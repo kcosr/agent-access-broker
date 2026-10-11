@@ -455,7 +455,7 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
       </DrawerSection>
       {fields.length ? (
         <DrawerSection title="Private attributes" count={`${configured.length}/${fields.length}`}>
-          <div className="pt-form">
+          <div className="wb-form-stack">
             {fields.map((field) =>
               configured.includes(field.name) ? (
                 <ResourceAttributeValue
@@ -572,7 +572,7 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
     >
       <AdminForm
         id={formId}
-        className="pt-form pt-catalog-form pt-catalog-drawer-form"
+        className="wb-form-stack pt-catalog-form pt-catalog-drawer-form"
         noValidate
         onSubmit={(event) => {
           event.preventDefault();

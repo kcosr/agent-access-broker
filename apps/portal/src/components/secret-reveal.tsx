@@ -40,7 +40,7 @@ export function SecretRevealModal({
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         <Banner tone="warning" slim>
           Copy this {secretLabel.toLowerCase()} now. It cannot be shown again after you close this dialog.
         </Banner>

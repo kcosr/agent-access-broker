@@ -127,7 +127,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   }
 
   const body = (
-    <div className="pt-form pt-catalog-form">
+    <div className="wb-form-stack pt-catalog-form">
       <p className="pt-prose">
         <b>{data.service.definition.displayName}</b> <span className="wb-num">{data.service.definition.service}</span>
         <br />

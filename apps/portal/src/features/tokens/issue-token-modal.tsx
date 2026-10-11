@@ -120,7 +120,7 @@ export function IssueTokenModal({
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         {modal.screen === "edit" ? <DetailsStep modal={modal} update={update} /> : null}
         {modal.screen === "access" ? <AccessStep modal={modal} update={update} /> : null}
         {modal.screen === "review" ? <ReviewStep modal={modal} /> : null}

@@ -63,7 +63,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         <Field label="Principal ID" hint="The stable identifier, for example an email address. It cannot be changed later.">
           <Input mono value={principalId} onChange={(event) => setPrincipalId(event.target.value)} required autoFocus autoComplete="off" spellCheck={false} />
         </Field>
@@ -138,7 +138,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         {!groupWritesEnabled ? (
           <Banner tone="warning" slim>
             Group writes are unavailable while identity authority is {identityAuthority}.

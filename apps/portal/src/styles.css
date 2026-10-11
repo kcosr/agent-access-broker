@@ -195,30 +195,15 @@
 }
 
 /* ---------- forms */
-.pt-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.pt-form > .wb-field + .wb-field {
-  margin-top: 0;
-}
+/* Field spacing comes from the kit's wb-form-stack and wb-form-row. This row
+   keeps two fixed equal columns where wb-form-row would wrap: in narrow
+   modals (under its 2 × 200px) and around bare inputs (no Field). */
 .pt-form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .pt-form-row > .wb-field {
-  margin: 0;
-}
-.pt-inline-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-}
-.pt-inline-form > .wb-field {
-  flex: 1 1 240px;
   margin: 0;
 }
 .pt-checks {
@@ -342,6 +327,8 @@
   font-size: var(--wb-fs-12);
   font-variant-numeric: tabular-nums;
 }
+/* Sidebar controls: the padding keeps focus rings inside the pane, and fields
+   stack 8px apart, denser than the kit's 14px wb-form-stack. */
 .pt-side-pad {
   padding: 2px 2px 6px;
 }

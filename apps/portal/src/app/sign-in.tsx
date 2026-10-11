@@ -103,7 +103,7 @@ export function SignInPage() {
           {microsoft?.enabled && localPassword ? <div className="pt-auth-divider">or</div> : null}
           {localPassword ? (
             <form
-              className="pt-form"
+              className="wb-form-stack"
               onSubmit={(event) => {
                 event.preventDefault();
                 void submit();

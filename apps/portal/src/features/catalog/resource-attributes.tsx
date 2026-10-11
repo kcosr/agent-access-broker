@@ -112,7 +112,7 @@ export function ResourceAttributeField({
   onReveal: () => Promise<string>;
 }) {
   return (
-    <div className="pt-form pt-catalog-form">
+    <div className="wb-form-stack pt-catalog-form">
       {configured ? <ResourceAttributeValue field={field} busy={busy} onReveal={onReveal} /> : null}
       <Field
         label={configured ? `Replacement ${field.label}` : field.label}

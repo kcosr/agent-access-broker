@@ -17,6 +17,7 @@
   color: var(--wb-muted);
   font-size: var(--wb-fs-12);
 }
+/* Sidebar density (8px, as .pt-side-pad fields), not the kit's 14px wb-form-stack. */
 .pt-audit-range {
   display: flex;
   flex-direction: column;

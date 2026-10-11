@@ -299,7 +299,7 @@ export function CredentialDrawer({ model }: { model: CredentialListModel }) {
       {writable && credential && needsRepository ? (
         <DrawerSection title="Verify">
           <form
-            className="pt-inline-form"
+            className="wb-form-row"
             onSubmit={(event) => {
               event.preventDefault();
               if (repository.trim()) void runner.run("verify", () => actions.verify(open, { repository: repository.trim() }));
@@ -331,7 +331,7 @@ function CredentialForm({ target, replacing, onSave }: { target: CredentialTarge
   const missing = target.inputSchema.fields.some((field) => field.required && !values[field.name]);
   return (
     <form
-      className="pt-form"
+      className="wb-form-stack"
       autoComplete="off"
       onSubmit={async (event) => {
         event.preventDefault();

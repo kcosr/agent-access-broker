@@ -245,7 +245,7 @@ function McpImportForm({
   }
 
   const body = (
-    <div className="pt-form pt-catalog-form" onChange={() => setConfirmed(false)}>
+    <div className="wb-form-stack pt-catalog-form" onChange={() => setConfirmed(false)}>
       {!old && !operatorEnabled ? (
         <Banner tone="warning" slim>
           Imports are disabled by operator configuration.
@@ -483,7 +483,7 @@ function OpenApiImportForm({
   }
 
   const body = (
-    <div className="pt-form pt-catalog-form" onChange={() => setConfirmed(false)}>
+    <div className="wb-form-stack pt-catalog-form" onChange={() => setConfirmed(false)}>
       {!old && !operatorEnabled ? (
         <Banner tone="warning" slim>
           Imports are disabled by operator configuration.
