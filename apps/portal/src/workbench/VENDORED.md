@@ -2,7 +2,7 @@
 
 Do not edit; change workbench-ui and re-vendor.
 
-- Kit commit: `b27a9ec9c9cd6f2237c1cf5d92ce4843319b7234`
+- Kit commit: `b7a3cafc4d685c7fe22f27253fee499d43b6bfa6`
 - Vendored on: 2026-10-11
 
 Check this copy with `node verify-vendor.mjs` from this directory.
