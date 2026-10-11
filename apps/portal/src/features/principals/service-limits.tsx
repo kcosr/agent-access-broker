@@ -141,7 +141,7 @@ function LimitEditor({ limit, onClose, onSave }: { limit: ServiceLimit; onClose:
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         <div className="pt-form-row">
           <Field label="Requests" error={issues.requests}>
             <Input numeric inputMode="numeric" autoComplete="off" value={draft.requests} onChange={(event) => setDraft({ ...draft, requests: event.target.value })} autoFocus />

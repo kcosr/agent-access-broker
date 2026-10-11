@@ -1,4 +1,4 @@
-/* Dense lists (gh-dash PR-row pattern) and sticky group headers. */
+/* Dense lists (icon, title/meta/description, side column) and sticky group headers. */
 @layer wb.components {
   .wb-list {
     max-width: var(--wb-list-max);
@@ -12,9 +12,21 @@
     padding: 0;
     list-style: none;
   }
+  /* content-visibility skips off-screen groups; its paint containment clips
+     at the padding box. The padding gives the rows' 12px outset (hover,
+     active, cursor ring) room to paint; the negative margin keeps the
+     content box, so nothing moves. */
   .wb-group {
+    margin-inline: -12px;
+    padding-inline: 12px;
     content-visibility: auto;
     contain-intrinsic-size: auto 900px;
+  }
+  /* The sticky header spans the outset too, so a highlighted row scrolling
+     under it doesn't show at its sides. */
+  .wb-group > .wb-group-h {
+    margin-inline: -12px;
+    padding-inline: 12px;
   }
   .wb-group-h {
     position: sticky;

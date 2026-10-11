@@ -47,7 +47,7 @@ export function AssignManagerModal({ service: initialService, onClose }: { servi
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         <Field label="Service">
           <Select
             value={target}

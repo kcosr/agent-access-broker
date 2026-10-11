@@ -4,7 +4,9 @@
  * they win over the kit where they overlap.
  */
 
-/* Forms: spacing comes from the container's gap, not field margins */
+/* Forms: spacing comes from the container's gap, not field margins. The kit's
+   wb-form-stack resets only its direct children; this also covers fields in
+   rows and inside AdminForm's display: contents fieldset. */
 .pt-catalog-form .wb-field + .wb-field {
   margin-top: 0;
 }

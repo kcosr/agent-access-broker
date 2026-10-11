@@ -42,6 +42,45 @@
     color: var(--wb-danger-text);
   }
 
+  /* ---------- form layout */
+  /* A vertical stack of fields and whatever sits between them (checks,
+     banners, form rows, a form error): the gap, the same 14px as two
+     consecutive fields, spaces every child. */
+  .wb-form-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+  /* <fieldset class="wb-form-stack" disabled> disables a whole form */
+  fieldset.wb-form-stack {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  /* Fields side by side, sharing the width, wrapping below 200px each.
+     Fields align at the top, so an error under one doesn't move its
+     neighbours; anything else (a submit button) aligns with the bottom,
+     the inputs' line when the fields have no hint. */
+  .wb-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 14px 12px;
+    min-width: 0;
+  }
+  .wb-form-row > .wb-field {
+    flex: 1 1 200px;
+  }
+  .wb-form-row > :not(.wb-field) {
+    align-self: flex-end;
+  }
+  /* the gaps replace the fields' own spacing */
+  .wb-form-stack > :is(.wb-field, .wb-form-error),
+  .wb-form-row > .wb-field {
+    margin-top: 0;
+  }
+
   /* ---------- text inputs */
   .wb-input {
     width: 100%;
@@ -201,6 +240,18 @@
   }
   .wb-switch:checked::after {
     transform: translateX(14px);
+  }
+  /* small: 26×16, for dense rows and table cells */
+  .wb-switch--sm {
+    width: 26px;
+    height: 16px;
+  }
+  .wb-switch--sm::after {
+    width: 12px;
+    height: 12px;
+  }
+  .wb-switch--sm:checked::after {
+    transform: translateX(10px);
   }
   .wb-switch:focus-visible {
     outline: 2px solid var(--wb-accent);

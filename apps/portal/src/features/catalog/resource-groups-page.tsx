@@ -451,7 +451,7 @@ function GroupEditorDrawer({ model, record, onDone }: { model: GroupsModel; reco
     >
       <AdminForm
         id={formId}
-        className="pt-form pt-catalog-form pt-catalog-drawer-form"
+        className="wb-form-stack pt-catalog-form pt-catalog-drawer-form"
         noValidate
         onSubmit={(event) => {
           event.preventDefault();

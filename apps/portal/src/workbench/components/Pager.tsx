@@ -42,7 +42,7 @@ function nouns(noun: ListPagerProps["noun"]): readonly [string, string] {
 }
 
 /**
- * Footer for paged lists and tables (gh-dash Issues style): "N of M noun",
+ * Footer for paged lists and tables: "N of M noun",
  * a "Load more" button, an inline error that keeps the loaded items, and an
  * "Updating…" state for background refreshes.
  */

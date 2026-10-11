@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { cx } from "../lib/cx";
@@ -249,5 +257,149 @@ function ConfirmSurface({
         </div>
       ) : null}
     </ModalSurface>
+  );
+}
+
+export interface ConfirmOptions {
+  title: ReactNode;
+  /** What will happen; name the object. */
+  body?: ReactNode;
+  confirmLabel?: string | undefined;
+  cancelLabel?: string | undefined;
+  /** danger (default) focuses Cancel first; primary focuses the confirm button. */
+  tone?: "danger" | "primary" | undefined;
+  /**
+   * Runs on confirm. The dialog stays open and pending until it settles; if
+   * it throws, the dialog shows the error and the user can retry or cancel.
+   */
+  action?: (() => void | Promise<unknown>) | undefined;
+}
+
+/**
+ * Ask for confirmation. Resolves true once confirmed (after `action`
+ * succeeded), false when cancelled, after the dialog has closed and
+ * returned focus.
+ */
+export type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
+
+interface ConfirmRequest {
+  id: number;
+  options: ConfirmOptions;
+  /** The action succeeded (or there was none): resolve true. */
+  ok: boolean;
+  running: boolean;
+  resolve: (ok: boolean) => void;
+}
+
+const ConfirmContext = createContext<ConfirmFn | null>(null);
+
+const noConfirmProvider: ConfirmFn = () =>
+  Promise.reject(new Error("useConfirm() needs a <ConfirmProvider> above it"));
+
+/**
+ * `const confirm = useConfirm(); if (await confirm({ title, action })) …`.
+ * Needs a ConfirmProvider; without one the promise rejects.
+ */
+export function useConfirm(): ConfirmFn {
+  return useContext(ConfirmContext) ?? noConfirmProvider;
+}
+
+/**
+ * Hosts the dialogs for useConfirm(): one ConfirmDialog at a time, further
+ * requests wait their turn. Put it once near the root (inside LinkProvider
+ * and ToastProvider if actions use them).
+ */
+export function ConfirmProvider({ children }: { children?: ReactNode }) {
+  const [queue, setQueue] = useState<readonly ConfirmRequest[]>([]);
+  // One render with no dialog after each close: the closed dialog unmounts
+  // and returns focus to its opener before the next one mounts, so the next
+  // takes that opener as its own rather than a control of the dialog going
+  // away (which would leave focus nowhere once the queue is done).
+  const [between, setBetween] = useState(false);
+  const seq = useRef(0);
+  // Every request not resolved yet, and those whose dialog just closed.
+  const unresolved = useRef(new Set<ConfirmRequest>());
+  const closed = useRef<ConfirmRequest[]>([]);
+  const mounted = useRef(true);
+
+  const settle = (req: ConfirmRequest) => {
+    unresolved.current.delete(req);
+    req.resolve(req.ok);
+  };
+
+  const confirm = useCallback<ConfirmFn>(
+    (options) =>
+      new Promise<boolean>((resolve) => {
+        const req = {
+          id: ++seq.current,
+          options,
+          ok: false,
+          running: false,
+          resolve,
+        };
+        unresolved.current.add(req);
+        setQueue((q) => [...q, req]);
+      }),
+    [],
+  );
+
+  // Settle once the dialog is gone and focus is back (passive cleanups run
+  // first), so the caller's follow-up (focus, navigation) has the last word.
+  useEffect(() => {
+    for (const req of closed.current.splice(0)) settle(req);
+  }, [queue]);
+
+  useEffect(() => {
+    if (between) setBetween(false);
+  }, [between]);
+
+  useEffect(() => {
+    const pending = unresolved.current;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // Unmounted: open and waiting requests are cancelled; a running
+      // action settles its request when it finishes.
+      closed.current = [];
+      for (const req of [...pending]) if (!req.running) settle(req);
+    };
+  }, []);
+
+  const run = async (req: ConfirmRequest) => {
+    req.running = true;
+    try {
+      await req.options.action?.();
+      req.ok = true;
+    } finally {
+      req.running = false;
+      if (!mounted.current) settle(req);
+    }
+  };
+
+  const close = (req: ConfirmRequest) => {
+    closed.current.push(req);
+    setQueue((q) => q.filter((r) => r !== req));
+    setBetween(true);
+  };
+
+  const current = between ? undefined : queue[0];
+  return (
+    <ConfirmContext.Provider value={confirm}>
+      {children}
+      {current ? (
+        <ConfirmDialog
+          key={current.id}
+          open
+          title={current.options.title}
+          confirmLabel={current.options.confirmLabel}
+          cancelLabel={current.options.cancelLabel}
+          tone={current.options.tone}
+          onConfirm={() => run(current)}
+          onClose={() => close(current)}
+        >
+          {current.options.body}
+        </ConfirmDialog>
+      ) : null}
+    </ConfirmContext.Provider>
   );
 }

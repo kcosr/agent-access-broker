@@ -51,7 +51,7 @@ export function ImportTokenModal({
     title: `${rotate ? "Rotate" : "Set"} ${purpose} token`,
     size: "sm",
     body: (
-      <div className="pt-form pt-catalog-form">
+      <div className="wb-form-stack pt-catalog-form">
         <Field
           label="Token"
           hint="Paste the token value without a Bearer prefix. Existing values cannot be revealed."

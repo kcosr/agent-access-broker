@@ -318,7 +318,7 @@ export interface DataTableProps<T> {
   rowClassName?: ((row: T) => string | undefined) | undefined;
   /** Dimmed rows (disabled, expired). */
   rowDim?: ((row: T) => boolean) | undefined;
-  /** gh-dash .dtable density. */
+  /** Denser padding and font size, for charts' data tables and dense panels. */
   compact?: boolean | undefined;
   /** Cell padding hangs outside the column (text aligns with the pane). */
   bleed?: boolean | undefined;

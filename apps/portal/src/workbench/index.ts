@@ -8,7 +8,11 @@ export {
   SkipLink,
   useAppShell,
 } from "./components/AppShell";
-export type { AppShellProps, AppShellState } from "./components/AppShell";
+export type {
+  AppShellProps,
+  AppShellState,
+  ShowSidebarOptions,
+} from "./components/AppShell";
 export {
   Brand,
   NavTab,
@@ -83,7 +87,7 @@ export { ListPager } from "./components/Pager";
 export type { ListPagerProps } from "./components/Pager";
 export { Sparkline } from "./components/Sparkline";
 export type { SparklineProps } from "./components/Sparkline";
-export { TruncateStart } from "./components/Text";
+export { QualifiedName, TruncateStart } from "./components/Text";
 
 // drawer
 export { Drawer, DrawerSection, KeyValue } from "./components/Drawer";
@@ -171,8 +175,18 @@ export type {
   Placement,
   PopoverProps,
 } from "./components/Popover";
-export { ConfirmDialog, Modal } from "./components/Modal";
-export type { ConfirmDialogProps, ModalProps } from "./components/Modal";
+export {
+  ConfirmDialog,
+  ConfirmProvider,
+  Modal,
+  useConfirm,
+} from "./components/Modal";
+export type {
+  ConfirmDialogProps,
+  ConfirmFn,
+  ConfirmOptions,
+  ModalProps,
+} from "./components/Modal";
 export { CommandPalette } from "./components/CommandPalette";
 export type {
   CommandPaletteProps,

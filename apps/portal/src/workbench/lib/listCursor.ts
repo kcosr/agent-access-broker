@@ -1,5 +1,5 @@
 /**
- * Keyboard cursor for dense lists (gh-dash): j/k move, Enter opens, o opens
+ * Keyboard cursor for dense lists: j/k move, Enter opens, o opens
  * externally. Suppressed while typing or while a blocking layer is open. When
  * an item is open (a drawer), moving the cursor follows with it.
  */

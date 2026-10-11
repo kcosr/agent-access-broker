@@ -52,7 +52,7 @@ export function ManagementTokenModal({
         </>
       }
     >
-      <div className="pt-form">
+      <div className="wb-form-stack">
         <KeyValue
           items={[
             { label: "Principal", value: <span className="wb-num">{principalId}</span> },

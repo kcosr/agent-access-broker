@@ -118,9 +118,15 @@
     text-decoration: none;
     cursor: pointer;
   }
-  .wb-link:hover {
+  .wb-link:not(:disabled, [aria-disabled="true"]):hover {
     text-decoration: underline;
     text-underline-offset: 2px;
+  }
+  /* disabled: quiet, muted text with no hover underline */
+  .wb-link:disabled,
+  .wb-link[aria-disabled="true"] {
+    color: var(--wb-muted);
+    cursor: default;
   }
   .wb-stack {
     display: flex;

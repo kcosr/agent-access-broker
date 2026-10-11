@@ -557,7 +557,7 @@
     width: calc(100% + 20px);
     margin-inline: -10px;
   }
-  /* compact: gh-dash .dtable density (charts' data tables, dense panels) */
+  /* compact: dense tables (charts' data tables, dense panels) */
   .wb-table--compact {
     --wb-table-head-h: 28px;
     font-size: var(--wb-fs-12-5);

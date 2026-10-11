@@ -322,7 +322,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
           </div>
           {control === "link" ? (
             <AdminForm
-              className="pt-form"
+              className="wb-form-stack"
               onSubmit={async (event) => {
                 event.preventDefault();
                 if (!canLink) return;
