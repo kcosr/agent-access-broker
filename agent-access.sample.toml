@@ -1,0 +1,32 @@
+# Shared by CLI commands and `agent-access mcp serve` (local stdio MCP).
+# MCP reloads configuration and token files for each tool-list/call request.
+[service]
+url = "http://127.0.0.1:8787"
+
+[service.tls]
+verify_certificates = true
+# Additional PEM CA or self-signed broker certificates are added to the default
+# HTTPS trust store. Missing paths are ignored so one config can span hosts.
+# A leading `~` expands to the current user's home directory.
+# additional_ca_cert_files = [
+#   "/etc/agent-access/broker-ca.pem",
+#   "~/.config/agent-access/broker-ca.pem",
+# ]
+
+[defaults]
+# Applied only when the selected action advertises the matching response
+# capability for Jira, Confluence, or GitLab. Command flags override these
+# values; config overrides environment.
+read_content_format = "native"
+output_format = "json"
+
+[identity]
+header = "Authorization"
+scheme = "Bearer"
+disabled = true
+# Enable identity and set token_file to use `agent-access auth token set`.
+# These Authorization/Bearer settings match both broker configuration templates;
+# the selected broker identity source must use the same header and scheme.
+# Keep disabled = true only for an anonymous development broker.
+# A leading `~` expands to the current user's home directory.
+# token_file = "~/.config/agent-access/token"

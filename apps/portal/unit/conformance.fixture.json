@@ -1,0 +1,177 @@
+{
+  "endpointType": {
+    "attributes": [
+      {
+        "description": "Key the conformance upstream requires for pings to this endpoint",
+        "label": "Signing key",
+        "name": "signingKey",
+        "required": true,
+        "secret": true
+      }
+    ],
+    "example": "alerts",
+    "id": "conformance_endpoint",
+    "label": "Conformance endpoint",
+    "pluralLabel": "Conformance endpoints",
+    "selectors": [
+      "exact",
+      "all"
+    ]
+  },
+  "resourceType": {
+    "example": "shelf-one/item-one",
+    "id": "conformance_item",
+    "label": "Conformance item",
+    "namespace": {
+      "example": "shelf-one",
+      "label": "Items on a shelf",
+      "membersLabel": "Items"
+    },
+    "pluralLabel": "Conformance items",
+    "selectors": [
+      "exact",
+      "namespace",
+      "all"
+    ]
+  },
+  "service": {
+    "actions": [
+      {
+        "action": "item.view",
+        "available": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "description": "View an item and its text body",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "description": "Item path, such as shelf-one/item-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item"
+          ],
+          "type": "object"
+        },
+        "lookupRequired": false,
+        "readOnly": true,
+        "requiredScopeTypes": [
+          "item"
+        ]
+      },
+      {
+        "action": "item.download",
+        "available": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "description": "Download an item's content",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "description": "Item path, such as shelf-one/item-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item"
+          ],
+          "type": "object"
+        },
+        "lookupRequired": false,
+        "readOnly": true,
+        "requiredScopeTypes": [
+          "item"
+        ]
+      },
+      {
+        "action": "item.upload",
+        "available": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "description": "Replace an item's content with one file",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "contentType": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "size": {
+                    "maximum": 4096,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "field",
+                  "filename",
+                  "contentType",
+                  "size",
+                  "sha256"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1,
+              "minItems": 1,
+              "type": "array"
+            },
+            "item": {
+              "description": "Item path, such as shelf-one/item-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "attachments"
+          ],
+          "type": "object"
+        },
+        "lookupRequired": false,
+        "readOnly": false,
+        "requiredScopeTypes": [
+          "item"
+        ]
+      }
+    ],
+    "available": true,
+    "configuredCredentialModes": [
+      "service"
+    ],
+    "displayName": "Conformance",
+    "lookupCredentialConfigured": false,
+    "resourceScopes": {
+      "item": {
+        "resourceType": "conformance_item",
+        "selectors": [
+          "exact",
+          "namespace",
+          "all"
+        ]
+      }
+    },
+    "service": "conformance",
+    "surface": "invoke"
+  }
+}

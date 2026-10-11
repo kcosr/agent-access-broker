@@ -1,0 +1,11 @@
+[service]
+url = "http://127.0.0.1:18787"
+
+[service.tls]
+verify_certificates = true
+
+[identity]
+header = "Authorization"
+scheme = "Bearer"
+disabled = false
+token_file = "/tmp/agent-access-broker-demo/alice-agent.token"

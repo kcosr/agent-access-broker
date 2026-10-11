@@ -1,0 +1,148 @@
+# Minimal managed production baseline. No providers or grants are enabled.
+# Customize paths/origin and provision secrets before use; see
+# docs/operator-guide.md and docs/administrator-guide.md.
+#
+# Start the public listener on loopback behind HTTPS ingress:
+# agent-access-broker --config /etc/agent-access-broker/broker.toml serve \
+#   --listen 127.0.0.1:8787
+# The broker itself serves HTTP. Restrict access to its listener to the ingress
+# process. Never forward caller identity/context headers from arbitrary clients.
+# No trusted callers, imported integrations, Git gateway, or HTTP MCP are
+# enabled by this baseline.
+
+[deployment]
+environment = "production"
+# Set a stable, unique identifier per running broker instance.
+node_id = "broker-1"
+
+# This sample uses HTTPS ingress connecting over IPv4 loopback. Replace this
+# address with the exact ingress peers in your deployment (add ::1/128 only if
+# ingress uses IPv6 loopback). Restrict the backend listener to those peers.
+# Ingress must strip client-supplied Forwarded and X-Forwarded-For and set the
+# client address from its verified connection. This trust grants no identity or
+# execution-context forwarding authority.
+[network]
+trusted_proxies = ["127.0.0.1/32"]
+
+[identity]
+mode = "required"
+authority = "managed"
+
+[[identity.sources]]
+name = "managed"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+# Optional direct managed HTTP MCP identity (also enable/configure [mcp]).
+# Create explicit managed_workspace/name bindings for existing humans through
+# administration. The launcher must control the username and keep its credential
+# outside workloads; do not place this secret in user-editable client settings.
+# [identity.trusted_callers.managed_client]
+# credential_ref = "file:/etc/agent-access-broker/secrets/managed-client-attestation"
+# credential_transport = "authorization_user"
+# username_namespace = "managed_workspace"
+# context_mode = "fixed"
+# execution_context = "default"
+# A caller secret is distinct from ordinary Broker tokens. Username assertions
+# are accepted only on /mcp and /mcp/{service}; see docs/trusted-callers.md.
+
+# Direct clients use this context. Add caller-attested contexts only after
+# configuring named trusted callers; a request header alone cannot attest one.
+[execution_context]
+allowed_values = ["default"]
+default_context = "default"
+
+[managed_store]
+type = "sqlite"
+path = "/var/lib/agent-access-broker/state/managed-store.sqlite3"
+require_registered_principal_for_invocation = true
+# For first startup or a reviewed upgrade, temporarily set true. After startup,
+# restore false. Config validation is offline; it does not create the database.
+auto_migrate = false
+
+# Each key file below contains an independently generated, unpadded base64url
+# encoding of 32 random bytes. Keep files owner-only and back them up separately
+# from the databases. Retain every encryption key still used by stored secrets.
+[credential_encryption]
+active_key = "k1"
+
+[[credential_encryption.keys]]
+id = "k1"
+provider = "file"
+path = "/etc/agent-access-broker/secrets/credential-k1"
+
+[broker_tokens]
+hash_key_ref = "file:/etc/agent-access-broker/secrets/token-hash-key"
+default_agent_invoke_ttl = "30d"
+default_user_manage_ttl = "2h"
+default_admin_ttl = "2h"
+max_self_issued_agent_invoke_ttl = "30d"
+self_agent_invoke_ttl_options = ["8h", "7d", "30d"]
+admin_agent_invoke_ttl_options = ["8h", "7d", "30d"]
+user_manage_ttl_options = ["30m", "2h", "8h"]
+admin_ttl_options = ["30m", "2h", "8h"]
+
+[browser_auth]
+enabled = true
+public_origin = "https://broker.example.com"
+session_cookie_name = "aab_session"
+csrf_header = "X-Agent-Access-CSRF"
+csrf_key_ref = "file:/etc/agent-access-broker/secrets/browser-csrf-key"
+session_ttl = "8h"
+allowed_return_paths = ["/ui"]
+
+[browser_auth.local_password]
+enabled = true
+pepper_ref = "file:/etc/agent-access-broker/secrets/password-pepper"
+min_password_length = 12
+max_failed_attempts = 10
+lockout_ttl = "15m"
+
+[portal]
+enabled = true
+mount_path = "/ui"
+# Copy the complete apps/portal/dist release assets here; serve them read-only.
+static_dir = "/opt/agent-access-broker/portal"
+
+[management]
+enabled = true
+
+# Steady-state configuration: bootstrap is disabled and stores are not created
+# automatically. To create the FIRST administrator in an EMPTY store, replace
+# this table with the following, using a unique generated password:
+# [management.initial_admin]
+# mode = "create_if_empty"
+# principal_id = "admin"
+# initial_password = "<insert-a-unique-generated-password>"
+# Generate a unique password before enabling bootstrap; placeholder literals
+# are rejected by configuration validation.
+# The first login requires a password reset. Then restore mode = "disabled"
+# and REMOVE principal_id and initial_password; disabled mode rejects them.
+# An existing store is not repaired or reset by create_if_empty.
+[management.initial_admin]
+mode = "disabled"
+
+[policy]
+authority = "managed"
+default_decision = "deny"
+
+# SQLite powers portal audit searches; keep its database separate from the
+# managed store. Select retention to match your operational requirements.
+[audit]
+type = "sqlite"
+path = "/var/lib/agent-access-broker/audit/audit.sqlite3"
+retention_days = 30
+durability = "sync_data"
+
+[limits]
+# Control-plane JSON: 1 MiB/15 seconds; browser auth: 16 KiB/5 seconds.
+max_http_body_bytes = 104857600 # 100 MiB for invocation bodies and streamed uploads
+request_body_timeout_ms = 300000 # five-minute total receive deadline
+streaming_idle_timeout_ms = 30000
+upload_spool_dir = "/var/lib/agent-access-broker/spool"
+
+# Service invocation limits apply per principal and service. Changing defaults
+# does not grant access; principals still need explicit action/resource grants.
+[limits.invocations]
+default = { requests = 100, window = "1m" }

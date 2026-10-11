@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Access MCP"
+  short_description: "Discover and use connected broker MCP tools."
+  default_prompt: "Use $agent-access-mcp to discover and call the connected Agent Access Broker tools for my task."

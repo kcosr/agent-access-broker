@@ -1,0 +1,16 @@
+target/
+node_modules/
+apps/portal/node_modules/
+apps/portal/dist/
+apps/portal/*.tsbuildinfo
+apps/portal/playwright-report/
+apps/portal/test-results/
+*.html
+!apps/portal/index.html
+!docs/system-overview.html
+.specs/
+.scratch/
+.build-service/workspace-id
+.env
+.env.*
+!.env.example

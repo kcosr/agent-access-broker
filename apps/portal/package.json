@@ -1,0 +1,36 @@
+{
+  "name": "@agent-access/portal",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run check:workbench && tsc -b && vite build && npm run check:notices",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "npm run check:workbench && npm run test:notices && vitest run",
+    "test:e2e": "npm run build && node ../../scripts/build-portal-broker.mjs && playwright test",
+    "check:workbench": "node src/workbench/verify-vendor.mjs",
+    "check:notices": "node scripts/check-notices.mjs",
+    "test:notices": "node --test scripts/third-party-notices.test.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^8.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9"
+  }
+}

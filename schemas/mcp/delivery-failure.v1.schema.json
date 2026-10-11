@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-access:mcp:delivery-failure:v1",
+  "title": "HTTP MCP oversized delivery result (structuredContent and text JSON)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error",
+    "agentRequestId",
+    "brokerRequestId",
+    "service",
+    "action",
+    "brokerOutcome",
+    "execution",
+    "resultAvailable",
+    "retrySafe"
+  ],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "const": "mcp_response_too_large"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "agentRequestId": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "brokerRequestId": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "service": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "brokerOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "decision",
+        "reasonCode"
+      ],
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "decision": {
+          "enum": [
+            "allow",
+            "deny",
+            "error"
+          ]
+        },
+        "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mutationStatus": {
+          "enum": [
+            "applied",
+            "applied_verified",
+            "applied_unverified",
+            "not_applied"
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatched",
+        "completion"
+      ],
+      "properties": {
+        "dispatched": {
+          "type": "boolean"
+        },
+        "completion": {
+          "enum": [
+            "completed",
+            "unknown",
+            "not_started"
+          ]
+        }
+      }
+    },
+    "resultAvailable": {
+      "const": false
+    },
+    "retrySafe": {
+      "const": false
+    }
+  }
+}

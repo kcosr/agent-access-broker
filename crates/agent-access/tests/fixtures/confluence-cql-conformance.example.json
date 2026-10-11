@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "description": "Example Confluence CQL conformance manifest with fake values; copy outside the repository and replace values before live use.",
+  "defaults": {
+    "spaces": ["ENG"],
+    "maxResults": 5
+  },
+  "cases": [
+    {
+      "id": "space-equality-and-type",
+      "description": "Proves Confluence accepts explicit space equality and page type clauses emitted through the broker.",
+      "cql": "space = ENG AND type = page",
+      "covers": ["space-eq", "type-page"],
+      "expect": {
+        "minPages": 0,
+        "containsPageIds": ["123456"]
+      }
+    },
+    {
+      "id": "space-list",
+      "description": "Proves Confluence accepts the broker-emitted space IN list form.",
+      "cql": "space IN (ENG, OPS)",
+      "spaces": ["ENG", "OPS"],
+      "covers": ["space-in"]
+    },
+    {
+      "id": "title-text-and-escaping",
+      "description": "Proves Confluence accepts title and text contains clauses with escaped string literal content.",
+      "cql": "title ~ \"runbook (draft)\" AND text ~ \"deploy \\\"quoted\\\" steps\"",
+      "covers": ["title-contains", "text-contains", "escaping-string-literals"]
+    },
+    {
+      "id": "label-equality",
+      "description": "Proves Confluence accepts label equality and inequality clauses.",
+      "cql": "label = runbook AND label != obsolete",
+      "covers": ["label-eq", "label-neq"]
+    },
+    {
+      "id": "label-list",
+      "description": "Proves Confluence accepts label list inclusion and exclusion clauses.",
+      "cql": "label IN (runbook, deploy) AND label NOT IN (obsolete)",
+      "covers": ["label-in", "label-not-in"]
+    },
+    {
+      "id": "creator-equality",
+      "description": "Proves Confluence accepts creator equality and inequality account-id clauses.",
+      "cql": "creator = \"account-id-one\" AND creator != \"account-id-two\"",
+      "covers": ["creator-eq", "creator-neq"]
+    },
+    {
+      "id": "creator-list",
+      "description": "Proves Confluence accepts creator list inclusion and exclusion account-id clauses.",
+      "cql": "creator IN (\"account-id-one\", \"account-id-two\") AND creator NOT IN (\"account-id-three\")",
+      "covers": ["creator-in", "creator-not-in"]
+    },
+    {
+      "id": "contributor-equality",
+      "description": "Proves Confluence accepts contributor equality and inequality account-id clauses.",
+      "cql": "contributor = \"account-id-one\" AND contributor != \"account-id-two\"",
+      "covers": ["contributor-eq", "contributor-neq"]
+    },
+    {
+      "id": "contributor-list",
+      "description": "Proves Confluence accepts contributor list inclusion and exclusion account-id clauses.",
+      "cql": "contributor IN (\"account-id-one\", \"account-id-two\") AND contributor NOT IN (\"account-id-three\")",
+      "covers": ["contributor-in", "contributor-not-in"]
+    },
+    {
+      "id": "mention",
+      "description": "Proves Confluence accepts mention equality and list account-id clauses.",
+      "cql": "mention = \"account-id-one\" OR mention IN (\"account-id-one\", \"account-id-two\")",
+      "covers": ["mention-eq", "mention-in"]
+    },
+    {
+      "id": "id-fields",
+      "description": "Proves Confluence accepts page id and content.id equality and list clauses.",
+      "cql": "id = 123456 AND id IN (123456, 234567) AND content.id = 123456 AND content.id IN (123456, 234567)",
+      "covers": ["id-eq", "id-in", "content-id-eq", "content-id-in"]
+    },
+    {
+      "id": "hierarchy-fields",
+      "description": "Proves Confluence accepts ancestor equality/list clauses and parent equality clauses.",
+      "cql": "ancestor = 123456 AND ancestor IN (123456, 234567) AND parent = 123456",
+      "covers": ["ancestor-eq", "ancestor-in", "parent-eq"]
+    },
+    {
+      "id": "parent-list",
+      "description": "Tracks Atlassian-published parent IN syntax that may fail on current Confluence Cloud search endpoints.",
+      "cql": "parent IN (123456, 234567)",
+      "covers": ["parent-in"],
+      "expect": {
+        "expectedUpstreamFailure": "Atlassian publishes parent IN, but current Confluence Cloud /wiki/rest/api/content/search endpoints may return an upstream error for this syntax."
+      }
+    },
+    {
+      "id": "created-comparisons",
+      "description": "Proves Confluence accepts all broker-supported created date comparison operators.",
+      "cql": "created = 2024-01-31 AND created != 2024-02-01 AND created < 2024-12-31 AND created <= 2024-12-31 AND created > 2024-01-01 AND created >= 2024-01-01",
+      "covers": ["created-eq", "created-neq", "created-lt", "created-lte", "created-gt", "created-gte"]
+    },
+    {
+      "id": "lastmodified-comparisons",
+      "description": "Proves Confluence accepts all broker-supported lastModified date comparison operators.",
+      "cql": "lastModified = 2024-01-31 AND lastModified != 2024-02-01 AND lastModified < 2024-12-31 AND lastModified <= 2024-12-31 AND lastModified > 2024-01-01 AND lastModified >= 2024-01-01",
+      "covers": ["lastmodified-eq", "lastmodified-neq", "lastmodified-lt", "lastmodified-lte", "lastmodified-gt", "lastmodified-gte"]
+    },
+    {
+      "id": "created-ordering",
+      "description": "Proves Confluence accepts created ordering after broker composition.",
+      "cql": "title ~ \"runbook\" ORDER BY created",
+      "covers": ["order-created"]
+    },
+    {
+      "id": "lastmodified-ordering",
+      "description": "Proves Confluence accepts descending lastModified ordering after broker composition.",
+      "cql": "title ~ \"runbook\" ORDER BY lastModified DESC",
+      "covers": ["order-lastmodified-desc"]
+    },
+    {
+      "id": "title-ordering",
+      "description": "Proves Confluence accepts title ordering with the broker's default direction emission.",
+      "cql": "title ~ \"runbook\" ORDER BY title",
+      "covers": ["order-title-default"]
+    },
+    {
+      "id": "multi-ordering",
+      "description": "Proves Confluence accepts supported multi-field ordering after broker composition.",
+      "cql": "title ~ \"runbook\" ORDER BY lastModified DESC, title",
+      "covers": ["order-multi"]
+    }
+  ]
+}

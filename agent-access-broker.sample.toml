@@ -1,0 +1,903 @@
+# Development-oriented sample for local smoke testing.
+#
+# Do not copy this file directly into production. It intentionally uses
+# environment = "development", anonymous identity, and service credential grants
+# so the local provider examples are easy to exercise.
+# For managed production deployment, start with
+# agent-access-broker.production.sample.toml and docs/operator-guide.md.
+# That template uses required identity, managed broker tokens, deny-by-default
+# policy, and dedicated broker-owned state directories.
+
+[deployment]
+environment = "development"
+# node_id names this broker in audit records (nodeId) and state-lock metadata.
+# It defaults to the host name; set it explicitly where host names are not
+# stable (containers) or not unique. 1 to 128 characters matching
+# ^[A-Za-z0-9][A-Za-z0-9._-]*$. Changing it requires a restart.
+# node_id = "broker-dev-1"
+
+# All Broker outbound HTTPS uses native system roots by default. To add an
+# organization CA, select system_plus_custom and an absolute PEM bundle path.
+# custom trusts only that bundle. All modes verify chains and hostnames.
+# [network.outbound_tls]
+# trust = "system_plus_custom"
+# ca_certificate = "/etc/agent-access-broker/ca/organization.pem"
+
+# Optional global outbound proxy for broker-owned upstream traffic. Provider or
+# configured-service proxy blocks can override this global default, while process
+# environment proxy variables take precedence at runtime.
+#
+# [network.egress_proxy]
+# url = "http://proxy.example:8080"
+#
+# Proxy credentials, when needed, must use an HTTPS proxy URL:
+#
+# [network.egress_proxy]
+# url = "https://proxy.example:8443"
+# username_ref = "env:EGRESS_PROXY_USERNAME"
+# password_ref = "env:EGRESS_PROXY_PASSWORD"
+
+# Optional downstream MCP on the public listener behind trusted TLS ingress.
+# Requires the Authorization Bearer identity source below. Local file tools stay
+# in `agent-access mcp serve`; HTTP exposes JSON actions and discovery helpers.
+# /mcp/<service> and `mcp serve --service <service>` expose one service with raw names.
+# Keep public_url at /mcp; proxy rules must allow both paths with the same protections.
+# All HTTP views share session/control limits. Allow headroom for multiple clients
+# and service connections, including overlapping sessions after a restart.
+# [mcp]
+# enabled = true
+# public_url = "https://broker.example.com/mcp"
+# allowed_origins = [] # Native clients omit Origin; reject every present Origin.
+# operation_timeout_ms = 120000
+# protocol_timeout_ms = 30000
+
+# Database-managed upstream integrations (requires managed identity/policy/store,
+# management.enabled, and credential encryption). Disabled by default.
+[imports]
+enabled = false
+allowed_kinds = ["mcp_http", "openapi_http"]
+# OpenAPI requires both its API base URL and document URL to be allowed.
+# See docs/imported-openapi.md for an example.
+allowed_endpoints = [] # For example ["https://tools.internal.example/mcp"].
+disabled_services = []
+
+[identity]
+mode = "anonymous"
+authority = "toml"
+
+# Context and fingerprint headers always require a valid named trusted caller
+# credential on both public and Git listeners, even with no callers configured.
+# Asserted callers replace client X-Agent-Access-Context values with an approved
+# context; fixed callers omit that header and receive their configured context.
+# Keep a conservative default for header-free direct clients, or omit
+# default_context to require caller-attested context on governed requests.
+[execution_context]
+allowed_values = ["default", "workstation", "internal", "external"]
+default_context = "default"
+
+# Example required static identity source. Keep mode = "anonymous" for local
+# smoke tests; switch to mode = "required" and uncomment this block when using
+# broker-issued/local opaque tokens.
+#
+# [[identity.sources]]
+# name = "local"
+# type = "static_principals"
+# header = "Authorization"
+# scheme = "Bearer"
+#
+# [[identity.sources.principals]]
+# principal = "alice"
+# token_refs = ["file:/run/agent-access/alice.token"]
+#
+# [[identity.groups]]
+# id = "agent-users"
+# status = "active"
+# members = ["alice"]
+
+# Managed broker tokens can be resolved from the managed SQLite store instead
+# of from static config. Broker tokens are hashed in SQLite; raw token values
+# are returned only once by the admin token-issue API.
+# Set identity.authority = "managed" before enabling this block.
+#
+# [[identity.sources]]
+# name = "managed"
+# type = "broker_tokens"
+# header = "Authorization"
+# scheme = "Bearer"
+#
+# [managed_store]
+# type = "sqlite"
+# path = "/var/lib/agent-access-broker/managed-store.sqlite3"
+# require_registered_principal_for_invocation = true
+# auto_migrate = false
+# `serve` startup and reload admission lock a sibling
+# <database-file>.agent-access.lock file before opening or migrating the
+# managed store.
+# Set auto_migrate = true only during an intentional startup create or schema
+# migration, then return it to false for steady-state operation.
+#
+# Configuring managed_store requires credential_encryption for identity inventory.
+# [credential_encryption]
+# active_key = "k2026-06"
+#
+# [[credential_encryption.keys]]
+# id = "k2026-06"
+# provider = "env"
+# env = "AGENT_ACCESS_CREDENTIAL_KEY_K2026_06"
+#
+# [broker_tokens]
+# hash_key_ref = "env:AGENT_ACCESS_BROKER_TOKEN_HASH_KEY"
+# default_agent_invoke_ttl = "30d"
+# default_user_manage_ttl = "2h"
+# default_admin_ttl = "2h"
+# max_self_issued_agent_invoke_ttl = "30d"
+# self_agent_invoke_ttl_options = ["8h", "7d", "30d"]
+# admin_agent_invoke_ttl_options = ["8h", "7d", "30d", "never"]
+# user_manage_ttl_options = ["30m", "2h", "8h", "1d"]
+# admin_ttl_options = ["30m", "2h", "8h", "1d"]
+#
+# [browser_auth]
+# enabled = true
+# public_origin = "http://localhost:8080"
+# session_cookie_name = "aab_session"
+# csrf_header = "X-Agent-Access-CSRF"
+# csrf_key_ref = "env:AGENT_ACCESS_BROWSER_CSRF_KEY"
+# session_ttl = "8h"
+# allowed_return_paths = ["/ui"]
+#
+# [browser_auth.local_password]
+# enabled = true
+# pepper_ref = "env:AGENT_ACCESS_LOCAL_PASSWORD_PEPPER"
+# min_password_length = 12
+# Failed attempts and lockouts count per principal and client source
+# (IPv4 address or IPv6 /64); a lockout never blocks other sources.
+# max_failed_attempts = 10
+# lockout_ttl = "15m"
+#
+# Optional single-tenant Microsoft Entra browser login. This requires the
+# managed identity/store/broker-token/management/browser/local-password blocks
+# above. Register a single-tenant Web application in Entra with the exact
+# callback derived from public_origin, for example:
+# http://localhost:8080/v1/auth/oidc/microsoft/callback
+# Use authorization code flow, leave implicit grants disabled, set
+# groupMembershipClaims = "SecurityGroup", set Assignment required = Yes, and
+# assign the intended users/groups. Do not grant Microsoft Graph permissions.
+# Production public_origin and its exact registered callback must use HTTPS.
+#
+# [browser_auth.oidc.microsoft]
+# enabled = true
+# tenant_id = "00000000-0000-0000-0000-000000000000"
+# client_id = "00000000-0000-0000-0000-000000000000"
+# client_secret_ref = "env:AGENT_ACCESS_MICROSOFT_OIDC_CLIENT_SECRET"
+# flow_key_ref = "env:AGENT_ACCESS_MICROSOFT_OIDC_FLOW_KEY"
+# flow_ttl = "10m"
+# max_pending_flows = 10000
+# jit_provisioning = true
+# external_membership_ttl = "8h"
+#
+# The client-secret ref contains the nonempty value issued by Entra. The flow
+# key ref contains an independent unpadded base64url value that decodes to
+# exactly 32 random bytes. Microsoft group Object IDs are mapped to existing
+# broker groups through the admin API, CLI, or portal. Overage/distributed group
+# claims deny that login; the broker does not call Graph. An already linked user
+# may log in with a complete empty group list and retain any local access.
+#
+# [portal]
+# enabled = true
+# mount_path = "/ui"
+# static_dir = "/var/lib/agent-access-broker/portal"
+#
+# [management]
+# enabled = true
+# admin_principals = ["ops-admin"]
+# admin_groups = ["broker-admins"]
+# allow_classless_admin_identities = true
+# allow_classless_user_management = false
+#
+# [management.initial_admin]
+# mode = "create_if_empty"
+# principal_id = "admin"
+# initial_password = "<insert-a-unique-generated-password>"
+# Generate a unique password before enabling bootstrap; placeholder literals
+# are rejected by configuration validation.
+#
+# allow_classless_admin_identities lets a configured static admin bootstrap
+# the first managed principals and admin tokens. Turn it off after bootstrap
+# when admin access should require managed admin broker tokens.
+# management.initial_admin creates the first DB-backed admin only when the
+# managed store has no principals, and the first login must reset the password.
+
+[credentials.service.jira]
+type = "basic_api_token"
+username_ref = "env:JIRA_SERVICE_USERNAME"
+token_ref = "env:JIRA_SERVICE_API_TOKEN"
+
+# Optional per-user Jira execution credentials use the same local secret-store
+# shape as Confluence. Per-user-only lookup-backed Jira policy can run without
+# the separate read-only lookup credential below; service-mode lookup-backed
+# policy still requires it.
+#
+# [credentials.per_user.jira]
+# type = "secret_store"
+# provider = "local_file"
+# path = "/etc/agent-access/jira-user-credentials.json"
+#
+# Example local-file secret store:
+#
+# {
+#   "credentials": [
+#     {
+#       "principal": "alice@example.com",
+#       "type": "basic_api_token",
+#       "username_ref": "env:JIRA_ALICE_USERNAME",
+#       "token_ref": "env:JIRA_ALICE_API_TOKEN"
+#     }
+#   ]
+# }
+#
+# Alternative managed-store Jira per-user credential shape. The credential row
+# must exist in the managed store for the authenticated principal and the
+# configured credential name.
+#
+# [credentials.per_user.jira]
+# type = "managed_store"
+# credential_name = "default"
+# profile = "jira-cloud-api-token"
+
+[credentials.lookup.jira]
+type = "basic_api_token"
+username_ref = "env:JIRA_LOOKUP_USERNAME"
+token_ref = "env:JIRA_LOOKUP_API_TOKEN"
+read_only = true
+
+[credentials.service.confluence]
+type = "basic_api_token"
+username_ref = "env:CONFLUENCE_SERVICE_USERNAME"
+token_ref = "env:CONFLUENCE_SERVICE_API_TOKEN"
+
+[credentials.lookup.confluence]
+type = "basic_api_token"
+username_ref = "env:CONFLUENCE_LOOKUP_USERNAME"
+token_ref = "env:CONFLUENCE_LOOKUP_API_TOKEN"
+read_only = true
+
+# Per-user-only lookup-backed Confluence policy can run without
+# [credentials.lookup.confluence]. Service-mode lookup-backed policy still
+# requires the separate read-only lookup credential.
+#
+# [credentials.per_user.confluence]
+# type = "managed_store"
+# credential_name = "default"
+# profile = "confluence-cloud-api-token"
+
+[credentials.service.gitlab]
+type = "bearer_token"
+token_ref = "env:GITLAB_SERVICE_TOKEN"
+
+# CloudBees CI is optional. Grant cloudbees_ci_job resources and actions separately.
+# [credentials.service.cloudbees_ci]
+# type = "basic_api_token"
+# username_ref = "env:CLOUDBEES_CI_USERNAME"
+# token_ref = "env:CLOUDBEES_CI_API_TOKEN"
+#
+[credentials.lookup.gitlab]
+type = "bearer_token"
+token_ref = "env:GITLAB_LOOKUP_TOKEN"
+read_only = true
+
+# [credentials.per_user.gitlab]
+# type = "managed_store"
+# credential_name = "default"
+# profile = "gitlab-access-token"
+
+# [credentials.service.gitlab_git]
+# type = "bearer_token"
+# token_ref = "env:GITLAB_SERVICE_TOKEN"
+#
+# [credentials.per_user.gitlab_git]
+# type = "managed_store"
+# credential_name = "default"
+# profile = "git-bearer-token"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+# Optional visible write attribution. Missing or empty lists disable attribution.
+# Patterns match broker attribution capabilities for the provider, not every
+# provider action. `page.*` includes attribution-capable page draft and comment
+# actions. GitLab `merge_request.*` also includes direct inline/reply adds,
+# draft adds, and publish-all/review-submit summaries; draft update remains
+# non-attributed. Use exact action names for narrower behavior.
+#
+# [attribution.actions]
+# jira = ["comment.*", "issue.create", "issue.child.create", "issue.update"]
+# confluence = ["page.*", "blog.*"]
+# gitlab = ["issue.*", "merge_request.*"]
+
+# Resource selectors are shared by grants and token restrictions.
+# Labels are optional. All and namespace entries include new upstream resources.
+
+[[policy.resources]]
+id = "jira-proj"
+resource_type = "jira_project"
+selector = { kind = "exact", value = "PROJ" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resources]]
+id = "jira-ops"
+resource_type = "jira_project"
+selector = { kind = "exact", value = "OPS" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resources]]
+id = "jira-all"
+resource_type = "jira_project"
+selector = { kind = "all" }
+allowed_execution_contexts = ["internal"]
+enabled = true
+
+[[policy.resources]]
+id = "confluence-eng"
+resource_type = "confluence_space"
+selector = { kind = "exact", value = "ENG" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resources]]
+id = "confluence-all"
+resource_type = "confluence_space"
+selector = { kind = "all" }
+allowed_execution_contexts = ["internal"]
+enabled = true
+
+[[policy.resources]]
+id = "git-project"
+resource_type = "git_repository"
+selector = { kind = "exact", value = "team/project" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resources]]
+id = "git-fork"
+resource_type = "git_repository"
+selector = { kind = "exact", value = "alice/project-fork" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resources]]
+id = "git-team"
+resource_type = "git_repository"
+selector = { kind = "namespace", value = "team" }
+allowed_execution_contexts = ["default", "internal", "external"]
+enabled = true
+
+[[policy.resource_groups]]
+id = "engineering"
+name = "Engineering"
+included_resource_ids = ["jira-proj", "confluence-eng", "git-project"]
+excluded_resource_ids = []
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "jira"
+actions = ["issue_type.list", "issue.view", "issue.create", "issue.child.create", "issue.update", "issue.parent.set", "issue.dependency.add", "search", "comment.list", "comment.view", "comment.add", "comment.reply", "comment.update", "comment.delete", "comment.property.list", "comment.property.get", "comment.property.set", "comment.property.delete", "attachment.add", "attachment.list", "attachment.download", "verify"]
+resources = { resource_group_ids = ["engineering"] }
+execution_contexts = ["default"]
+credential_mode = "service"
+
+# Example per-user Jira grant. Enable only when [credentials.per_user.jira] is
+# configured and the authenticated principal has a matching store record. This
+# validates without [credentials.lookup.jira] only when no lookup-backed Jira
+# grant uses credential_mode = "service".
+#
+# [[policy.grants]]
+# subjects = ["user:alice@example.com"]
+# service = "jira"
+# actions = ["issue_type.list", "issue.view", "issue.create", "issue.child.create", "issue.update", "issue.parent.set", "issue.dependency.add", "search", "comment.list", "comment.view", "comment.add", "comment.reply", "comment.update", "comment.delete", "comment.property.list", "comment.property.get", "comment.property.set", "comment.property.delete", "attachment.add", "attachment.list", "attachment.download", "verify"]
+# resources = { resource_ids = ["jira-ops"] }
+# execution_contexts = ["external"]
+# credential_mode = "per_user"
+#
+# Wildcard containment is supported for Jira project scope. Per-user-only
+# lookup-backed object operations use the selected user's upstream credential
+# for pre-authorization metadata lookup. Enable only when that upstream
+# credential is intended to bound all reachable projects for the principal.
+#
+# [[policy.grants]]
+# subjects = ["user:alice@example.com"]
+# service = "jira"
+# actions = ["issue_type.list", "issue.view", "issue.create", "issue.child.create", "issue.update", "issue.parent.set", "issue.dependency.add", "search", "comment.list", "comment.view", "comment.add", "comment.reply", "comment.update", "comment.delete", "comment.property.list", "comment.property.get", "comment.property.set", "comment.property.delete", "attachment.add", "attachment.list", "attachment.download", "verify"]
+# resources = { resource_ids = ["jira-all"] }
+# execution_contexts = ["internal"]
+# credential_mode = "per_user"
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "confluence"
+actions = ["page.view", "search", "page.create", "page.update", "page.move", "attachment.add", "attachment.list", "attachment.download", "verify"]
+resources = { resource_group_ids = ["engineering"] }
+execution_contexts = ["default"]
+credential_mode = "service"
+
+# Draft grants require [broker_tokens].hash_key_ref for stable signed draft handles.
+# [[policy.grants]]
+# subjects = ["group:anonymous"]
+# service = "confluence"
+# actions = ["page.draft.create", "page.draft.stage", "page.draft.view", "page.draft.update", "page.draft.publish", "page.draft.discard", "page.draft.verify", "page.draft.attachment.add", "page.draft.attachment.list", "page.draft.attachment.download"]
+# resources = { resource_ids = ["confluence-eng"] }
+# execution_contexts = ["external"]
+# credential_mode = "service"
+
+# Blog grants are explicit; page grants do not automatically include blog posts.
+# [[policy.grants]]
+# subjects = ["group:anonymous"]
+# service = "confluence"
+# actions = ["blog.view", "blog.search", "blog.create", "blog.update", "blog.attachment.add", "blog.attachment.list", "blog.attachment.download", "blog.verify"]
+# resources = { resource_ids = ["confluence-eng"] }
+# execution_contexts = ["external"]
+# credential_mode = "service"
+
+# [[policy.grants]]
+# subjects = ["user:alice@example.com"]
+# service = "confluence"
+# actions = ["page.view", "search", "page.update", "page.move", "attachment.add", "attachment.list", "attachment.download", "verify"]
+# resources = { resource_ids = ["confluence-all"] }
+# execution_contexts = ["internal"]
+# credential_mode = "per_user"
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "gitlab"
+actions = [
+  "project.view",
+  "issue.view",
+  "issue.search",
+  "issue.create",
+  "issue.update",
+  "issue.note.list",
+  "issue.note.add",
+  "issue.note.update",
+  "issue.note.delete",
+  "merge_request.view",
+  "merge_request.search",
+  "merge_request.create",
+  "merge_request.update",
+  "merge_request.note.list",
+  "merge_request.note.add",
+  "merge_request.note.update",
+  "merge_request.note.delete",
+  "merge_request.discussion.list",
+  "merge_request.discussion.view",
+  "merge_request.discussion.add",
+  "merge_request.discussion.inline.add",
+  "merge_request.discussion.note.add",
+  "merge_request.discussion.note.update",
+  "merge_request.discussion.note.delete",
+  "merge_request.discussion.resolve",
+  "merge_request.discussion.reopen",
+  "merge_request.reviewer.list",
+  "merge_request.commit.list",
+  "merge_request.pipeline.list",
+  "merge_request.diff.list",
+  "merge_request.diff.raw.download",
+  "merge_request.diff_version.list",
+  "merge_request.diff_version.view",
+  "merge_request.merge",
+  "branch.list",
+  "branch.view",
+  "branch.create",
+  "protected_branch.list",
+  "protected_branch.view",
+  "protected_branch.verify",
+  "file.view",
+  "file.raw.download",
+  "file.create",
+  "file.update",
+  "file.delete",
+  "commit.list",
+  "commit.view",
+  "commit.create",
+  "pipeline.list",
+  "pipeline.view",
+  "pipeline.run",
+  "pipeline.retry",
+  "pipeline.cancel",
+  "job.list",
+  "job.view",
+  "job.trace.download",
+  "job.retry",
+  "job.cancel",
+  "job.play",
+]
+resources = { resource_group_ids = ["engineering"] }
+execution_contexts = ["default"]
+credential_mode = "service"
+
+# GitLab REST and Git HTTP use the same git_repository resource entries.
+# Exact, nested namespace, and all selectors are supported. Credentials do not
+# replace the resource policy boundary.
+# Owner-scoped pending-review participation should normally use per-user
+# credentials so GitLab attributes drafts, reviewer state, and summaries to the
+# human. This separate grant keeps draft CRUD/publication and review submission
+# out of the broad service-account grant above; direct inline/reply actions in
+# that example intentionally remain bot comments.
+#
+# [[policy.grants]]
+# subjects = ["user:alice@example.com"]
+# service = "gitlab"
+# actions = [
+#   "merge_request.draft_note.list",
+#   "merge_request.draft_note.view",
+#   "merge_request.draft_note.add",
+#   "merge_request.draft_note.update",
+#   "merge_request.draft_note.delete",
+#   "merge_request.draft_note.publish",
+#   "merge_request.draft_note.publish_all",
+#   "merge_request.review.submit",
+#   "merge_request.approval.view",
+#   "merge_request.approval_state.view",
+#   "merge_request.approval_rule.list",
+#   "merge_request.approval_rule.view",
+#   "merge_request.approve",
+#   "merge_request.unapprove",
+#   "merge_request.suggestion.apply",
+#   "merge_request.suggestion.batch_apply",
+# ]
+# Suggestion application commits to the MR source branch. For a fork MR, one
+# selected grant must therefore cover both the target and source repositories;
+# grants are not combined. Same-project MRs need only the one repository.
+# resources = { resource_ids = ["git-project", "git-fork"] }
+# execution_contexts = ["internal"]
+# credential_mode = "per_user"
+#
+# Service mode is also supported for an intentional bot reviewer. Every Broker
+# principal sharing that credential then shares the bot-owned draft set and,
+# when granted, can read, edit, delete, publish, or submit it. Do not describe
+# such activity as the human principal's GitLab review.
+#
+# [[policy.grants]]
+# subjects = ["group:git-users"]
+# service = "gitlab_git"
+# actions = ["repo.fetch", "repo.push"]
+# resources = { resource_ids = ["git-project", "git-team"] }
+# execution_contexts = ["internal"]
+# credential_mode = "service"
+
+# Development-only fake backend (fake.echo on fake_project resources) for local
+# smoke tests; requires deployment.enable_fake_service = true.
+# [providers.fake]
+
+# [providers.cloudbees_ci]
+# allowed_upstream_hosts = ["https://ci.example.com/team-ci/**"]
+# max_log_scan_bytes = 16777216 # default 16 MiB; must be <= limits.max_upstream_response_bytes
+#
+# [providers.cloudbees_ci.controllers.team-ci]
+# base_url = "https://ci.example.com/team-ci/"
+# web_base_url = "https://ci-public.example.com/team-ci/" # optional public Jenkins root; no requests sent here
+#
+[providers.jira]
+tenant_host = "example.atlassian.net"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://example.atlassian.net/rest/api/3/**",
+  "https://api.media.atlassian.com/**",
+]
+
+# [providers.jira.egress_proxy]
+# url = "http://jira-proxy.example:8080"
+
+[providers.jira.attachments]
+max_bytes = 10485760
+max_total_bytes = 52428800
+max_download_bytes = 104857600
+media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+
+[providers.jira.content]
+comment_formats = ["adf"]
+# Bounds caller-supplied rich-content writes and every declared native Jira body
+# returned by reads or mutation readbacks, including native response mode.
+max_body_bytes = 1048576
+
+[providers.jira.search]
+max_results = 50
+
+[providers.jira.comments]
+max_results = 50
+max_property_value_bytes = 32768
+allowed_property_key_prefixes = ["agent-access."]
+
+[providers.jira.issue_links]
+dependency_link_type = "Blocks"
+dependency_outward = "blocks"
+dependency_inward = "is blocked by"
+
+# Visibility restrictions are denied unless explicitly allowlisted.
+# [[providers.jira.comments.allowed_visibility]]
+# type = "role"
+# value = "Developers"
+#
+# [[providers.jira.comments.allowed_visibility]]
+# type = "group"
+# identifier = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+[providers.confluence]
+tenant_host = "example.atlassian.net"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://example.atlassian.net/wiki/rest/api/**",
+  "https://example.atlassian.net/wiki/api/v2/**",
+  "https://example.atlassian.net/wiki/download/attachments/**",
+  "https://api.media.atlassian.com/**",
+]
+
+# [providers.confluence.egress_proxy]
+# url = "http://confluence-proxy.example:8080"
+
+[providers.confluence.attachments]
+max_bytes = 10485760
+max_total_bytes = 52428800
+max_download_bytes = 104857600
+media_types = ["text/plain", "application/json", "image/png", "text/html", "text/markdown"]
+
+[providers.confluence.content]
+# Native write targets and returned read representations. Normalized reads
+# preserve a returned native body and derive Markdown/text from present ADF
+# first, otherwise storage. Storage also enables normalized writes.
+page_formats = ["atlas_doc_format", "storage"]
+blog_formats = ["storage"]
+comment_formats = ["storage"]
+max_body_bytes = 2097152
+
+[providers.confluence.search]
+max_results = 50
+
+[providers.gitlab]
+api_base_url = "https://gitlab.example.com/api/v4"
+web_base_url = "https://gitlab.example.com"
+allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
+
+# Explicit credential issuance for downstream review tools; see docs/gitlab-bot-provisioning.md.
+# These caps apply in addition to independently granted repository-scoped actions.
+[providers.gitlab.provisioning]
+enabled = false
+max_access_level = 30
+max_token_lifetime_days = 30
+allowed_token_scopes = ["api", "read_api", "read_repository"]
+
+# Project webhook destination policy is operator-owned TOML, not grant or portal
+# configuration. The empty default denies hook creation and URL-changing
+# updates while still allowing separately granted operations on existing hooks.
+[providers.gitlab.webhooks]
+allowed_destinations = []
+allow_disable_ssl_verification = false
+
+# Example deployment policy (replace the empty list above rather than defining
+# this table twice):
+# allowed_destinations = [
+#   "https://hooks.example.com/gitlab/**",
+#   "http://hooks.internal.example/**", # explicit authorization for plaintext HTTP
+# ]
+# allow_disable_ssl_verification = false
+
+# [providers.gitlab.egress_proxy]
+# url = "http://gitlab-proxy.example:8080"
+
+# One file per project.upload. Empty media_types allows all types, including
+# text/html exported sessions; set an explicit list to restrict uploads.
+[providers.gitlab.attachments]
+max_bytes = 10485760
+max_total_bytes = 52428800
+media_types = []
+
+[providers.gitlab.content]
+max_body_bytes = 1048576
+max_commit_actions = 25
+max_file_bytes = 10485760
+max_raw_download_bytes = 104857600
+
+[providers.gitlab.search]
+max_results = 50
+
+# [gateways.gitlab_git]
+# kind = "git_http"
+# display_name = "GitLab Git"
+# broker_hosts = ["git.example.test"]
+# upstream_base_url = "https://gitlab.example.com"
+# allowed_upstream_hosts = ["https://gitlab.example.com/**"]
+# auth_modes = ["basic_broker_token"]
+# basic_broker_token_username = "agent-access"
+# credential_modes = ["service"]
+# redirect_policy = "none"
+# request_body_max_bytes = 536870912
+# response_body_max_bytes = 536870912
+# streaming_idle_timeout_ms = 30000
+#
+# [gateways.gitlab_git.git]
+# allow_fetch = true
+# allow_push = true
+# deny_ref_patterns = ["refs/heads/main"]
+# deny_delete_refs = true # default
+# receive_pack_prefix_max_bytes = 65536
+
+[limits]
+request_body_timeout_ms = 300000
+# Authentication, anonymous, and unauthenticated traffic budgets (fixed
+# 60-second windows), checked before body extraction on control-plane routes.
+# Authenticated API calls are limited per service below.
+auth_requests_per_principal_per_minute = 100
+auth_requests_per_source_per_minute = 300
+max_concurrent_requests = 100
+max_concurrent_requests_per_principal = 10
+max_http_body_bytes = 536870912
+max_download_bytes = 104857600
+max_upstream_response_bytes = 536870912
+request_timeout_ms = 30000
+streaming_idle_timeout_ms = 30000
+# Use broker-owned disk-backed storage in production. `serve` startup and reload
+# admission lock this directory for the lifetime of the runtime generation.
+upload_spool_dir = "target/agent-access-upload-spool"
+upload_spool_max_bytes = 2147483648
+
+# Service invocations (POST /v1/invoke, HTTP MCP action tools, and Git pack
+# POSTs) are limited per principal and service in a rolling window. Discovery,
+# runtime specs, management, and MCP protocol messages are not counted.
+# Precedence: principal override -> service limit -> default -> 100 per 1m.
+[limits.invocations]
+default = { requests = 100, window = "1m" }
+
+[limits.invocations.services.jira]
+requests = 60
+window = "1m"
+
+# Principal overrides are only valid with identity.authority = "toml" and must
+# name a configured static principal (or "anonymous"). Managed deployments
+# store overrides in the managed store instead.
+#
+# [[limits.invocations.principal_overrides]]
+# principal = "alice"
+# service = "jira"
+# requests = 10
+# window = "1m"
+
+# Omit [audit] to disable audit. type and path are required when it is present:
+# - sqlite: a standalone SQLite audit database that the portal Audit/Activity
+#   pages, `agent-access audit`, and /v1/audit/* can query (with [management]
+#   enabled). `serve` creates it owner-only and migrates it at startup; reload
+#   never creates or migrates one. With the broker stopped, check it with
+#   `agent-access-broker --config <file> audit verify`.
+# - jsonl: size-rotated JSON Lines files for log shippers; not queryable.
+# path must not be the managed_store database. `serve` startup and reload admission
+# lock a sibling <path>.agent-access.lock file before writing audit records.
+# Changing type (including adding or removing [audit]) requires a restart.
+[audit]
+type = "sqlite"
+path = "target/agent-access-broker-audit/audit.sqlite"
+# JSONL alternative (rotate_bytes is valid only with type = "jsonl"):
+# type = "jsonl"
+# path = "target/agent-access-broker-audit/audit.jsonl"
+# rotate_bytes = 104857600 # default
+retention_days = 30
+queue_capacity = 1024
+# terminal_queue_capacity defaults to limits.max_concurrent_requests. If set
+# explicitly, it must be at least that limit so each accepted streaming
+# response has reserved capacity for its terminal audit.
+# terminal_queue_capacity = 100
+enqueue_timeout_ms = 1000
+durability = "write" # write | sync_data | sync_all
+
+# Trusted callers authenticate attesters separately from end principals.
+# Username and fingerprint identity require managed identity/storage/encryption.
+# Direct username mode is HTTP MCP only; the launcher controls BOTH protected
+# headers. Explicit bindings are created through administration, never inferred.
+# [identity.trusted_callers.managed_client]
+# credential_ref = "file:/run/secrets/managed-client-attestation"
+# credential_transport = "authorization_user"
+# username_namespace = "managed_workspace"
+# context_mode = "fixed"
+# execution_context = "internal"
+#
+# [identity.trusted_callers.identity_ingress]
+# credential_ref = "file:/run/secrets/ingress-attestation"
+# credential_transport = "caller_authorization" # default transport
+# username_namespace = "managed_workspace" # optional username capability
+# context_mode = "asserted"
+# allowed_execution_contexts = ["internal", "external"]
+# allow_forwarded_identity = true # fingerprint capability only
+#
+# Context-only callers still need an ordinary principal credential.
+# [identity.trusted_callers.job_runner]
+# credential_ref = "file:/run/secrets/job-runner-attestation"
+# context_mode = "fixed"
+# execution_context = "internal"
+#
+# Direct username: Authorization: Bearer <direct caller credential> and
+# X-Agent-Access-User: alice. Omit X-Agent-Access-Context (context is fixed).
+# Relay username: X-Agent-Access-Caller-Authorization: Bearer <relay credential>
+# and X-Agent-Access-User: alice, plus approved context for an asserted caller.
+# Fingerprint: dedicated caller header and X-AW-Identity-Token-SHA256:
+# sha256:<64 lowercase hex>. Never combine usernames and fingerprints.
+# Fixed callers omit context. MCP rejects all request trailers. Other routes,
+# including Git and REST, reject X-Agent-Access-User.
+# In each Git [gateways.<service>] table, optionally add:
+# allow_forwarded_identity = true # permits token-free fingerprint identity
+# Secrets for username callers are 16–8192 visible ASCII bytes without commas or
+# whitespace, distinct from each other and static principal credentials.
+# Direct secrets cannot start with aab_. See docs/trusted-callers.md.
+
+# Optional delegated OAuth test provider (non-production only). Requires managed
+# identity/store/encryption, browser auth, management and enable_fake_service.
+# Full runnable harness and separate provider setup: docs/oauth.md.
+# [oauth.registrations.stub]
+# adapter = "stub"
+# base_url = "http://127.0.0.1:8099"
+# redirect_uri = "http://127.0.0.1:8080/v1/oauth/callback/stub"
+# client_id = "broker-local"
+# client_secret_ref = "env:OAUTH_STUB_CLIENT_SECRET"
+# allow_insecure_loopback = true
+# [oauth.registrations.stub.permission_profiles.read]
+# scopes = ["records.read", "offline_access"]
+# audience = "records-api"
+# target = "workspace-one"
+# [credentials.per_user.oauth_stub]
+# type = "oauth"
+# provider = "stub"
+# profile = "read"
+
+# Imported MCP OAuth: add to a managed/browser-enabled deployment and allow the
+# exact endpoint in [imports] with allowed_kinds = ["mcp_http"]. Configure the
+# imported service's personal OAuth binding in the portal. See docs/imported-oauth.md.
+# [oauth.registrations.internal_tools]
+# adapter = "mcp_oauth"
+# base_url = "https://login.example.com/issuer"
+# redirect_uri = "https://broker.example.com/v1/oauth/callback/internal_tools"
+# client_id = "registered-broker-client"
+# client_auth = "none"
+# rotation = "preserve_old"
+#
+# [oauth.registrations.internal_tools.adapter_settings]
+# resource = "https://tools.example.com/mcp"
+# protected_resource_metadata_url = "https://tools.example.com/.well-known/oauth-protected-resource/mcp"
+# authorization_server_metadata_url = "https://login.example.com/.well-known/oauth-authorization-server/issuer"
+# authorization_endpoint = "https://login.example.com/authorize"
+# token_endpoint = "https://login.example.com/token"
+#
+# [oauth.registrations.internal_tools.permission_profiles.default]
+# scope_mode = "server_default"
+# audience = "https://tools.example.com/mcp"
+# target = "https://tools.example.com/mcp"
+# Do not set scopes in server_default mode, even to an empty list. All profiles
+# in a registration use one mode. For explicit permissions, omit scope_mode (or
+# set it to "explicit") and supply a nonempty scopes list, such as ["tools.read"].
+
+# Gmail: add to a managed/browser-enabled deployment. Full setup: docs/providers-gmail.md.
+# [providers.gmail]
+#
+# [oauth.registrations.google]
+# adapter = "google"
+# base_url = "https://accounts.google.com"
+# redirect_uri = "http://127.0.0.1:8787/v1/oauth/callback/google"
+# client_id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+# client_secret_ref = "env:GOOGLE_CLIENT_SECRET"
+# client_auth = "client_secret_post"
+# encoding = "form"
+# rotation = "preserve_old"
+# allow_insecure_loopback = true
+#
+# [oauth.registrations.google.permission_profiles.mail]
+# scopes = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+# audience = "https://gmail.googleapis.com/"
+# target = "me"
+#
+# [credentials.per_user.gmail]
+# type = "oauth"
+# provider = "google"
+# profile = "mail"
+#
+# [[policy.grants]]
+# subjects = ["user:YOUR_BROKER_PRINCIPAL"]
+# service = "gmail"
+# actions = ["account.view", "label.list", "message.search", "message.view", "thread.view", "message.archive", "thread.archive", "message.trash", "thread.trash", "message.restore", "thread.restore"]
+# credential_mode = "per_user"

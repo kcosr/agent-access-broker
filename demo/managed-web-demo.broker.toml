@@ -1,0 +1,235 @@
+[deployment]
+environment = "development"
+enable_fake_service = true
+
+[providers.fake]
+
+# Optional Teams Workflows notifications; policy is managed below. Store signed
+# URLs only in exact Teams destination resources using the admin editor. Do not
+# add credentials.service.teams. See docs/providers-teams.md.
+# [providers.teams]
+# allowed_upstream_hosts = ["https://YOUR-ENVIRONMENT.environment.api.powerplatform.com/**"]
+
+[identity]
+mode = "required"
+authority = "managed"
+
+# The local demo uses the concrete default during its loopback-only transition
+# setup. A real context-aware deployment must put both listeners behind trusted
+# ingress and remove default_context after every governed path is attested.
+[execution_context]
+allowed_values = ["default", "internal", "external"]
+default_context = "default"
+
+[[identity.sources]]
+name = "managed"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+[managed_store]
+type = "sqlite"
+path = "/tmp/agent-access-broker-demo/state/managed-store.sqlite3"
+require_registered_principal_for_invocation = true
+auto_migrate = true
+
+[credential_encryption]
+active_key = "demo"
+
+[[credential_encryption.keys]]
+id = "demo"
+provider = "env"
+env = "AAB_DEMO_CREDENTIAL_KEY"
+
+[broker_tokens]
+hash_key_ref = "env:AAB_DEMO_BROKER_TOKEN_HASH_KEY"
+default_agent_invoke_ttl = "30d"
+default_user_manage_ttl = "8h"
+default_admin_ttl = "8h"
+max_self_issued_agent_invoke_ttl = "30d"
+
+[browser_auth]
+enabled = true
+session_cookie_name = "aab_demo_session"
+csrf_header = "X-Agent-Access-CSRF"
+csrf_key_ref = "env:AAB_DEMO_BROWSER_CSRF_KEY"
+session_ttl = "8h"
+allowed_return_paths = ["/ui"]
+
+[browser_auth.local_password]
+enabled = true
+pepper_ref = "env:AAB_DEMO_LOCAL_PASSWORD_PEPPER"
+min_password_length = 8
+max_failed_attempts = 10
+lockout_ttl = "15m"
+
+[portal]
+enabled = true
+mount_path = "/ui"
+static_dir = "/tmp/agent-access-broker-demo/portal-dist"
+
+[management]
+enabled = true
+
+[management.initial_admin]
+mode = "create_if_empty"
+principal_id = "admin"
+# The launcher fills this empty placeholder with a new random bootstrap password.
+# This tracked template intentionally fails validation until materialized.
+initial_password = ""
+
+[policy]
+authority = "managed"
+default_decision = "deny"
+
+[audit]
+type = "sqlite"
+path = "/tmp/agent-access-broker-demo/state/audit.sqlite"
+
+[limits]
+max_concurrent_requests = 1000
+max_concurrent_requests_per_principal = 1000
+upload_spool_dir = "/tmp/agent-access-broker-demo/state/upload-spool"
+
+[limits.invocations]
+default = { requests = 100000, window = "1m" }
+
+[credentials.service.fake]
+type = "bearer_token"
+token_ref = "env:AAB_DEMO_FAKE_SERVICE_TOKEN"
+
+[credentials.service.jira]
+type = "basic_api_token"
+username_ref = "env:AAB_DEMO_JIRA_SERVICE_USERNAME"
+token_ref = "env:AAB_DEMO_JIRA_SERVICE_TOKEN"
+
+[credentials.lookup.jira]
+type = "basic_api_token"
+username_ref = "env:AAB_DEMO_JIRA_LOOKUP_USERNAME"
+token_ref = "env:AAB_DEMO_JIRA_LOOKUP_TOKEN"
+read_only = true
+
+[credentials.per_user.jira]
+type = "managed_store"
+credential_name = "default"
+profile = "jira-cloud-api-token"
+
+[credentials.service.confluence]
+type = "basic_api_token"
+username_ref = "env:AAB_DEMO_CONFLUENCE_SERVICE_USERNAME"
+token_ref = "env:AAB_DEMO_CONFLUENCE_SERVICE_TOKEN"
+
+[credentials.lookup.confluence]
+type = "basic_api_token"
+username_ref = "env:AAB_DEMO_CONFLUENCE_LOOKUP_USERNAME"
+token_ref = "env:AAB_DEMO_CONFLUENCE_LOOKUP_TOKEN"
+read_only = true
+
+[credentials.per_user.confluence]
+type = "managed_store"
+credential_name = "default"
+profile = "confluence-cloud-api-token"
+
+[credentials.service.gitlab]
+type = "bearer_token"
+token_ref = "env:AAB_DEMO_GITLAB_SERVICE_TOKEN"
+
+[credentials.lookup.gitlab]
+type = "bearer_token"
+token_ref = "env:AAB_DEMO_GITLAB_LOOKUP_TOKEN"
+read_only = true
+
+[credentials.per_user.gitlab]
+type = "managed_store"
+credential_name = "default"
+profile = "gitlab-access-token"
+
+[credentials.service.gitlab_git]
+type = "bearer_token"
+token_ref = "env:AAB_DEMO_GITLAB_GIT_SERVICE_TOKEN"
+
+[credentials.per_user.gitlab_git]
+type = "managed_store"
+credential_name = "default"
+profile = "git-bearer-token"
+
+[providers.jira]
+tenant_host = "jira.example.invalid"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://jira.example.invalid/rest/api/3/**",
+  "https://api.media.atlassian.com/**",
+]
+
+[providers.jira.attachments]
+media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+
+[providers.jira.content]
+comment_formats = ["adf"]
+max_body_bytes = 1048576
+
+[providers.jira.search]
+max_results = 50
+
+[providers.jira.comments]
+max_results = 50
+max_property_value_bytes = 32768
+allowed_property_key_prefixes = ["agent-access."]
+
+[providers.confluence]
+tenant_host = "confluence.example.invalid"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://confluence.example.invalid/wiki/rest/api/**",
+  "https://confluence.example.invalid/wiki/api/v2/**",
+  "https://confluence.example.invalid/wiki/download/attachments/**",
+  "https://api.media.atlassian.com/**",
+]
+
+[providers.confluence.attachments]
+media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+
+[providers.confluence.content]
+page_formats = ["atlas_doc_format", "storage"]
+blog_formats = ["storage"]
+comment_formats = ["storage"]
+max_body_bytes = 2097152
+
+[providers.confluence.search]
+max_results = 50
+
+[providers.gitlab]
+api_base_url = "https://gitlab.example.invalid/api/v4"
+web_base_url = "https://gitlab.example.invalid"
+allowed_upstream_hosts = ["https://gitlab.example.invalid/api/v4/**"]
+
+[providers.gitlab.content]
+max_body_bytes = 1048576
+max_commit_actions = 25
+max_file_bytes = 10485760
+max_raw_download_bytes = 104857600
+
+[providers.gitlab.search]
+max_results = 50
+
+[gateways.gitlab_git]
+kind = "git_http"
+display_name = "GitLab Git"
+broker_hosts = ["git.demo.test"]
+upstream_base_url = "https://gitlab.example.invalid"
+allowed_upstream_hosts = ["https://gitlab.example.invalid/**"]
+auth_modes = ["basic_broker_token"]
+basic_broker_token_username = "agent-access"
+credential_modes = ["service", "per_user"]
+redirect_policy = "none"
+correlation_headers = true
+request_body_max_bytes = 536870912
+response_body_max_bytes = 536870912
+streaming_idle_timeout_ms = 30000
+
+[gateways.gitlab_git.git]
+allow_fetch = true
+allow_push = true
+deny_ref_patterns = ["refs/heads/main", "refs/tags/**"]
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536

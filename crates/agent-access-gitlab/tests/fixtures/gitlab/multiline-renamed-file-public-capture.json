@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "agent-access.gitlab-multiline-evidence.v1",
+  "provenance": {
+    "project": "viktomas/test-project",
+    "mergeRequestIid": 7,
+    "noteId": 754841236,
+    "sources": {
+      "mergeRequest": "https://gitlab.com/api/v4/projects/20486274/merge_requests/7",
+      "currentDiffs": "https://gitlab.com/api/v4/projects/20486274/merge_requests/7/diffs?per_page=100&unidiff=true",
+      "capturedNotePayload": "https://gitlab.com/gitlab-org/gitlab/-/issues/347504",
+      "publicNote": "https://gitlab.com/viktomas/test-project/-/merge_requests/7#note_754841236"
+    },
+    "fieldEvidence": {
+      "mergeRequest.diff_refs": "captured from the public GitLab.com REST response",
+      "diff": "captured from the current public GitLab.com REST diffs response",
+      "responsePosition": "captured from the public GitLab.com note payload reproduced in gitlab-org/gitlab#347504",
+      "derivedRequestPosition": "derived from responsePosition by retaining the exact accepted position values and omitting response-only null optional fields; the original POST request was not captured"
+    }
+  },
+  "mergeRequest": {
+    "id": 93958054,
+    "iid": 7,
+    "project_id": 20486274,
+    "diff_refs": {
+      "base_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80",
+      "head_sha": "f9ce7e16e56c162edbc9e480108041cf6b0291fe",
+      "start_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80"
+    }
+  },
+  "diff": {
+    "diff": "--- a/test.js\n+++ b/test.ts\n@@ -10,17 +10,17 @@\n //  This seems to be a result of only some next-line content triggering this issue and other content doesn't. \n //  If there is an empty line after, for example, this issue doesn't not occur\n \n-function containingFunction(){\n-    function subFunction(){\n+function containingFunction(): void{\n+    function subFunctionA(): void{\n         console.log(\"Some Output\");\n     }\n     // Issue is not present when the line after the function name and opening { is empty\n-    function subFunction(){\n+    function subFunctionB(): void{\n \n         console.log(\"OPutput\");\n     }\n }\n \n-function anotherFunction(){\n+function anotherFunction(): void{\n     console.log(\"Other Output\");\n }\n",
+    "collapsed": false,
+    "too_large": false,
+    "new_path": "test.ts",
+    "old_path": "test.js",
+    "a_mode": "100644",
+    "b_mode": "100644",
+    "new_file": false,
+    "renamed_file": true,
+    "deleted_file": false,
+    "generated_file": null
+  },
+  "responsePosition": {
+    "base_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80",
+    "start_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80",
+    "head_sha": "f9ce7e16e56c162edbc9e480108041cf6b0291fe",
+    "old_path": "test.js",
+    "new_path": "test.ts",
+    "position_type": "text",
+    "old_line": null,
+    "new_line": 14,
+    "line_range": {
+      "start": {
+        "line_code": "5f7b6aabace88f74752a2b616628e855914e4bc7_15_13",
+        "type": "new",
+        "old_line": null,
+        "new_line": 13
+      },
+      "end": {
+        "line_code": "5f7b6aabace88f74752a2b616628e855914e4bc7_15_14",
+        "type": "new",
+        "old_line": null,
+        "new_line": 14
+      }
+    }
+  },
+  "derivedRequestPosition": {
+    "position_type": "text",
+    "base_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80",
+    "start_sha": "5e6dffa282c5129aa67cd227a0429be21bfdaf80",
+    "head_sha": "f9ce7e16e56c162edbc9e480108041cf6b0291fe",
+    "old_path": "test.js",
+    "new_path": "test.ts",
+    "new_line": 14,
+    "line_range": {
+      "start": {
+        "line_code": "5f7b6aabace88f74752a2b616628e855914e4bc7_15_13",
+        "type": "new",
+        "new_line": 13
+      },
+      "end": {
+        "line_code": "5f7b6aabace88f74752a2b616628e855914e4bc7_15_14",
+        "type": "new",
+        "new_line": 14
+      }
+    }
+  }
+}

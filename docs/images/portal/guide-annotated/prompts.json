@@ -1,0 +1,395 @@
+{
+  "method": "built-in imagegen",
+  "annotations": [
+    {
+      "file": "admin-account-access-light.png",
+      "original": "../guide/admin-account-access-light.png",
+      "sourceSha256": "b113e782492788cc01726a49a5203fa9bf4725adfed8a81d4cc6eb8d2ac059a6",
+      "outputSha256": "e541bfe1b7db66ccfb6a9f0d4c0b77051e580d8f23ad300d9e42102601af9052",
+      "description": "Independent role and self-service controls",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original 1440x960 canvas. Highlight only the Role dropdown and Self-service checkbox rows approximately x=44,y=670,width=756,height=90. Put callout on empty right margin x=913,y=648,width=475,height=100. Exact text: 'Two independent controls' then 'Role and personal self-service'. Arrow to right edge of highlighted rows. Preserve the Auditor role and unchecked Self-service enabled checkbox exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-denied-light.png",
+      "original": "../guide/admin-audit-denied-light.png",
+      "sourceSha256": "5777a6620662854f79511703dd47981ff06b53bc2442ca939eceb7c73c9c4f44",
+      "outputSha256": "bb215ce987fc4952ccbe05746cf9a4692652d8e7d6e5618f2e408201e5c3d51c",
+      "description": "Denied filter and reason-code inspection",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Outline sidebar selected Denied filter x=9,y=295,width=246,height=33 and first three reason-code cells x=785,y=178,width=307,height=100. Preserve all service_action_denied values, Denied labels, and counts 36 records and30records exactly. Put one white orange-border callout in appended strip at x=700,y=990,width=695,height=86. Exact two lines: 'Sample audit: investigate the denial' then 'Filter Denied and read the reason code'. Route arrow upward along far-right empty margin x=1430 then horizontally through empty row area to right edge of reason-code highlight; never cover data. Preserve Admin and My access header navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-detail-light.png",
+      "original": "../guide/admin-audit-detail-light.png",
+      "sourceSha256": "4d68e67cd3d0945543ce86fbec7366187c5cfb44f4bfd3b958a7bd25f3f153d3",
+      "outputSha256": "a6762a165d135fd032b5d673bad7d0d6bd9bccb4ca0362d9a433ce3f7e2a58ce",
+      "description": "Summary request-correlation IDs",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight only Broker request ID and Agent request ID rows approximately x=914,y=617,width=499,height=56. Put one white orange-border callout in appended strip at x=715,y=989,width=660,height=86. Exact two lines: 'Sample audit: correlate the request' then 'Use broker and agent request IDs'. Route arrow along empty outer-right margin x=1430 to right edge of IDs highlight, never across identity/request text. Preserve Admin and My access header navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-light.png",
+      "original": "../guide/admin-audit-light.png",
+      "sourceSha256": "5b7c71d2a18f6bb974c4272ff6f514a87cc86fb443aaac2ca68465097931242f",
+      "outputSha256": "3cb6c68911ca47f7989f3db71a8958171ce73d74cab7aa52b4c766eca102a73d",
+      "description": "Administrative global audit filters",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append a white 160px annotation strip below the original 1440x960 screenshot without scaling or cropping original UI; output1440x1120. Highlight sidebar Decision/Service/Principal controls with one thin rounded rectangle approximately x=7,y=207,width=250,height=305.  Put one white callout with orange border in appended strip at x=35,y=987,width=620,height=88. Exact two lines: 'Sample audit: filter before reviewing' then 'Filter by principal, service and decision'. Arrow goes up through empty sidebar right margin x=262 to right edge of control highlight near y=510; do not cover any UI text. Preserve Admin and My access header navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-timeline-light.png",
+      "original": "../guide/admin-audit-timeline-light.png",
+      "sourceSha256": "8e8b46786a4339f79e3daeae2640694cc0b347becedf5043529027d93a585daf",
+      "outputSha256": "abce6599a3f0f55f90a829a129e59e8173e3d6695be64b2ff1be124f1d2623ce",
+      "description": "Preflight-to-success timeline",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight both timeline entries together approximately x=926,y=325,width=496,height=111. Keep preflight, success, start, and +59 ms intact. Put one white orange-border callout in appended strip x=720,y=991,width=660,height=86. Exact two lines: 'Sample audit: follow one request' then 'Preflight to success, in order'. Route arrow upward through empty drawer space below entries to bottom edge of highlight without covering timeline text. Preserve Admin and My access header navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-grant-light.png",
+      "original": "../guide/admin-create-grant-light.png",
+      "sourceSha256": "ab7da532da09d8f0bf636aa812c84bacab357c22f518c2cdd1b815e4a959e697",
+      "outputSha256": "33095e68eb9c8843e116c1e023e060511d43620b4b306fd67af5cb450aaf80bd",
+      "description": "Review Jira Users as the selected subject of the unsaved read grant.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of this authentic dense portal screenshot. Preserve ALL original UI text, checkbox states, counts, JSON code, labels, colors, layout, and 3:2 canvas ratio exactly. Add only a thin orange rounded outline with very faint transparent orange fill around the selected Jira Users subject chip at original x300 y123 to548 y158. Place ONE white callout with orange border and compact DARK text in the EMPTY sidebar BELOW Settings, original x17 y360 to250 y450, exact two lines \"Grant to Jira Users\" and \"Review before saving\". Orange thin elbow arrow from right edge of callout runs through the unused gutter x280, vertically up to subject row, then points right to chip; it must not cross form labels or sidebar navigation. No panel/ribbon covers any original content. Never change any original UI or JSON character; this is an unsaved draft.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-group-light.png",
+      "original": "../guide/admin-create-group-light.png",
+      "sourceSha256": "c4a5010194384d306262ffb3b4984a0bd88b8124089b87e5b0440990060be62e",
+      "outputSha256": "7d47c2cf0acc3f4e8aef0b0d3321a53385fc1a464320135c2d58ed93b489aefd",
+      "description": "Choose a stable group ID and review the unsaved group draft.",
+      "prompt": "Use case: precise-object-edit. Add documentation annotations only to this authentic screenshot. Preserve all original UI text, numbers, labels, colors, layout, and 3:2 canvas ratio, with no crop or redesign. Highlight the Group ID label and project-readers field with a thin orange rounded outline and very faint transparent orange fill (original coords x450 y153 to990 y219). Place one small white card with thin orange border in empty gray area below and right of modal (x1040 y500 to1360 y592), exact two lines \"Choose a stable group ID\" and \"Review before saving\". One thin orange arrow points from callout to the highlighted Group ID field via empty gray area, never covering form labels or table content. Keep every underlying UI character unchanged and legible. This is an unsaved draft; do not imply successful creation.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-resource-light.png",
+      "original": "../guide/admin-create-resource-light.png",
+      "sourceSha256": "90f73d13bc6aa79d8b15e66825da6f52c1dc6cdf5e3e2c2abca69c1d8c620bf7",
+      "outputSha256": "5da4bfb44bc490210618d2958db1cde95747b9c6a5a6833d592b3c2f1633ffd7",
+      "description": "Review the unsaved exact DEMO Jira resource and default-only context.",
+      "prompt": "Use case: precise-object-edit. Annotate COPY of this authentic portal screenshot, preserving all original UI labels, text, counts, selected states, colors, layout, and 3:2 canvas ratio exactly. Add only thin orange rounded outlines with almost-transparent orange fill around Jira project/Specific resource/DEMO fields (original x914 y170 to1425 y306) and Allowed execution contexts showing default selected (x914 y375 to1305 y478). Place ONE white/orange-bordered card in empty left-center pane x365 y615 to770 y704, exact two lines of DARK text \"Exact DEMO, default only\" and \"Review before saving\". A thin orange elbow arrow follows empty pane margin x884 up to y410 then points right at the context outline, never covering UI labels or existing table data. Do not alter any original UI. Unsaved resource form; do not label it created or saved.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-service-account-light.png",
+      "original": "../guide/admin-create-service-account-light.png",
+      "sourceSha256": "4323499e9ca2e9167761d472faddb7dd172566810012612dc1790e3fc132dd0e",
+      "outputSha256": "b01db1b78b73762a25b25d3e5b0fd29cd4cb9c561023fe8bc5379887052e992a",
+      "description": "Review a noninteractive workload identity before creating the account.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of this authentic screenshot without changing any UI text, labels, numbers, controls, colors, layout, or 3:2 canvas ratio. Thin orange rounded highlight with almost-transparent orange fill around the top modal's explanation \"Service accounts are noninteractive...\" (original x451 y120 to987 y160) and a second thin highlight around Principal ID field (x451 y185 to987 y246). Place ONE white/orange-bordered callout in empty gray area below modal x1040 y580 to1390 y670 with exact two lines \"Use a workload identity\" and \"No interactive sign-in\". Thin orange elbow arrow follows empty gap immediately right of modal x1018 then left to highlighted explanation; never crosses existing text, table labels, or form controls. Preserve the original screenshot pixel content and every UI character unchanged; add annotations only. Draft is not saved.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-user-light.png",
+      "original": "../guide/admin-create-user-light.png",
+      "sourceSha256": "6b6dc0d453e26f0d6ed47271f25c4cdd79be9180face794b1b28161468cfa889",
+      "outputSha256": "a911c77a161574ab7912554d61d125b7bf8f59e15c68beda3177a456735e4d5a",
+      "description": "Review the selected Jira group, User role, and self-service before creating Morgan.",
+      "prompt": "Use case: precise-object-edit. Edit target: the supplied authentic portal screenshot. Produce an annotated COPY for a user guide. Preserve the entire original screenshot exactly: all UI text, labels, numeric counts, account names, colors, controls, canvas 1440x960 and layout. Do not redraw, paraphrase, simplify, blur or remove any UI. Add ONLY two thin orange rounded-rectangle outlines with extremely light transparent orange fill: one around Groups label and selected Jira Users field (x451 y414 to989 y477), one around Role and Self-service enabled controls (x451 y697 to989 y805). Add ONE small white callout card with orange border and short dark text in empty gray area to right of modal x1040 y650 to1390 y746, exact two-line text \"Check group and role\" / \"Review before creating\". Add a thin orange arrow from card toward Role control without covering labels, passing through empty space. Keep annotations restrained and match a clean documentation preview style. No claims this draft was saved. All original UI must remain unmodified and legible.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-disable-user-light.png",
+      "original": "../guide/admin-disable-user-light.png",
+      "sourceSha256": "e0ed099f3eff75756d2dbde151ef871e1e16b46fc7003e45ee414eec8ce725a6",
+      "outputSha256": "091f866f045dc69b7b17f36a33148521d3af002df068157ef72e54d2b726e284",
+      "description": "Unsubmitted disable confirmation retains records",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original 1440x960 canvas. Highlight confirmation message body approximately x=512,y=236,width=416,height=47, and red Disable user button x=817,y=301,width=114,height=43. Put callout in empty right margin x=1000,y=414,width=385,height=100. Exact text: 'Disable stops sign-in and token use' then 'Records remain; this draft is unsubmitted'. Arrow to right edge of confirmation-body highlight via empty margin. Preserve modal text, all original dimming, Bob active state, and unsubmitted controls.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-actions-light.png",
+      "original": "../guide/admin-grant-actions-light.png",
+      "sourceSha256": "c34d2ac9dd02e427dc78edc9580f58d15c970bfabe404d63637037462b888514",
+      "outputSha256": "5ba853a3b95627ee11f2e1f6bc7d85616de2c673cfb88b00b90a8eaf8a36a1e9",
+      "description": "Verify only issue.view and search are selected, with zero write-capable actions.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of the supplied authentic dense portal screenshot, preserving every UI label, number, JSON character, selection state, control, color, layout, and 3:2 ratio. Add thin orange rounded outlines with extremely faint transparent fill around the two SELECTED read-action rows: issue.view at original x316 y409 to465 y447, search at x316 y471 to435 y503; and around \"0 of 12 selected\" under Write-capable at x670 y318 to780 y348. Do NOT select or modify any write checkbox. Place ONE white/orange-bordered card with small DARK text in EMPTY sidebar below Settings, original x15 y370 to250 y456, exact two lines \"Only two read actions\" and \"No writes selected\". Thin orange elbow arrow runs along empty gutter x280 and points right at the highlighted issue.view checkbox, never crossing existing labels or form text. Do not cover any code/form content. All underlying screenshot text and selected states must remain exactly unchanged. Unsaved draft; add annotations only.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-editor-light.png",
+      "original": "../guide/admin-grant-editor-light.png",
+      "sourceSha256": "e246d5f4e81a835d3fa42fb953a3ad981221a31a5c67c01cb648c82d4b5e8167",
+      "outputSha256": "7c99805ba0d2cbf1543ed58ee7e0b0261f8c2544daabe09148cb945c481b5dc7",
+      "description": "Review the existing broader Jira grant, including its write-capable actions.",
+      "prompt": "Use case: precise-object-edit. Annotate COPY of this authentic screenshot without modifying any UI, selected checkboxes, labels, numeric counts, original JSON, controls, colors, layout or 3:2 ratio. Add thin orange rounded highlight with extremely faint transparent fill around existing Jira Users subject chip (original x303 y244 to549 y280), around orange Writes badge (x929 y479 to1008 y510), and effective-access row containing All 8 granted actions/default/DEMO (x1045 y315 to1405 y352). Place ONE white/orange-bordered callout in EMPTY sidebar below Settings at x16 y366 to251 y460, exact two lines of small DARK text \"Review existing wider access\" and \"Writes are already included\". Thin orange elbow arrow follows blank gutter x281 to y262 then points right to subject chip; no line crosses original labels, JSON, or controls. Preserve original UI text, including 6 of 10 selected and 2 of 12 selected. Do not imply changes saved; this existing editor says No changes.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-light.png",
+      "original": "../guide/admin-grant-light.png",
+      "sourceSha256": "466c83bef75acb7ed57817af17478b487feb6db49338cc09c16889a5891fb720",
+      "outputSha256": "10438126f6e2a99fad78f4e5d38fa4ade0fadd8a567343bbcc68e554a7f695c7",
+      "description": "Review the existing grant action list and full resource, context, and credential boundary.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of this authentic portal screenshot. Preserve every existing UI character, count, action name, label, status, timestamp, control, layout, color, and 3:2 canvas ratio exactly. Add thin orange rounded outlines with extremely faint transparent fill around drawer ACTIONS including read-only and write-capable action lists (original x914 y341 to1425 y475), and SCOPE resources/contexts/credential section (x914 y484 to1425 y629). Place ONE white/orange-bordered card in empty center pane below grants list at x337 y540 to815 y630, exact two lines of DARK text \"Existing demo includes writes\" and \"Review the full grant boundary\". Thin orange elbow arrow from card follows empty pane at x884 up to y447 then points right to the highlighted write-capable area edge. Do not cover any labels, actions, list rows or buttons; preserve every underlying UI character unmodified. Add only annotation layers.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-resources-light.png",
+      "original": "../guide/admin-grant-resources-light.png",
+      "sourceSha256": "67ca10ebbd427ac74982db30b902103ed21fd1ca4bb50f174e4d021bdba7c7c6",
+      "outputSha256": "9e5cb8514a15c7f27ed8a869d77ee0315c74cdcd078938525df3523a02e1aca0",
+      "description": "Confirm the direct DEMO resource, default context, and per_user credential mode in the unsaved grant.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of the supplied authentic dense screenshot. Preserve EVERY original UI character, JSON line, number, selection state, label, color, layout, and 3:2 ratio. Add only thin orange rounded highlights with almost-transparent fill around checked direct DEMO resource row (original x300 y199 to565 y245), effective access row showing default and DEMO (x1044 y183 to1404 y234), and JSON credentialMode per_user line (x1084 y692 to1390 y722). Keep Demo resources GROUP unchecked, unchanged. Place ONE white/orange-bordered card in EMPTY sidebar below Settings x15 y365 to251 y459, exact two lines of small DARK text \"Select the exact DEMO scope\" and \"default with per_user\". Thin orange elbow arrow follows unused gutter x280 to y219 then points right to direct DEMO highlight. No annotation covers labels, navigation, JSON, or form text. Keep all original content intact; form is unsaved.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-group-add-member-light.png",
+      "original": "../guide/admin-group-add-member-light.png",
+      "sourceSha256": "d1d2234bdd62ff5f11674e69c302fd2f6d461584ff4c4621364d4149124f2365",
+      "outputSha256": "ad18861ffb836395f3ce76371a5cfa3fdb7ac35e0b6ac345bd722358ad8ee82a",
+      "description": "Confirm Bob in the membership draft before submitting Add member.",
+      "prompt": "Use case: precise-object-edit. Annotate a COPY of the supplied authentic screenshot. Preserve all existing UI text, counts, labels, layout, colors and 3:2 canvas ratio exactly. Add thin orange rounded rectangle with extremely faint transparent orange fill around the selected Bob Demo User field and adjacent Add member button (original x16 y208 to451 y254). Place ONE white callout with thin orange border in empty white area below table x440 y390 to805 y475, exact two lines of DARK text \"Confirm Bob before adding\" and \"Membership is not saved yet\". A short thin orange elbow arrow runs through empty space to the Add member button from x450 y390 vertically to y257. No arrows or callouts cover any original UI label or table content. Preserve every underlying UI character unchanged.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-group-member-picker-light.png",
+      "original": "../guide/admin-group-member-picker-light.png",
+      "sourceSha256": "465c8d67d5bdd7819d77aebac79a6fe0becfa5885e4fca2dd1d1cc82a9b23933",
+      "outputSha256": "b96cab225037d545a7687884db65a5ab23ee8ff1a8d647112ff0b770880b016f",
+      "description": "Select the existing Bob principal rather than a custom identifier.",
+      "prompt": "Use case: precise-object-edit. Annotated COPY of the supplied authentic screenshot, preserving every original UI character, number, layout, color, and 3:2 ratio. Add only a thin orange rounded highlight with extremely faint transparent fill around the Bob Demo User option in the expanded member picker (original x35 y290 to306 y322). Place ONE white callout with thin orange border in the large empty white area below the table at x430 y395 to810 y480, exact two lines of DARK text \"Choose the existing Bob account\" and \"Check the principal ID first\". Thin orange elbow arrow points to the highlighted option, routed below the table at y360 then through empty gap x325 to the option edge. Do not cover any existing form label/table text or highlight the custom Add bob option. Never modify underlying UI or imply membership was saved.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-principals-light.png",
+      "original": "../guide/admin-principals-light.png",
+      "sourceSha256": "b8880df7c8a754d9ab461e52f13aba1145ec23e6011f4777f238380291ff9284",
+      "outputSha256": "b76edfb1f87cd595a321a72596568e26bee01ca6044231d4ede8e43118e7f1d1",
+      "description": "Account inventory roles and status",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original 1440x960 canvas. Highlight ROLE column of table approximately x=1019,y=110,width=104,height=236 and STATUS column x=284,y=111,width=64,height=233. Put one callout in empty lower main area at x=650,y=490,width=480,height=90. Exact text: 'Review account authority' then 'Check each role and active status'. Route arrow through empty area to bottom edge of ROLE highlight. Preserve all six rows and all counts.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-resource-editor-light.png",
+      "original": "../guide/admin-resource-editor-light.png",
+      "sourceSha256": "f4a49f9898831d6276f3ac856083c7da5090fecc01b1f8e2b842bdc2cc2ad1a1",
+      "outputSha256": "07e6569f67a176c1bca7bf1ed09839488965ea70d7042da3fa70fd3893592721",
+      "description": "Review the exact DEMO Jira selector and default context in the existing resource editor.",
+      "prompt": "Use case: precise-object-edit. Annotate COPY of this authentic portal screenshot. Preserve every existing UI character, count, selected state, label, color, controls, layout, and 3:2 canvas ratio exactly. Add ONLY thin orange rounded outlines with extremely faint transparent orange fill around resource type/coverage/canonical DEMO area (original x914 y170 to1425 y306) and Allowed execution contexts (x914 y375 to1305 y478). Place ONE white card with orange border in empty left-center pane x365 y615 to770 y704, exact two lines of DARK text \"Check exact project and context\" and \"DEMO in default only\". Thin orange elbow arrow from card follows empty pane x884 and ends at left edge of highlighted context area; it must not cross labels or populated table rows. Keep underlying UI entirely intact, no redraw or simplification. This is an editor review, not evidence that an edit was saved.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "admin-resources-light.png",
+      "original": "../guide/admin-resources-light.png",
+      "sourceSha256": "20e7784b78a7d72b559123d571e9fa12103c0bc170669fa7d8bf9ea02fa7efc9",
+      "outputSha256": "98e104f138a501632fb48ae7b14f3755104afc0c673f4ccea3ce30f346dc56f9",
+      "description": "Typed Jira project choice among identically named resources",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original screenshot proportions. Draw highlight ONLY around second resource row, the DEMO Jira project. Put callout in empty main area below table, exact two lines: 'Choose the typed Jira resource' and 'DEMO project for Jira access'. Route one arrow around FAR RIGHT margin of table to right edge of Jira project highlighted row; do NOT draw through Confluence space or Git repository text. CRITICAL INVARIANT: lower-left sidebar Resource groups has count 0 in original; preserve literal 0, never change to 1. Preserve all resource counts, Services counts 5,63,1,102,2,22 and Resources4, all data, original project/space/repository/fake-project types. No new resource-group state. Change only overlay.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-denied-light.png",
+      "original": "../guide/auditor-audit-denied-light.png",
+      "sourceSha256": "48d46b290988d4f05a5cbddd5046c9dc24b663bf4b24ce8e8d5027b3e6243529",
+      "outputSha256": "6a0cd542fa447885ec3f560e1156c070f7b2f93bddf640eb59837b850e669e7f",
+      "description": "Denied filter and reason-code inspection",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Outline sidebar selected Denied filter x=9,y=295,width=246,height=33 and first three reason-code cells x=785,y=178,width=307,height=100. Preserve all service_action_denied values, Denied labels, and counts 36 records and30records exactly. Put one white orange-border callout in appended strip at x=700,y=990,width=695,height=86. Exact two lines: 'Sample audit: read-only denial review' then 'Filter Denied and read the reason code'. Route arrow upward along far-right empty margin x=1430 then horizontally through empty row area to right edge of reason-code highlight; never cover data. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-detail-light.png",
+      "original": "../guide/auditor-audit-detail-light.png",
+      "sourceSha256": "472a399a17d846a7ed2b7bc1b0200f2242e4c2f43986790ad8ed575b6711b84d",
+      "outputSha256": "fa2e5eed802d4e78dd9e1603384e8560ca0995ace8adec3d7411f2af9abd21c0",
+      "description": "Summary request-correlation IDs",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight only Broker request ID and Agent request ID rows approximately x=914,y=617,width=499,height=56. Put one white orange-border callout in appended strip at x=715,y=989,width=660,height=86. Exact two lines: 'Sample audit: read-only correlation' then 'Use broker and agent request IDs'. Route arrow along empty outer-right margin x=1430 to right edge of IDs highlight, never across identity/request text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-light.png",
+      "original": "../guide/auditor-audit-light.png",
+      "sourceSha256": "2a2898e5cb4a742085658fbee27735eb9ac1cc80ed882ec36c22acf700c81556",
+      "outputSha256": "02421c8f8fd2e72dad270a1adce3b5317a05177940a5c309b459ad16a873fe08",
+      "description": "Read-only global review filters",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append a white 160px annotation strip below the original 1440x960 screenshot without scaling or cropping original UI; output1440x1120. Highlight sidebar Decision/Service/Principal controls with one thin rounded rectangle approximately x=7,y=207,width=250,height=305. Also outline header badge Auditor · read-only approximately x=650,y=11,width=127,height=25. Put one white callout with orange border in appended strip at x=35,y=987,width=620,height=88. Exact two lines: 'Sample audit: read-only global review' then 'Filter by principal, service and decision'. Arrow goes up through empty sidebar right margin x=262 to right edge of control highlight near y=510; do not cover any UI text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-timeline-light.png",
+      "original": "../guide/auditor-audit-timeline-light.png",
+      "sourceSha256": "a627542fbc0b26b248bdcdbaf25e5f2512640d407ac6e97ed1cf5daabce6e1c5",
+      "outputSha256": "27a492e9c79f4acb1a30737a3b171a1e2e64d7eb2f0d714fb3a3dd4068a7fd3d",
+      "description": "Preflight-to-success timeline",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight both timeline entries together approximately x=926,y=325,width=496,height=111. Keep preflight, success, start, and +59 ms intact. Put one white orange-border callout in appended strip x=720,y=991,width=660,height=86. Exact two lines: 'Sample audit: read-only request timeline' then 'Preflight to success, in order'. Route arrow upward through empty drawer space below entries to bottom edge of highlight without covering timeline text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "login-light.png",
+      "original": "../guide/login-light.png",
+      "sourceSha256": "24bbc0d73e2dbcc4cb4999fd2ac5a565811e39c99ef49ff2f1b422eb51c0cdf1",
+      "outputSha256": "c3a8393cf09b38dcfefc63002ada7e4d9bb9bde89c17a1cd010706d07d76877a",
+      "description": "Principal and password sign-in inputs",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original 1440x960 canvas. Highlight the two empty Principal and Password fields with one rounded rectangle approximately x=531,y=454,width=377,height=137. Put the callout in empty area to right of login card at x=990,y=461,width=350,height=96. Exact text two lines: 'Sign in to the portal' then 'Use your principal and password'. Draw arrow through blank area to highlighted fields. Keep both inputs empty, do not invent credentials.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-access-light.png",
+      "original": "../guide/user-access-light.png",
+      "sourceSha256": "8fde148e9501e9de93f56a874ed41a53c12f6081c5e9f07ff7bc4a930a319691",
+      "outputSha256": "d9ea470ccb851a163d18dedee071fe5531d2f414bafb8e571fb0a0e3f0ffd131",
+      "description": "Filter granted actions by service and context",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight only Jira service filter x=10,y=440,width=242,height=33 and the execution context selectors x=16,y=92,width=231,height=61, using two orange thin rounded borders. Place one compact callout in EMPTY LOWER LEFT SIDEBAR around x=12,y=555,width=243,height=83. Exact two-line text: 'Inspect granted actions' then 'Filter by service and context'. Typography about 16px so two lines fit sidebar. Draw short arrow upward from callout to bottom edge of highlighted Jira service selector, staying entirely in blank sidebar below Jira. Do NOT append a strip and DO NOT draw any arrow over the main table or UI text. Filters only change the view; do not alter UI selections.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-activity-light.png",
+      "original": "../guide/user-activity-light.png",
+      "sourceSha256": "58eb2a41c0a4858d8635a349389bb577be2a50ad57141110ce95c21b17b67365",
+      "outputSha256": "e6130b044b60c70ff2abcd413025efeb1c3661ec3cc5a3769112c8186ecb055f",
+      "description": "Find personal activity using service and decision filters",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight sidebar Decision controls x=10,y=252,width=246,height=120 and Service selector x=10,y=411,width=246,height=44, two borders. Callout in empty LOWER LEFT sidebar x=14,y=650,width=238,height=81. Exact two-line text 'Find your agent requests' then 'Filter by service or decision'. Font about 16px so two lines fit. Draw arrow from LEFT edge of callout along extreme left margin x=4 vertically up to y=433, then to LEFT edge of Service selector, staying outside all UI text. Preserve all existing records, fields, counts, filters and selected All decisions. Do not annotate over the table; no live upstream result implied.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-input-light.png",
+      "original": "../guide/user-credential-input-light.png",
+      "sourceSha256": "0ec39552a960bc51998b77086051a08374b7198b7500f00173277a5f88b2077a",
+      "outputSha256": "720ef4deb1d934685ee7f8dad6255af870e4d2550f52232d9b9ad147a1e9a999",
+      "description": "Replace a stored upstream credential, keeping its token masked",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight replacement username, masked Jira API token, and Replace credential button as one region approximately x=913,y=448,width=515,height=179. Place white callout in empty left middle area x=365,y=480. Exact two-line text: 'Replace the upstream credential' then 'Save the required fields securely'. Arrow through empty gap to left edge of highlighted form. Keep the fake token masked. Do not imply Replace credential has been clicked.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-failure-light.png",
+      "original": "../guide/user-credential-test-failure-light.png",
+      "sourceSha256": "ae04eac6a0ecc431fce581b003c43ed55feaa34cf0ccf36b9d22280858c916d9",
+      "outputSha256": "a921433a06e81e01bce13fe21169e34608acec425332f7f0e099246d6e5d8df7",
+      "description": "Illustrate a simulated credential verification failure and error code",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight right drawer Status and Last error rows approximately x=913,y=242,width=420,height=130. Place callout in empty left middle area x=300,y=500. Exact two-line text: 'Simulated result: verification failed' then 'Read the error before trying again'. Arrow through empty region to left edge of status area. Preserve error code upstream_unauthorized and existing bottom error toast; do not cover it.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-repository-light.png",
+      "original": "../guide/user-credential-test-repository-light.png",
+      "sourceSha256": "1628afa281f0f84e644e060f25d42ec652911e6ac32098e968f363ef0c80da36",
+      "outputSha256": "91223c5a9902bdcf5f734a7f6ed30e15e649b3b1e7005125fdbc8d9b2cf87e09",
+      "description": "Enter a permitted repository for Git credential verification",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight only Verify section with Repository demo/app and Verify button around x=913,y=420,width=515,height=118. Callout in blank left area x=350,y=470, exact text 'Verify against a repository' then 'Enter namespace/repository first'. Arrow to left edge of Verify section entirely below table. Preserve Not verified status; no verification request submitted.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-success-light.png",
+      "original": "../guide/user-credential-test-success-light.png",
+      "sourceSha256": "6c71de6587b40f5ed451bee3dc7f7b163450439032f4fe0f339ecec5795a777f",
+      "outputSha256": "078408cdf77b0ad902ee85681ca509558615e340e7320d70ea9c09bc310ab64f",
+      "description": "Illustrate a simulated credential verification success",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight right drawer Status and verification timestamps approximately x=914,y=240,width=410,height=100. Place callout in empty left center area x=390,y=430. Exact two-line text: 'Simulated result: verified' then 'Check status and verification time'. Route arrow through empty space below table to left edge of status area. Preserve all UI and empty replacement fields. CRITICAL: Preserve the EXISTING BLACK success toast at original bottom center-left x=638,y=898,width=164,height=39 with exact text 'Credential verified'. Do not remove that UI toast or any existing UI element.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-credentials-light.png",
+      "original": "../guide/user-credentials-light.png",
+      "sourceSha256": "9bcaf44909468ea1ca32f091cd74435208b9f9263053794e2d5bcc2c5b75237a",
+      "outputSha256": "4a8165304e8d5ca470c9f7c80de2fc63d97c8cad4ff8beb053592efbac1bbe25",
+      "description": "Select a saved personal credential and review its verification status",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight only the existing Jira credential table row x=16,y=247,width=1410,height=32. Place callout in empty area below table around x=450,y=420. Exact callout text: 'Open your service credential' then 'Saved does not mean verified'. Connect arrow to bottom edge of Jira row without crossing other table rows.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-first-password-light.png",
+      "original": "../guide/user-first-password-light.png",
+      "sourceSha256": "dd3c12dee6a7520e04829e3447698c2a36a677f4f544fc577eab4c86010111d3",
+      "outputSha256": "31f1ced0509f757b4a4f94c6931a60bc1452530a065145881b4425a6500616c4",
+      "description": "Change a temporary password before entering the portal",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight the Local password form fields and Update password button, around x=36,y=703,width=789,height=215. Place callout in empty right area around x=900,y=600. Exact callout text: 'Change your temporary password' then 'Choose Update password to continue'. Arrow to right edge of password form. Keep all password values masked, and do not imply the update has been submitted.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-access-light.png",
+      "original": "../guide/user-token-access-light.png",
+      "sourceSha256": "54ed6e2ed7d6849e3bf5613b5cb11054eb35d98ab18f2123c2f78cd94b8a3002",
+      "outputSha256": "bfb7c6056997f820ea131f9f31c136b53829cb3422d7094fc364e3bc0482323f",
+      "description": "Select only issue.view for a narrow Jira agent token",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight checked issue.view checkbox and its description x=369,y=315,width=690,height=48. Callout in empty gray below modal x=450,y=827,width=480,height=80. Exact text 'Select only the action needed' then 'This example allows issue.view'. Arrow route right gray margin beside modal ending at right edge of highlight, do not cross labels or controls. Preserve all action checkbox states and resource setting Follow available grants; this screenshot precedes resource restriction.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-details-light.png",
+      "original": "../guide/user-token-details-light.png",
+      "sourceSha256": "3a1d89bd0b44e4ad6d9dfd73b9195d15e556681b7bec4d9c0a5d6eee92a9dd06",
+      "outputSha256": "d3347bd4ecb7507661a01bdd6c8021007103fed7b098dbfb6473f088213da47a",
+      "description": "Choose a finite lifetime and restricted access before token issuance",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight Lifetime field x=354,y=239,width=728,height=62 and Restrict to selected button x=500,y=477,width=148,height=39, exactly 2 highlights. Callout in empty gray below modal x=445,y=727,width=520,height=90. Exact text 'Set a finite, restricted token' then 'Choose lifetime and Restrict to selected'. CRITICAL arrow must target RIGHT EDGE OF LIFETIME highlight, not the Access button: from callout right edge travel through EMPTY GRAY RIGHT MARGIN beyond x=1130, vertically to y=278, then left to highlight right edge. Arrow must NEVER enter modal content or cross its help text, buttons, labels or checkbox. All original UI text and selections unchanged. Do not imply issuance.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-resources-light.png",
+      "original": "../guide/user-token-resources-light.png",
+      "sourceSha256": "d45a7cd1bf155f3231b7b1d7cd4af1f4f87e8cfb6b71e045a2879c8e08c04e99",
+      "outputSha256": "caa379bba5378d04323f2bd29eff41ee8d41a450e87f7361ff3fb3a87eb302e0",
+      "description": "Choose the exact typed Jira DEMO project resource",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight ONLY checked DEMO Jira project row x=386,y=545,width=666,height=44, not Fake project or Confluence. There is room for callout in empty LEFT GRAY MARGIN x=28,y=535,width=287,height=82. Exact text 'Choose the Jira project' then 'Restrict this token to DEMO'. Arrow short from callout right edge through gray and blank border to left edge of checked Jira project row, never cover its label. Preserve all checked and unchecked states and no token issuance implied.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-review-light.png",
+      "original": "../guide/user-token-review-light.png",
+      "sourceSha256": "46cfce8ca412d506b6cf69e452bd5a2aad86b721ee9c7e6db2abefd39b6fb3ae",
+      "outputSha256": "dc42626407cb0581600b38df3e912dd2b6da5b33834595ec1e71c5271d59053c",
+      "description": "Review the exact action and DEMO project boundary before issuance; approved preview reused after matching source SHA-256",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot preview. Input image 1 is the exact EDIT TARGET: a 1440x960 light-mode Agent Access Broker token review screenshot. Add only a clean tutorial annotation overlay; preserve the entire original screenshot, all UI text, all pixel positions and controls, original canvas dimensions and aspect ratio. Do not redraw, rewrite, restyle, crop, blur, recolor or move any original UI. Annotation: a 3-pixel orange rounded rectangle surrounding only the Jira Actions/Resources block (approximately x=355,y=267,width=730,height=85), with an extremely light transparent orange tint so 'Actions issue.view' and 'Resources DEMO' remain perfectly legible. Add a compact white callout box with orange border and subtle shadow in the empty gray area below the modal (approximately x=475,y=565,width=490,height=78). Callout exact text, two lines: 'Review the access boundary' then 'Only issue.view on the DEMO project'. Use crisp dark sans-serif text, bold first line, 20px font. Draw one orange arrow from the upper edge of this callout, routed through the empty right-hand gray margin beside the modal, to the right edge of the orange highlight around the Jira block; do not obscure any UI text or controls. No additional annotations, logos, decoration, or watermark. Keep all original screenshot content and background unchanged outside the overlay.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-revoke-light.png",
+      "original": "../guide/user-token-revoke-light.png",
+      "sourceSha256": "86c276a1de15fb2d1da2692edc117df244ba85742374d8b6b1514033ee243edb",
+      "outputSha256": "e17271c179c267228c94ddd9348064240ef34a348f6ea24da2a84b371463e269",
+      "description": "Confirm the affected token before irreversible revocation",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight entire existing Revoke token confirmation modal around x=494,y=168,width=450,height=188 with thin orange rounded outline, extremely light tint only. Callout in empty gray area below modal x=440,y=455,width=560,height=86. Exact text 'Revocation cannot be undone' then 'Confirm only the token you intend'. Arrow from callout routed through empty right gray margin to right edge of modal, never obscure text or buttons. Preserve Cancel and red Revoke token buttons, existing token counts and all table text. This is confirmation BEFORE submission; do not change token status or imply revocation happened.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    },
+    {
+      "file": "user-tokens-light.png",
+      "original": "../guide/user-tokens-light.png",
+      "sourceSha256": "c44b84808102a558a17e8d85c0802c239916137756053e78dd3d65a81186c8f3",
+      "outputSha256": "8e832b5b08c7397417ac7b6f95450278cc89a9b2b7032d2a39080ee3bc5d42b1",
+      "description": "Review personal invocation token expiry and last use",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated tutorial screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 UI screenshot. Add only an annotation overlay. Preserve ALL original UI text, numbers, icons, forms, masked secret bullets, positions, dimensions and aspect ratio; never redraw, rewrite, crop or change the original UI. Approved style: thin 3px orange rounded highlight border, extremely light transparent orange tint, one white rounded callout with orange border and subtle shadow, dark sans-serif typography bold first line and regular second line, an orange arrow connecting the callout to the highlight without crossing original labels or controls. Maximum 1-2 highlights and exactly one useful two-line callout. Use empty space for the callout; if no room, append a white bottom annotation strip without shrinking or cropping the screenshot. No watermarks or other decorations. Highlight only the existing demo-agent-token table row x=15,y=143,width=1412,height=31. Callout in blank area below table x=490,y=382,width=480,height=90. Exact text 'Review your active agent tokens' then 'Check expiry and last use'. Arrow from top of callout up to bottom edge of table row in empty area. Keep exact existing token ID, counts, status and All granted unchanged; this is a seeded broad token, do not claim it is the draft restricted token.",
+      "tool": "built-in imagegen",
+      "reviewed": true
+    }
+  ]
+}

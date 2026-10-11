@@ -1,0 +1,106 @@
+{
+  "defmt-parser": {
+    "checksum": "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e",
+    "files": [
+      {
+        "file": "defmt-LICENSE-MIT.txt",
+        "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50",
+        "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT"
+      }
+    ],
+    "reason": "Crate omits licenses; MIT option from the exact .cargo_vcs_info.json upstream revision.",
+    "selected_license": "MIT",
+    "version": "1.0.0"
+  },
+  "libsqlite3-sys": {
+    "checksum": "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db",
+    "files": [],
+    "reason": "Bundled SQLite sqlite3.c copyright disclaimer/blessing is separate from the Rust wrapper MIT license. All packaged native license files are also retained.",
+    "sqlite_notice": true,
+    "version": "0.38.1"
+  },
+  "mac": {
+    "checksum": "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4",
+    "files": [
+      {
+        "file": "Apache-2.0.txt",
+        "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+        "url": "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/Apache-2.0.txt"
+      }
+    ],
+    "reason": "Published Cargo.toml and README grant MIT/Apache-2.0; upstream tag 0.1.1 (66afc663b68a65633ea165c742b5a9c6734581c2) also has no license file. Select Apache-2.0, preserve author/permission declaration from README, and provide the standard license from SPDX.",
+    "selected_license": "Apache-2.0",
+    "source_files": [
+      "README.md"
+    ],
+    "version": "0.1.1"
+  },
+  "match_token": {
+    "checksum": "ac84fd3f360fcc43dc5f5d186f02a94192761a080e8bc58621ad4d12296a58cf",
+    "files": [
+      {
+        "file": "html5ever-LICENSE-MIT.txt",
+        "sha256": "86dd7f026f916daf7511e39951ad8ea8cf55a8db67ae64060dacf829761c18f3",
+        "url": "https://raw.githubusercontent.com/servo/html5ever/6db7bbf1c4dfaecd28731950d427e40c8b911bef/LICENSE-MIT"
+      }
+    ],
+    "reason": "Crate omits licenses; MIT option from the exact .cargo_vcs_info.json upstream revision.",
+    "selected_license": "MIT",
+    "version": "0.35.0"
+  },
+  "ring": {
+    "checksum": "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7",
+    "copyright_comments": true,
+    "files": [],
+    "reason": "Preserve per-file native/source copyright and permission comments in addition to all packaged license files. Different architectures may use only a subset.",
+    "version": "0.17.14"
+  },
+  "rmcp": {
+    "checksum": "5b6317cd8c13e3ec9033cf2aa5aa92cd743f0f4f8a93cddc42ea0ae6ce3b8898",
+    "files": [
+      {
+        "file": "rmcp-LICENSE.txt",
+        "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+        "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/9427a929959e665e0d12e9395f674026baf4bd48/LICENSE"
+      }
+    ],
+    "reason": "Crate omits license; full upstream license at .cargo_vcs_info.json revision includes Apache/MIT transition terms.",
+    "version": "3.4.1"
+  },
+  "unicode-general-category": {
+    "checksum": "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f",
+    "files": [
+      {
+        "file": "Unicode-16-LICENSE.txt",
+        "sha256": "fe5c62b543e287981db198f2acfa0ca732d12591a1024536dc8fd85dacd77104",
+        "url": "https://raw.githubusercontent.com/unicode-org/unicodetools/addf0c992050b10a0bfe8647f90fcc8fdbfe71fc/LICENSE"
+      }
+    ],
+    "reason": "src/tables.rs identifies generated Unicode 16.0.0 data. Preserve the Unicode data/tools license from Unicode final-16.0-20240912 in addition to the Rust crate license.",
+    "version": "1.1.0"
+  },
+  "uuid-simd": {
+    "checksum": "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8",
+    "files": [
+      {
+        "file": "simd-LICENSE.txt",
+        "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+        "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE"
+      }
+    ],
+    "reason": "Crate omits license; MIT text from the exact .cargo_vcs_info.json upstream revision.",
+    "version": "0.8.0"
+  },
+  "vsimd": {
+    "checksum": "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64",
+    "files": [
+      {
+        "file": "simd-LICENSE.txt",
+        "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+        "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE"
+      }
+    ],
+    "reason": "Crate omits license; MIT text from the exact .cargo_vcs_info.json upstream revision.",
+    "version": "0.8.0"
+  }
+}

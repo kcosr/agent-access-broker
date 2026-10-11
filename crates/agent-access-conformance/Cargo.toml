@@ -1,0 +1,21 @@
+[package]
+name = "agent-access-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only backend that exercises every extension point of the backend contract"
+
+[dependencies]
+agent-access-provider = { path = "../agent-access-provider" }
+async-trait.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+wiremock.workspace = true

@@ -1,0 +1,604 @@
+# Agent Access Broker Agent Notes
+
+This repository implements the Agent Access Broker service and CLI. The implemented
+architecture and conceptual contract live in `docs/design.md`.
+
+## What This Repo Is
+
+Agent Access Broker is a Rust service and CLI for giving AI agents
+scoped, audited access to service APIs without putting upstream service
+credentials in the agent environment. The broker owns identity, policy,
+credential selection, provider request validation, bounded transfer handling,
+audit emission, and structured service observability; the CLI discovers broker
+actions and exposes typed wrappers for supported services.
+
+## Ground Rules
+
+- Keep repository documentation focused on implemented behavior: current
+  architecture, supported interfaces, operational runbooks, and contributor
+  instructions. Capture implemented content in those references before moving
+  historical proposals, research, review correspondence, or dated validation
+  evidence to a plain folder outside the repository. Do not link shipped docs
+  to that external material. Describe accepted fields, flags, headers, and current
+  defaults directly; keep removed-interface lists and transition history in the
+  changelog or external historical notes. Retain supported schema admission,
+  upgrade, and rollback instructions as operational contracts.
+- Describe proxy integration through the generic trusted-caller and client-address
+  contracts. Keep product-specific deployment notes and cross-repository harnesses
+  outside the public repository. Preserve the canonical wire headers, including
+  `X-AW-Identity-Token-SHA256`; generic wording does not rename supported APIs.
+- Use synthetic people, project names, and reserved example hosts in examples.
+  Keep site-specific paths, server names, credentials, and build-service overrides
+  in local configuration outside the repository. Preserve explicitly identified
+  test-only cryptographic fixtures and required license notices.
+- Do not add backward-compatibility aliases, bridge routes, or dual-shape config
+  parsers unless a migration is explicitly requested.
+- Keep generated HTML out of git; Markdown is canonical. The hand-authored
+  `docs/system-overview.html` presentation is the one tracked exception: keep it
+  consistent with the Markdown docs when the behavior it describes changes.
+- Keep sample configs in sync with the config schema and tests.
+- Update `README.md` for user-facing behavior, config, or workflow changes.
+- Service policy grants use the canonical plural `subjects` field everywhere;
+  do not reintroduce singular grant `subject` config, API, CLI JSON, or store
+  shapes unless an approved interface change explicitly changes the contract.
+- Grants and token resource restrictions reference typed resource entries and
+  resource groups. Do not restore freeform policy scope strings, Jira issue or
+  Confluence page scopes, or generic HTTP services. Group exclusions apply
+  across selections within one grant/token boundary, including when their
+  resource entry is disabled or context-ineligible; they are not global denies.
+- Runtime specs are part of the supported interface. When changing broker
+  actions, typed CLI commands, `agent-access invoke`, JSON `send`, or HTTP
+  routes, keep the caller-filtered catalog, OpenAPI projection, send schema,
+  docs, and agent-facing skills in sync. Typed CLI commands may be ergonomic
+  wrappers, but they must still map cleanly to canonical catalog actions.
+- Keep action descriptions and input schemas concise for initial MCP discovery.
+  Put extended grammar, limits, and examples in action `documentation`; preserve
+  its detail/catalog/OpenAPI/send projections and keep it out of `tools/list`.
+  MCP describe hints use stable service/action IDs, never client-renamed names.
+- Caller discovery and native MCP lists expose only authority with locally usable
+  selected execution and lookup credentials. Preserve grant precedence and hide
+  unknown availability too. Discovery must not contact upstream, refresh OAuth,
+  or record credential use/verification. Keep management and setup previews
+  independent so missing credentials cannot prevent onboarding.
+- Backend invocation context comes from the host-authorized execution context,
+  never a tool input. Bind resumable provider cursors to that context and current
+  principal/resource/query settings; reauthorize every continuation.
+- Backend actions default to `read_only = false`; explicitly opt reviewed reads
+  in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
+  classifies upstream effects for grant selection; it does not gate local output.
+  JSON and multipart-upload responses support local output, including writes.
+  Do not infer read-only status from action names or presentation support, expand
+  result limits, or forward local output paths to broker invoke requests. Report
+  confirmed operation success separately from local output failure; never replay
+  an operation to retry saving its response. Reserve response/metadata destinations
+  before provider dispatch, including downloads, and preserve unverified mutation
+  outcomes in compact receipts without exposing catalog-marked secrets.
+  `--output` is a destination and
+  `--output-format` is representation; preserve dedicated raw-download actions
+  and receipt metadata.
+- When making changes, audit whether `README.md`, `docs/`, `skills/`, sample
+  configs, `CHANGELOG.md`, and this `AGENTS.md` need updates. Update them in
+  the same change when behavior, commands, config, architecture, security
+  posture, provider semantics, operational workflows, or repository layout
+  changes.
+
+## Managed access
+
+`docs/roles.md` defines exclusive account roles and independent self-service.
+Keep `PolicyReadScope` and `PolicyWriteScope` distinct. Auditors may read admin
+metadata and safe previews but never mutate, reveal secrets, verify credentials,
+or run import discovery. Service policy managers are assigned directly to
+accounts, never groups. Use the shared store authority resolver for admission;
+keep invocation authorization independent from personal self-service gates.
+Personal OAuth setup uses active direct/group `per_user` grants and an approved
+binding, not credential rights. Keep authoritative consent checks on current
+runtime policy and transactional membership; preserve owner cleanup after grant
+loss and the separate classless static credential-right path.
+
+## Build Service
+
+Rust/Cargo commands work locally with the checked-in `rust-toolchain.toml` and
+`Cargo.lock`. The reproducible tested toolchain is Rust/Cargo 1.98.1 with rustfmt
+and Clippy. The tested portal toolchain is Node.js 24.18.0 and npm 11.16.0; these
+versions do not establish a minimum supported version.
+
+The remote build service is optional. When it is configured and available, use
+it to offload Rust/Cargo work; it copies formatted sources plus debug/release
+artifacts back according to `.build-service/config.toml`. Set
+`BUILD_SERVICE_ENDPOINT` in the local environment; machine-specific values do
+not belong in tracked files. For example:
+
+```bash
+BUILD_SERVICE_ENABLED=true BUILD_SERVICE_ENDPOINT="${BUILD_SERVICE_ENDPOINT:?Set BUILD_SERVICE_ENDPOINT}" build-cli build cargo -- test --locked
+```
+
+Apply the same wrapper to the local Cargo commands below when using the service.
+If it cannot be used, run Cargo locally and record the build mode in validation
+results. After any Cargo command creates build artifacts in a retained worktree,
+run `cargo clean` through the same build mode before returning a parked clean
+result.
+
+The production provenance verifier builds locally by default. Its explicit
+`--build-service` option forwards `AGENT_ACCESS_BUILD_COMMIT`,
+`AGENT_ACCESS_BUILD_PROVENANCE`, and `AGENT_ACCESS_REQUIRE_BUILD_PROVENANCE`
+through `build-cli --env`. A remote service must allowlist all three names.
+
+## Fast Bootstrap
+
+1. Format: `cargo fmt`
+2. Test: `cargo test --locked`
+3. Build: `cargo build --locked`
+4. Lint: `cargo clippy --locked --all-targets --all-features -- -D warnings`
+5. Validate broker config: `cargo run --locked -p agent-access-broker -- --config agent-access-broker.sample.toml config validate`
+6. Validate CLI config: `cargo run --locked -p agent-access -- --config agent-access.sample.toml config validate`
+
+## Development
+
+Run these before submitting changes:
+
+```bash
+cargo fmt --check
+cargo test --locked
+cargo build --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+Use these for offline config validation:
+
+```bash
+cargo run --locked -p agent-access-broker -- --config agent-access-broker.sample.toml config validate
+cargo run --locked -p agent-access-broker -- --config agent-access-broker.production.sample.toml config validate
+cargo run --locked -p agent-access -- --config agent-access.sample.toml config validate
+```
+
+On Unix, also run the isolated real-signal parent fixture explicitly:
+
+```bash
+cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+```
+
+It requires no live credentials and starts its own guarded child fixtures; do
+not run the ignored child directly or use a broad `-- --ignored`. Record it as
+not applicable on non-Unix platforms. See `docs/testing.md` for the full suite.
+
+The fake-provider vertical smoke is included in `cargo test`; it starts an
+in-process broker and invokes it through the real `agent-access` binary.
+
+The Jira read smoke is also included in `cargo test`; it injects a stubbed Jira
+backend into the broker and drives typed `agent-access jira issue view/search`,
+project issue-type discovery and its create workflow, and issue comment commands.
+The ignored `real_jira_smoke` test is only for a live broker that has already
+been configured with real Jira credentials.
+
+The ignored `real_gitlab_smoke` binary is likewise only for a configured live
+broker. Its read test is exact-filtered; its inline/reply and draft/review tests
+also require the documented confirmation sentinels and an explicitly throwaway
+MR/source branch. Never run that binary with a broad `-- --ignored`; use only
+the individually named exact commands in `docs/testing.md`.
+
+The GitLab REST smoke is included in `cargo test`; it injects a stubbed GitLab
+backend into the broker and drives typed `agent-access gitlab` read, mutation,
+repository, and CI commands.
+
+The CloudBees CI smoke is included in `cargo test`; it runs an in-process
+broker against a stubbed controller and drives typed and JSON-send downloads,
+stdio MCP output, bounded reads, build triggers, redirect rejection,
+and audit checks through the real `agent-access` binary.
+
+## Layout
+
+- `crates/agent-access-provider`: the backend contract: service descriptors,
+  resource types, the `Provider` trait and its invocation/result/error types,
+  reason codes, the OAuth dialect and delegated-credential contracts, and the
+  host services backends use (upstream HTTP clients, egress proxy, outbound
+  TLS, upstream allowlists, correlation, upstream trace events, token signing).
+- `crates/agent-access-core`: shared config, policy, identity, envelope, and
+  runtime; contains no backend. Re-exports the backend contract.
+- `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
+  GitLab Markdown) rendering and conversion, plus attribution footers.
+- `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
+  client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`).
+- `crates/agent-access-confluence`: the Confluence backend (`backend.rs` wire
+  seam and HTTP client, `cql.rs` search and CQL parser, `config.rs`,
+  `present.rs`).
+- `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
+  pagination headers, and HTTP client, `config.rs`, `provisioning.rs`,
+  `present.rs`).
+- `crates/agent-access-atlassian`: helpers shared by the Atlassian backends.
+- `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
+- `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
+- `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and
+  single-attempt execution over the host transport with the pinned SDK.
+- `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
+  bounded operation plans and single-attempt HTTP execution.
+- `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
+- `crates/agent-access-fake`: the development `fake` backend used by smoke
+  tests and fixtures.
+- `crates/agent-access-conformance`: a test-only backend using every backend
+  contract extension point; the broker's `tests::conformance` acceptance suite
+  registers it and generates `apps/portal/unit/conformance.fixture.json`
+  (regenerate with `UPDATE_PORTAL_FIXTURES=1`).
+- `crates/agent-access-broker`: HTTP service binary and broker runtime wiring;
+  `src/backends.rs` lists the backends the binary registers.
+- `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
+- `apps/portal`: same-origin browser management portal frontend and Playwright
+  e2e harness.
+  `apps/portal/src/workbench` is a pinned shared workbench-ui snapshot. Builds
+  and checks require no upstream access. Never edit the snapshot in place:
+  public contributors submit a Broker issue or proposed patch for maintainer
+  review; maintainers commit changes to the private upstream and re-vendor.
+  Follow [the contribution workflow](docs/workbench-vendoring.md).
+  `npm --prefix apps/portal run check:workbench` verifies the snapshot; portal
+  builds and unit tests also run this check.
+- `demo/`: tracked local managed-mode browser demo config and setup script; the
+  generated database, logs, token files, and copied portal assets live under
+  `/tmp/agent-access-broker-demo` by default. The resume launcher preserves this
+  populated state. `demo/seed-audit-showcase.py` creates marked offline audit
+  fixtures with a backup and state locks; never use it on an operational store.
+  Run `python3 demo/seed-audit-showcase.test.py` for its SQLite/FTS,
+  idempotency, and rollback checks.
+- `skills/`: self-contained agent-facing usage skills split by access surface.
+- `scripts/`: release, portal build, and local portal smoke helpers (smoke tests
+  are cargo integration tests under `crates/agent-access/tests/`). Trusted-ingress
+  admission and identity tests run within this repository; deployment-specific
+  cross-repository harnesses are maintained outside it. See `docs/testing.md`.
+  The macOS/Linux portal launchers share `scripts/local-broker-process.py` for
+  path resolution, exact executable/config identity checks, port availability,
+  and detached startup. Run its native checks with
+  `python3 scripts/local-broker-process.test.py` when changing the launchers.
+  `scripts/capture-portal.mjs` captures separate showcase (light/dark) and guide
+  (light-only) image streams from the populated demo. Keep raw captures under
+  ignored `.scratch/` or outside the repository; ship reviewed images under
+  `docs/images/portal/` with captions identifying synthetic data. Setup forms
+  remain unsubmitted; credential verification success/failure captures use
+  browser-only fixtures identified in the manifest, never real upstream tests.
+  Keep guide annotations as separate assets under
+  `docs/images/portal/guide-annotated/`; preserve the original guide captures.
+  Review generated annotations for faithful UI text and accurate callouts before
+  updating guide image links.
+  `demo/seed-guide-accounts.mjs` adds an actual auditor and a temporary-password
+  onboarding identity to the loopback demo for role-accurate captures; keep its
+  private credential handoff in the disposable demo directory.
+- `docs/`: implemented architecture, reference, security, operator, and user docs.
+- `schemas/`: published versioned JSON Schemas for runtime and contract
+  surfaces.
+
+## Documentation Map
+
+- `README.md`: project framing, quickstart, high-level architecture, and the
+  top-level documentation index.
+- `CONTRIBUTING.md`: focused bug reports and fixes, feature proposals, and
+  contributor expectations for issues and pull requests.
+- `assets/screenshots/`: permanent copies of selected README showcase images.
+  Keep README image sources and full-size links relative, with file checksums in
+  the adjacent manifest. Keep unused selection images and review galleries
+  outside the product repository.
+- `docs/portal-guide/index.md`: illustrated portal walkthrough index, linking
+  user self-service, auditor investigation, account/group onboarding,
+  resource/grant creation, and administration/offboarding. Captions distinguish
+  draft forms, synthetic audit fixtures, and simulated verification results.
+- `docs/images/portal/`: original and annotated walkthrough images. Keep guide
+  image paths relative to their Markdown page and include every referenced
+  asset. The capture inventory covers the retained guide images; public
+  manifests omit private host paths, credentials, and browser session state.
+- `agent-access-broker.production.sample.toml`: minimal managed production
+  baseline, with required identity, protected key/state paths, SQLite audit,
+  disabled steady-state bootstrap/migrations, and no provider grants.
+- `docs/administrator-guide.md`: administrator bootstrap, principal onboarding,
+  credential modes, resources/grants, service delegation, access review, and
+  offboarding.
+- `docs/release-readiness.md`: candidate validation, distribution contents,
+  administrator acceptance, and publishing checklist.
+- `docs/design.md`: implemented architecture and conceptual contract for request lifecycle,
+  identity, policy, credential selection, audit, observability/correlation,
+  limits, egress proxy, reloads, and security posture.
+- `docs/system-overview.html`: self-contained, hand-authored architecture
+  presentation (connection paths, identity, policy, request evaluation, rate
+  limits, audit) for readers new to the broker; Markdown remains canonical.
+- `docs/http-api.md`: HTTP routes, runtime spec endpoints, request-id rules,
+  response envelopes, reason codes, status mapping, management endpoints,
+  upstream correlation headers, and raw download negotiation.
+- `docs/cli.md`: command catalog, runtime spec commands, JSON `send`, config/env
+  precedence, exit codes, transport security, and CLI recipes.
+- `docs/mcp.md`: local stdio and downstream HTTP MCP setup, discovery, file inputs/transfers,
+  protocol lifecycle, and client/broker authorization boundaries. The adapter
+  lives in `crates/agent-access/src/mcp/`; never call CLI print/exit helpers from
+  an MCP request handler, and never write diagnostics to protocol stdout.
+- `docs/testing.md`: deterministic test suite, offline smoke harnesses, ignored
+  live smokes, and Confluence CQL conformance smoke workflow.
+- `docs/configuration.md`: canonical broker and CLI config schema, including
+  identity, policy, credentials, managed store, broker tokens, encryption,
+  management, audit, services, and providers.
+- `docs/oauth.md`: delegated OAuth, production Google dialect, separate test
+  provider, consent, refresh recovery, and connection boundaries.
+- `docs/database.md`: managed-store database schema, token hashing, credential
+  encryption, key readiness, rewrap, lifecycle, and backup/recovery model, plus
+  the separate SQLite audit database.
+- `docs/resources.md`: typed resources, flat include/exclude resource groups,
+  execution contexts, live grant/token references, effective access, and catalog
+  administration.
+- `docs/providers.md`: provider overview, shared concepts, and links to the
+  provider-specific docs.
+- `docs/imported-services.md`: generic MCP import setup, administrator review,
+  credential ownership, refresh, limits, and invocation outcomes.
+- `docs/imported-openapi.md`: OpenAPI document/API destination setup, discovery
+  authentication, scheme selection, supported operation profile and write receipts.
+- `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
+  discovery onboarding, unknown upstream identity, and optional refresh.
+- `docs/providers-jira.md`: Jira issue, search, comment, attachment,
+  verification, URL locator, and attribution behavior.
+- `docs/providers-gmail.md`: Google connection setup, Gmail actions, MIME bounds,
+  refresh recovery, and live smoke instructions.
+- `docs/providers-teams.md`: signed Workflow destinations, managed setup, payloads,
+  client commands, and acceptance/delivery limits.
+- `docs/providers-confluence.md`: Confluence page, blog, draft, comment,
+  attachment, CQL, URL locator, and attribution behavior.
+- `docs/providers-cloudbees-ci.md`: CloudBees CI job resources and
+  job/build/Pipeline/test reads, log/report/artifact downloads, queue inspection,
+  and trigger actions.
+- `docs/providers-gitlab-rest.md`: GitLab REST project, issue, merge-request,
+  note, discussion, branch, file, commit, pipeline, and job behavior.
+- `docs/git-http-gateway.md`: Git smart HTTP gateway behavior for
+  `[gateways] kind = "git_http"`.
+- `docs/security-model.md`: rationale for the broker, agent containment model,
+  egress boundary, direct-token comparison, credential boundary, authorization
+  ownership, and residual risks.
+- `docs/end-user-guide.md`: user sign-in, personal credential/OAuth setup,
+  separate setup/invocation client configuration, agent token issuance,
+  CLI/MCP connections, and troubleshooting.
+- `docs/operator-guide.md`: managed deployment operations, store setup, key
+  handling, reloads, health checks, service logs/correlation, audit,
+  backup/restore, and common failures.
+- `docs/manual-live-smoke.md`: sanitized operator runbook for manual live smoke
+  setup, grants, tokens, attribution, and targeted provider commands.
+- `skills/agent-access-cli-typed/SKILL.md`: typed provider-wrapper CLI usage.
+- `skills/agent-access-cli-invoke/SKILL.md`: canonical `agent-access invoke`
+  usage against runtime catalog actions.
+- `skills/agent-access-cli-send/SKILL.md`: JSON request-file usage with
+  `agent-access send` and runtime send schema.
+- `skills/agent-access-http/SKILL.md`: direct broker HTTP API usage with
+  runtime OpenAPI/catalog discovery.
+- `skills/agent-access-mcp/SKILL.md`: discovery and invocation through existing
+  MCP connections, including argument shapes, pagination, and error handling.
+
+## Changelog
+
+Location: `CHANGELOG.md` (root)
+
+### Format
+
+Use these sections under `## [Unreleased]`:
+- `### Breaking Changes` - API/config changes requiring migration
+- `### Added` - New features
+- `### Changed` - Changes to existing behavior
+- `### Fixed` - Bug fixes
+- `### Removed` - Removed features
+
+### Rules
+
+- New entries always go under `## [Unreleased]`.
+- Append to existing subsections; do not create duplicate subsection headers.
+- Do not edit already released version sections.
+
+## Release Procedure
+
+Prepare release metadata, qualify the reviewed source revision, and publish that
+same revision as separate steps. Follow `docs/release-readiness.md` for required
+checks and distribution acceptance. All four release entrypoints, including
+standalone provenance verification, reject inherited Git location/configuration
+overrides and verify that Git's repository root matches the source checkout.
+
+### Prepare
+
+The initial `0.1.0` release metadata is already prepared in this source tree;
+proceed to qualification after review and merge. Do not rerun `current` on an
+already prepared version. For later releases, start from a clean checkout on the
+preparation branch. Use `current` when `Cargo.toml` has the intended version but
+its release notes still need preparation, or select `major`, `minor`, `patch`,
+or an explicit semantic version:
+
+```bash
+node scripts/prepare-release.mjs current
+node scripts/prepare-release.mjs patch
+node scripts/prepare-release.mjs X.Y.Z
+```
+
+The preparation script edits only `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`.
+It stamps the versioned release notes and opens a new empty `Unreleased` section
+in the same change, then validates locked Cargo metadata. A failure restores the
+three files. Review the diff, commit it, and merge it through the normal PR
+process. Preparation does not commit, tag, push, or publish.
+
+### Qualify
+
+Run the qualification driver on the final clean merged commit, with a new or
+empty evidence directory outside the checkout:
+
+```bash
+node scripts/verify-release.mjs --output-dir /absolute/external/path
+```
+
+The driver runs the required standalone Rust, portal, script, documentation,
+sample-config, Unix signal, native release-provenance, and notice checks. It
+writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
+required prerequisites or failed gates prevent passing qualification; optional
+OAuth/live-provider exclusions and platform applicability are recorded. Preflight
+requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
+`contentless_delete`, and rejects Cargo target runners, including through
+configuration includes. See the [full prerequisites](docs/release-readiness.md#qualify-the-candidate).
+
+Qualification accepts any clean branch or detached commit for PR validation and
+rechecks that `HEAD` stays clean and unchanged. A merge that changes the SHA
+requires qualification of that merged commit before publishing. Qualification is
+native and local; the optional remote provenance check below cannot substitute
+for it. The driver does not publish, create archives, or perform administrator
+acceptance against a deployment.
+
+### Publish
+
+Only when publication is intended, use the passing qualification for the exact
+prepared release commit:
+
+```bash
+node scripts/release.mjs --qualification /absolute/external/path/qualification.json
+```
+
+The publisher verifies the receipt's full SHA, version, and required gates, and
+requires clean `main` to match freshly fetched `origin/main` and the qualified
+SHA. It creates an annotated tag at that SHA, pushes only the tag, creates a
+GitHub draft from the prepared release notes, then publishes the draft. It does
+not edit source, create commits, push `main`, or make a post-tag changelog commit.
+
+A failed publication preserves a matching tag or draft. Retry with the same
+qualification only when the existing tag and draft metadata match the same
+SHA, version, and notes. Existing published releases are never overwritten.
+
+### Standalone provenance check
+
+The full qualifier includes native production provenance. To run that check
+alone from a clean checkout at a full commit or exact tag:
+
+```bash
+node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
+```
+
+The verifier checks the exact pinned local compiler/Cargo versions and physical
+paths, rejects ambient compiler/flag/profile overrides, and uses locked
+dependencies with required source provenance. It builds native executables under
+`target/<host-triple>/release`, checks CLI startup and authenticated Broker
+status, and records discovered Cargo configuration digests. It is not a hermetic
+build; see the [provenance boundaries](docs/operator-guide.md#build-provenance-and-deployed-status).
+
+To run the separate optional remote check:
+
+```bash
+BUILD_SERVICE_ENDPOINT="${BUILD_SERVICE_ENDPOINT:?Set BUILD_SERVICE_ENDPOINT}" \
+node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag> --build-service
+```
+
+Remote compiler/Cargo and service configuration are unverified. Both modes
+require a clean, unchanged source revision and neither publishes a release.
+
+## GitLab credential issuance
+
+GitLab bot provisioning is implemented in `crates/agent-access-gitlab/src/provisioning.rs`;
+its canonical contract is `docs/gitlab-bot-provisioning.md`. Preserve the explicit
+distinction between Broker-held execution credentials and deliberately exported
+new tokens. Only issuance/rotation responses contain `result.issuedToken`; keep
+metadata reads/audit secret-free and maintain sensitive output markers across
+catalog, OpenAPI, and send schema. Project service-account ownership must be
+proved before membership changes or token management.
+
+## Trusted managed human identity
+
+Keep username assertions HTTP-MCP-only, with exact `X-Agent-Access-User` values and
+explicit managed namespace/name bindings. A direct `authorization_user` caller
+requires fixed context; a relayed `caller_authorization` caller uses its configured
+context contract. Match credentials by transport on every route. Select typed
+username mode before ordinary principal auth; competing sources or failure never
+fall back to an ordinary token or fingerprint. Without a user assertion, preserve
+ordinary-token precedence over fingerprint identity. The caller credential alone
+never authenticates the human. Keep caller audit identity separate from token
+provenance and keep assertion secrets/names out of failure traces.
+
+Every human has one durable identity-access gate, created transactionally with
+the principal, even without token inventory. Preserve gate pause across inventory
+set/remove/generate. Username bindings and inventory revisions are independent;
+never recreate removed inventory on login. Gate incarnation/version, binding
+ID/version and inventory revision prevent old sessions from regaining authority
+when values are restored. Reject kind changes to/from human. Missing gate rows
+fail closed. Identity inventory remains encrypted; ordinary reads and audit must
+not expose plaintext or fingerprints. Only explicit administrator reveal returns
+plaintext. Shared pause belongs to identity-access administration, independently
+of issued Broker token pause and browser login.
+
+Carry one private proof through MCP intake/session/final governed admission.
+Revalidate it before credential or provider work; never resolve a queued request
+as a newly mapped human. Caller security epochs survive reload snapshots and
+advance for actual security-contract changes, including loaded secrets. Prune
+confirmed stale sessions without cancelling independently admitted operations;
+unavailable state is not proof of staleness. Reject protected Connection/trailer
+nominations globally and all actual MCP request trailers before dispatch. Keep
+proofs and credential-derived bindings out of serialization, Debug and telemetry.
+
+Validate every supplied caller and protected assertion on HTTP, MCP and Git,
+independently of token-free fingerprint Git opt-in. Fixed callers reject context
+headers; asserted callers cannot inherit the direct-client default. Reserve
+`broker` as the control-plane service namespace: designated admission failure
+tuples must never be produced after provider dispatch. Keep schema, portal,
+CLI/catalog/OpenAPI/send projections and current docs aligned. See
+`docs/trusted-callers.md` and `docs/managed-identity.md`.
+
+## Private resource configuration
+
+Resource and resource-group mutations keep mandatory preflight and supplemental
+success audit distinct. Capture allowlisted before/after names and membership
+deltas inside the managed transaction, never from a later catalog lookup or raw
+request body. Keep completion emission in the mutation owner so disconnects do
+not cancel it; completion failure must preserve the committed response. Managed
+and audit stores are separate, so do not claim crash-atomic completion. Audit
+names are historical; portal links explicitly open current state at the ID and
+must be gated by catalog read capability. Never infer service visibility from a
+global resource/group change.
+
+Keep private resource attributes out of `ResourceDefinition`, catalog/export
+serialization, agent tool inputs/results, Debug output, and audit. Only explicit
+admin reveal returns plaintext, after authorization/CSRF and audit preflight, with
+`Cache-Control: no-store`. Store changes are atomic with resource versions and
+policy publication. At dispatch, revalidate the admitted resource identity, alias,
+versions, enabled state, and context before decrypting; never refresh a stale
+binding onto a replacement endpoint. Retained secrets, including disabled
+resources, participate in key readiness, used-key inventory, and credential rewrap.
+Rewrap preserves semantic versions.
+
+Teams uses current Workflows signed URLs on configured Microsoft environment
+origins and service-mode grants without dummy credentials. Keep endpoint path and
+query out of logs, errors, traces, and client bases; reject redirects and automatic
+POST retries. A 2xx receipt means endpoint acceptance, not completed Teams delivery.
+Use only synthetic endpoints in deterministic tests; live sends require an
+explicitly authorized dedicated Workflow.
+
+## Imported services
+
+Imported integrations use DB-managed stable service/action identities and compiled
+adapter factories. Core must not depend on a protocol adapter. Preserve offline
+startup, retained grant references, current operator gates, and cancellation-safe
+DB commit/runtime publication. Selected imported user credentials never fall back
+to shared service or discovery tokens. Retained service-owned secret slots must
+remain in key inventory, readiness and rewrap. Imported upstream payloads are
+conservatively sensitive output, including ordinary telemetry or document data.
+
+Import management remains outside the agent tool catalog. Preview acceptance must
+reconstruct schemas from the persisted manifest, never trust caller-supplied tool
+definitions. Complete refresh quarantines changed/missing accepted tools; failed
+partial discovery must not publish. MCP imports support exactly `2026-07-28` and
+`2025-11-25` through the host transport and pinned SDK. Keep automatic negotiation
+bounded to startup: at most one discovery probe and one legacy initialization,
+with a shared deadline and single tool-dispatch fence. Legacy sessions remain
+private to an operation; initialized-session and eligible probe-session cleanup
+share one two-second budget and cannot change known outcomes or invalidate OAuth
+tokens. Preserve the finite JSON/SSE profile and uncertain-write receipts after
+disconnect; upstream stdio hosting, server requests and replay remain unsupported.
+Opaque image/audio content stays bounded JSON.
+
+Propagate the host operation deadline into imported MCP finalization, and mark
+cleanup only after capturing an outcome. The ordinary HTTP MCP deadline permits
+one immediate final poll of that same provider future during cleanup; Pending
+remains a timeout. Preserve the known result without a grace period, detached
+cleanup or second dispatch. Forced shutdown retains its unknown-outcome contract.
+
+Imported OAuth must use operator-approved authentication adapters and exact resource
+bindings. Preserve per-flow issuer checks, PKCE, connection revision fences and
+per-request delegated lease revalidation. Never infer an upstream account identity
+when the authorization server provides none, or replay MCP calls after a 401.
+
+Imported OpenAPI document URLs are operator-controlled destinations independently
+of API base URLs. Keep schema/operation plans bounded and offline at execution;
+never fetch external references, follow redirects, or infer resource grants.
+Empty drafts may choose settings before accepting actions; accepted connection
+settings and delivery cannot change underneath existing action identities.
+
+Empty imported drafts may change adapter settings/delivery only before actions
+are accepted. Such changes clear execution/discovery slots transactionally and
+require removal of existing personal credentials first; never carry stored
+authority to a new draft destination.

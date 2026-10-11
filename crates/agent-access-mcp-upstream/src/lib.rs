@@ -1,0 +1,744 @@
+//! Generic, bounded MCP imports through the broker's ordinary provider boundary.
+mod oauth;
+mod protocol;
+mod schema;
+mod transport;
+
+pub use oauth::MCP_OAUTH_DIALECT;
+
+use agent_access_provider::*;
+use async_trait::async_trait;
+use base64::{Engine, prelude::BASE64_STANDARD};
+use http::{HeaderMap, HeaderName, HeaderValue};
+use protocol::{LEGACY_PROTOCOL_VERSION, Lifecycle};
+use rmcp::{
+    RoleClient,
+    model::{
+        CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation,
+        PaginatedRequestParams, ProtocolVersion,
+    },
+    service::{ClientLifecycleMode, RunningService, serve_client_with_lifecycle_and_ct},
+};
+use schema::CompiledSchema;
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use transport::{CallArguments, Operation, WireClient, WireState, protocol_error};
+use url::Url;
+
+pub use transport::PROTOCOL_VERSION;
+
+#[derive(Debug)]
+pub struct McpAdapter;
+
+#[async_trait]
+impl ImportedAdapter for McpAdapter {
+    fn kind(&self) -> &'static str {
+        "mcp_http"
+    }
+
+    fn sensitive_output_pointers(&self) -> &'static [&'static str] {
+        &["/result/upstreamMcp"]
+    }
+
+    fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
+        CompiledAction::new(action).map(|_| ())
+    }
+
+    fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
+        source_tool_name(action).map(str::to_owned)
+    }
+
+    fn build(
+        &self,
+        definition: &ImportedServiceDefinition,
+        actions: &[ImportedActionDefinition],
+        transport_credential: Option<ExecutionCredential>,
+        host: &BuildContext<'_>,
+    ) -> Result<Arc<dyn Provider>, HostError> {
+        let mut compiled = BTreeMap::new();
+        for action in actions {
+            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
+            let value = CompiledAction::new(action).map_err(HostError::invalid)?;
+            if compiled.insert(action.action.clone(), value).is_some() {
+                return Err(HostError::invalid("duplicate imported action"));
+            }
+        }
+        Ok(Arc::new(McpProvider {
+            wire: make_wire(definition, host)?,
+            definition: definition.clone(),
+            actions: compiled,
+            transport_credential,
+            timeout: Duration::from_millis(host.limits.request_timeout_ms),
+        }))
+    }
+
+    async fn discover(
+        &self,
+        definition: &ImportedServiceDefinition,
+        authentication: &ImportedDiscoveryAuthentication,
+        transport_credential: Option<ExecutionCredential>,
+        host: &BuildContext<'_>,
+    ) -> Result<ImportedDiscovery, ProviderError> {
+        let wire = make_wire(definition, host).map_err(|_| {
+            ProviderError::deny(
+                ReasonCode::ConfigValidationFailed,
+                "imported MCP endpoint could not be prepared",
+            )
+        })?;
+        let delivery = &definition
+            .execution_bindings
+            .first()
+            .ok_or_else(credential_error)?
+            .delivery;
+        let (auth, delegated) = match authentication {
+            ImportedDiscoveryAuthentication::Static(credential) => (
+                auth_headers(
+                    definition,
+                    delivery,
+                    credential,
+                    transport_credential.as_ref(),
+                )?,
+                None,
+            ),
+            ImportedDiscoveryAuthentication::Delegated(credential)
+                if matches!(
+                    definition.discovery,
+                    ImportedDiscoveryCredential::PerUser { .. }
+                ) && !definition.transport_auth
+                    && transport_credential.is_none()
+                    && definition.execution_bindings.iter().any(|binding| {
+                        binding.owner_mode == ImportedCredentialMode::PerUser
+                            && binding.mechanism == ImportedAuthMechanism::Oauth
+                            && binding.is_supported()
+                    }) =>
+            {
+                (HeaderMap::new(), Some(credential.clone()))
+            }
+            _ => return Err(credential_error()),
+        };
+        discover(wire, auth, delegated, &definition.endpoint).await
+    }
+}
+
+fn make_wire(
+    definition: &ImportedServiceDefinition,
+    host: &BuildContext<'_>,
+) -> Result<WireClient, HostError> {
+    McpAdapter
+        .validate_definition(definition)
+        .map_err(HostError::invalid)?;
+    if definition.adapter_kind != "mcp_http" {
+        return Err(HostError::invalid("incorrect imported adapter kind"));
+    }
+    let endpoint = Url::parse(&definition.endpoint)
+        .map_err(|_| HostError::invalid("invalid imported endpoint"))?;
+    let client = UpstreamClient::build(
+        UpstreamClientSpec {
+            label: "imports.mcp_http",
+            provider: "mcp_http",
+            base: &endpoint,
+            egress_proxy: None,
+            allowed_upstream_hosts: std::slice::from_ref(&definition.endpoint),
+            profile: ClientProfile::SingleAttempt,
+            status_reasons: &[],
+        },
+        host.network(),
+    )?;
+    Ok(WireClient {
+        client: Arc::new(client),
+        endpoint,
+        service: definition.service.clone(),
+        max_bytes: host.limits.max_upstream_response_bytes,
+    })
+}
+
+struct CompiledAction {
+    definition: ImportedActionDefinition,
+    name: String,
+    input: CompiledSchema,
+    output: Option<CompiledSchema>,
+}
+
+fn source_tool_name(definition: &ImportedActionDefinition) -> Result<&str, String> {
+    let source = definition
+        .source
+        .as_object()
+        .ok_or("tool source must be an object")?;
+    if source.len() != 1 {
+        return Err("MCP source supports only toolName".into());
+    }
+    source
+        .get("toolName")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        })
+        .ok_or_else(|| "MCP source requires a bounded toolName".into())
+}
+
+impl CompiledAction {
+    fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
+        if serde_json::to_vec(definition)
+            .map_err(|_| "invalid tool definition")?
+            .len()
+            > schema::MAX_TOOL_BYTES
+            || definition.description.len() > schema::MAX_DESCRIPTION_BYTES
+        {
+            return Err("tool definition exceeds import limits".into());
+        }
+        let name = source_tool_name(definition)?.to_owned();
+        Ok(Self {
+            definition: definition.clone(),
+            name,
+            input: CompiledSchema::input(&definition.input_schema)?,
+            output: definition
+                .output_schema
+                .as_ref()
+                .map(CompiledSchema::output)
+                .transpose()?,
+        })
+    }
+}
+
+struct McpProvider {
+    wire: WireClient,
+    definition: ImportedServiceDefinition,
+    actions: BTreeMap<String, CompiledAction>,
+    transport_credential: Option<ExecutionCredential>,
+    timeout: Duration,
+}
+
+#[async_trait]
+impl Provider for McpProvider {
+    fn resolve_scopes(
+        &self,
+        action: &str,
+        inputs: &Value,
+    ) -> Result<ResourceScopes, ProviderError> {
+        let action = self.actions.get(action).ok_or_else(input_error)?;
+        if !action.input.valid(inputs) {
+            return Err(input_error());
+        }
+        action.input.headers(inputs).map_err(|_| input_error())?;
+        Ok(BTreeMap::new())
+    }
+
+    async fn verify_execution_credential(
+        &self,
+        credential: &ExecutionCredential,
+        correlation: &CorrelationContext,
+    ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        let started = Instant::now();
+        let delivery = &self
+            .definition
+            .execution_bindings
+            .first()
+            .ok_or_else(credential_error)?
+            .delivery;
+        let auth = auth_headers(
+            &self.definition,
+            delivery,
+            credential,
+            self.transport_credential.as_ref(),
+        )?;
+        with_correlation_context(correlation.clone(), async {
+            let discovered = discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
+            Ok(Some(ProviderCredentialVerification {
+                upstream_status: 200,
+                upstream_duration_ms: started.elapsed().as_millis() as u64,
+                audit: json!({"adapterKind":"mcp_http", "protocolVersion":discovered.protocol_version}),
+            }))
+        })
+        .await
+    }
+
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        self.resolve_scopes(&request.action, &request.inputs)?;
+        if request.service != self.definition.service
+            || !request.resource_scopes.is_empty()
+            || !request.body_parts.is_empty()
+        {
+            return Err(input_error());
+        }
+        let binding = self
+            .definition
+            .execution_bindings
+            .iter()
+            .find(|binding| {
+                binding.owner_mode.as_str() == request.credential_mode && binding.is_supported()
+            })
+            .ok_or_else(credential_error)?;
+        let action = self.actions.get(&request.action).ok_or_else(input_error)?;
+        let auth = match binding.mechanism {
+            ImportedAuthMechanism::StaticToken if request.delegated_credential.is_none() => {
+                auth_headers(
+                    &self.definition,
+                    &binding.delivery,
+                    request.credential.as_ref().ok_or_else(credential_error)?,
+                    self.transport_credential.as_ref(),
+                )?
+            }
+            ImportedAuthMechanism::Oauth
+                if request.credential.is_none()
+                    && request.delegated_credential.is_some()
+                    && binding.owner_mode == ImportedCredentialMode::PerUser
+                    && binding.delivery == ImportedCredentialDelivery::Bearer
+                    && !self.definition.transport_auth =>
+            {
+                HeaderMap::new()
+            }
+            _ => return Err(credential_error()),
+        };
+        let (modern_arguments, headers) = action
+            .input
+            .arguments_and_headers(&request.inputs)
+            .map_err(|_| input_error())?;
+        let call = CallArguments {
+            name: action.name.clone(),
+            arguments: request.inputs.clone(),
+            modern_arguments,
+            headers,
+        };
+        let operation = Operation::new(
+            self.wire.clone(),
+            auth,
+            request
+                .delegated_credential
+                .clone()
+                .map(|credential| (credential, self.definition.endpoint.clone())),
+            Some(call),
+            self.timeout,
+        );
+        let state = Arc::clone(&operation.state);
+        let started = Instant::now();
+        let work = async {
+            let client = connect(&operation).await?;
+            // Real names/arguments stay inside HostTransport, away from SDK trace events.
+            let result = client
+                .peer()
+                .call_tool_once(
+                    CallToolRequestParams::new("imported_tool").with_arguments(Default::default()),
+                )
+                .await;
+            let raw = if result.is_err() {
+                Err(operation.error())
+            } else {
+                take_result(&state)
+            };
+            let _ = client.cancel().await;
+            normalize_result(raw?, action)
+        };
+        let outcome = operation
+            .run(work, "imported MCP invocation exceeded its deadline")
+            .await;
+        let state = state.lock().expect("wire state");
+        let elapsed = started.elapsed().as_millis() as u64;
+        let mut audit = json!({"adapterKind":"mcp_http", "upstreamTool":action.name,
+            "credentialMode":request.credential_mode,
+            "toolDispatched":state.call_dispatched});
+        if let Some(version) = state.protocol_version {
+            audit["protocolVersion"] = json!(version);
+        }
+        match outcome {
+            Ok(mut result) => {
+                if !action.definition.read_only {
+                    result["mutationStatus"] = json!("applied_unverified");
+                    result["retrySafe"] = json!(false);
+                }
+                Ok(ProviderResult {
+                    result,
+                    stream: None,
+                    audit: Some(audit),
+                    upstream_status: state.status,
+                    upstream_duration_ms: Some(elapsed),
+                    object_ids: None,
+                })
+            }
+            Err(mut error) => {
+                if !action.definition.read_only {
+                    let mut result = error.result.take().map(|v| *v).unwrap_or_else(|| json!({}));
+                    result["mutationStatus"] = json!(if state.call_dispatched {
+                        "unknown"
+                    } else {
+                        "not_applied"
+                    });
+                    result["retrySafe"] = json!(false);
+                    result["toolDispatched"] = json!(state.call_dispatched);
+                    error.result = Some(Box::new(result));
+                }
+                Err(error
+                    .with_upstream(state.status, Some(elapsed))
+                    .with_audit(audit))
+            }
+        }
+    }
+}
+
+fn input_error() -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::InputInvalid,
+        "imported action inputs do not match the accepted definition",
+    )
+}
+fn credential_error() -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::CredentialInvalid,
+        "imported service requires a supported configured token credential",
+    )
+}
+
+fn auth_headers(
+    definition: &ImportedServiceDefinition,
+    delivery: &ImportedCredentialDelivery,
+    execution: &ExecutionCredential,
+    transport: Option<&ExecutionCredential>,
+) -> Result<HeaderMap, ProviderError> {
+    delivery.validate().map_err(|_| credential_error())?;
+    let token = |credential: &ExecutionCredential| {
+        if credential.kind != "bearer_token" || credential.username.is_some() {
+            return Err(credential_error());
+        }
+        credential
+            .token
+            .as_ref()
+            .filter(|value| valid_token(value))
+            .cloned()
+            .ok_or_else(credential_error)
+    };
+    let mut auth = HeaderMap::new();
+    let token = token(execution)?;
+    let (name, value) = match delivery {
+        ImportedCredentialDelivery::Bearer => (
+            HeaderName::from_static("authorization"),
+            format!("Bearer {token}"),
+        ),
+        ImportedCredentialDelivery::RawHeader { name } => (
+            HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
+            token,
+        ),
+    };
+    let mut value = HeaderValue::from_str(&value).map_err(|_| credential_error())?;
+    value.set_sensitive(true);
+    auth.insert(name, value);
+    if definition.transport_auth {
+        if matches!(delivery, ImportedCredentialDelivery::Bearer) {
+            return Err(credential_error());
+        }
+        let transport = transport.ok_or_else(credential_error)?;
+        if transport.kind != "bearer_token" || transport.username.is_some() {
+            return Err(credential_error());
+        }
+        let token = transport
+            .token
+            .as_ref()
+            .filter(|v| valid_token(v))
+            .ok_or_else(credential_error)?;
+        let mut value =
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| credential_error())?;
+        value.set_sensitive(true);
+        auth.insert("authorization", value);
+    }
+    Ok(auth)
+}
+
+fn valid_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 32768
+        && token.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+async fn connect(
+    operation: &Operation,
+) -> Result<RunningService<RoleClient, ClientConfig>, ProviderError> {
+    let info = |version| {
+        ClientConfig::new(
+            ClientCapabilities::default(),
+            Implementation::new("agent-access-broker", env!("CARGO_PKG_VERSION")),
+        )
+        .with_protocol_version(version)
+    };
+    let (transport, cancel) = operation.attempt(Lifecycle::Discover);
+    match serve_client_with_lifecycle_and_ct(
+        info(ProtocolVersion::V_2026_07_28),
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+        cancel,
+    )
+    .await
+    {
+        Ok(client) => return Ok(client),
+        Err(_) if operation.begin_legacy()? => {}
+        Err(_) => return Err(operation.error()),
+    }
+    let (transport, cancel) = operation.attempt(Lifecycle::Initialize);
+    serve_client_with_lifecycle_and_ct(
+        info(ProtocolVersion::V_2025_11_25),
+        transport,
+        ClientLifecycleMode::Initialize,
+        cancel,
+    )
+    .await
+    .map_err(|_| operation.error())
+}
+fn take_result(state: &Mutex<WireState>) -> Result<Value, ProviderError> {
+    state
+        .lock()
+        .expect("wire state")
+        .result
+        .take()
+        .ok_or_else(protocol_error)
+}
+
+async fn discover(
+    mut wire: WireClient,
+    auth: HeaderMap,
+    delegated: Option<DelegatedCredential>,
+    resource: &str,
+) -> Result<ImportedDiscovery, ProviderError> {
+    // Discovery has its own manifest ceiling, never a larger per-request allowance.
+    wire.max_bytes = wire.max_bytes.min(IMPORT_MAX_MANIFEST_BYTES as u64);
+    let operation = Operation::new(
+        wire,
+        auth,
+        delegated.map(|credential| (credential, resource.to_owned())),
+        None,
+        Duration::from_secs(60),
+    );
+    operation
+        .run(
+            discover_tools(&operation),
+            "imported MCP discovery exceeded its deadline",
+        )
+        .await
+}
+
+async fn discover_tools(operation: &Operation) -> Result<ImportedDiscovery, ProviderError> {
+    let state = &operation.state;
+    let client = connect(operation).await?;
+    let version = state
+        .lock()
+        .expect("wire state")
+        .protocol_version
+        .ok_or_else(protocol_error)?;
+    let discovered = take_result(state)?;
+    // Only standardized implementation identity is useful to an administrator.
+    // Opaque extensions, instructions, icons and links never enter the manifest.
+    let mut server_info = serde_json::Map::new();
+    let info = if version == LEGACY_PROTOCOL_VERSION {
+        discovered.get("serverInfo")
+    } else {
+        discovered.pointer("/_meta/io.modelcontextprotocol~1serverInfo")
+    };
+    if let Some(info) = info {
+        for field in ["name", "version", "title"] {
+            if let Some(value) = info.get(field).and_then(Value::as_str)
+                && !value.is_empty()
+                && value.len() <= 512
+                && !value.chars().any(char::is_control)
+            {
+                server_info.insert(field.into(), json!(value));
+            }
+        }
+    }
+    let server_info = if server_info.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(server_info)
+    };
+    let result = async {
+        let mut tools = Vec::new();
+        let mut names = BTreeSet::new();
+        let mut cursors = BTreeSet::new();
+        let mut bytes = 0usize;
+        let mut listing_metadata = Vec::new();
+        for page in 0..128 {
+            // Every SDK cache key is unique, while actual cursors remain transport-owned.
+            let mut params = PaginatedRequestParams::default();
+            params.cursor = Some(format!("page-{page}"));
+            client
+                .peer()
+                .list_tools(Some(params))
+                .await
+                .map_err(|_| operation.error())?;
+            let raw = take_result(state)?;
+            bytes = bytes
+                .checked_add(
+                    serde_json::to_vec(&raw)
+                        .map_err(|_| protocol_error())?
+                        .len(),
+                )
+                .ok_or_else(protocol_error)?;
+            if bytes > IMPORT_MAX_MANIFEST_BYTES {
+                return Err(protocol_error());
+            }
+            // Preserve source cache declarations only as bounded metadata. This
+            // operation never shares or reuses a user's upstream response.
+            let mut cache = serde_json::Map::new();
+            for field in ["cacheScope", "ttlMs"] {
+                if let Some(value) = raw.get(field) {
+                    cache.insert(field.into(), value.clone());
+                }
+            }
+            listing_metadata.push(Value::Object(cache));
+            for tool in raw
+                .get("tools")
+                .and_then(Value::as_array)
+                .ok_or_else(protocol_error)?
+            {
+                if tools.len() >= IMPORT_MAX_TOOLS {
+                    return Err(protocol_error());
+                }
+                let name = tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(protocol_error)?;
+                if !names.insert(name.to_owned()) {
+                    return Err(protocol_error());
+                }
+                // JSON Schema compilation is synchronous. Keep it off runtime
+                // workers and bound cancellation to one in-progress tool.
+                let tool = tool.clone();
+                tools.push(tokio::task::spawn_blocking(move || discovered_tool(&tool))
+                    .await.map_err(|_| protocol_error())??);
+            }
+            let cursor = raw.get("nextCursor").and_then(Value::as_str);
+            match cursor {
+                None => {
+                    return Ok(ImportedDiscovery {
+                        protocol_version: version.into(),
+                        metadata: json!({"adapterKind":"mcp_http", "pages":page + 1, "listings":listing_metadata, "serverInfo":server_info}),
+                        tools,
+                    });
+                }
+                Some(cursor)
+                    if cursor.len() <= 16 * 1024
+                        && !cursor.is_empty()
+                        && cursors.insert(cursor.to_owned()) =>
+                {
+                    state.lock().expect("wire state").cursor = Some(cursor.to_owned());
+                }
+                Some(_) => return Err(protocol_error()),
+            }
+        }
+        Err(protocol_error())
+    }
+    .await;
+    let _ = client.cancel().await;
+    result
+}
+
+fn discovered_tool(raw: &Value) -> Result<ImportedDiscoveredTool, ProviderError> {
+    let name = raw
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(protocol_error)?;
+    let definition = ImportedActionDefinition {
+        action: "pending".into(),
+        source: json!({"toolName":name}),
+        label: raw.get("title").and_then(Value::as_str).map(str::to_owned),
+        description: raw
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        input_schema: raw.get("inputSchema").cloned().unwrap_or(Value::Null),
+        output_schema: raw.get("outputSchema").cloned(),
+        annotations: json!({"toolAnnotations":raw.get("annotations").cloned().unwrap_or_else(|| json!({})),
+            "execution":raw.get("execution").cloned().unwrap_or(Value::Null)}),
+        read_only: false,
+    };
+    let unsupported_reason =
+        if serde_json::to_vec(raw).map_err(|_| protocol_error())?.len() > IMPORT_MAX_TOOL_BYTES {
+            Some("tool definition exceeds import limits".into())
+        } else if raw
+            .get("execution")
+            .and_then(|e| e.get("taskSupport"))
+            .and_then(Value::as_str)
+            == Some("required")
+        {
+            Some("tool requires unsupported background task execution".into())
+        } else if serde_json::from_value::<rmcp::model::Tool>(raw.clone()).is_err() {
+            Some("tool definition has invalid MCP field types".into())
+        } else {
+            CompiledAction::new(&definition).err()
+        };
+    Ok(ImportedDiscoveredTool {
+        read_only_hint: raw
+            .pointer("/annotations/readOnlyHint")
+            .and_then(Value::as_bool),
+        definition,
+        unsupported_reason,
+    })
+}
+
+fn normalize_result(raw: Value, action: &CompiledAction) -> Result<Value, ProviderError> {
+    // Explicit null is deliberately tested and copied from raw, because SDK Option<Value>
+    // collapses it into absence. Typed content parsing checks every standard block shape.
+    if raw.get("content").is_some_and(|v| !v.is_array())
+        || raw.get("isError").is_some_and(|v| !v.is_boolean())
+    {
+        return Err(protocol_error());
+    }
+    let mut for_validation = raw.clone();
+    for_validation
+        .as_object_mut()
+        .ok_or_else(protocol_error)?
+        .entry("content")
+        .or_insert_with(|| json!([]));
+    let result: rmcp::model::CallToolResult =
+        serde_json::from_value(for_validation).map_err(|_| protocol_error())?;
+    let failed = result.is_error.unwrap_or(false);
+    if !failed && let Some(schema) = &action.output {
+        let structured = raw.get("structuredContent").ok_or_else(protocol_error)?;
+        if !schema.valid(structured) {
+            return Err(protocol_error());
+        }
+    }
+    let mut content = serde_json::to_value(result.content).map_err(|_| protocol_error())?;
+    for block in content.as_array_mut().ok_or_else(protocol_error)? {
+        drop_protocol_meta(block);
+        if let Some(encoded) = block
+            .get("data")
+            .or_else(|| block.pointer("/resource/blob"))
+            .and_then(Value::as_str)
+        {
+            // Already bounded by the encoded HTTP body; decoding cannot enlarge that bound.
+            BASE64_STANDARD
+                .decode(encoded)
+                .map_err(|_| protocol_error())?;
+        }
+    }
+    let mut upstream = json!({"content":content,"isError":failed});
+    if let Some(structured) = raw.get("structuredContent") {
+        upstream["structuredContent"] = structured.clone();
+    }
+    let result = json!({"upstreamMcp":upstream});
+    if failed {
+        Err(ProviderError::error(
+            ReasonCode::UpstreamFailed,
+            "upstream MCP tool reported an error",
+        )
+        .with_result(result))
+    } else {
+        Ok(result)
+    }
+}
+
+fn drop_protocol_meta(value: &mut Value) {
+    if let Value::Object(fields) = value {
+        fields.remove("_meta");
+        if let Some(resource) = fields.get_mut("resource") {
+            drop_protocol_meta(resource);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

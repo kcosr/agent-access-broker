@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Access CLI Send"
+  short_description: "Run schema-guided agent-access send requests."
+  default_prompt: "Use $agent-access-cli-send to build and run a schema-guided agent-access send request file."

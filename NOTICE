@@ -1,0 +1,43 @@
+Agent Access Broker
+Copyright (c) 2026 Kevin
+
+The kit-authored source included in this Broker distribution at
+apps/portal/src/workbench is distributed under the root MIT License in LICENSE,
+alongside the Broker-authored code.
+This declaration applies to the Broker distribution; it does not change the
+visibility or licensing metadata of the separate upstream repository.
+
+The shared UI snapshot comes from https://github.com/kcosr/workbench-ui at
+commit 0e156edfb3ae4bbd1002ae38a7b221d370b5e4fa. Its components, helpers and
+styles were originally extracted from https://github.com/kcosr/gh-dash.
+The gh-dash-derived portions retain this upstream notice:
+
+MIT License
+
+Copyright (c) 2026 kcosr
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The bundled Inter and JetBrains Mono fonts retain their separate SIL Open Font
+License notices in apps/portal/src/workbench/fonts/LICENSE-Inter.txt and
+LICENSE-JetBrainsMono.txt. The portal build copies those notices, this NOTICE,
+and LICENSE to dist/licenses and generates THIRD-PARTY-NOTICES.txt for bundled
+JavaScript dependencies and the Tailwind theme/utilities CSS included in the
+portal. Distribute the complete licenses directory with the portal assets.
+See docs/workbench-vendoring.md for source provenance and upkeep.

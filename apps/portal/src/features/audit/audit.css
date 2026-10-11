@@ -1,0 +1,132 @@
+/* Audit and Activity: app glue on top of the kit (unlayered, portal-only). */
+
+/* ---------- sidebar */
+.pt-audit-scope {
+  margin: 0;
+  padding: 2px 6px 2px;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12-5);
+  line-height: var(--wb-lh);
+}
+.pt-audit-quiet {
+  padding: 2px 6px;
+  color: var(--wb-muted);
+}
+.pt-audit-side-note {
+  margin: 12px 8px 0;
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-12);
+}
+.pt-audit-range {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pt-audit-range > .wb-field {
+  margin: 0;
+}
+.pt-audit-range > .wb-btn {
+  align-self: flex-start;
+}
+.pt-audit-range .wb-input[type="datetime-local"] {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- table */
+/* The reason code column (shown when a loaded record has one). */
+.wb-table .pt-audit-reason {
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12);
+}
+/* A banner in the table's empty row: the bleed table hangs 10px past the
+   pane on each side, so pad it back to the content edge. */
+.pt-audit-table-note {
+  padding: 12px 10px;
+}
+
+/* ---------- drawer */
+.pt-audit-drawer-pad {
+  padding: 16px 22px;
+}
+.pt-audit-note {
+  margin-bottom: 8px;
+}
+.pt-audit-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pt-audit-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--wb-fs-13);
+}
+.pt-audit-refs > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pt-audit-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pt-audit-raw .wb-code {
+  max-height: 480px;
+}
+
+/* Timeline entries are buttons: selecting one opens that record. */
+.pt-audit-step {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--wb-fs-13);
+  text-align: left;
+  cursor: pointer;
+}
+.pt-audit-step:hover {
+  background: var(--wb-surface-2);
+}
+.pt-audit-step[aria-current="true"],
+.pt-audit-step[aria-current="true"]:hover {
+  background: var(--wb-accent-weak);
+  cursor: default;
+}
+.pt-audit-step-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pt-audit-step-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--wb-fw-strong);
+}
+.pt-audit-step-title .wb-badge,
+.pt-audit-step-title .wb-num {
+  font-weight: var(--wb-fw-regular);
+}
+.pt-audit-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12-5);
+}

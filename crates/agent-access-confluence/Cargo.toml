@@ -1,0 +1,28 @@
+[package]
+name = "agent-access-confluence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-access-atlassian = { path = "../agent-access-atlassian" }
+agent-access-content = { path = "../agent-access-content" }
+agent-access-provider = { path = "../agent-access-provider" }
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+bytes.workspace = true
+wiremock.workspace = true

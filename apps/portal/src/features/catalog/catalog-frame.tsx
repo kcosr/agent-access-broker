@@ -1,0 +1,101 @@
+import { canWriteAdmin } from "../../lib/capabilities";
+// The frame every Catalog page shares: the Catalog sidebar (services,
+// resources, resource groups) and the Import service dialog, which opens from
+// `?import=1` on any Catalog page (the command palette links there).
+import { useRef, type ReactNode } from "react";
+import { useNavigate } from "react-router";
+import { Sidebar, SidebarItem, SidebarSection, SkeletonSidebar, StatusDot } from "../../workbench";
+import { PortalPage } from "../../app/top-bar";
+import { paths } from "../../app/paths";
+import { useSession } from "../../app/session";
+import { urlParam, useUrlState } from "../../lib/url-state";
+import { useResourceCatalog } from "../../data/queries";
+import { stateNeedsAttention, useCatalogServices, type CatalogIndex } from "./catalog-data";
+import { ImportEditor } from "./import-editor";
+import { useImportActions } from "./import-actions";
+import "./catalog.css";
+
+export type CatalogSection = { kind: "services"; service?: string } | { kind: "resources" } | { kind: "groups" };
+
+const IMPORT_STATE = { import: urlParam.flag() };
+
+/** Opens and closes the Import service dialog through the URL. */
+export function useImportDialog() {
+  const [state, setState] = useUrlState(IMPORT_STATE);
+  const { session } = useSession();
+  return {
+    open: state.import && canWriteAdmin(session),
+    show: () => setState({ import: true }, { history: "push" }),
+    close: () => setState({ import: false })
+  };
+}
+
+export function CatalogFrame({ section, drawer, children }: { section: CatalogSection; drawer?: ReactNode; children: ReactNode }) {
+  const index = useCatalogServices();
+  const dialog = useImportDialog();
+  return (
+    <PortalPage sidebar={<CatalogSidebar index={index} section={section} onImport={dialog.show} />} drawer={drawer}>
+      {children}
+      {dialog.open ? <NewImportDialog index={index} onClose={dialog.close} /> : null}
+    </PortalPage>
+  );
+}
+
+function CatalogSidebar({ index, section, onImport }: { index: CatalogIndex; section: CatalogSection; onImport: () => void }) {
+  const resources = useResourceCatalog().data;
+  const { session } = useSession();
+  const current = section.kind === "services" ? section.service ?? "" : null;
+  return (
+    <Sidebar label="Catalog">
+      <SidebarSection title="Services" action={canWriteAdmin(session) ? { label: "Import service", icon: "plus", onClick: onImport } : undefined}>
+        <SidebarItem icon="layers" label="All services" count={index.loading ? undefined : index.services.length} current={current === ""} href={paths.catalog()} />
+        {index.loading ? (
+          <SkeletonSidebar lines={6} />
+        ) : (
+          index.services.map((service) => (
+            <SidebarItem
+              key={service.service}
+              icon={service.origin === "imported" ? "download" : "package"}
+              label={service.displayName}
+              title={`${service.service} · ${service.origin === "imported" ? "imported" : "built-in"} · ${service.state.label.toLowerCase()}`}
+              count={service.actionCount}
+              current={current === service.service}
+              href={paths.catalogService(service.service)}
+              trailing={stateNeedsAttention(service.state) ? <StatusDot tone={service.state.tone} label={service.state.label} /> : undefined}
+            />
+          ))
+        )}
+      </SidebarSection>
+      <SidebarSection title="Resources">
+        <SidebarItem icon="database" label="Resources" count={resources?.resources.length} current={section.kind === "resources"} href={paths.resources()} />
+        <SidebarItem icon="layers" label="Resource groups" count={resources?.resourceGroups.length} current={section.kind === "groups"} href={paths.resourceGroups()} />
+      </SidebarSection>
+    </Sidebar>
+  );
+}
+
+/** Import service: create a draft, then continue on its Import tab. */
+function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () => void }) {
+  const { session } = useSession();
+  const actions = useImportActions();
+  const navigate = useNavigate();
+  // After creating, the draft's page replaces this URL; closing must not rewrite it.
+  const created = useRef(false);
+  const imports = index.imports;
+  return (
+    <ImportEditor
+      principal={session.principal ?? ""}
+      registrations={imports?.oauthRegistrations ?? []}
+      availableKinds={imports?.availableKinds ?? []}
+      operatorEnabled={imports?.operatorEnabled ?? false}
+      onClose={() => {
+        if (!created.current) onClose();
+      }}
+      onSave={async (definition) => {
+        const result = await actions.create(definition);
+        created.current = true;
+        navigate(paths.catalogService(result.service.definition.service, "import"), { replace: true });
+      }}
+    />
+  );
+}

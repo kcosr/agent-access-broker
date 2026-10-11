@@ -1,0 +1,231 @@
+/*
+ * Catalog feature styles (services, imports, resources). Kit classes do the
+ * heavy lifting; these cover layouts the kit leaves to apps. Unlayered, so
+ * they win over the kit where they overlap.
+ */
+
+/* Forms: spacing comes from the container's gap, not field margins */
+.pt-catalog-form .wb-field + .wb-field {
+  margin-top: 0;
+}
+.pt-catalog-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+/* Upstream text: URLs, JSON, long identifiers */
+.pt-catalog-break {
+  overflow-wrap: anywhere;
+}
+.pt-catalog-code {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pt-catalog-tone-text {
+  color: var(--wb-tone-text, inherit);
+  font-weight: var(--wb-fw-medium);
+}
+.pt-catalog-warn {
+  margin: 0;
+  color: var(--wb-warning-text);
+  font-size: var(--wb-fs-12-5);
+  overflow-wrap: anywhere;
+}
+.pt-catalog-op {
+  margin: 0;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12-5);
+  overflow-wrap: anywhere;
+}
+
+/* Descriptions: full text, or three lines with a toggle */
+.pt-catalog-desc {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-13);
+  line-height: var(--wb-lh-prose);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pt-catalog-more > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--wb-radius-xs);
+}
+.pt-catalog-more > summary::-webkit-details-marker {
+  display: none;
+}
+.pt-catalog-more-preview {
+  display: -webkit-box;
+  max-width: 72ch;
+  overflow: hidden;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-13);
+  line-height: var(--wb-lh-prose);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.pt-catalog-more-show,
+.pt-catalog-more-hide {
+  align-self: flex-start;
+  font-size: var(--wb-fs-12-5);
+}
+.pt-catalog-more-hide,
+.pt-catalog-more[open] .pt-catalog-more-preview,
+.pt-catalog-more[open] .pt-catalog-more-show {
+  display: none;
+}
+.pt-catalog-more[open] .pt-catalog-more-hide {
+  display: inline;
+}
+.pt-catalog-more[open] > .pt-catalog-desc {
+  margin-top: 6px;
+}
+
+/* Scoped MCP readiness */
+.pt-catalog-readiness {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pt-catalog-readiness-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--wb-fs-13);
+  font-weight: var(--wb-fw-medium);
+}
+
+/* Import review */
+.pt-catalog-review-group {
+  gap: 8px;
+}
+.pt-catalog-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pt-catalog-review-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-md);
+  background: var(--wb-surface);
+}
+.pt-catalog-review-item.is-selected {
+  border-color: color-mix(in srgb, var(--wb-accent) 45%, var(--wb-border));
+}
+.pt-catalog-review-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pt-catalog-review-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+.pt-catalog-review-fields > .wb-field {
+  margin: 0;
+}
+.pt-catalog-review-retained {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Private attribute value with reveal and copy */
+.pt-catalog-secret {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pt-catalog-secret > .wb-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Used-by references */
+.pt-catalog-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pt-catalog-ref {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  font-size: var(--wb-fs-13);
+}
+.pt-catalog-ref > .wb-icon {
+  margin-top: 2px;
+  color: var(--wb-muted);
+}
+.pt-catalog-ref-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pt-catalog-ref-kind {
+  color: var(--wb-fg-2);
+}
+
+/* Drawer forms, stacked blocks in settings cards, related links */
+.pt-catalog-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.pt-catalog-type-filter {
+  width: 160px;
+}
+/* A toolbar with a type filter too: in a wide pane, a shorter search keeps
+   the primary action on the first row. */
+@container wb-main (min-width: 941px) {
+  .wb-toolbar .wb-filter.pt-catalog-filter {
+    flex-basis: 240px;
+  }
+}
+.pt-catalog-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.pt-catalog-drawer-form {
+  padding: 16px 22px 24px;
+}
+.pt-catalog-member-columns {
+  align-items: start;
+}
+.pt-catalog-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 1100px) {
+  .pt-catalog-member-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

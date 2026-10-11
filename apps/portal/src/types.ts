@@ -1,0 +1,702 @@
+export type ThemeMode = "light" | "dark";
+
+export type TokenTtlPolicy = {
+  defaultTtl: string | null;
+  maxTtl: string | null;
+  options: string[];
+};
+
+export type TokenIssuancePolicy = {
+  selfAgentInvoke: TokenTtlPolicy;
+  administered?: {
+    agentInvoke: TokenTtlPolicy;
+    userManage: TokenTtlPolicy;
+    admin: TokenTtlPolicy;
+  };
+};
+
+/** Registered resource type id; the broker publishes the registered set as `resourceTypes`. */
+export type ResourceType = string;
+
+/** Broker-provided description of a registered resource type. */
+export type ResourceTypeMetadata = {
+  id: ResourceType;
+  label: string;
+  pluralLabel: string;
+  example: string;
+  selectors: string[];
+  attributes?: ResourceAttributeMetadata[];
+  /** Present only when the type accepts namespace selectors. */
+  namespace?: { label: string; membersLabel: string; example: string };
+};
+
+export type OAuthScopeMode = "explicit" | "server_default";
+
+export type OAuthConnectionTarget = {
+  service: string;
+  /** The service's display name from its descriptor. */
+  serviceDisplayName: string;
+  /** What connecting allows, as the service's backend describes it. */
+  connectionDescription: string | null;
+  registration: string;
+  permissionProfile: string;
+  scopeMode: OAuthScopeMode;
+  requestedScopes: string[];
+  target: string;
+  canConnect: boolean;
+  connectUnavailableReason: null | "no_personal_access" | "service_unavailable";
+  canDisconnect: boolean;
+  connection: null | {
+    connectionId: string | null;
+    subjectId: string | null;
+    displayName: string | null;
+    status: "ready" | "reconnect_required" | "operator_action_required" | "disconnected";
+    reason: string | null;
+    targets: Array<{ id: string; name: string; audience: string; scopes: string[] }>;
+  };
+};
+export type ResourceSelector = { kind: "exact" | "namespace"; value: string } | { kind: "all" };
+export type ResourceSelection = { resourceIds: string[]; resourceGroupIds: string[] };
+export type ResourceDefinition = {
+  id: string; resourceType: ResourceType; selector: ResourceSelector;
+  displayName?: string | null; allowedExecutionContexts: string[]; enabled: boolean;
+};
+export type ResourceAttributeMetadata = { name: string; label: string; description: string; required: boolean; secret: boolean };
+/** Who created and last changed a managed catalog entry (catalog management reads; absent from policy catalogs). */
+export type CatalogStamp = { createdAt?: string; createdBy?: string; updatedAt?: string; updatedBy?: string };
+export type ResourceRecord = ResourceDefinition & CatalogStamp & { version: number; configuredAttributes?: string[] };
+export type ResourceGroupRecord = {
+  id: string; name: string; includedResourceIds: string[]; excludedResourceIds: string[];
+  version: number;
+} & CatalogStamp;
+export type ResourceGroupSummary = Pick<ResourceGroupRecord, "id" | "name">;
+export type ResourceCatalog = { resources: ResourceDefinition[]; resourceGroups: ResourceGroupSummary[] };
+export type CatalogMutation<T> = { record: T; previousRevision: { generation: number }; revision: { generation: number } };
+export type ResourceWriteBody = Omit<ResourceRecord, "id" | "version" | "configuredAttributes" | keyof CatalogStamp> & { id?: string; expectedVersion?: number; attributes?: Record<string, string> };
+export type ResourceGroupWriteBody = Omit<ResourceGroupRecord, "id" | "version" | keyof CatalogStamp> & { id?: string; expectedVersion?: number };
+
+export type AgentTokenOptions = {
+  policyGeneration: number;
+  resources: ResourceDefinition[];
+  resourceGroups: ResourceGroupSummary[];
+  executionContexts: string[];
+  services: AgentTokenServiceOption[];
+};
+
+/**
+ * A service the principal holds grants for. Display name and broker hosts do
+ * not depend on the caller's execution context (unlike agent discovery).
+ */
+export type AgentTokenServiceOption = {
+  service: string;
+  displayName: string;
+  /** Hosts agents use for a gateway service (e.g. Git over HTTP); empty otherwise. */
+  brokerHosts: string[];
+  executionContexts: string[];
+  actions: AgentTokenActionOption[];
+};
+
+export type EffectiveAccessClause = { included: ResourceSelector[]; excluded: ResourceSelector[]; excludedRequests?: EffectiveAccessClause[] };
+export type EffectiveResourceAccess = { resourceType: ResourceType; clauses: EffectiveAccessClause[] };
+export type EffectiveAccessItem = { service: string; action: string; executionContext: string; resourceType: ResourceType | null; clauses: EffectiveAccessClause[] };
+export type EffectiveAccessResult = { policyGeneration: number; access: EffectiveAccessItem[] };
+export type GrantEffectiveAccessBody = { service: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };
+export type TokenEffectiveAccessBody = Pick<AgentTokenIssueBody, "allowedServices" | "allowedExecutionContexts" | "serviceRestrictions">;
+export type ResourceUsage = { kind: string; id: string; service?: string | null; principalId?: string | null; viaGroupId?: string | null; effect?: string | null };
+export type ResourceUsedBy = ResourceUsage[];
+
+export type AgentTokenActionOption = {
+  action: string;
+  description: string;
+  /** True only when the action is explicitly classified read-only. */
+  readOnly: boolean;
+  requiredScopeTypes: string[];
+  executionContexts: string[];
+  resourceType: ResourceType | null;
+  effectiveAccessByExecutionContext: Record<string, EffectiveAccessClause[]>;
+};
+
+export type AgentTokenServiceRestriction = {
+  actions: string[];
+  resources?: ResourceSelection;
+};
+
+export type AgentTokenIssueBody = {
+  name: string;
+  ttl?: string;
+  never?: boolean;
+  allowedServices?: string[];
+  allowedExecutionContexts: string[];
+  serviceRestrictions?: Record<string, AgentTokenServiceRestriction>;
+};
+
+export type SignInMethods = {
+  localPassword: "absent" | "active" | "disabled";
+  microsoft: "absent" | "active" | "disabled";
+};
+
+export type Session = {
+  signInMethods?: SignInMethods;
+  authenticated: boolean;
+  principal?: string;
+  displayName?: string | null;
+  email?: string | null;
+  groups?: string[];
+  tokenClass?: string;
+  loginMethod?: string;
+  expiresAt?: string;
+  passwordChangeRequired?: boolean;
+  role?: PrincipalRole;
+  selfServiceEnabled?: boolean;
+  policyManagementServices?: string[];
+  csrfHeader?: string;
+  csrfToken?: string;
+  tokenIssuancePolicy?: TokenIssuancePolicy;
+  /** Audit uses SQLite and management is enabled: the audit views work. */
+  auditQueryable?: boolean;
+  returnTo?: string;
+  loginOptions?: {
+    localPassword?: { enabled: boolean };
+    microsoft?: {
+      enabled: boolean;
+      available: boolean;
+      displayName: string;
+      startPath: string;
+    };
+  };
+};
+
+export type CredentialInputField = {
+  name: string;
+  required: boolean;
+  secret: boolean;
+  prompt: string;
+  description?: string;
+  inputMethods?: string[];
+};
+
+export type CredentialInputSchema = {
+  service: string;
+  profile: string;
+  credentialKind: string;
+  fields: CredentialInputField[];
+};
+
+export type CredentialTarget = {
+  service: string;
+  displayName: string;
+  /** Inputs a verification needs besides the secret (GitLab Git: `repository`); empty when none. */
+  credentialVerificationInputs: string[];
+  credentialName: string;
+  profile: string;
+  credentialKind: string;
+  inputSchema: CredentialInputSchema;
+};
+
+export type CredentialMetadata = {
+  credentialId: string;
+  ownerPrincipal: string;
+  ownerKind: string;
+  service: string;
+  name: string;
+  profile: string;
+  credentialKind: string;
+  metadata: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
+  lastUsedAt?: string | null;
+  lastVerifiedAt?: string | null;
+  verificationStatus?: string | null;
+  lastVerificationAttemptAt?: string | null;
+  lastVerificationErrorCode?: string | null;
+};
+
+export type CredentialVerificationInput = {
+  repository?: string;
+};
+
+export type BrokerTokenRecord = {
+  tokenId: string;
+  principalId: string;
+  name: string;
+  tokenClass: string;
+  scopes: {
+    allowedServices?: string[];
+    allowedExecutionContexts?: string[];
+    serviceRestrictions?: Record<string, AgentTokenServiceRestriction>;
+    [key: string]: unknown;
+  };
+  createdAt: string;
+  expiresAt?: string | null;
+  pausedAt?: string | null;
+  pausedBy?: string | null;
+  revokedAt?: string | null;
+  revokedBy?: string | null;
+  lastUsedAt?: string | null;
+  createdBy: string;
+};
+
+export type AdminBrokerTokenRecord = BrokerTokenRecord & {
+  browserSession: boolean;
+};
+
+export type PrincipalRole = "user" | "auditor" | "service_policy_manager" | "admin";
+
+export type PrincipalKind = "user" | "service_account" | "system";
+
+export type PrincipalRecord = {
+  signInMethods: SignInMethods;
+  principalId: string;
+  kind: PrincipalKind;
+  displayName?: string | null;
+  email?: string | null;
+  externalSubject?: string | null;
+  status: string;
+  groups: string[];
+  role: PrincipalRole;
+  selfServiceEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  disabledAt?: string | null;
+  createdBy: string;
+};
+
+export type GroupRecord = {
+  groupId: string;
+  displayName?: string | null;
+  description?: string | null;
+  status: string;
+  createdAt?: string | null;
+  createdBy?: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+  disabledAt?: string | null;
+  memberCount: number;
+};
+
+export type GroupMemberRecord = {
+  principalId: string;
+  kind?: string | null;
+  displayName?: string | null;
+  email?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  createdBy?: string | null;
+  membership?: GroupMembershipProvenance | null;
+};
+
+export type ExternalGroupBinding = {
+  bindingId: string;
+  externalGroupId: string;
+  groupId: string;
+  status: "active" | "disabled";
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+export type GroupMembershipProvenance = {
+  groupId: string;
+  effective: boolean;
+  source: string;
+  local: { addedAt: string; addedBy: string } | null;
+  microsoft: Array<{
+    bindingId: string;
+    externalGroupId: string;
+    observedAt: string;
+    validUntil: string;
+    current: boolean;
+  }>;
+};
+
+export type GroupPolicyReference = {
+  grantRef: string;
+  writable: boolean;
+  grantId?: string | null;
+  index?: number | null;
+  subjects: string[];
+  service: string;
+  actions: string[];
+  executionContexts: string[];
+  credentialMode: string;
+  priority?: number | null;
+  resources: ResourceSelection;
+  status: string;
+  description?: string | null;
+  version?: number | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+  derivedViaSubjects?: string[];
+  derivedViaGroups?: string[];
+};
+
+export type PolicyReferenceSection = {
+  kind: string;
+  title: string;
+  subject?: string | null;
+  subjectRuntimeEligible: boolean;
+  runtimeIneligibleReason?: string | null;
+  references: GroupPolicyReference[];
+};
+
+export type GroupDetail = GroupRecord & {
+  members: GroupMemberRecord[];
+  policyReferenceSections: PolicyReferenceSection[];
+};
+
+export type PrincipalDetail = PrincipalRecord & {
+  groupMemberships: GroupMembershipProvenance[];
+  activePolicyGroupSubjects: string[];
+  policyReferenceSections: PolicyReferenceSection[];
+};
+
+export type LoginMethodRecord = {
+  loginMethodId: string;
+  principalId: string;
+  method: string;
+  externalProvider?: string | null;
+  externalSubject?: string | null;
+  oidc?: {
+    provider: "microsoft";
+    tenantId: string;
+    userObjectId: string;
+  };
+  status: string;
+  passwordSetAt?: string | null;
+  mustChangePassword: boolean;
+  /** Whether any source is currently locked out of this local password. */
+  locked: boolean;
+  /** Latest active lockout expiry across sources. */
+  lockedUntil?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
+};
+
+export type IssuedBrokerToken = {
+  token: string;
+  record: BrokerTokenRecord;
+};
+
+export type IssuedAdminBrokerToken = {
+  token: string;
+  record: AdminBrokerTokenRecord;
+};
+
+export type IdentitySummary = {
+  principal: string;
+  groups: string[];
+  policyGroups?: string[];
+  authenticated: boolean;
+};
+
+/** The limit a caller sees for one visible service on `/v1/me`; no default/override distinction. */
+export type SelfServiceLimit = {
+  service: string;
+  requests: number;
+  windowSeconds: number;
+};
+
+/** `GET /v1/me`: the caller's identity summary plus their per-service invocation limits. */
+export type MeResult = IdentitySummary & {
+  serviceLimits: SelfServiceLimit[];
+};
+
+/** Admin view of a principal's effective limit for one configured service. */
+export type ServiceLimit = SelfServiceLimit & {
+  /** True when the principal has a managed-store override for this service. */
+  overridden: boolean;
+};
+
+export type ServiceLimitInput = {
+  requests: number;
+  windowSeconds: number;
+};
+
+
+export type ConfigReloadAttempt = {
+  trigger: string;
+  attemptedAt: string;
+  decision: string;
+  reasonCode?: string | null;
+  candidateConfigHash?: string | null;
+  previousGeneration: number;
+  activeGeneration: number;
+  message?: string | null;
+};
+
+export type ConfigStatusResult = {
+  generation: number;
+  configHash: string;
+  loadedAt: string;
+  identityAuthority: string;
+  policyAuthority: string;
+  bodyHardCapBytes: number;
+  reloadTimeoutMs: number;
+  shutdownTimeoutMs: number;
+  lastReloadAttempt?: ConfigReloadAttempt | null;
+};
+
+export type ConfigReloadResult = ConfigStatusResult & {
+  previousGeneration: number;
+  previousConfigHash: string;
+};
+
+export type PolicyGrantCounts = {
+  active: number;
+  disabled: number;
+  deleted: number;
+};
+
+export type PolicyStatusResult = {
+  identityAuthority: string;
+  policyAuthority: string;
+  writable: boolean;
+  defaultDecision: string;
+  configGeneration: number;
+  policyGeneration: number;
+  counts: PolicyGrantCounts;
+  lastUpdatedAt?: string | null;
+  lastUpdatedBy?: string | null;
+  managementScope?:
+    | { kind: "global" }
+    | { kind: "services"; services: string[] };
+};
+
+export type ServicePolicyManagerAssignment = {
+  assignmentId: string;
+  service: string;
+  principalId: string;
+  displayName?: string | null;
+  principalStatus: string;
+  serviceConfigured: boolean;
+  createdAt: string;
+  createdBy: string;
+};
+
+export type ServicePolicyManagerDeleteResult = {
+  removed: boolean;
+};
+
+export type PolicyCatalogSubject = {
+  principalId?: string;
+  groupId?: string;
+  displayName?: string | null;
+  status: string;
+};
+
+export type PolicyScopeCatalog = { resourceType: ResourceType; selectors: string[] };
+
+export type PolicyActionCatalog = {
+  available?: boolean;
+  unavailableReason?: string;
+  action: string;
+  readOnly: boolean;
+  description: string;
+  requiredScopeTypes: string[];
+  credentialModes: string[];
+  lookupRequired: boolean;
+  inputSchema: Record<string, unknown>;
+};
+
+export type PolicyServiceCatalog = {
+  available?: boolean;
+  unavailableReason?: string;
+  service: string;
+  displayName: string;
+  surface: string;
+  gatewayKind?: string | null;
+  brokerHosts?: string[];
+  credentialVerificationInputs?: string[];
+  actions: PolicyActionCatalog[];
+  resourceScopes: Record<string, PolicyScopeCatalog>;
+  configuredCredentialModes: string[];
+  lookupCredentialConfigured: boolean;
+};
+
+export type PolicyCatalogResult = {
+  resources: ResourceDefinition[];
+  resourceGroups: ResourceGroupRecord[];
+  services: PolicyServiceCatalog[];
+  executionContexts: {
+    allowedValues: string[];
+    defaultContext?: string | null;
+    contextRequired: boolean;
+  };
+  subjects: {
+    users: PolicyCatalogSubject[];
+    groups: PolicyCatalogSubject[];
+    anonymous: boolean;
+  };
+};
+
+export type PolicyGrantRecord = {
+  grantRef: string;
+  writable: boolean;
+  grantId?: string | null;
+  index?: number | null;
+  grantOrder?: number | null;
+  subjects: string[];
+  service: string;
+  actions: string[];
+  executionContexts: string[];
+  resources: ResourceSelection;
+  credentialMode: string;
+  priority?: number | null;
+  status: string;
+  description?: string | null;
+  version?: number | null;
+  createdAt?: string | null;
+  createdBy?: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+  disabledAt?: string | null;
+  deletedAt?: string | null;
+};
+
+export type PolicyValidationMessage = {
+  field: string;
+  code: string;
+  message: string;
+};
+
+export type PolicyValidationResult = {
+  valid: boolean;
+  errors: PolicyValidationMessage[];
+  warnings: PolicyValidationMessage[];
+};
+
+export type PolicyGrantWriteBody = {
+  grantId?: string;
+  expectedVersion?: number;
+  subjects?: string[];
+  service?: string;
+  actions?: string[];
+  executionContexts?: string[];
+  resources?: ResourceSelection;
+  credentialMode?: string;
+  priority?: number | null;
+  status?: string;
+  description?: string | null;
+};
+
+export type PolicyMutationResult = {
+  previousRevision: {
+    generation: number;
+    updatedAt: string;
+    updatedBy: string;
+  };
+  revision: {
+    generation: number;
+    updatedAt: string;
+    updatedBy: string;
+  };
+  grant: ManagedPolicyGrant;
+  activeGrants: ManagedPolicyGrant[];
+};
+
+/** A managed-store grant as policy mutations return it: identified by `grantId` (its grant reference). */
+export type ManagedPolicyGrant = Omit<PolicyGrantRecord, "grantRef" | "writable" | "grantId" | "index"> & { grantId: string };
+
+export type IdentityTokenMetadata = {
+  principalId: string;
+  configured: boolean;
+  revision?: number | null;
+  updatedAt?: string | null;
+};
+
+export type PrincipalIdentityAccess = {
+  principalId: string;
+  incarnation: string;
+  paused: boolean;
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+export type PrincipalUsernameBinding = {
+  bindingId: string;
+  principalId: string;
+  namespace: string;
+  username: string;
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  namespaceAvailable: boolean;
+};
+
+export type PrincipalIdentityBindingsResponse = {
+  bindings: PrincipalUsernameBinding[];
+  configuredNamespaces: {
+    namespace: string;
+    credentialTransports: ("authorization_user" | "caller_authorization")[];
+  }[];
+};
+
+/** One stored audit record, exactly as the broker wrote it. Only the fields
+ * the viewer reads are typed; everything else stays reachable as JSON. */
+export type AuditRecord = {
+  auditId: string;
+  nodeId: string;
+  timestamp: string;
+  agentRequestId: string;
+  brokerRequestId: string;
+  principal: string;
+  principalSubject?: string | null;
+  groups?: string[];
+  service: string;
+  action: string;
+  resourceScopes?: Record<string, string[]>;
+  matchedGrant?: {
+    grantId?: string | null;
+    configIndex?: number | null;
+    grantVersion?: number | null;
+    policyGeneration?: number | null;
+    subject?: string | null;
+    priority?: number | null;
+    executionContexts?: string[];
+    [key: string]: unknown;
+  } | null;
+  credentialMode?: string | null;
+  decision: "allow" | "deny" | "error";
+  reasonCode?: string | null;
+  upstreamStatus?: number | null;
+  upstreamDurationMs?: number | null;
+  objectIds?: unknown;
+  identitySource?: {
+    name: string;
+    type: string;
+    tokenClass?: string | null;
+    tokenId?: string | null;
+    [key: string]: unknown;
+  } | null;
+  source?: { listener?: string; remote?: string; proxyChain?: string[]; [key: string]: unknown } | null;
+  executionContext?: string | null;
+  providerAudit?: Record<string, unknown> | null;
+  configGeneration?: number | null;
+  policyGeneration?: number | null;
+  [key: string]: unknown;
+};
+
+export type AuditEventsPage = {
+  items: AuditRecord[];
+  nextCursor: string | null;
+};
+
+/** Canonical broker audit actions relevant to this caller's visibility tier. */
+export type AuditOptions = {
+  services: { service: string; actions: string[] }[];
+};
+
+export type AuditRequestTimeline = {
+  brokerRequestId: string;
+  items: AuditRecord[];
+};

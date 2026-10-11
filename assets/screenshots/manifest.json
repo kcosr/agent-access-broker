@@ -1,0 +1,16 @@
+{
+  "screenshots": [
+    {
+      "file": "grants-light.png",
+      "sha256": "90fd60cc79ae69e26ffce4b38f3edfa8b123828c4ad428dda40b750ab2de52c5"
+    },
+    {
+      "file": "audit-detail-light.png",
+      "sha256": "e3c40786a85090aac6f00df8637ccfaed35e9c264e347cc674fdb1fb93baa1a8"
+    },
+    {
+      "file": "token-access-dark.png",
+      "sha256": "d023c3c947ea3fe9d14ac38a553f03b9bab3c429dd9000b228360cb085963b18"
+    }
+  ]
+}

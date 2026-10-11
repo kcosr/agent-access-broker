@@ -1,0 +1,21 @@
+[package]
+name = "agent-access-teams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+agent-access-provider = { path = "../agent-access-provider" }
+async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+tokio.workspace = true
+wiremock.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "agent-access-atlassian"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-access-provider = { path = "../agent-access-provider" }
+reqwest.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true

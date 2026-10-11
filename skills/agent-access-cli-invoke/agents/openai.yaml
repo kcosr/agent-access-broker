@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Access CLI Invoke"
+  short_description: "Call canonical broker actions through CLI invoke."
+  default_prompt: "Use $agent-access-cli-invoke to call a canonical Agent Access Broker service.action through the CLI."

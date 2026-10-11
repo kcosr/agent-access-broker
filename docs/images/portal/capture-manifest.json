@@ -1,0 +1,277 @@
+{
+  "captures": [
+    {
+      "file": "guide/login-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Local browser sign-in before entering credentials; Microsoft login is not configured in this demo",
+      "sha256": "24bbc0d73e2dbcc4cb4999fd2ac5a565811e39c99ef49ff2f1b422eb51c0cdf1"
+    },
+    {
+      "file": "guide/user-first-password-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Actual temporary-password account with a required first change; masked draft is not submitted",
+      "sha256": "dd3c12dee6a7520e04829e3447698c2a36a677f4f544fc577eab4c86010111d3"
+    },
+    {
+      "file": "guide/admin-principals-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Configured demo principals and account roles",
+      "sha256": "b8880df7c8a754d9ab461e52f13aba1145ec23e6011f4777f238380291ff9284"
+    },
+    {
+      "file": "guide/admin-create-user-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft user enrollment, group selection, independent local password sign-in, and self-service",
+      "sha256": "6b6dc0d453e26f0d6ed47271f25c4cdd79be9180face794b1b28161468cfa889"
+    },
+    {
+      "file": "guide/admin-create-group-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft policy group with a stable identifier and human-readable purpose",
+      "sha256": "c4a5010194384d306262ffb3b4984a0bd88b8124089b87e5b0440990060be62e"
+    },
+    {
+      "file": "guide/admin-create-service-account-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft noninteractive workload account using a policy group",
+      "sha256": "4323499e9ca2e9167761d472faddb7dd172566810012612dc1790e3fc132dd0e"
+    },
+    {
+      "file": "guide/admin-group-member-picker-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Search the Jira group member picker for Bob without adding membership",
+      "sha256": "465c8d67d5bdd7819d77aebac79a6fe0becfa5885e4fca2dd1d1cc82a9b23933"
+    },
+    {
+      "file": "guide/admin-group-add-member-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft Jira group membership selection ready for administrator review",
+      "sha256": "d1d2234bdd62ff5f11674e69c302fd2f6d461584ff4c4621364d4149124f2365"
+    },
+    {
+      "file": "guide/admin-resource-editor-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Jira typed resource editor with canonical identifier and execution contexts",
+      "sha256": "f4a49f9898831d6276f3ac856083c7da5090fecc01b1f8e2b842bdc2cc2ad1a1"
+    },
+    {
+      "file": "guide/admin-grant-editor-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Grant editor with explicit subjects, service actions, credential mode, and execution contexts",
+      "sha256": "e246d5f4e81a835d3fa42fb953a3ad981221a31a5c67c01cb648c82d4b5e8167"
+    },
+    {
+      "file": "guide/admin-create-resource-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Unsaved Jira project resource draft for DEMO; reuse the existing demo entry rather than saving a duplicate",
+      "sha256": "90f73d13bc6aa79d8b15e66825da6f52c1dc6cdf5e3e2c2abca69c1d8c620bf7"
+    },
+    {
+      "file": "guide/admin-create-grant-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Unsaved least-privilege Jira grant: Jira Users, issue.view/search, default, per_user, direct DEMO resource",
+      "sha256": "ab7da532da09d8f0bf636aa812c84bacab357c22f518c2cdd1b815e4a959e697"
+    },
+    {
+      "file": "guide/admin-grant-actions-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Unsaved new Jira grant with only issue.view and search selected; no write-capable actions",
+      "sha256": "c34d2ac9dd02e427dc78edc9580f58d15c970bfabe404d63637037462b888514"
+    },
+    {
+      "file": "guide/admin-grant-resources-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Unsaved new grant resource selection and effective access for the DEMO Jira project",
+      "sha256": "67ca10ebbd427ac74982db30b902103ed21fd1ca4bb50f174e4d021bdba7c7c6"
+    },
+    {
+      "file": "guide/admin-account-access-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Administrator viewing a real documentation auditor role with personal self-service disabled",
+      "sha256": "b113e782492788cc01726a49a5203fa9bf4725adfed8a81d4cc6eb8d2ac059a6"
+    },
+    {
+      "file": "guide/admin-disable-user-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "User disable confirmation; dismissed without changing the account",
+      "sha256": "e0ed099f3eff75756d2dbde151ef871e1e16b46fc7003e45ee414eec8ce725a6"
+    },
+    {
+      "file": "guide/admin-resources-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Typed resources available for grants",
+      "sha256": "20e7784b78a7d72b559123d571e9fa12103c0bc170669fa7d8bf9ea02fa7efc9"
+    },
+    {
+      "file": "guide/admin-grant-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Grant boundary and effective access for a service",
+      "sha256": "466c83bef75acb7ed57817af17478b487feb6db49338cc09c16889a5891fb720"
+    },
+    {
+      "file": "guide/admin-audit-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "admin viewing synthetic audit history with mixed decisions and service actions",
+      "sha256": "5b7c71d2a18f6bb974c4272ff6f514a87cc86fb443aaac2ca68465097931242f"
+    },
+    {
+      "file": "guide/admin-audit-detail-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "admin viewing a synthetic audit request outcome, identity, resource references, and correlation identifiers",
+      "sha256": "4d68e67cd3d0945543ce86fbec7366187c5cfb44f4bfd3b958a7bd25f3f153d3"
+    },
+    {
+      "file": "guide/admin-audit-timeline-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "admin viewing a correlated synthetic request timeline, from the initial phase through the final outcome",
+      "sha256": "8e8b46786a4339f79e3daeae2640694cc0b347becedf5043529027d93a585daf"
+    },
+    {
+      "file": "guide/admin-audit-denied-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "admin viewing synthetic rejected requests and reason codes",
+      "sha256": "5777a6620662854f79511703dd47981ff06b53bc2442ca939eceb7c73c9c4f44"
+    },
+    {
+      "file": "guide/auditor-audit-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "auditor viewing synthetic audit history with mixed decisions and service actions",
+      "sha256": "2a2898e5cb4a742085658fbee27735eb9ac1cc80ed882ec36c22acf700c81556"
+    },
+    {
+      "file": "guide/auditor-audit-detail-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "auditor viewing a synthetic audit request outcome, identity, resource references, and correlation identifiers",
+      "sha256": "472a399a17d846a7ed2b7bc1b0200f2242e4c2f43986790ad8ed575b6711b84d"
+    },
+    {
+      "file": "guide/auditor-audit-timeline-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "auditor viewing a correlated synthetic request timeline, from the initial phase through the final outcome",
+      "sha256": "a627542fbc0b26b248bdcdbaf25e5f2512640d407ac6e97ed1cf5daabce6e1c5"
+    },
+    {
+      "file": "guide/auditor-audit-denied-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "auditor viewing synthetic rejected requests and reason codes",
+      "sha256": "48d46b290988d4f05a5cbddd5046c9dc24b663bf4b24ce8e8d5027b3e6243529"
+    },
+    {
+      "file": "guide/user-access-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "User self-service access across available services and execution contexts",
+      "sha256": "8fde148e9501e9de93f56a874ed41a53c12f6081c5e9f07ff7bc4a930a319691"
+    },
+    {
+      "file": "guide/user-credentials-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "User credential inventory without exposing credential values",
+      "sha256": "9bcaf44909468ea1ca32f091cd74435208b9f9263053794e2d5bcc2c5b75237a"
+    },
+    {
+      "file": "guide/user-credential-input-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Jira credential entry with a synthetic username and masked token; replacement draft is not saved",
+      "sha256": "0ec39552a960bc51998b77086051a08374b7198b7500f00173277a5f88b2077a"
+    },
+    {
+      "file": "guide/user-credential-test-success-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "SIMULATED upstream verification success using browser-only response fixtures; no credential verification reaches the broker",
+      "sha256": "6c71de6587b40f5ed451bee3dc7f7b163450439032f4fe0f339ecec5795a777f"
+    },
+    {
+      "file": "guide/user-credential-test-failure-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "SIMULATED upstream verification failure with status, error code, and recovery message; browser-only response fixtures",
+      "sha256": "ae04eac6a0ecc431fce581b003c43ed55feaa34cf0ccf36b9d22280858c916d9"
+    },
+    {
+      "file": "guide/user-credential-test-repository-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Git HTTP credential verification requires a repository; populated draft without submitting verification",
+      "sha256": "1628afa281f0f84e644e060f25d42ec652911e6ac32098e968f363ef0c80da36"
+    },
+    {
+      "file": "guide/user-tokens-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "User invocation token inventory and lifecycle status",
+      "sha256": "c44b84808102a558a17e8d85c0802c239916137756053e78dd3d65a81186c8f3"
+    },
+    {
+      "file": "guide/user-token-details-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft invocation token with explicit lifetime, contexts, and restricted access",
+      "sha256": "3a1d89bd0b44e4ad6d9dfd73b9195d15e556681b7bec4d9c0a5d6eee92a9dd06"
+    },
+    {
+      "file": "guide/user-token-access-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft token restricted to the Jira issue.view action",
+      "sha256": "54ed6e2ed7d6849e3bf5613b5cb11054eb35d98ab18f2123c2f78cd94b8a3002"
+    },
+    {
+      "file": "guide/user-token-resources-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Draft Jira token selecting only the exact DEMO Jira project resource",
+      "sha256": "d45a7cd1bf155f3231b7b1d7cd4af1f4f87e8cfb6b71e045a2879c8e08c04e99"
+    },
+    {
+      "file": "guide/user-token-review-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Final token review showing restrictions before issuance; no token is issued",
+      "sha256": "46cfce8ca412d506b6cf69e452bd5a2aad86b721ee9c7e6db2abefd39b6fb3ae"
+    },
+    {
+      "file": "guide/user-token-revoke-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Token revocation confirmation; dismissed without revoking the seeded token",
+      "sha256": "86c276a1de15fb2d1da2692edc117df244ba85742374d8b6b1514033ee243edb"
+    },
+    {
+      "file": "guide/user-activity-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Personal activity history limited to the signed-in user",
+      "sha256": "58eb2a41c0a4858d8635a349389bb577be2a50ad57141110ce95c21b17b67365"
+    }
+  ]
+}

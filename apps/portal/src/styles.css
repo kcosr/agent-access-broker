@@ -1,0 +1,379 @@
+/*
+ * Portal stylesheet. The workbench-ui kit (vendored in ./workbench, imported
+ * once from main.tsx) owns tokens, base styles, and every component look; it
+ * lives in the `wb` layer below Tailwind's components and utilities. Tailwind
+ * is used only for layout glue (flex, grid, gaps, sizing). Preflight is omitted:
+ * the kit's base layer is the reset. Everything below is portal-specific and
+ * unlayered, so it wins over the kit where they overlap.
+ */
+@layer theme, base, wb, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* ---------- sign-in */
+.pt-auth {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: auto;
+  background: var(--wb-page);
+}
+.pt-auth-body {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 32px 24px;
+}
+.pt-auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(420px, 100%);
+  padding: 28px;
+}
+.pt-auth-title {
+  margin: 0;
+  font-size: var(--wb-fs-22);
+  font-weight: var(--wb-fw-bold);
+  letter-spacing: var(--wb-tracking-tight);
+}
+.pt-auth-lede {
+  margin: -8px 0 0;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-13-5);
+}
+.pt-auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-12);
+}
+.pt-auth-divider::before,
+.pt-auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--wb-border);
+}
+
+/* ---------- full-page content (entity pages, tabs) */
+.pt-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: var(--wb-list-max);
+  padding: 18px var(--wb-pane-x) 48px;
+}
+.pt-section-title {
+  margin: 6px 0 0;
+  font-size: var(--wb-fs-13);
+  font-weight: var(--wb-fw-bold);
+}
+.pt-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* ---------- text helpers */
+.pt-on {
+  color: var(--wb-muted);
+  font-weight: var(--wb-fw-book);
+}
+.pt-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--wb-fs-13);
+}
+.pt-prose {
+  margin: 0;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-13);
+  line-height: var(--wb-lh-prose);
+}
+.pt-error {
+  color: var(--wb-danger-text);
+  font-size: var(--wb-fs-12-5);
+}
+.pt-title-mono {
+  font-family: var(--wb-font-mono);
+  font-size: 0.92em;
+  font-weight: var(--wb-fw-medium);
+}
+.pt-clauses {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pt-clause-note {
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-12);
+}
+
+/* Effective access: actions · contexts · resources, merged exactly (grant and
+   token drawers, the grant editor's preview, the issue-token dialog). */
+.pt-access-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--wb-fs-12-5);
+}
+.pt-access-table th,
+.pt-access-table td {
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid var(--wb-border);
+  color: var(--wb-fg-2);
+  font-weight: var(--wb-fw-regular);
+  text-align: left;
+  vertical-align: top;
+}
+.pt-access-table th:last-child,
+.pt-access-table td:last-child {
+  padding-right: 0;
+}
+.pt-access-table thead th {
+  padding-top: 0;
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-11);
+  font-weight: var(--wb-fw-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pt-access-table tbody:last-child tr:last-child > * {
+  border-bottom: 0;
+}
+/* Actions share the width with the resources instead of taking it all. */
+.pt-access-table thead th:first-child {
+  width: 48%;
+}
+.pt-access-table .pt-access-actions {
+  color: var(--wb-fg);
+  font-family: var(--wb-font-mono);
+  font-size: var(--wb-fs-12);
+}
+/* Lists wrap between names; a name breaks only if it is wider than the column. */
+.pt-access-actions span,
+.pt-access-contexts > span {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pt-access-all > summary {
+  width: fit-content;
+  color: var(--wb-accent-text, var(--wb-accent));
+  font-family: var(--wb-font-sans);
+  font-size: var(--wb-fs-12-5);
+  cursor: pointer;
+}
+.pt-access-all[open] > summary {
+  margin-bottom: 2px;
+}
+.pt-access-table .pt-access-contexts {
+  font-family: var(--wb-font-mono);
+  font-size: var(--wb-fs-12);
+}
+.pt-access-group > th {
+  padding-top: 10px;
+  color: var(--wb-fg);
+  font-weight: var(--wb-fw-semibold);
+}
+.pt-access-group .wb-mono {
+  font-weight: var(--wb-fw-regular);
+}
+.pt-access-table .pt-clauses {
+  gap: 2px;
+}
+
+/* ---------- forms */
+.pt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pt-form > .wb-field + .wb-field {
+  margin-top: 0;
+}
+.pt-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.pt-form-row > .wb-field {
+  margin: 0;
+}
+.pt-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.pt-inline-form > .wb-field {
+  flex: 1 1 240px;
+  margin: 0;
+}
+.pt-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pt-checks--scroll {
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.pt-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-md);
+}
+.pt-fieldset > legend {
+  padding: 0 4px;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12-5);
+  font-weight: var(--wb-fw-strong);
+}
+.pt-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.pt-secret {
+  -webkit-text-security: disc;
+}
+.pt-reveal {
+  margin: 0;
+  user-select: all;
+}
+
+/* ---------- grant editor */
+.pt-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  align-items: start;
+  gap: 18px;
+  max-width: 1320px;
+  padding: 18px var(--wb-pane-x) 48px;
+}
+.pt-editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.pt-editor-form > .wb-card {
+  scroll-margin-top: 16px;
+}
+.pt-editor-aside {
+  position: sticky;
+  top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  max-height: calc(100dvh - var(--wb-topbar-h) - 140px);
+  overflow: auto;
+}
+@media (max-width: 1180px) {
+  .pt-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pt-editor-aside {
+    position: static;
+    max-height: none;
+  }
+}
+.pt-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pt-validation {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-13);
+}
+.pt-validation .wb-icon {
+  flex: none;
+}
+
+/* ---------- audit */
+.pt-timeline {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pt-timeline-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--wb-radius-md);
+  font-size: var(--wb-fs-13);
+}
+.pt-timeline-item[aria-current="true"] {
+  background: var(--wb-accent-weak);
+}
+.pt-timeline-item .wb-icon {
+  margin-top: 2px;
+}
+.pt-timeline-gap {
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-12);
+  font-variant-numeric: tabular-nums;
+}
+.pt-side-pad {
+  padding: 2px 2px 6px;
+}
+.pt-side-pad > .wb-field {
+  margin: 0 0 8px;
+}
+
+/* ---------- attention banners between a toolbar and its list */
+.pt-header-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: var(--wb-list-max);
+  padding: 12px var(--wb-pane-x) 0;
+}
+.wb-kv + .pt-prose,
+.pt-prose + .wb-kv {
+  margin-top: 10px;
+}
+
+/* Grants tab: the add-to-existing-grant form under the references table. */
+.pt-ref-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0 4px;
+}
+
+/* Recorded resource names and changes can contain long selectors or Unicode. */
+.pt-audit-entity { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.pt-audit-entity-id { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pt-audit-change-value { overflow-wrap: anywhere; }
+.pt-audit-membership { margin-top: 16px; }
+.pt-audit-membership h4 { margin: 0 0 8px; font-size: var(--wb-fs-13); }
+.pt-audit-members { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }

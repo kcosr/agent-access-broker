@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Access Typed CLI"
+  short_description: "Use typed broker-backed provider CLI commands."
+  default_prompt: "Use $agent-access-cli-typed to work with Jira, Confluence, GitLab, CloudBees CI, Gmail, or Teams through typed agent-access commands."

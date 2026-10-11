@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Access HTTP"
+  short_description: "Call Agent Access Broker HTTP endpoints directly."
+  default_prompt: "Use $agent-access-http to call Agent Access Broker through the trusted execution-context ingress with the right request shape; never set the trusted context header yourself."

@@ -1,0 +1,16 @@
+[package]
+name = "agent-access-content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-access-provider = { path = "../agent-access-provider" }
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
+pulldown-cmark.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true

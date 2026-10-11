@@ -1,0 +1,35 @@
+[deployment]
+environment = "development"
+enable_fake_service = true
+
+[providers.fake]
+
+[identity]
+mode = "anonymous"
+authority = "toml"
+
+[credentials.service.fake]
+type = "bearer_token"
+token_ref = "env:FAKE_SERVICE_TOKEN"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "fake-test"
+resource_type = "fake_project"
+selector = { kind = "exact", value = "TEST" }
+allowed_execution_contexts = ["default"]
+enabled = true
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "fake"
+actions = ["echo"]
+resources = { resource_ids = ["fake-test"] }
+credential_mode = "service"
+
+[audit]
+type = "jsonl"
+path = "target/fake-broker-audit/audit.jsonl"

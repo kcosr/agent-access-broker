@@ -1,0 +1,1024 @@
+# Jira Provider Contract
+
+This document owns Jira-specific action behavior, canonical action names,
+locators, typed CLI examples, request-body rules, attachment behavior, audit
+metadata, and attribution notes. Shared provider concepts and runtime discovery
+guidance are in [providers.md](providers.md); CLI-wide behavior is in
+[cli.md](cli.md).
+
+Service name `jira`. Policy scope type `project`, bound to `jira_project` resources. Every action advertises
+credential modes `[service, per_user]`.
+
+## Operator setup
+
+This integration targets Atlassian Cloud. Add the following fragment to a Broker
+configuration with identity, policy and audit already configured:
+
+```toml
+[providers.jira]
+tenant_host = "example.atlassian.net"
+allowed_upstream_hosts = [
+  "https://example.atlassian.net/rest/api/3/**",
+  "https://api.media.atlassian.com/**",
+]
+
+[providers.jira.content]
+comment_formats = ["adf"]
+
+[credentials.service.jira]
+type = "basic_api_token"
+username_ref = "env:JIRA_SERVICE_USERNAME"
+token_ref = "env:JIRA_SERVICE_API_TOKEN"
+
+[credentials.lookup.jira]
+type = "basic_api_token"
+username_ref = "env:JIRA_LOOKUP_USERNAME"
+token_ref = "env:JIRA_LOOKUP_API_TOKEN"
+read_only = true
+```
+
+The username is the upstream account's email address. Use a separately restricted
+upstream account/token for lookup: `read_only = true` declares its Broker role;
+it does not remove write permissions from the upstream token. Lookup-backed
+service-mode grants require this credential. Per-user-only paths instead use the
+principal's selected credential for lookup and execution.
+
+For managed per-user credentials, replace the service execution stanza with
+`[credentials.per_user.jira]`, `type = "managed_store"`,
+`credential_name = "default"`, and `profile = "jira-cloud-api-token"`.
+Create the corresponding user credential and grant `credential_mode = "per_user"`.
+The [configuration reference](configuration.md) describes secret sources, managed
+profiles, attachment limits and optional egress/TLS settings. Atlassian bearer
+credentials additionally require `cloud_id` and an explicit
+`https://api.atlassian.com/**` allowlist; credential kind selects that gateway
+rather than the tenant route.
+
+For ordinary managed browser or `user_manage` credential management, enable the
+owner's self-service flag and grant access to this configured per-user target.
+Those management paths use current per-user policy visibility and do not require
+separate `credentials:self:*` rights for API-token credentials. The account role
+alone does not grant invocation access. Deliberately configured classless
+management uses explicit scoped credential rights; see the
+[administrator guide](administrator-guide.md) for that distinct setup and the
+complete user handoff. OAuth connections use grant-based personal setup instead.
+
+Create `jira_project` resources and action grants through the configured policy
+authority, then validate and reload configuration. Start with a granted view or
+search action and verify its scope and audit record. The explicit content settings
+above enable the write formats used in this document; inspect the running catalog
+before using a mutation. Jira comment writes require the ADF setting shown above.
+
+## Access surfaces and examples
+
+Jira actions are available through the typed CLI wrappers, generic
+`agent-access invoke`, JSON `agent-access send` request files, and direct HTTP
+`POST /v1/invoke/jira/{action}`. Use `agent-access spec catalog` against the
+target broker to see the caller-visible hot catalog before relying on an action
+or input schema.
+
+Typed CLI examples:
+
+```bash
+agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123
+agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
+agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100
+agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --content-file description.md --content-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue search --project PROJ --text 'deployment checklist' --max-results 10
+agent-access --url http://127.0.0.1:8787 jira issue comment add --issue PROJ-123 --content-file comment.md --content-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue attach PROJ-123 ./report.txt --content-type text/plain
+agent-access --url http://127.0.0.1:8787 jira issue attachment download PROJ-123 10055 --output ./downloaded-report.txt
+```
+
+Generic invoke uses canonical action names and compact JSON inputs:
+
+```bash
+agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}'
+agent-access invoke jira.issue.view --input-json '{"url":"https://example.atlassian.net/browse/PROJ-123"}'
+agent-access invoke jira.issue.child.create --input-json '{"project":"PROJ","issueTypeId":"10001","summary":"Add rollout checklist","parentIssue":"PROJ-100"}'
+agent-access invoke jira.search --input-json '{"query":{"type":"text","value":"release notes"},"projects":["PROJ"],"maxResults":10}'
+agent-access invoke jira.comment.add --input-file jira-comment-add.json
+```
+
+Example `jira-comment-add.json`:
+
+```json
+{
+  "issue": "PROJ-123",
+  "contentFormat": "markdown",
+  "content": "## Update\n\nDeployment completed."
+}
+```
+
+JSON `send` request files use the same service/action/input vocabulary:
+
+```json
+{
+  "version": "agent-access.send.v1",
+  "kind": "invoke",
+  "service": "jira",
+  "action": "comment.add",
+  "inputs": {
+    "issue": "PROJ-123",
+    "contentFormat": "plain_text",
+    "content": "Deployment completed."
+  }
+}
+```
+
+Direct HTTP uses the same action path and wraps inputs under `inputs`. The
+example assumes `$AAB_CURL_AUTH` points to a curl config containing the broker
+`Authorization` header.
+
+```bash
+curl -fsS \
+  --config "$AAB_CURL_AUTH" \
+  -H "X-Agent-Access-Request-Id: jira-view-1" \
+  -H "Content-Type: application/json" \
+  -d '{"inputs":{"issue":"PROJ-123"}}' \
+  "$BROKER_URL/v1/invoke/jira/issue.view"
+```
+
+For multipart uploads and raw attachment downloads, prefer `agent-access send`
+when using the CLI because it constructs upload metadata and stream outputs.
+Direct HTTP multipart and raw-download negotiation are specified in
+[http-api.md](http-api.md).
+
+## Project issue types
+
+Discover issue types before creating an issue:
+
+```bash
+agent-access jira issue-type list --project PROJ
+agent-access jira issue-type list --project PROJ --output-format markdown
+agent-access jira issue-type list --project PROJ --start-at 50 --max-results 50
+agent-access invoke jira.issue_type.list --input-json '{"project":"PROJ"}'
+```
+
+The read-only `issue_type.list` action requires an uppercase `project` key.
+Existing grants must add `issue_type.list` explicitly. The portal's Read-only
+column helps select the action while editing a grant; classification never
+adds new actions to saved grants. Project restrictions still apply.
+`startAt` defaults to `0`; `maxResults` defaults to `50` and accepts `1`–`100`.
+Each call retrieves one bounded page from Jira Cloud's
+`GET /rest/api/3/issue/createmeta/{project}/issuetypes`, using the selected
+execution credential after broker project authorization, without a lookup
+credential. Jira requires that credential to have **Create issues** permission
+in the project. The action lists creation metadata, rather than the tenant-wide
+issue-type catalog.
+
+The result contains `operation`, `project`, `issueTypes`, `startAt`, `maxResults`,
+`total`, `count`, `isLast`, and nullable `nextStartAt`. Each issue type contains
+`id`, `name`, plain-text `description`, and `subtask`. Descriptions can be empty;
+an omitted upstream description is represented as an empty string.
+IDs are decimal strings, such as `"10001"`, matching `issue.create` and
+`issue.child.create` inputs. Pass a returned `id` as `issueTypeId`; never infer
+an ID from a type name or hard-code IDs across Jira sites or projects.
+
+When `isLast` is false, request the same project with `startAt` set to
+`nextStartAt`. Each page is independently authorized; project configuration may
+change between pages. Use the same credential context for discovery and create.
+Discovery does not grant write access or guarantee creation succeeds: the
+broker's create actions do not expose arbitrary required custom fields, and
+Jira still validates parent/subtask compatibility and current permissions.
+
+## Actions and lookup requirements
+
+Twenty-two actions:
+
+| Action | Required scope type | Lookup requirement |
+| --- | --- | --- |
+| `issue_type.list` | `project` | no |
+| `issue.view` | `project` | yes |
+| `issue.create` | `project` | no |
+| `issue.child.create` | `project` | yes |
+| `issue.update` | `project` | yes |
+| `issue.parent.set` | `project` | yes |
+| `issue.dependency.add` | `project` | yes |
+| `search` | `project` | no |
+| `comment.list` | `project` | yes |
+| `comment.view` | `project` | yes |
+| `comment.add` | `project` | yes |
+| `comment.reply` | `project` | yes |
+| `comment.update` | `project` | yes |
+| `comment.delete` | `project` | yes |
+| `comment.property.list` | `project` | yes |
+| `comment.property.get` | `project` | yes |
+| `comment.property.set` | `project` | yes |
+| `comment.property.delete` | `project` | yes |
+| `attachment.add` | `project` | yes |
+| `attachment.download` | `project` | yes |
+| `attachment.list` | `project` | yes |
+| `verify` | `project` | yes |
+
+`issue_type.list`, `issue.create`, and `search` do not require pre-authorization metadata lookup.
+`issue.create` resolves scope from the caller-supplied project after input
+validation; `search` resolves scope from policy rather than from an upstream
+metadata lookup. `issue.child.create` is lookup-backed because the broker must
+resolve the requested parent before authorization and mutation.
+
+`basic_api_token` credentials issue requests against the tenant base
+(`https://<tenant_host>/rest/api/3/`). `bearer_token` credentials route to the
+Atlassian gateway (`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`) and
+require `providers.jira.cloud_id` plus `api.atlassian.com` in
+`allowed_upstream_hosts`; absent either, bearer requests fail. Every Jira
+request, including each attachment redirect hop, must match
+`allowed_upstream_hosts`, so the allowlist must cover the REST paths in use
+(for example `https://<tenant_host>/rest/api/3/**`, and
+`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/**` for bearer
+credentials).
+
+Broker-side ADF and body-format validation remains actionable on lookup-backed
+actions: malformed ADF returns `body_malformed`, and an unsupported format
+returns `body_format_unsupported`, rather than either being hidden as
+`scope_unresolved`. Once policy has authorized a Jira mutation, a Jira 400 or
+422 may also return a bounded, sanitized validation message derived only from
+allowlisted fields in Jira's structured error map. Body/description validation
+is classified as `body_malformed`; other recognized safe field validation is
+`input_invalid`. The broker ignores Jira's free-form error-message list and
+never returns the raw response body. Lookup, readback, authentication,
+permission, existence, scope, conflict, throttling, and server-error bodies
+remain hidden. A Jira HTTP 429 returns `upstream_rate_limited` with the bounded
+`Retry-After` wait when Jira sends one; see
+[http-api.md](http-api.md#reason-code-table). A 429 on a mutation request itself
+means Jira did not apply it. When the mutation was applied but the readback that
+verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
+`issue.parent.set`, and `issue.dependency.add`), the error is instead
+`mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
+`retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
+`post_create_readback`), and `safeLocators` holding the created or changed issue
+IDs and keys. It carries no retry wait: inspect those issues instead of repeating
+the mutation.
+
+## Read response formats
+
+Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
+`readContentFormat` accepts `native`, `markdown`, or `text`; omission is
+`native`. It is advertised on exactly these seven actions:
+
+- `issue.view`, whose `renderedBody` is beside root `description`;
+- `issue.create` and `issue.update`, whose companion is inside `result.issue`;
+- `comment.view`, `comment.add`, `comment.reply`, and `comment.update`, whose
+  companion is inside `result.comment` beside `body`.
+
+Markdown and text preserve the native ADF field unchanged. Missing or null
+native content has no companion; a present empty document has a present,
+possibly empty companion. `search` stays description-free, `comment.list`
+stays body-free, `issue.child.create` does not expose its internal description
+readback, and comment-property JSON is never guessed to be ADF.
+
+The deterministic ADF subset covers documents, paragraphs, headings, hard
+breaks, rules, quotes, panels, expands, bullet/ordered/task/decision lists,
+collision-safe code blocks, tables, and readable mention, emoji, status, date,
+card, and media fallbacks. Supported marks are strong, emphasis, strike, code,
+and safe links. Only absolute `http`/`https` links with a host and no user
+information, plus `mailto`, remain active. Unknown containers preserve safe
+textual descendants, unknown leaves emit `[unsupported content]`, and media
+fallbacks never disclose internal IDs. Plain text uses the same structural
+traversal without Markdown markers. Conversion is offline, preserves source
+order, never fetches linked content, and never truncates or returns a partial
+rendering.
+
+`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly nine
+retrievals advertise whole-result Markdown: `issue_type.list`, `issue.view`, `search`,
+`comment.list`, `comment.view`, `comment.property.list`,
+`comment.property.get`, `attachment.list`, and `verify`. Their deterministic
+templates represent every meaningful present field, preserve exact identifiers,
+URLs, timestamps, booleans, counts, collection order, and pagination tokens,
+and end with one LF. Copyable identifiers and timestamps render as code spans;
+safe absolute URLs render as autolinks. Metadata text has control characters and
+embedded newlines neutralized so it cannot create unintended Markdown structure.
+Arbitrary comment-property JSON, including the valid value `null`, is retained
+in a safely delimited `json` fence. Verification mismatches use the same template
+while retaining `allow_with_result`, HTTP 409, and CLI exit 2.
+
+Whole-result formatting uses the exact result already produced: it makes no
+second Jira call, changes no selected fields or query parameters, follows no
+pagination token, and fetches no related content. Direct HTTP and `send` retain
+the normal JSON response envelope with
+`result = { "format": "markdown", "value": "..." }`; typed CLI and generic
+`invoke --output-format markdown` print only `result.value` on a formatted
+success. The caller-filtered catalog, OpenAPI, and action-specific send schema
+advertise support. Confluence and GitLab normalized reads are also available on
+their declared actions.
+
+Every returned declared ADF field is structurally validated and bounded by
+`providers.jira.content.max_body_bytes` even in native mode. Malformed,
+oversized, over-complex, or over-budget native/rendered content fails without
+truncation or fallback as sanitized `upstream_protocol_failed`/502. Native ADF,
+rendered content, whole-result Markdown, property values, and pagination tokens
+are excluded from audit, tracing, logs, errors, and object identifiers.
+
+## Keys, locators, and project confirmation
+
+- **Project key** matches `^[A-Z][A-Z0-9_]+$`: an uppercase letter followed by
+  one or more uppercase letters, digits, or underscores, such as `OPS_TOOLS`.
+- **Issue key** matches `^[A-Z][A-Z0-9_]+-[1-9][0-9]*$` — uppercase only, with a
+  non-zero, non-leading-zero issue number.
+
+The same key rules apply to registered project resources, explicit search
+projects, JQL project/key operands, issue URLs, and returned issues. An
+authorized issue such as `OPS_TOOLS-12345` remains valid on continuation pages;
+underscores do not bypass project exclusions or key/project consistency checks.
+
+An issue may be supplied as a key or as a URL. A URL locator
+(`issue_locator_from_url`) requires `https`, a host equal to the configured
+`tenant_host`, no userinfo, no explicit port, no query and no fragment. Accepted
+browser paths are `/browse/{issueKey}` and modern Jira paths of the form
+`/jira/.../projects/{projectKey}/issues/{issueKey}`. When the modern path
+carries a project key, it must match the issue key prefix. REST API `self` URLs
+such as `/rest/api/3/issue/{id}` are rejected because they carry only the
+numeric issue ID. Malformed issue keys and invalid URL locators are
+`locator_invalid` (HTTP 403).
+
+Issue view, issue search, and embedded issue metadata results include a
+generated browser `webUrl` of `https://<tenant_host>/browse/{issueKey}`. This
+includes issue metadata nested under comment list/view/property/mutation results
+and `attachment.list`. Jira REST responses do not provide a browser URL, so the
+broker derives this field only from confirmed issue keys.
+
+The key prefix is never treated as authoritative project scope on its own. For
+parent changes, dependency links, comment actions, comment-property actions,
+mutations, `verify`, `attachment.download`, and `attachment.list`, the broker
+confirms the issue's project through pre-authorization metadata lookup before
+authorization.
+`issue.view` denies with `scope_unresolved` if the confirmed metadata id, key,
+or project disagree with the request.
+
+Static config validation requires `credentials.lookup.jira` whenever any
+lookup-backed Jira grant uses `credential_mode = "service"`. At runtime, the
+broker uses that shared lookup credential when a service-mode Jira grant can be
+viable for the caller/action. If all viable Jira lookup-backed grants are
+`per_user`, the broker uses the caller's per-user Jira credential for both the
+pre-authorization metadata lookup and any provider-side execution-time
+confirmation.
+
+## Normalized rich-content writes
+
+Exactly six Jira actions accept rich content: `issue.create`,
+`issue.child.create`, `issue.update`, `comment.add`, `comment.reply`, and
+`comment.update`. Their canonical fields are `content` and the explicit
+`contentFormat`; accepted formats are `adf`, `markdown`, and `plain_text`.
+Issue actions map content to Jira `description`, and comment actions map it to
+Jira `body`. Create/child-create descriptions are optional, update content is
+optional when another mutable field is present, and comment content is
+required.
+
+Native `adf` content is a JSON object. Markdown and plain text are strings and
+are deterministically converted to ADF. Plain-text punctuation is never
+interpreted as Markdown. Raw HTML and unsafe links in Markdown do not become
+trusted provider markup; unsupported constructs retain safe readable content.
+Conversion is pure and offline.
+
+Every write validates the closed source shape, explicit format, source type,
+source structure, and source-byte limit; validates native ADF or converts under
+bounded depth/event/work/output budgets; adds configured attribution in native
+ADF; validates the complete ADF structure; enforces the final serialized-body
+limit; and only then submits upstream. The Broker never truncates. Source or
+final expansion beyond `providers.jira.content.max_body_bytes` returns
+`body_size_denied` (HTTP 413); an unsupported action/format combination returns
+`body_format_unsupported` (HTTP 415).
+
+Rich-content write schemas use `content` and `contentFormat` and reject
+undeclared fields. Typed CLI callers use exactly one of `--content` or
+`--content-file` with `--content-format`; there are no format defaults.
+Clients detect supported formats from the exact action's catalog
+`contentFormat.enum`, not from a Broker version. Comment write
+actions are omitted from the caller-visible catalog when native ADF is not
+enabled by `providers.jira.content.comment_formats`.
+
+Audit and tracing never contain caller source content, converted ADF, mutation
+readback bodies, parser excerpts, or extracted links. Safe requested/effective
+formats, source/final byte counts, conversion status, and attribution metadata
+may be recorded.
+
+## `issue.view`
+
+`issue.view` is a project-scoped issue read. Authorization and containment
+lookup use only `fields=project`; after authorization, the execution credential
+performs the full read with
+`fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description`.
+
+Successful results include issue id/key/project, generated `webUrl`, summary,
+status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
+`priority`, `labels`, and `description`. The description is Jira ADF JSON when
+Jira returns one and `null` when Jira returns no description or omits the field.
+When requested through `readContentFormat`, the broker also adds the normalized
+companion described above. User summaries expose only `accountId` and
+`displayName`; priority exposes only `id` and `name`.
+
+Returned descriptions are validated with a read-path structural ADF check and
+bounded by `providers.jira.content.max_body_bytes` before returning. This
+read-path check does not apply the broker's write-time ADF node allowlist, so
+ordinary existing Jira descriptions with nodes the broker would not let agents
+write can still be viewed. Audit records for `issue.view` do not include
+description content.
+
+## `issue.create`
+
+`issue.create` creates a normal Jira issue in an authorized Jira project. It is
+project-scoped and deliberately narrow: inputs are `project`, `issueTypeId`,
+`summary`, and optional `content`/`contentFormat`. It does not expose raw Jira `fields`,
+`update`, transitions, parent/subtask creation, reporter/assignee, labels,
+priority, custom fields, properties, or notification flags.
+
+The broker validates the project key, requires `issueTypeId` to be a non-empty
+ASCII decimal id string, and rejects summaries that are empty after trimming,
+contain NUL/CR/LF, or exceed 1024 UTF-8 bytes. Jira Cloud may enforce a tighter
+summary product limit; those upstream validation failures remain sanitized and
+do not log or return the submitted summary. When present, the content pair is
+processed through the normalized rich-content pipeline above.
+
+The provider sends `POST /rest/api/3/issue` with only
+`fields.project.key`, `fields.issuetype.id`, `fields.summary`, and optional
+`fields.description`. Jira must return `201 Created` with a created issue id and
+key. Before full readback, the broker validates that the created key is a valid
+Jira issue key whose project prefix matches the authorized requested project.
+It then reads the issue back with the execution credential and returns
+`operation: "issue.create"` plus the same bounded issue shape as `issue.view`.
+If Jira accepts an old renamed-project key alias and returns a current key
+prefix, the broker fails closed after creation; operators should reconcile the
+created issue id/key from failure audit and update grants to current project
+keys before retrying.
+
+Audit includes issue id/key when available, project, issue type id,
+`descriptionProvided`, credential mode, egress proxy, and attribution metadata
+when configured. It excludes submitted summary text, source content, converted
+ADF, returned description ADF, and raw upstream error bodies.
+
+## `issue.child.create`
+
+`issue.child.create` creates a new Jira issue with a parent issue or Epic in the
+same upstream create request. It is separate from `issue.create`; grants for
+`issue.create` do not authorize parented child creation. Inputs are `project`,
+`issueTypeId`, `summary`, exactly one parent locator (`parentIssue` or
+`parentUrl`), and optional `content`/`contentFormat`. The action does not expose raw
+Jira `fields`, `update`, labels, components, assignee, priority, sprint, rank,
+custom fields, transitions, legacy Epic Link fields, or Parent Link fields.
+
+The typed CLI lowers to the same canonical input shape:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue child create \
+  --project PROJ \
+  --issue-type-id 10001 \
+  --summary 'Add rollout checklist' \
+  --parent PROJ-100 \
+  --content 'Follow the deployment checklist.' \
+  --content-format plain_text
+```
+
+is equivalent to invoking `jira.issue.child.create` with:
+
+```json
+{
+  "project": "PROJ",
+  "issueTypeId": "10001",
+  "summary": "Add rollout checklist",
+  "parentIssue": "PROJ-100",
+  "content": "Follow the deployment checklist.",
+  "contentFormat": "plain_text"
+}
+```
+
+Issue browser URLs may be used for the parent:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue child create \
+  --project PROJ \
+  --issue-type-id 10001 \
+  --summary 'Add rollout checklist' \
+  --parent-url https://example.atlassian.net/browse/PROJ-100
+```
+
+Before authorization, the broker resolves the parent locator to authoritative
+Jira metadata, and invocation reconfirms the parent immediately before mutation
+instead of reusing stale preflight metadata. Authorization must permit the
+requested target project and the resolved parent project. Individual issue
+keys are operation locators, not separate grant or token scopes.
+
+The provider sends `POST /rest/api/3/issue` with only
+`fields.project.key`, `fields.issuetype.id`, `fields.summary`,
+`fields.parent.key`, and optional `fields.description`. Jira must return
+`201 Created` with a created issue id and key. The broker validates the created
+key against the requested target project, reads the new issue back with the
+execution credential, then reads `fields=project,parent` and verifies that Jira
+reports the requested parent key or id. Tenant-specific Jira rules for Epics,
+subtasks, hierarchy levels, issue types, and cross-project parenting remain
+upstream validation failures.
+
+Successful results include `operation: "issue.child.create"`, bounded metadata
+for the created child and parent issues, and
+`verification.status: "matched"`. Audit includes child and parent issue keys
+and projects, issue type id, description-provided state, verification status,
+credential mode, egress proxy metadata, and attribution metadata when
+configured. It excludes submitted summary text, source content, converted ADF,
+returned description ADF, and raw upstream error bodies. If Jira accepts the
+create request but readback fails or does not confirm the parent, the broker
+returns a failure with side-effect audit details.
+
+## `issue.update`
+
+`issue.update` is a narrow issue edit action for `summary` and `description`
+only. It is project-scoped, lookup-backed, and deliberately does not expose
+Jira's generic `fields`, `update`, transition, history metadata, override flags,
+or arbitrary query parameters. Future broader field editing must use separate
+action names.
+
+Inputs accept exactly one issue locator (`issue` or `url`) and at least one
+mutable field:
+
+- `summary` is a string preserved byte-for-byte when sent upstream. Broker
+  validation rejects empty-after-trim summaries, NUL/CR/LF characters, and
+  values over 1024 UTF-8 bytes.
+- `content` and `contentFormat` update the description through the normalized
+  rich-content pipeline. Both must be supplied together.
+- `notifyUsers` is optional. When omitted, the broker omits Jira's query
+  parameter and leaves Jira's default notification behavior in place. `true`
+  and `false` are sent explicitly; Jira Cloud may require project/global admin
+  permission to suppress notifications with `notifyUsers=false`.
+
+The provider resolves the issue's authoritative current project with a lookup
+credential before authorization, re-confirms the issue at invocation time, sends
+`PUT /rest/api/3/issue/{currentKey}` with only `fields.summary` and/or
+`fields.description`, and then performs its own bounded readback using
+`fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description`.
+The readback uses the execution credential and must still match the confirmed
+issue id, key, and project. Invalid readback key/project shapes fail with
+`upstream_protocol_failed`; mismatched issue or project readback fails with
+`scope_unresolved`.
+
+Successful results include `operation: "issue.update"`, the same bounded issue
+shape as `issue.view`, stable `changedFields` order (`summary`, then
+`description`), and `notifyUsers` as `true`, `false`, or `null` when omitted.
+Readback description content is returned in `result.issue.description` when Jira
+returns it. Audit includes issue id/key, project, changed field names, booleans
+for which fields changed, notification mode, credential mode, and egress proxy
+metadata; it excludes submitted summary text, source content, converted ADF,
+returned description ADF, and raw upstream error bodies. Content attribution for
+`issue.update` applies only when the request supplies `content`; it never
+mutates summaries.
+
+## `issue.parent.set`
+
+`issue.parent.set` assigns an existing Jira issue to an existing parent issue
+or Epic. It is separate from `issue.update`; grants for `issue.update` do not
+authorize parent changes. Inputs must provide exactly one child locator
+(`issue` or `url`) and exactly one parent locator (`parentIssue` or
+`parentUrl`). The action does not accept raw Jira `fields`, `update`, issue
+type changes, project moves, parent clearing, transitions, or custom fields.
+
+The typed CLI lowers to the same canonical input shape:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue parent set PROJ-124 --parent PROJ-123
+```
+
+is equivalent to invoking `jira.issue.parent.set` with:
+
+```json
+{
+  "issue": "PROJ-124",
+  "parentIssue": "PROJ-123"
+}
+```
+
+Issue browser URLs may be used instead:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue parent set \
+  --issue-url https://example.atlassian.net/browse/PROJ-124 \
+  --parent-url https://example.atlassian.net/browse/PROJ-123
+```
+
+Before authorization, the broker resolves both issue locators to authoritative
+Jira metadata and rejects self-parenting after both parse-time normalization
+and lookup-time canonicalization. Authorization must permit the resolved
+project scope for both the child issue and parent issue.
+
+The provider sends `PUT /rest/api/3/issue/{currentKey}` with only:
+
+```json
+{
+  "fields": {
+    "parent": { "key": "PROJ-123" }
+  }
+}
+```
+
+After the update, the broker reads back `fields=project,parent` for the child
+issue and verifies that the child metadata still matches the authorized issue
+and that Jira reports the requested parent key or id. Tenant-specific Jira
+rules for Epic parents, subtasks, hierarchy levels, issue types, and
+cross-project parenting remain upstream validation failures; the broker does
+not add a raw-field escape hatch.
+
+Successful results include `operation: "issue.parent.set"`, bounded metadata
+for the child and parent issues, and `verification.status: "matched"`. Audit
+includes child and parent issue keys and projects, verification status,
+credential mode, and egress proxy metadata. If Jira accepts the update but
+readback fails or does not confirm the parent, the broker returns a failure
+with side-effect audit details.
+
+## `issue.dependency.add`
+
+`issue.dependency.add` declares that one Jira issue blocks another. It is
+project-scoped, lookup-backed, and narrow: inputs must provide exactly one
+locator for the blocking issue (`blockingIssue` or `blockingUrl`) and exactly
+one locator for the blocked issue (`blockedIssue` or `blockedUrl`). The action
+does not accept a caller-supplied link type, comment, transition, field update,
+or arbitrary Jira issue-link payload.
+
+The typed CLI lowers to the same canonical input shape:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue dependency add --blocking PROJ-123 --blocked PROJ-124
+```
+
+is equivalent to invoking `jira.issue.dependency.add` with:
+
+```json
+{
+  "blockingIssue": "PROJ-123",
+  "blockedIssue": "PROJ-124"
+}
+```
+
+Issue browser URLs may be used instead:
+
+```bash
+agent-access --url http://127.0.0.1:8787 \
+  jira issue dependency add \
+  --blocking-url https://example.atlassian.net/browse/PROJ-123 \
+  --blocked-url https://example.atlassian.net/browse/PROJ-124
+```
+
+Before authorization, the broker resolves both issue locators to authoritative
+Jira issue metadata and rejects a dependency where both locators identify the
+same canonical issue. Authorization must permit the resolved project scope for
+both issues. Issue locators do not introduce a separate policy scope.
+
+The provider fetches Jira's configured issue link types, validates
+`providers.jira.issue_links.dependency_link_type` plus the configured outward
+and inward direction names, then sends `POST /rest/api/3/issueLink` with
+`outwardIssue` set to the blocking issue and `inwardIssue` set to the blocked
+issue. No Jira link comment is sent. After the create request, the broker reads
+back the blocking issue's `issuelinks` and requires the configured link type to
+show the blocked issue as an outward linked issue.
+
+Successful results include `operation: "issue.dependency.add"`,
+`status: "present"`, the link type name, bounded metadata for both issues, and
+`verification.status: "matched"`. Audit includes both issue keys and projects,
+the link type, verification status, credential mode, and egress proxy metadata.
+If Jira accepts the create request but readback fails or does not confirm the
+link, the broker returns a failure with side-effect audit details so operators
+can reconcile the upstream relationship.
+
+## Epic, child, and dependency workflow
+
+The broker does not expose a single atomic Jira planning workflow. Use the
+narrow actions in sequence:
+
+```bash
+agent-access jira issue create \
+  --project ENG \
+  --issue-type-id "$EPIC_TYPE_ID" \
+  --summary "Importer reliability"
+
+agent-access jira issue child create \
+  --project ENG \
+  --issue-type-id "$TASK_TYPE_ID" \
+  --parent ENG-100 \
+  --summary "Retry controls"
+
+agent-access jira issue child create \
+  --project ENG \
+  --issue-type-id "$TASK_TYPE_ID" \
+  --parent ENG-100 \
+  --summary "Telemetry"
+
+agent-access jira issue dependency add \
+  --blocking ENG-101 \
+  --blocked ENG-102
+```
+
+Use the Epic key returned by `issue.create` as `--parent`, and use the child
+keys returned by `issue.child.create` in the dependency call. To attach an
+already-existing issue to the Epic instead of creating a new child, use
+`jira issue parent set <issue> --parent <epic>`.
+
+Each call is independently authorized, executed, audited, and verified. If a
+later call fails, the broker does not roll back earlier created issues or links;
+operators should reconcile from each action's result or side-effect audit. Some
+Jira tenants require custom fields for Epic or child issue creation. This
+workstream intentionally does not add creation profiles or raw field
+passthroughs; those require a separate typed policy and validation design.
+
+## `search` and JQL
+
+The `search` input takes a `query` object of `{ type: "jql" | "text", value }`,
+an optional `projects` array (min 1), an optional `maxResults`, and an optional
+`nextPageToken`. Omit `projects` to search the caller's effective broker scope,
+including grant exclusions and token restrictions; explicit projects only narrow
+that scope. A project clause in JQL is optional.
+
+MCP tool definitions carry concise input descriptions. For complete grammar,
+examples, pagination, and limits, call `actions_describe` with
+`service="jira"` and `action="search"`. Its `documentation` object includes
+field/operator, function, and sorting tables generated from the parser definitions.
+The stable service/action arguments remain valid if a harness renames MCP tools.
+
+The typed CLI lowers to that shape:
+
+```bash
+agent-access --url http://127.0.0.1:8787 --no-token \
+  jira issue search --project PROJ --jql 'status = Done ORDER BY updated DESC'
+```
+
+is equivalent to invoking `jira.search` with:
+
+```json
+{
+  "query": { "type": "jql", "value": "status = Done ORDER BY updated DESC" },
+  "projects": ["PROJ"]
+}
+```
+
+Exactly one of `--jql` or `--text` is accepted by the CLI. There is no AQL
+mode: Jira Assets/AQL queries are not parsed by this provider, there is no
+`--aql` typed command, and `query.type` accepts only `jql` or `text`.
+
+The broker parses raw JQL into a broker-owned AST and re-emits it canonically; it
+never forwards caller JQL verbatim. Even unrestricted access uses canonical AST output. Caps applied
+to raw input:
+
+| Limit | Value |
+| --- | --- |
+| Raw JQL | 4096 bytes |
+| Tokens | 512 |
+| Parse depth | 32 |
+| `IN`-list values | 100 |
+| String literal | 512 bytes |
+| `ORDER BY` terms | 5 |
+| Text query | 512 bytes |
+
+Accepted JQL fields: `project`, `key`/`issuekey`, `status`, `statusCategory`,
+`issuetype`/`type`, `priority`, `resolution`, `assignee`, `reporter`, `creator`,
+`labels`/`label`, `component`/`components`, `fixVersion`/`fixVersions`,
+`affectedVersion`/`affectedVersions`, `created`, `updated`, `resolutiondate`,
+`duedate`, `summary`, `description`, and `text`. The `currentUser()` function is
+accepted only when the request's credential mode is `per_user`.
+
+Supported JQL is intentionally bounded:
+
+- `project` and `key` accept only `=` and `IN`.
+- `status`, `statusCategory`, `issuetype`/`type`, and `priority` accept `=`,
+  `!=`, `IN`, and `NOT IN`.
+- `resolution`, `assignee`, `labels`, `component`, `fixVersion`, and
+  `affectedVersion` also accept `IS EMPTY` and `IS NOT EMPTY`.
+- `reporter` and `creator` accept `=`, `!=`, `IN`, and `NOT IN`.
+- Date fields (`created`, `updated`, `resolutiondate`, `duedate`) accept `=`,
+  `!=`, `<`, `<=`, `>`, and `>=`, with date literals or date functions.
+- Text fields (`summary`, `description`, `text`) accept only `~` with a quoted
+  string.
+
+Supported date functions are `now()`, `startOfDay()`, `endOfDay()`,
+`startOfWeek()`, `endOfWeek()`, `startOfMonth()`, `endOfMonth()`,
+`startOfYear()`, and `endOfYear()`. The start/end functions may take one
+relative-date argument such as `-7d`; nested functions and unsupported offsets
+are rejected. `ORDER BY` supports `created`, `updated`, `priority`, `status`,
+`issuetype`/`type`, and `key`/`issuekey`; omitted directions canonicalize to
+`ASC`.
+
+Scope composition:
+
+- For a **finite** effective project scope, the broker composes
+  `(<caller filter>) AND project IN (...)` and appends any `ORDER BY` from the
+  caller filter. Empty or whitespace-only JQL and ordering-only JQL (for example
+  `ORDER BY updated DESC`) omit the caller filter and use `project IN (...)`
+  directly. The injected predicate is `project_in`.
+- For **all except** selected projects, the broker composes a grouped
+  `project NOT IN (...)` predicate before upstream pagination and counts.
+- For unrestricted **all** with no requested projects, the canonical caller JQL
+  needs no additional containment predicate.
+- Explicit project selections narrow the effective boundary and cannot discard
+  exclusions. Returned issue containment is checked against that boundary.
+- Empty or ordering-only JQL with **all** or **all except** scope returns
+  `input_invalid`: supply explicit authorized `projects` or a filter such as
+  `updated >= -7d`. Jira's enhanced search endpoint requires a bounded query;
+  the broker conservatively does not treat exclusions alone as a sufficient
+  bound. Ordinary filtered queries retain the containment rules above; Jira
+  remains responsible for evaluating its endpoint-specific query bounds.
+
+A `text` query is converted to a `key = <value>` clause when the value is a valid
+issue key, otherwise to a `text ~ "<value>"` clause.
+
+Examples with a finite project scope of `PROJ`:
+
+| Input | Composed JQL sent upstream |
+| --- | --- |
+| `--jql ''` | `project IN (PROJ)` |
+| `--jql 'ORDER BY updated DESC'` | `project IN (PROJ) ORDER BY updated DESC` |
+| `--text PROJ-123` | `(key = PROJ-123) AND project IN (PROJ)` |
+| `--text 'deploy checklist'` | `(text ~ "deploy checklist") AND project IN (PROJ)` |
+| `--jql 'status = "Done"'` | `(status = Done) AND project IN (PROJ)` |
+| `--jql 'status = "In Progress" AND (priority = High OR priority = Highest)'` | `(status = "In Progress" AND (priority = High OR priority = Highest)) AND project IN (PROJ)` |
+| `--jql 'labels NOT IN (security, "needs triage")'` | `(labels NOT IN (security, "needs triage")) AND project IN (PROJ)` |
+| `--jql 'resolution IS NOT EMPTY'` | `(resolution IS NOT EMPTY) AND project IN (PROJ)` |
+| `--jql 'updated >= startOfDay(-7d) ORDER BY updated DESC, key'` | `(updated >= startOfDay(-7d)) AND project IN (PROJ) ORDER BY updated DESC, key ASC` |
+
+Examples accepted only in `per_user` credential mode:
+
+```bash
+agent-access --url http://127.0.0.1:8787 jira issue search \
+  --project PROJ \
+  --jql 'assignee = currentUser() AND updated >= startOfDay(-7d)'
+```
+
+Examples rejected by the broker include mixed `AND`/`OR` without parentheses,
+prefix `NOT`, text negation (`!~`), history predicates such as
+`status CHANGED FROM Open`, arbitrary fields/functions, unsupported sort fields,
+and Jira Assets/AQL clauses such as object schema or object type predicates.
+Query grammar and cap failures return `input_invalid`, with safe token locations
+and supported alternatives where applicable. Diagnostics do not echo query
+literals. `scope_unresolved` covers returned-result identity/containment failures.
+
+### Diagnosing rejected search results
+
+Search result validation retains the public `scope_unresolved` denial and its
+generic message. Operators can distinguish the actual failing check through
+`diagnosticCode` on the correlated `invoke_completed` log event:
+
+| Diagnostic code | Check |
+| --- | --- |
+| `jira_search_issue_key_invalid` | An issue key does not match the broker's accepted key format. |
+| `jira_search_issue_project_mismatch` | The issue key's project prefix differs from `fields.project.key`. |
+| `jira_search_project_unauthorized` | The reported project is outside the effective response scope. |
+
+The first failing check in that order determines the log code. All three checks
+are recorded as booleans in `providerAudit.searchResultValidation` in the audit
+record, along with the zero-based `issueIndex` of the first rejected result.
+`issueKey` and `reportedProject` contain SHA-256 fingerprints, byte lengths, and
+masked shapes capped at 64 characters (`shapeTruncated` reports truncation).
+Shapes map uppercase letters to `A`, lowercase letters to `a`, digits to `9`,
+preserve `-` and `_`, and replace every other character with `?`. They expose
+format problems without storing the upstream identifiers. Compare fingerprints
+with candidate identifiers only through authorized operator investigation.
+
+The failure also retains upstream HTTP status/duration. Its provider audit
+records `effectiveSearchScope`, `injectedScopePredicate`,
+`canonicalCallerJqlHash`, `queryType`, `pageTokenPresent`, `maxResults`, and
+`resultCount`. Raw JQL, page tokens, issue bodies, and raw rejected identifiers
+are not included. The log-only diagnostic code is not copied into the audit or
+agent response. `searchAuthorization.scope` in the audit remains the full
+authorization plan; `effectiveSearchScope` also reflects narrowing by explicit
+`projects` and, for all/all-except access, JQL `project =` / `project IN` clauses.
+Returned issues are checked against this effective response scope.
+
+After deploying a diagnostic build, reproduce once through the same identity
+and context. Collect the matching `invoke_completed` event and raw audit record
+using `brokerRequestId`, plus the deployed build commit. No debug log level is
+needed. If audit persistence fails, the internal code appears instead on
+`audit_append_failed`. These diagnostics do not change validation, query scope,
+pagination, or which results are returned.
+
+### Upstream search transport
+
+Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
+`fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
+and an optional `nextPageToken`. Search results include the same lightweight
+issue metadata as `issue.view`, but are intentionally body-free and never
+include issue `description`; callers should use `issue.view` on a specific
+result when they need the body.
+`maxResults` defaults to `providers.jira.search.max_results` (default `50`),
+rejects `0`, and is clamped to `providers.jira.search.max_results`. The response
+is bounded by `limits.max_upstream_response_bytes`.
+Every returned issue must have a valid current key, a key prefix equal to its
+project, and an authorized project; otherwise the request denies with
+`scope_unresolved` and **no partial results** are returned.
+
+## Comments
+
+The Jira provider exposes issue comments and one-level threaded replies. Jira
+returns comments as a flat issue-comment collection; reply comments carry an
+upstream parent ID, which the broker returns as `parentCommentId`. Jira Service
+Management request comments and public/internal JSM notes are not part of this
+surface. `comment.add` creates a top-level issue comment; use `comment.reply`
+to create a child reply.
+
+All comment actions accept exactly one issue locator, either `issue` or `url`.
+The broker resolves the issue to an authoritative current project before policy
+authorization and re-confirms the issue during invocation.
+
+- `comment.list` returns metadata only. It accepts optional `maxResults`,
+  `startAt`, and `orderBy` (`created`, `-created`, or `+created`), caps
+  `maxResults` at `providers.jira.comments.max_results`, and strips upstream
+  comment bodies, raw URLs, avatar URLs, rendered HTML, update-author fields,
+  and email-like user fields. Use `comment.view` for ADF body reads.
+- `comment.view` fetches one comment through the scoped
+  `issue/{key}/comment/{id}` path and validates that Jira returned the requested
+  numeric comment id. Its returned ADF body is structurally validated and
+  bounded by `providers.jira.content.max_body_bytes` in native and rendered
+  modes; overflow or malformed upstream ADF returns the fixed sanitized
+  `upstream_protocol_failed`/502.
+- `comment.reply` fetches the requested parent through the scoped issue-comment
+  path. If the requested parent is already a reply, the broker resolves the
+  top-level thread root and creates the new reply under that root, matching the
+  Jira UI's one-level thread model. The created reply must return the expected
+  `parentCommentId`.
+- `comment.add`, `comment.reply`, and `comment.update` require canonical
+  `content` and `contentFormat` and accept `adf`, `markdown`, or `plain_text`
+  when native ADF is enabled by `config.content.comment_formats`. The complete
+  converted and attributed ADF document must pass native validation and
+  `config.content.max_body_bytes`.
+- `comment.update` is a full-body edit. `notifyUsers` defaults to `false` and is
+  sent explicitly. Omitted visibility uses `visibilityMode = "preserve"`: the
+  provider reads the current comment with the execution credential and resends
+  the existing restriction when one exists. If that pre-read fails or Jira
+  returns an indeterminate visibility shape, the update fails before PUT.
+- `comment.delete` deletes through the scoped issue-comment path and returns a
+  small broker result after Jira returns success.
+
+Visibility restrictions are denied unless allowlisted in
+`providers.jira.comments.allowed_visibility`. Group visibility inputs require
+the immutable group `identifier`; role visibility inputs require `value`.
+Update cannot clear an existing visibility restriction: it
+preserves existing visibility unless the caller explicitly sets a new
+allowlisted restriction.
+
+Comment properties are scoped by broker contract even though Jira's upstream
+property API is comment-ID-only. `comment.property.list/get/set/delete` all
+require an issue locator and comment id. Before calling a property endpoint, the
+provider proves membership by fetching `issue/{key}/comment/{id}` with the same
+execution credential that will read or mutate the property. Property keys must
+be ASCII, contain no whitespace or slash, be at most 255 bytes, avoid reserved
+prefixes such as `sd.`, `jira.`, `atlassian.`, and `com.atlassian.`, and start
+with one configured `providers.jira.comments.allowed_property_key_prefixes`
+entry. Property list filters out keys that are not allowed; property values are
+returned only by `comment.property.get` and are excluded from audit.
+
+## Attachments
+
+**`attachment.add`** is the only Jira action that accepts multipart body parts.
+Each declared part is validated: the `field` and `filename` must be non-empty, and
+the `filename` must contain no `/` or `\`; `size` must be in `1..=max_bytes`; the
+`contentType` must be in the `media_types` allowlist; and `sha256` must be exactly
+64 hex characters matching the uploaded part. The running total is enforced against
+`max_total_bytes`. Uploads run one at a time. On a failure, every remaining file is
+recorded as `skipped`. A run where all files fail, or any file fails (partial),
+returns `upstream_failed` (the partial result still carries `status: "partial"`);
+a full success returns `status: "complete"`. When Jira throttled the failed
+upload, the failure's `reason` is `upstream_rate_limited`. If no file was
+created, the reason code is `upstream_rate_limited`, with a result carrying
+`limitScope`, `service`, and any known wait. If earlier files were created,
+waiting and repeating the batch would upload them again, so the reason code is
+`mutation_verification_failed`: the partial result keeps `status: "partial"`,
+`attachments`, and `failures`, and adds `mutationStatus: "applied_unverified"`,
+`retrySafe: false`, `verificationStage: "attachment_upload"`, and
+`safeLocators` with the issue and created attachment IDs, with no retry wait.
+Upload only the failed and skipped files, later, instead of the whole batch.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Uploading: validate parts, confirm issue project
+    Uploading --> Uploading: file created (next file)
+    Uploading --> FirstFailure: a file fails
+    FirstFailure --> RemainingSkipped: mark every remaining file skipped\n(not_attempted_after_previous_failure)
+    RemainingSkipped --> AllFailed: no successes
+    RemainingSkipped --> Partial: some successes
+    Uploading --> Complete: all files created
+    AllFailed --> [*]: upstream_failed, no result body\n(throttled: upstream_rate_limited with limitScope/service/wait result)
+    Partial --> [*]: upstream_failed error carrying result status="partial"\n(throttled: mutation_verification_failed, applied_unverified)
+    Complete --> [*]: 200, result status="complete"
+```
+
+*The `attachment.add` per-file upload state machine: sequential uploads,
+all-remaining-files marked skipped on first failure, and the complete vs partial
+vs all-failed terminal outcomes.*
+
+**`attachment.download`** confirms the issue/project and the attachment's
+membership by lookup, validates the metadata size and content type, then GETs
+`attachment/content/{id}?redirect=false` with the execution credential. It follows
+up to 5 allowlisted redirects, attaching auth only on same-origin hops; every
+hop carries the correlation headers. The byte
+cap is `min(config.attachments.max_download_bytes, limits.max_download_bytes)`, and
+the streamed size is checked against the metadata size. Download is served as a raw
+stream (see the raw-download negotiation in [docs/http-api.md](http-api.md)).
+
+**`attachment.list`** is a single fetch, not paginated. Its input accepts exactly
+`{ issue }` or `{ url }`. One `issue?fields=project,attachment` fetch returns a
+confirmed `issue` object including `id`, `key`, `project`, and `webUrl`, plus a
+bounded list of `{ attachmentId, filename, size, contentType }` and a `count`.
+The resolved issue id/key/project must match the listed issue.
+
+## `verify`
+
+`verify` requires at least one of `expectCommentId` or `expectAttachmentId`. The
+issue's project is confirmed first. A full match returns decision `allow` with
+`verification.status = "matched"`. A mismatch (a missing comment, or an attachment
+that does not resolve) returns decision `allow` with
+`verification.status = "mismatch"` and reason code `verification_mismatch`.

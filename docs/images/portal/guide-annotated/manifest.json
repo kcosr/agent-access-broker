@@ -1,0 +1,397 @@
+{
+  "method": "built-in imagegen",
+  "originalsPreserved": true,
+  "count": 39,
+  "annotations": [
+    {
+      "file": "admin-account-access-light.png",
+      "original": "../guide/admin-account-access-light.png",
+      "sourceSha256": "b113e782492788cc01726a49a5203fa9bf4725adfed8a81d4cc6eb8d2ac059a6",
+      "outputSha256": "e541bfe1b7db66ccfb6a9f0d4c0b77051e580d8f23ad300d9e42102601af9052",
+      "width": 1536,
+      "height": 1024,
+      "description": "Independent role and self-service controls",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-denied-light.png",
+      "original": "../guide/admin-audit-denied-light.png",
+      "sourceSha256": "5777a6620662854f79511703dd47981ff06b53bc2442ca939eceb7c73c9c4f44",
+      "outputSha256": "bb215ce987fc4952ccbe05746cf9a4692652d8e7d6e5618f2e408201e5c3d51c",
+      "width": 1422,
+      "height": 1106,
+      "description": "Denied filter and reason-code inspection",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-detail-light.png",
+      "original": "../guide/admin-audit-detail-light.png",
+      "sourceSha256": "4d68e67cd3d0945543ce86fbec7366187c5cfb44f4bfd3b958a7bd25f3f153d3",
+      "outputSha256": "a6762a165d135fd032b5d673bad7d0d6bd9bccb4ca0362d9a433ce3f7e2a58ce",
+      "width": 1487,
+      "height": 1058,
+      "description": "Summary request-correlation IDs",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-light.png",
+      "original": "../guide/admin-audit-light.png",
+      "sourceSha256": "5b7c71d2a18f6bb974c4272ff6f514a87cc86fb443aaac2ca68465097931242f",
+      "outputSha256": "3cb6c68911ca47f7989f3db71a8958171ce73d74cab7aa52b4c766eca102a73d",
+      "width": 1487,
+      "height": 1058,
+      "description": "Administrative global audit filters",
+      "reviewed": true
+    },
+    {
+      "file": "admin-audit-timeline-light.png",
+      "original": "../guide/admin-audit-timeline-light.png",
+      "sourceSha256": "8e8b46786a4339f79e3daeae2640694cc0b347becedf5043529027d93a585daf",
+      "outputSha256": "abce6599a3f0f55f90a829a129e59e8173e3d6695be64b2ff1be124f1d2623ce",
+      "width": 1487,
+      "height": 1058,
+      "description": "Preflight-to-success timeline",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-grant-light.png",
+      "original": "../guide/admin-create-grant-light.png",
+      "sourceSha256": "ab7da532da09d8f0bf636aa812c84bacab357c22f518c2cdd1b815e4a959e697",
+      "outputSha256": "33095e68eb9c8843e116c1e023e060511d43620b4b306fd67af5cb450aaf80bd",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review Jira Users as the selected subject of the unsaved read grant.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-group-light.png",
+      "original": "../guide/admin-create-group-light.png",
+      "sourceSha256": "c4a5010194384d306262ffb3b4984a0bd88b8124089b87e5b0440990060be62e",
+      "outputSha256": "7d47c2cf0acc3f4e8aef0b0d3321a53385fc1a464320135c2d58ed93b489aefd",
+      "width": 1536,
+      "height": 1024,
+      "description": "Choose a stable group ID and review the unsaved group draft.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-resource-light.png",
+      "original": "../guide/admin-create-resource-light.png",
+      "sourceSha256": "90f73d13bc6aa79d8b15e66825da6f52c1dc6cdf5e3e2c2abca69c1d8c620bf7",
+      "outputSha256": "5da4bfb44bc490210618d2958db1cde95747b9c6a5a6833d592b3c2f1633ffd7",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the unsaved exact DEMO Jira resource and default-only context.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-service-account-light.png",
+      "original": "../guide/admin-create-service-account-light.png",
+      "sourceSha256": "4323499e9ca2e9167761d472faddb7dd172566810012612dc1790e3fc132dd0e",
+      "outputSha256": "b01db1b78b73762a25b25d3e5b0fd29cd4cb9c561023fe8bc5379887052e992a",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review a noninteractive workload identity before creating the account.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-create-user-light.png",
+      "original": "../guide/admin-create-user-light.png",
+      "sourceSha256": "6b6dc0d453e26f0d6ed47271f25c4cdd79be9180face794b1b28161468cfa889",
+      "outputSha256": "a911c77a161574ab7912554d61d125b7bf8f59e15c68beda3177a456735e4d5a",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the selected Jira group, User role, and self-service before creating Morgan.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-disable-user-light.png",
+      "original": "../guide/admin-disable-user-light.png",
+      "sourceSha256": "e0ed099f3eff75756d2dbde151ef871e1e16b46fc7003e45ee414eec8ce725a6",
+      "outputSha256": "091f866f045dc69b7b17f36a33148521d3af002df068157ef72e54d2b726e284",
+      "width": 1536,
+      "height": 1024,
+      "description": "Unsubmitted disable confirmation retains records",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-actions-light.png",
+      "original": "../guide/admin-grant-actions-light.png",
+      "sourceSha256": "c34d2ac9dd02e427dc78edc9580f58d15c970bfabe404d63637037462b888514",
+      "outputSha256": "5ba853a3b95627ee11f2e1f6bc7d85616de2c673cfb88b00b90a8eaf8a36a1e9",
+      "width": 1536,
+      "height": 1024,
+      "description": "Verify only issue.view and search are selected, with zero write-capable actions.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-editor-light.png",
+      "original": "../guide/admin-grant-editor-light.png",
+      "sourceSha256": "e246d5f4e81a835d3fa42fb953a3ad981221a31a5c67c01cb648c82d4b5e8167",
+      "outputSha256": "7c99805ba0d2cbf1543ed58ee7e0b0261f8c2544daabe09148cb945c481b5dc7",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the existing broader Jira grant, including its write-capable actions.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-light.png",
+      "original": "../guide/admin-grant-light.png",
+      "sourceSha256": "466c83bef75acb7ed57817af17478b487feb6db49338cc09c16889a5891fb720",
+      "outputSha256": "10438126f6e2a99fad78f4e5d38fa4ade0fadd8a567343bbcc68e554a7f695c7",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the existing grant action list and full resource, context, and credential boundary.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-grant-resources-light.png",
+      "original": "../guide/admin-grant-resources-light.png",
+      "sourceSha256": "67ca10ebbd427ac74982db30b902103ed21fd1ca4bb50f174e4d021bdba7c7c6",
+      "outputSha256": "9e5cb8514a15c7f27ed8a869d77ee0315c74cdcd078938525df3523a02e1aca0",
+      "width": 1536,
+      "height": 1024,
+      "description": "Confirm the direct DEMO resource, default context, and per_user credential mode in the unsaved grant.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-group-add-member-light.png",
+      "original": "../guide/admin-group-add-member-light.png",
+      "sourceSha256": "d1d2234bdd62ff5f11674e69c302fd2f6d461584ff4c4621364d4149124f2365",
+      "outputSha256": "ad18861ffb836395f3ce76371a5cfa3fdb7ac35e0b6ac345bd722358ad8ee82a",
+      "width": 1536,
+      "height": 1024,
+      "description": "Confirm Bob in the membership draft before submitting Add member.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-group-member-picker-light.png",
+      "original": "../guide/admin-group-member-picker-light.png",
+      "sourceSha256": "465c8d67d5bdd7819d77aebac79a6fe0becfa5885e4fca2dd1d1cc82a9b23933",
+      "outputSha256": "b96cab225037d545a7687884db65a5ab23ee8ff1a8d647112ff0b770880b016f",
+      "width": 1536,
+      "height": 1024,
+      "description": "Select the existing Bob principal rather than a custom identifier.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-principals-light.png",
+      "original": "../guide/admin-principals-light.png",
+      "sourceSha256": "b8880df7c8a754d9ab461e52f13aba1145ec23e6011f4777f238380291ff9284",
+      "outputSha256": "b76edfb1f87cd595a321a72596568e26bee01ca6044231d4ede8e43118e7f1d1",
+      "width": 1536,
+      "height": 1024,
+      "description": "Account inventory roles and status",
+      "reviewed": true
+    },
+    {
+      "file": "admin-resource-editor-light.png",
+      "original": "../guide/admin-resource-editor-light.png",
+      "sourceSha256": "f4a49f9898831d6276f3ac856083c7da5090fecc01b1f8e2b842bdc2cc2ad1a1",
+      "outputSha256": "07e6569f67a176c1bca7bf1ed09839488965ea70d7042da3fa70fd3893592721",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the exact DEMO Jira selector and default context in the existing resource editor.",
+      "reviewed": true
+    },
+    {
+      "file": "admin-resources-light.png",
+      "original": "../guide/admin-resources-light.png",
+      "sourceSha256": "20e7784b78a7d72b559123d571e9fa12103c0bc170669fa7d8bf9ea02fa7efc9",
+      "outputSha256": "98e104f138a501632fb48ae7b14f3755104afc0c673f4ccea3ce30f346dc56f9",
+      "width": 1536,
+      "height": 1024,
+      "description": "Typed Jira project choice among identically named resources",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-denied-light.png",
+      "original": "../guide/auditor-audit-denied-light.png",
+      "sourceSha256": "48d46b290988d4f05a5cbddd5046c9dc24b663bf4b24ce8e8d5027b3e6243529",
+      "outputSha256": "6a0cd542fa447885ec3f560e1156c070f7b2f93bddf640eb59837b850e669e7f",
+      "width": 1422,
+      "height": 1106,
+      "description": "Denied filter and reason-code inspection",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-detail-light.png",
+      "original": "../guide/auditor-audit-detail-light.png",
+      "sourceSha256": "472a399a17d846a7ed2b7bc1b0200f2242e4c2f43986790ad8ed575b6711b84d",
+      "outputSha256": "fa2e5eed802d4e78dd9e1603384e8560ca0995ace8adec3d7411f2af9abd21c0",
+      "width": 1422,
+      "height": 1106,
+      "description": "Summary request-correlation IDs",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-light.png",
+      "original": "../guide/auditor-audit-light.png",
+      "sourceSha256": "2a2898e5cb4a742085658fbee27735eb9ac1cc80ed882ec36c22acf700c81556",
+      "outputSha256": "02421c8f8fd2e72dad270a1adce3b5317a05177940a5c309b459ad16a873fe08",
+      "width": 1487,
+      "height": 1058,
+      "description": "Read-only global review filters",
+      "reviewed": true
+    },
+    {
+      "file": "auditor-audit-timeline-light.png",
+      "original": "../guide/auditor-audit-timeline-light.png",
+      "sourceSha256": "a627542fbc0b26b248bdcdbaf25e5f2512640d407ac6e97ed1cf5daabce6e1c5",
+      "outputSha256": "27a492e9c79f4acb1a30737a3b171a1e2e64d7eb2f0d714fb3a3dd4068a7fd3d",
+      "width": 1487,
+      "height": 1058,
+      "description": "Preflight-to-success timeline",
+      "reviewed": true
+    },
+    {
+      "file": "login-light.png",
+      "original": "../guide/login-light.png",
+      "sourceSha256": "24bbc0d73e2dbcc4cb4999fd2ac5a565811e39c99ef49ff2f1b422eb51c0cdf1",
+      "outputSha256": "c3a8393cf09b38dcfefc63002ada7e4d9bb9bde89c17a1cd010706d07d76877a",
+      "width": 1536,
+      "height": 1024,
+      "description": "Principal and password sign-in inputs",
+      "reviewed": true
+    },
+    {
+      "file": "user-access-light.png",
+      "original": "../guide/user-access-light.png",
+      "sourceSha256": "8fde148e9501e9de93f56a874ed41a53c12f6081c5e9f07ff7bc4a930a319691",
+      "outputSha256": "d9ea470ccb851a163d18dedee071fe5531d2f414bafb8e571fb0a0e3f0ffd131",
+      "width": 1536,
+      "height": 1024,
+      "description": "Filter granted actions by service and context",
+      "reviewed": true
+    },
+    {
+      "file": "user-activity-light.png",
+      "original": "../guide/user-activity-light.png",
+      "sourceSha256": "58eb2a41c0a4858d8635a349389bb577be2a50ad57141110ce95c21b17b67365",
+      "outputSha256": "e6130b044b60c70ff2abcd413025efeb1c3661ec3cc5a3769112c8186ecb055f",
+      "width": 1536,
+      "height": 1024,
+      "description": "Find personal activity using service and decision filters",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-input-light.png",
+      "original": "../guide/user-credential-input-light.png",
+      "sourceSha256": "0ec39552a960bc51998b77086051a08374b7198b7500f00173277a5f88b2077a",
+      "outputSha256": "720ef4deb1d934685ee7f8dad6255af870e4d2550f52232d9b9ad147a1e9a999",
+      "width": 1536,
+      "height": 1024,
+      "description": "Replace a stored upstream credential, keeping its token masked",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-failure-light.png",
+      "original": "../guide/user-credential-test-failure-light.png",
+      "sourceSha256": "ae04eac6a0ecc431fce581b003c43ed55feaa34cf0ccf36b9d22280858c916d9",
+      "outputSha256": "a921433a06e81e01bce13fe21169e34608acec425332f7f0e099246d6e5d8df7",
+      "width": 1536,
+      "height": 1024,
+      "description": "Illustrate a simulated credential verification failure and error code",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-repository-light.png",
+      "original": "../guide/user-credential-test-repository-light.png",
+      "sourceSha256": "1628afa281f0f84e644e060f25d42ec652911e6ac32098e968f363ef0c80da36",
+      "outputSha256": "91223c5a9902bdcf5f734a7f6ed30e15e649b3b1e7005125fdbc8d9b2cf87e09",
+      "width": 1536,
+      "height": 1024,
+      "description": "Enter a permitted repository for Git credential verification",
+      "reviewed": true
+    },
+    {
+      "file": "user-credential-test-success-light.png",
+      "original": "../guide/user-credential-test-success-light.png",
+      "sourceSha256": "6c71de6587b40f5ed451bee3dc7f7b163450439032f4fe0f339ecec5795a777f",
+      "outputSha256": "078408cdf77b0ad902ee85681ca509558615e340e7320d70ea9c09bc310ab64f",
+      "width": 1536,
+      "height": 1024,
+      "description": "Illustrate a simulated credential verification success",
+      "reviewed": true
+    },
+    {
+      "file": "user-credentials-light.png",
+      "original": "../guide/user-credentials-light.png",
+      "sourceSha256": "9bcaf44909468ea1ca32f091cd74435208b9f9263053794e2d5bcc2c5b75237a",
+      "outputSha256": "4a8165304e8d5ca470c9f7c80de2fc63d97c8cad4ff8beb053592efbac1bbe25",
+      "width": 1536,
+      "height": 1024,
+      "description": "Select a saved personal credential and review its verification status",
+      "reviewed": true
+    },
+    {
+      "file": "user-first-password-light.png",
+      "original": "../guide/user-first-password-light.png",
+      "sourceSha256": "dd3c12dee6a7520e04829e3447698c2a36a677f4f544fc577eab4c86010111d3",
+      "outputSha256": "31f1ced0509f757b4a4f94c6931a60bc1452530a065145881b4425a6500616c4",
+      "width": 1536,
+      "height": 1024,
+      "description": "Change a temporary password before entering the portal",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-access-light.png",
+      "original": "../guide/user-token-access-light.png",
+      "sourceSha256": "54ed6e2ed7d6849e3bf5613b5cb11054eb35d98ab18f2123c2f78cd94b8a3002",
+      "outputSha256": "bfb7c6056997f820ea131f9f31c136b53829cb3422d7094fc364e3bc0482323f",
+      "width": 1536,
+      "height": 1024,
+      "description": "Select only issue.view for a narrow Jira agent token",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-details-light.png",
+      "original": "../guide/user-token-details-light.png",
+      "sourceSha256": "3a1d89bd0b44e4ad6d9dfd73b9195d15e556681b7bec4d9c0a5d6eee92a9dd06",
+      "outputSha256": "d3347bd4ecb7507661a01bdd6c8021007103fed7b098dbfb6473f088213da47a",
+      "width": 1536,
+      "height": 1024,
+      "description": "Choose a finite lifetime and restricted access before token issuance",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-resources-light.png",
+      "original": "../guide/user-token-resources-light.png",
+      "sourceSha256": "d45a7cd1bf155f3231b7b1d7cd4af1f4f87e8cfb6b71e045a2879c8e08c04e99",
+      "outputSha256": "caa379bba5378d04323f2bd29eff41ee8d41a450e87f7361ff3fb3a87eb302e0",
+      "width": 1536,
+      "height": 1024,
+      "description": "Choose the exact typed Jira DEMO project resource",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-review-light.png",
+      "original": "../guide/user-token-review-light.png",
+      "sourceSha256": "46cfce8ca412d506b6cf69e452bd5a2aad86b721ee9c7e6db2abefd39b6fb3ae",
+      "outputSha256": "dc42626407cb0581600b38df3e912dd2b6da5b33834595ec1e71c5271d59053c",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review the exact action and DEMO project boundary before issuance; approved preview reused after matching source SHA-256",
+      "reviewed": true
+    },
+    {
+      "file": "user-token-revoke-light.png",
+      "original": "../guide/user-token-revoke-light.png",
+      "sourceSha256": "86c276a1de15fb2d1da2692edc117df244ba85742374d8b6b1514033ee243edb",
+      "outputSha256": "e17271c179c267228c94ddd9348064240ef34a348f6ea24da2a84b371463e269",
+      "width": 1536,
+      "height": 1024,
+      "description": "Confirm the affected token before irreversible revocation",
+      "reviewed": true
+    },
+    {
+      "file": "user-tokens-light.png",
+      "original": "../guide/user-tokens-light.png",
+      "sourceSha256": "c44b84808102a558a17e8d85c0802c239916137756053e78dd3d65a81186c8f3",
+      "outputSha256": "8e832b5b08c7397417ac7b6f95450278cc89a9b2b7032d2a39080ee3bc5d42b1",
+      "width": 1536,
+      "height": 1024,
+      "description": "Review personal invocation token expiry and last use",
+      "reviewed": true
+    }
+  ]
+}
