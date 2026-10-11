@@ -175,7 +175,7 @@ export interface ListRowProps extends Omit<
 }
 
 /**
- * The gh-dash row: grid with icon, title/meta/description, side column.
+ * The dense row: grid with icon, title/meta/description, side column.
  * The title is the row's link/button; its hit area stretches over the whole
  * row while other controls in the row stay clickable. Separators hide next
  * to hovered, active and cursor rows.

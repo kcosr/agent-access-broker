@@ -4,7 +4,7 @@ export interface SparklineProps {
   values: readonly number[];
   /** Accessible description ("Requests per day, last 14 days: 1,284 today"). */
   label: string;
-  /** "bars" (gh-dash columns: de-emphasised, the last one in the accent) or "line". */
+  /** "bars" (columns: de-emphasised, the last one in the accent) or "line". */
   variant?: "bars" | "line" | undefined;
   width?: number | undefined;
   height?: number | undefined;

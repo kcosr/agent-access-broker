@@ -7,11 +7,12 @@ const dot = (x: number, y: number) => (
 );
 
 /**
- * 16px stroke icons (currentColor, 1.5 stroke, round caps). The gh-dash set
+ * 16px stroke icons (currentColor, 1.5 stroke, round caps): a core set
+ * (pull request and issue states, commit, branch, tag, star, pin, chevrons…)
  * plus generic app icons. Size them with CSS (`.wb-icon`) or the `size` prop.
  */
 const PATHS = {
-  // ---- from gh-dash
+  // ---- core set
   merge: (
     <>
       <circle cx="4.5" cy="3.5" r="1.75" />
@@ -62,6 +63,14 @@ const PATHS = {
       <circle cx="11.5" cy="3.5" r="1.75" />
       <circle cx="8" cy="12.5" r="1.75" />
       <path d="M4.5 5.25v.75a2 2 0 0 0 2 2h3a2 2 0 0 0 2-2v-.75M8 8v2.75" />
+    </>
+  ),
+  branch: (
+    <>
+      <circle cx="4.5" cy="3.5" r="1.75" />
+      <circle cx="4.5" cy="12.5" r="1.75" />
+      <circle cx="11.5" cy="3.5" r="1.75" />
+      <path d="M4.5 5.25v5.5M11.5 5.25v.5a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 0-2.5 2.5" />
     </>
   ),
   tag: (
@@ -207,6 +216,15 @@ const PATHS = {
       <path d="M4 1.75h5.25L12.5 5v9.25H4z" />
       <path d="M9 1.75V5.25h3.5M6 8.5h4.5M6 11h4.5" />
     </>
+  ),
+  diff: (
+    <>
+      <path d="M4 1.75h5.25L12.5 5v9.25H4z" />
+      <path d="M9 1.75V5.25h3.5M8.25 6.5v3.5M6.5 8.25h3.5M6.5 12h3.5" />
+    </>
+  ),
+  comment: (
+    <path d="M3.5 2.75h9a1.25 1.25 0 0 1 1.25 1.25v6a1.25 1.25 0 0 1-1.25 1.25H7.25L4.5 13.5v-2.25h-1A1.25 1.25 0 0 1 2.25 10V4A1.25 1.25 0 0 1 3.5 2.75z" />
   ),
 
   // ---- generic app icons

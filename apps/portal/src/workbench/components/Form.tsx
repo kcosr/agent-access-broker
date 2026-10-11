@@ -309,15 +309,22 @@ export function Checkbox({
 
 export interface SwitchProps extends Omit<
   InputHTMLAttributes<HTMLInputElement>,
-  "type" | "role"
+  "type" | "role" | "size"
 > {
   /** Visible label; omit when a Field/SettingsRow labels it. */
   label?: ReactNode;
+  /** sm: a smaller switch for dense rows, toolbars and table cells. */
+  size?: "default" | "sm" | undefined;
   ref?: Ref<HTMLInputElement> | undefined;
 }
 
 /** On/off switch: a native checkbox with role="switch". */
-export function Switch({ label, className, ...rest }: SwitchProps) {
+export function Switch({
+  label,
+  size = "default",
+  className,
+  ...rest
+}: SwitchProps) {
   const wiring = useFieldControl(rest);
   const input = (
     <input
@@ -325,7 +332,11 @@ export function Switch({ label, className, ...rest }: SwitchProps) {
       {...wiring}
       type="checkbox"
       role="switch"
-      className={cx("wb-switch", !label && className)}
+      className={cx(
+        "wb-switch",
+        size === "sm" && "wb-switch--sm",
+        !label && className,
+      )}
     />
   );
   if (!label) return input;

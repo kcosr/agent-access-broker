@@ -224,7 +224,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  button.wb-top-status {
+  :is(a, button).wb-top-status {
     height: var(--wb-ctl-md);
     padding: 0 8px;
     border-radius: var(--wb-radius-ctl);
@@ -232,9 +232,10 @@
     background: none;
     font: inherit;
     font-size: var(--wb-fs-12-5);
+    text-decoration: none;
     cursor: pointer;
   }
-  button.wb-top-status:hover {
+  :is(a, button).wb-top-status:hover {
     background: var(--wb-surface-2);
     color: var(--wb-fg);
   }

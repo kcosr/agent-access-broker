@@ -206,13 +206,20 @@ export type IconButtonProps = DistributiveOmit<
   icon: IconName;
   /** Accessible name (required); also the tooltip unless `title` is given. */
   label: string;
+  /**
+   * A small accent dot in the corner, e.g. while a filter behind the button
+   * narrows the list. It is decorative: say what is active in `label`
+   * ("Visibility: Private").
+   */
+  indicator?: boolean | undefined;
 };
 
-/** Square icon-only button. Ghost by default, like gh-dash's top-bar buttons. */
+/** Square icon-only button. Ghost by default, like the top-bar buttons. */
 export function IconButton({
   label,
   icon,
   variant = "ghost",
+  indicator = false,
   className,
   title,
   ...rest
@@ -224,5 +231,11 @@ export function IconButton({
     title: title ?? label,
     className: cx("wb-btn--icon", className),
   };
-  return <Button {...(rest as ButtonProps)} {...shared} />;
+  return (
+    <Button {...(rest as ButtonProps)} {...shared}>
+      {indicator ? (
+        <span className="wb-btn-indicator" aria-hidden="true" />
+      ) : null}
+    </Button>
+  );
 }

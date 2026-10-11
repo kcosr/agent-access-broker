@@ -399,7 +399,8 @@ export function TopSearch({
 }
 
 /**
- * Status indicator: dot + short text; a button when `onClick` is set (opens
+ * Status indicator: dot + short text; a link when `href` is set (its
+ * details page, through LinkProvider), a button when `onClick` is set (opens
  * details). In a crowded TopBar it shows `shortLabel` (or only the dot);
  * the full label stays available to assistive technology.
  */
@@ -410,6 +411,7 @@ export function TopStatus({
   detail,
   pulse = false,
   icon,
+  href,
   onClick,
   className,
 }: {
@@ -423,9 +425,12 @@ export function TopStatus({
   pulse?: boolean | undefined;
   /** Replaces the dot (e.g. a spinner-like icon). */
   icon?: ReactNode;
+  /** Renders a link (e.g. to the sync settings); `onClick` still runs. */
+  href?: string | undefined;
   onClick?: (() => void) | undefined;
   className?: string | undefined;
 }) {
+  const Link = useLinkComponent();
   const body = (
     <>
       {icon ?? <StatusDot tone={tone} pulse={pulse} />}
@@ -437,6 +442,17 @@ export function TopStatus({
       ) : null}
     </>
   );
+  if (href !== undefined)
+    return (
+      <Link
+        href={href}
+        className={cx("wb-top-status", className)}
+        title={detail}
+        onClick={onClick}
+      >
+        {body}
+      </Link>
+    );
   return onClick ? (
     <button
       type="button"

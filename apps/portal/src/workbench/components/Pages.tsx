@@ -12,7 +12,7 @@ export function SettingsPage({
   className,
 }: {
   children: ReactNode;
-  /** Centre the column instead of aligning it left like gh-dash. */
+  /** Centre the column instead of aligning it left. */
   center?: boolean | undefined;
   className?: string | undefined;
 }) {
@@ -148,6 +148,7 @@ export function Card({
   actions,
   children,
   wide = false,
+  headAlign = "start",
   className,
   id,
 }: {
@@ -157,6 +158,11 @@ export function Card({
   children?: ReactNode;
   /** Span both columns inside `.wb-cards`. */
   wide?: boolean | undefined;
+  /**
+   * "center": a one-row header, the actions (a filter, a button) centred
+   * against the title and subtitle instead of aligned with the title.
+   */
+  headAlign?: "start" | "center" | undefined;
   className?: string | undefined;
   id?: string | undefined;
 }) {
@@ -169,7 +175,12 @@ export function Card({
       aria-labelledby={titleId}
     >
       {title || actions ? (
-        <div className="wb-card-head">
+        <div
+          className={cx(
+            "wb-card-head",
+            headAlign === "center" && "wb-card-head--center",
+          )}
+        >
           <div className="wb-card-titles">
             {title ? (
               <h3 className="wb-card-title" id={titleId}>

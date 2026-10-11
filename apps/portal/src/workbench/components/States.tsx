@@ -107,7 +107,7 @@ export function Skeleton({
   );
 }
 
-/** List placeholder in the gh-dash row shape (inside a List). */
+/** List placeholder in the dense row shape (inside a List). */
 export function SkeletonRows({
   rows = 6,
   compact = false,

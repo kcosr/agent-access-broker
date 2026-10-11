@@ -8,7 +8,7 @@ This declaration applies to the Broker distribution; it does not change the
 visibility or licensing metadata of the separate upstream repository.
 
 The shared UI snapshot comes from https://github.com/kcosr/workbench-ui at
-commit 0e156edfb3ae4bbd1002ae38a7b221d370b5e4fa. Its components, helpers and
+commit b27a9ec9c9cd6f2237c1cf5d92ce4843319b7234. Its components, helpers and
 styles were originally extracted from https://github.com/kcosr/gh-dash.
 The gh-dash-derived portions retain this upstream notice:
 

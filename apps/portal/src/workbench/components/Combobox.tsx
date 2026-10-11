@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ClipboardEvent, KeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cx } from "../lib/cx";
 import { layerDepth, useOverlayOwner } from "../lib/layers";
@@ -82,6 +82,18 @@ export interface ComboboxMultipleProps extends ComboboxBaseProps {
   multiple: true;
   value: readonly string[];
   onChange: (value: string[]) => void;
+  /**
+   * Token entry, for lists of free values (with allowCustom): typing one of
+   * these characters commits the typed text, and pasted text containing one
+   * (or a line break or tab) is split into values. `[",", " "]` for emails.
+   */
+  separators?: readonly string[] | undefined;
+  /**
+   * Splits and normalizes typed or pasted text into values (default: split
+   * on `separators`, line breaks and tabs, trim, drop empty parts). Return
+   * [] to reject the text; it stays in the field.
+   */
+  parse?: ((text: string) => readonly string[]) | undefined;
 }
 
 export type ComboboxProps = ComboboxSingleProps | ComboboxMultipleProps;
@@ -191,6 +203,10 @@ export function Combobox(props: ComboboxProps) {
 
   const q = query.trim().toLowerCase();
   const async = !!loadOptions;
+  const separators = props.multiple ? (props.separators ?? []) : [];
+  const parse = props.multiple ? props.parse : undefined;
+  // Token entry: free text is split into values (separators, paste, parse).
+  const tokens = !!props.multiple && (separators.length > 0 || !!parse);
 
   // Async loading, debounced, cancelling the previous request.
   useEffect(() => {
@@ -240,14 +256,13 @@ export function Combobox(props: ComboboxProps) {
    * free-text value is never re-cased into an option; otherwise a unique
    * case-insensitive match counts too.
    */
-  const exactAny = (list: readonly ComboOption[]) => {
-    if (customText === "") return undefined;
-    const same = list.find(
-      (o) => o.label === customText || o.value === customText,
-    );
+  const exactAny = (list: readonly ComboOption[], text = customText) => {
+    if (text === "") return undefined;
+    const same = list.find((o) => o.label === text || o.value === text);
     if (same || allowCustom || matchCase) return same;
+    const lower = text.toLowerCase();
     const folded = list.filter(
-      (o) => o.label.toLowerCase() === q || o.value.toLowerCase() === q,
+      (o) => o.label.toLowerCase() === lower || o.value.toLowerCase() === lower,
     );
     return folded.length === 1 ? folded[0] : undefined;
   };
@@ -370,25 +385,73 @@ export function Combobox(props: ComboboxProps) {
     }
   };
 
-  const pick = (index: number) => {
-    const e = entries[index];
-    if (!e || disabled) return;
-    if (e.kind === "custom") commit(e.text);
-    else if (!e.option.disabled) commit(e.option.value, e.option.label);
-  };
-
   /**
-   * What the typed text stands for: the option it names exactly, else the
-   * text itself with allowCustom; never a disabled option.
+   * What `text` stands for: the option it names exactly, else the text
+   * itself with allowCustom; never a disabled option. Async results only
+   * count for the query they were loaded for.
    */
-  const typedChoice = (): { value: string; label?: string } | undefined => {
-    if (customText === "") return undefined;
-    const known = exactAny(async ? (remoteItems ?? []) : (options ?? []));
+  const choiceFor = (
+    text: string,
+  ): { value: string; label?: string } | undefined => {
+    if (text === "") return undefined;
+    const known = exactAny(
+      async ? (remote?.query === text ? remote.items : []) : (options ?? []),
+      text,
+    );
     if (known)
       return known.disabled
         ? undefined
         : { value: known.value, label: known.label };
-    return allowCustom ? { value: customText } : undefined;
+    return allowCustom ? { value: text } : undefined;
+  };
+  const typedChoice = () => choiceFor(customText);
+
+  /** Token entry: the values in free text (parse, or split on separators). */
+  const splitText = (text: string): readonly string[] => {
+    if (parse) return parse(text);
+    let parts = text.split(/[\r\n\t]/);
+    for (const sep of separators)
+      if (sep) parts = parts.flatMap((p) => p.split(sep));
+    return parts.map((p) => p.trim()).filter(Boolean);
+  };
+
+  /**
+   * Token entry: commit every value in `text` at once. Parts that stand for
+   * nothing stay as the text; returns false (state untouched) when none do.
+   */
+  const commitParts = (text: string): boolean => {
+    if (!props.multiple) return false;
+    const next = [...props.value];
+    const rest: string[] = [];
+    let took = false;
+    for (const part of splitText(text)) {
+      const choice = choiceFor(part);
+      if (!choice) {
+        rest.push(part);
+        continue;
+      }
+      took = true;
+      if (next.includes(choice.value)) continue;
+      if (choice.label) labels.current.set(choice.value, choice.label);
+      next.push(choice.value);
+    }
+    if (!took) return false;
+    if (next.length !== props.value.length) props.onChange(next);
+    const sep = separators[0] ?? ",";
+    const left = rest.join(/\s/.test(sep) ? sep : `${sep} `);
+    setQuery(left);
+    setEditing(left !== "");
+    setNavigated(false);
+    return true;
+  };
+
+  const pick = (index: number) => {
+    const e = entries[index];
+    if (!e || disabled) return;
+    if (e.kind === "custom") {
+      if (tokens) commitParts(e.text);
+      else commit(e.text);
+    } else if (!e.option.disabled) commit(e.option.value, e.option.label);
   };
 
   /** Blur/Tab with commitOnBlur: keep what was typed. */
@@ -396,6 +459,10 @@ export function Combobox(props: ComboboxProps) {
     if (!editing || disabled) return;
     if (customText === "") {
       if (!props.multiple && selected.length > 0) props.onChange(null);
+      return;
+    }
+    if (tokens) {
+      commitParts(customText);
       return;
     }
     const choice = typedChoice();
@@ -477,6 +544,10 @@ export function Combobox(props: ComboboxProps) {
         } else if (editing) {
           e.preventDefault();
           // List closed (Esc): Enter confirms what was typed.
+          if (tokens) {
+            commitParts(customText);
+            break;
+          }
           const choice = typedChoice();
           if (choice && !(props.multiple && props.value.includes(choice.value)))
             commit(choice.value, choice.label);
@@ -507,8 +578,34 @@ export function Combobox(props: ComboboxProps) {
         setOpen(false);
         break;
       default:
+        // Token entry: a separator commits the typed text (it is never typed).
+        if (tokens && separators.includes(e.key)) {
+          e.preventDefault();
+          if (customText !== "" && !disabled) commitParts(customText);
+        }
         break;
     }
+  };
+
+  /** Token entry: a pasted list (with separators or line breaks) becomes values. */
+  const onPaste = (e: ClipboardEvent<HTMLInputElement>) => {
+    if (!tokens || disabled) return;
+    const pasted = e.clipboardData.getData("text");
+    if (
+      !/[\r\n\t]/.test(pasted) &&
+      !separators.some((sep) => sep && pasted.includes(sep))
+    )
+      return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const text = el.value.slice(0, start) + pasted + el.value.slice(end);
+    if (commitParts(text)) return;
+    setQuery(text);
+    setEditing(true);
+    setNavigated(false);
+    if (!open) setOpen(true);
   };
 
   const single = !props.multiple;
@@ -582,6 +679,7 @@ export function Combobox(props: ComboboxProps) {
           if (single) e.currentTarget.select();
         }}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         onBlur={() => {
           if (commitOnBlur) commitTyped();
           setOpen(false);

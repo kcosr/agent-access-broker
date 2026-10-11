@@ -1,5 +1,5 @@
 /**
- * Overlay plumbing, ported from gh-dash and extended for nesting:
+ * Overlay plumbing, with support for nesting:
  *
  * - A stack of dismissable layers (palette, modal, popover, drawer) so one
  *   document-level Escape handler closes the top-most one. Blocking layers

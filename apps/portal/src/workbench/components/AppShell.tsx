@@ -22,7 +22,7 @@ export interface AppShellProps {
   /** <Sidebar>; omit on settings-style pages. */
   sidebar?: ReactNode;
   /**
-   * localStorage key for the sidebar width (e.g. "portal:sidebar-width");
+   * localStorage key for the sidebar width (e.g. "my-app:sidebar-width");
    * the collapsed state is stored under `<key>:collapsed`.
    */
   sidebarStorageKey?: string | undefined;
@@ -77,12 +77,31 @@ function readWidth(
   return Number.isFinite(v) && v >= min && v <= max ? Math.round(v) : fallback;
 }
 
+export interface ShowSidebarOptions {
+  /**
+   * Move focus into the sidebar once it is visible: "first" (its first
+   * control) or a function returning the element, e.g. its search field:
+   * `(pane) => pane.querySelector("input")`.
+   */
+  focus?:
+    | "first"
+    | ((pane: HTMLElement) => HTMLElement | null | undefined)
+    | undefined;
+}
+
 export interface AppShellState {
   /** The shell has a sidebar on this page. */
   hasSidebar: boolean;
   /** The sidebar is collapsed (by the user, or automatically for a drawer). */
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  /**
+   * Expand the sidebar (it stays expanded while a drawer would collapse it
+   * automatically); does nothing to one already shown, except focus.
+   */
+  showSidebar: (options?: ShowSidebarOptions) => void;
+  /** Collapse the sidebar; does nothing to one already collapsed. */
+  hideSidebar: () => void;
   /** id of the sidebar pane (for aria-controls). */
   sidebarId: string;
   /** id of the main pane (the skip link's target). */
@@ -183,8 +202,8 @@ export function AppShell({
   const drawerSlot = useRef<HTMLDivElement | null>(null);
   const pane = useRef<HTMLDivElement | null>(null);
   const rail = useRef<HTMLDivElement | null>(null);
-  // Where focus should go after the next collapse/expand renders.
-  const focusAfter = useRef<"sidebar" | null>(null);
+  // Where focus should go once the sidebar is shown again.
+  const focusAfter = useRef<ShowSidebarOptions["focus"]>(undefined);
   // Whether focus was last inside the sidebar (browsers may already have
   // moved a hidden element's focus to <body> when the collapse is handled).
   const focusInPane = useRef(false);
@@ -280,21 +299,6 @@ export function AppShell({
         )
       : null;
 
-  const toggleSidebar = useCallback(() => {
-    if (collapsed) {
-      if (userCollapsed) {
-        setUserCollapsed(false);
-        if (collapsedKey) writeStorage(collapsedKey, null);
-      }
-      if (autoCollapsed) setForceExpanded(true);
-    } else if (autoCollapsed) {
-      setForceExpanded(false);
-    } else {
-      setUserCollapsed(true);
-      if (collapsedKey) writeStorage(collapsedKey, "1");
-    }
-  }, [collapsed, userCollapsed, autoCollapsed, collapsedKey]);
-
   const sidebarResize = usePaneResize(
     {
       label: "Sidebar width",
@@ -351,20 +355,69 @@ export function AppShell({
   );
   const handle = sidebarResize.handle;
 
+  const focusSidebar = useCallback(
+    (target: ShowSidebarOptions["focus"]) => {
+      const el = pane.current;
+      if (!el || !target) return;
+      const to =
+        target === "first" ? (tabbableIn(el)[0] ?? handle.current) : target(el);
+      to?.focus();
+    },
+    [handle],
+  );
+
+  const showSidebar = useCallback(
+    (options: ShowSidebarOptions = {}) => {
+      if (!hasSidebar) return;
+      if (!collapsed) {
+        focusSidebar(options.focus);
+        return;
+      }
+      focusAfter.current = options.focus;
+      if (userCollapsed) {
+        setUserCollapsed(false);
+        if (collapsedKey) writeStorage(collapsedKey, null);
+      }
+      if (autoCollapsed) setForceExpanded(true);
+    },
+    [
+      hasSidebar,
+      collapsed,
+      userCollapsed,
+      autoCollapsed,
+      collapsedKey,
+      focusSidebar,
+    ],
+  );
+
+  const hideSidebar = useCallback(() => {
+    if (!hasSidebar || collapsed) return;
+    focusAfter.current = undefined;
+    if (autoCollapsed) {
+      setForceExpanded(false);
+    } else {
+      setUserCollapsed(true);
+      if (collapsedKey) writeStorage(collapsedKey, "1");
+    }
+  }, [hasSidebar, collapsed, autoCollapsed, collapsedKey]);
+
+  const toggleSidebar = useCallback(() => {
+    if (collapsed) showSidebar();
+    else hideSidebar();
+  }, [collapsed, showSidebar, hideSidebar]);
+
   // Keep keyboard focus alive across collapse/expand, without fighting other
   // focus owners (a closing drawer returning focus to its row): expanding
-  // moves focus into the sidebar only when asked from the rail; collapsing
-  // moves it to the rail only when it was inside the sidebar.
+  // moves focus into the sidebar only when asked (the rail, showSidebar's
+  // `focus`); collapsing moves it to the rail only when it was inside.
   const wasCollapsed = useRef(collapsed);
   useLayoutEffect(() => {
     if (wasCollapsed.current === collapsed) return;
     wasCollapsed.current = collapsed;
     const want = focusAfter.current;
-    focusAfter.current = null;
+    focusAfter.current = undefined;
     if (!collapsed) {
-      if (want === "sidebar" && pane.current) {
-        (tabbableIn(pane.current)[0] ?? handle.current)?.focus();
-      }
+      focusSidebar(want);
     } else if (
       pane.current?.contains(document.activeElement) ||
       (focusInPane.current &&
@@ -379,10 +432,20 @@ export function AppShell({
       hasSidebar,
       sidebarCollapsed: collapsed,
       toggleSidebar,
+      showSidebar,
+      hideSidebar,
       sidebarId: paneId,
       mainId,
     }),
-    [hasSidebar, collapsed, toggleSidebar, paneId, mainId],
+    [
+      hasSidebar,
+      collapsed,
+      toggleSidebar,
+      showSidebar,
+      hideSidebar,
+      paneId,
+      mainId,
+    ],
   );
 
   const style: Record<string, string> = {};
@@ -412,10 +475,7 @@ export function AppShell({
               label="Show sidebar"
               aria-expanded={false}
               aria-controls={paneId}
-              onClick={() => {
-                focusAfter.current = "sidebar";
-                toggleSidebar();
-              }}
+              onClick={() => showSidebar({ focus: "first" })}
             />
           </div>
         ) : null}

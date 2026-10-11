@@ -1,4 +1,4 @@
-/* Buttons, segmented controls, chips, badges, pills, dots, kbd, avatars. */
+/* Buttons, segmented controls, chips, badges, pills, dots, kbd, avatars, names. */
 @layer wb.components {
   .wb-icon {
     display: inline-block;
@@ -152,6 +152,25 @@
   .wb-btn-group {
     display: inline-flex;
     gap: 8px;
+  }
+  /* corner dot on an icon button (IconButton indicator: a filter narrows) */
+  .wb-btn:has(> .wb-btn-indicator) {
+    position: relative;
+  }
+  .wb-btn-indicator {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wb-accent);
+    box-shadow: 0 0 0 1.5px var(--wb-surface);
+    pointer-events: none;
+  }
+  .wb-btn--sm > .wb-btn-indicator {
+    top: 3px;
+    right: 3px;
   }
 
   /* ---------- spinner */
@@ -544,5 +563,32 @@
     width: 36px;
     height: 36px;
     font-size: 16px;
+  }
+
+  /* ---------- qualified name (QualifiedName): a muted prefix gives way first */
+  .wb-qname {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  .wb-qname-prefix {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--wb-muted);
+    font-weight: var(--wb-fw-regular);
+  }
+  .wb-qname-prefix-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-qname-name {
+    flex: none;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }

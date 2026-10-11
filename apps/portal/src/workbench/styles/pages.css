@@ -103,6 +103,9 @@
     gap: 12px;
     margin-bottom: 8px;
   }
+  .wb-card-head--center {
+    align-items: center;
+  }
   .wb-card-titles {
     flex: 1;
     min-width: 0;
