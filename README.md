@@ -7,10 +7,6 @@ can use each action, which resources within a service it can affect, which
 execution contexts may use it, and whether it runs as the user or a shared service
 identity.
 
-The portal supports local account sign-in or optional
-[Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
-through OpenID Connect (OIDC), with Entra group mappings for access management.
-
 Teams that run agent platforms can own the first layer of access control for
 their agents. The broker gives them one place to set and audit agent-specific
 policy across services, without relying solely on individual service owners to
@@ -28,6 +24,10 @@ and, when configured, user identity from that infrastructure. An **execution
 context**, such as an internal workspace or external automation environment,
 helps determine permitted actions and resources. The agent cannot gain more
 access simply by claiming a different context or identity.
+
+The portal supports local account sign-in or optional
+[Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
+through OpenID Connect (OIDC), with Entra group mappings for access management.
 
 ## Supported integrations
 
