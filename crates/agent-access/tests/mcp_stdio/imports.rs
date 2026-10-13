@@ -1,6 +1,11 @@
 //! Generic import setup and invocation through the shipped CLI and both MCP surfaces.
-use super::{BrokerTask, McpProcess, fake_config};
-use agent_access_core::*;
+use super::{McpProcess, ServerTask, isolated_broker, stop, toml_string};
+use agent_access_broker_host::test_support::FixtureDir;
+use agent_access_core::{
+    BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig, ManagedStore,
+    ManagedStoreConfig, ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole,
+    PrincipalWriteRequest,
+};
 use axum::{
     Json, Router,
     extract::State,
@@ -87,6 +92,84 @@ fn versions(response: &Value) -> (String, String) {
             .to_string(),
     )
 }
+/// Which import kinds and destinations the operator allows.
+#[derive(Clone)]
+struct ImportPermissions {
+    allowed_kinds: Vec<String>,
+    allowed_endpoints: Vec<String>,
+}
+
+/// Managed identity, policy and store with management, imports limited to
+/// `permissions`, and HTTP MCP served at `mcp_public_url`. The credential
+/// encryption key and the broker token hash key are the files `key` and
+/// `hash` in `directory`.
+fn import_document(
+    directory: &FixtureDir,
+    permissions: &ImportPermissions,
+    mcp_public_url: &str,
+) -> String {
+    let key = directory.join("key");
+    format!(
+        r#"
+[deployment]
+enable_fake_service = true
+
+[identity]
+mode = "required"
+authority = "managed"
+
+[[identity.sources]]
+name = "broker"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+[managed_store]
+type = "sqlite"
+path = {store}
+auto_migrate = true
+require_registered_principal_for_invocation = true
+
+[broker_tokens]
+hash_key_ref = {hash_key}
+
+[credential_encryption]
+active_key = "test"
+
+[[credential_encryption.keys]]
+id = "test"
+provider = "file"
+path = {key}
+
+[management]
+enabled = true
+
+[policy]
+authority = "managed"
+default_decision = "deny"
+
+[imports]
+enabled = true
+allowed_kinds = {allowed_kinds}
+allowed_endpoints = {allowed_endpoints}
+
+[mcp]
+enabled = true
+public_url = {mcp_public_url}
+
+[limits]
+upload_spool_dir = {spool}
+"#,
+        store = toml_string(directory.join("store.sqlite").display()),
+        hash_key = toml_string(format_args!("file:{}", directory.join("hash").display())),
+        key = toml_string(key.display()),
+        allowed_kinds = serde_json::to_string(&permissions.allowed_kinds).unwrap(),
+        allowed_endpoints = serde_json::to_string(&permissions.allowed_endpoints).unwrap(),
+        mcp_public_url = toml_string(mcp_public_url),
+        spool = toml_string(directory.join("upload-spool").display()),
+    )
+}
+
 fn config_file(directory: &Path, name: &str, base: &str, token: &str) -> std::path::PathBuf {
     let token_path = directory.join(format!("{name}.token"));
     std::fs::write(&token_path, token).unwrap();
@@ -162,12 +245,6 @@ async fn exercise_import(openapi: bool) {
     } else {
         "/result/upstreamMcp/structuredContent/value"
     };
-    let directory = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
     let upstream_state = Upstream::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -202,76 +279,43 @@ async fn exercise_import(openapi: bool) {
             }),
         )
         .with_state(upstream_state.clone());
-    let _upstream = BrokerTask(tokio::spawn(async move {
+    let _upstream = ServerTask(tokio::spawn(async move {
         axum::serve(listener, upstream_app).await.unwrap()
     }));
-    let broker_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", broker_listener.local_addr().unwrap());
-    let key = directory.path().join("key");
-    std::fs::write(&key, URL_SAFE_NO_PAD.encode([62u8; 32])).unwrap();
-    let hash = directory.path().join("hash");
-    std::fs::write(&hash, URL_SAFE_NO_PAD.encode([63u8; 32])).unwrap();
-    let mut config = fake_config(directory.path(), &key, &key);
-    config.providers = ProvidersConfig::new(Arc::new(agent_access_broker::backend_registry()));
-    config.credentials = CredentialsConfig::default();
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".into(),
-        authority: "managed".into(),
-        sources: vec![IdentitySourceConfig {
-            name: "broker".into(),
-            kind: "broker_tokens".into(),
-            header: "Authorization".into(),
-            scheme: "Bearer".into(),
-            principals: vec![],
-        }],
-        groups: vec![],
-    };
-    config.policy = PolicyConfig {
-        authority: "managed".into(),
-        default_decision: "deny".into(),
-        grants: vec![],
-        resources: vec![],
-        resource_groups: vec![],
-    };
-    config.management.enabled = true;
-    config.managed_store = Some(ManagedStoreConfig {
-        kind: "sqlite".into(),
-        path: directory.path().join("store.sqlite").display().to_string(),
-        auto_migrate: true,
-        require_registered_principal_for_invocation: true,
-    });
-    config.broker_tokens = Some(BrokerTokensConfig {
-        hash_key_ref: format!("file:{}", hash.display()),
-        ..Default::default()
-    });
-    config.credential_encryption = Some(CredentialEncryptionConfig {
-        active_key: "test".into(),
-        keys: vec![CredentialEncryptionKeyConfig {
-            id: "test".into(),
-            provider: "file".into(),
-            env: None,
-            path: Some(key.display().to_string()),
-        }],
-    });
-    config.imports = ImportsConfig {
-        enabled: true,
+    let application = isolated_broker();
+    let directory = application.directory().clone();
+    // The listener is already bound, so HTTP MCP can name its address.
+    let base = application.public_url();
+    directory
+        .secret_file("key", URL_SAFE_NO_PAD.encode([62u8; 32]))
+        .unwrap();
+    let hash = directory
+        .secret_file("hash", URL_SAFE_NO_PAD.encode([63u8; 32]))
+        .unwrap();
+    let permissions = ImportPermissions {
         allowed_kinds: vec![kind.into()],
         allowed_endpoints: if openapi {
             vec![endpoint.clone(), definition_url.clone()]
         } else {
             vec![endpoint.clone()]
         },
-        disabled_services: vec![],
     };
-    config.mcp.enabled = true;
-    config.mcp.public_url = Some(format!("{base}/mcp"));
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
-    let store = runtime.managed_store().unwrap();
+
+    // Seed the managed store before the broker opens and locks it.
+    let store = ManagedStore::open(
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: directory.join("store.sqlite").display().to_string(),
+            auto_migrate: true,
+            require_registered_principal_for_invocation: true,
+        },
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     for principal in ["admin", "agent", "personal", "missing"] {
         store
             .create_principal(PrincipalWriteRequest {
-                role: agent_access_core::PrincipalRole::User,
+                role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
                 kind: "user".into(),
@@ -283,14 +327,18 @@ async fn exercise_import(openapi: bool) {
             .unwrap();
     }
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+        .patch_principal_access(PrincipalAccessPatchRequest {
             principal_id: "admin".into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
+            role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
             actor: "test".into(),
         })
         .unwrap();
-    let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", hash.display()),
+        ..Default::default()
+    })
+    .unwrap();
     let issue = |principal: &str, class, scopes| {
         store
             .issue_broker_token(
@@ -323,24 +371,20 @@ async fn exercise_import(openapi: bool) {
         BrokerTokenClass::AgentInvoke,
         json!({"allowedExecutionContexts":["default"]}),
     );
-    let managed_store = store.clone();
-    let ring = runtime.credential_key_ring().unwrap().clone();
+    drop(store);
     let personal_config = config_file(directory.path(), "personal", &base, &personal);
     let missing_config = config_file(directory.path(), "missing", &base, &missing);
     let admin_config = config_file(directory.path(), "admin", &base, &admin);
     let agent_config = config_file(directory.path(), "agent", &base, &agent);
-    let _broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            broker_listener,
-            agent_access_broker_host::build_router(
-                runtime,
-                agent_access_broker::broker_build_status(),
-            )
-            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
+    let broker = application
+        .config_document(import_document(
+            &directory,
+            &permissions,
+            &format!("{base}/mcp"),
+        ))
+        .start()
         .await
-        .unwrap()
-    }));
+        .unwrap();
 
     let request = write_request(
         directory.path(),
@@ -496,22 +540,25 @@ async fn exercise_import(openapi: bool) {
     }
 
     if openapi {
-        managed_store
-            .upsert_user_credential(
-                &ring,
-                CredentialWriteRequest {
-                    owner_principal_id: "personal".into(),
-                    service: "imported".into(),
-                    name: "default".into(),
-                    profile: "token".into(),
-                    credential_kind: "bearer_token".into(),
-                    secret: json!({"token":"imported-personal-token"}),
-                    metadata: json!({}),
-                    actor: "admin".into(),
-                },
-                agent_access_core::CredentialManagementPurpose::Administrative,
-            )
+        // The administrator stores the personal principal's own token.
+        let personal_token = directory
+            .secret_file("personal-backend.token", "imported-personal-token")
             .unwrap();
+        run(
+            &admin_config,
+            &[
+                "admin",
+                "credentials",
+                "put",
+                "personal",
+                "imported",
+                "default",
+                "--profile",
+                "token",
+                "--field-file",
+                &format!("token={}", personal_token.display()),
+            ],
+        );
         for principal in ["personal", "missing"] {
             let subject = format!("user:{principal}");
             run(
@@ -865,60 +912,95 @@ async fn exercise_import(openapi: bool) {
         }
         requests.len()
     };
-    let retained_grants = managed_store.policy_grants().unwrap();
+    let retained = broker.managed_store().unwrap();
+    let retained_grants = retained.policy_grants().unwrap();
     assert!(retained_grants.iter().any(
         |grant| grant.service == "imported" && grant.actions.contains(&"item.read".to_owned())
     ));
     let retained_grants = serde_json::to_value(retained_grants).unwrap();
-    let retained_catalog = managed_store.imported_catalog().unwrap();
+    let retained_catalog = retained.imported_catalog().unwrap();
+    drop(retained);
+    // Each gated broker restarts on this broker's state.
+    stop(broker).await;
     let gates: &[&str] = if openapi {
         &["endpoint", "definition", "kind"]
     } else {
         &["endpoint", "kind"]
     };
     for gate in gates {
-        let mut gated = config.clone();
+        let mut gated = permissions.clone();
         match *gate {
             "endpoint" => {
-                gated
-                    .imports
-                    .allowed_endpoints
-                    .retain(|url| url != &endpoint);
+                gated.allowed_endpoints.retain(|url| url != &endpoint);
                 // Keep enabled-import configuration valid while removing this
                 // destination's permission. No request should reach this URL.
-                if gated.imports.allowed_endpoints.is_empty() {
+                if gated.allowed_endpoints.is_empty() {
                     gated
-                        .imports
                         .allowed_endpoints
                         .push(format!("{origin}/operator-disabled"));
                 }
             }
-            "definition" => gated
-                .imports
-                .allowed_endpoints
-                .retain(|url| url != &definition_url),
+            "definition" => gated.allowed_endpoints.retain(|url| url != &definition_url),
             "kind" => {
-                gated.imports.allowed_kinds =
-                    vec![if openapi { "mcp_http" } else { "openapi_http" }.into()]
+                gated.allowed_kinds = vec![if openapi { "mcp_http" } else { "openapi_http" }.into()]
             }
             _ => unreachable!(),
         }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let gated_base = format!("http://{}", listener.local_addr().unwrap());
-        gated.mcp.public_url = Some(format!("{gated_base}/mcp"));
-        let restarted = BrokerRuntime::new(gated).unwrap();
-        assert!(!restarted.imported_action_available("imported", "item.read"));
-        assert!(!restarted.imported_action_available("imported", "item.update"));
-        assert!(
-            restarted
-                .imported_service_unavailable_reason("imported")
-                .unwrap()
-                .contains("operator")
+        let application = isolated_broker().in_directory(directory.clone());
+        let gated_base = application.public_url();
+        let restarted = application
+            .config_document(import_document(
+                &directory,
+                &gated,
+                &format!("{gated_base}/mcp"),
+            ))
+            .start()
+            .await
+            .unwrap();
+        // The restarted broker reports its own availability through management.
+        let gated_admin = config_file(
+            directory.path(),
+            &format!("gated-admin-{gate}"),
+            &gated_base,
+            &admin,
         );
-        assert_eq!(restarted.imported_catalog(), &retained_catalog);
+        let policy_catalog = run(&gated_admin, &["admin", "policy", "catalog"]);
+        let service = policy_catalog["result"]["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|service| service["service"] == "imported")
+            .unwrap();
+        // An action is offered when it is available and a credential mode is
+        // configured; with a mode configured, `available` is the action's own.
+        assert!(
+            !service["configuredCredentialModes"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{gate}: {service}"
+        );
+        for action in ["item.read", "item.update"] {
+            let action = service["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["action"] == action)
+                .unwrap();
+            assert_eq!(action["available"], false, "{gate}: {action}");
+        }
+        let record = run(&gated_admin, &["admin", "imports", "get", "imported"]);
+        assert!(
+            record["result"]["unavailableReason"]
+                .as_str()
+                .unwrap()
+                .contains("operator"),
+            "{gate}: {record}"
+        );
+        let store = restarted.managed_store().unwrap();
+        assert_eq!(store.imported_catalog().unwrap(), retained_catalog);
         assert_eq!(
-            serde_json::to_value(restarted.managed_store().unwrap().policy_grants().unwrap())
-                .unwrap(),
+            serde_json::to_value(store.policy_grants().unwrap()).unwrap(),
             retained_grants
         );
         assert_eq!(
@@ -926,18 +1008,6 @@ async fn exercise_import(openapi: bool) {
             request_count,
             "{gate}: restart must be offline"
         );
-        let _gated_broker = BrokerTask(tokio::spawn(async move {
-            axum::serve(
-                listener,
-                agent_access_broker_host::build_router(
-                    restarted,
-                    agent_access_broker::broker_build_status(),
-                )
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        }));
         let blocked = client.post(format!("{gated_base}/mcp/imported"))
             .bearer_auth(&agent).header("accept","application/json, text/event-stream")
             .json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":DOWNSTREAM_MCP,"capabilities":{},"clientInfo":{"name":"operator-gate","version":"1"}}}))
@@ -979,8 +1049,10 @@ async fn exercise_import(openapi: bool) {
             "{gate}: scoped transports must not reach the upstream"
         );
         assert_eq!(
-            serde_json::to_value(managed_store.policy_grants().unwrap()).unwrap(),
+            serde_json::to_value(store.policy_grants().unwrap()).unwrap(),
             retained_grants
         );
+        drop(store);
+        stop(restarted).await;
     }
 }

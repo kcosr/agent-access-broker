@@ -1,5 +1,6 @@
 //! Personal imported OAuth through real scoped HTTP and stdio MCP connections.
-use super::{BrokerTask, McpProcess};
+use super::{McpProcess, isolated_broker, stop};
+use agent_access_broker_host::test_support::{FixtureDir, RunningBroker};
 use agent_access_core::imports::{
     ImportedActionDefinition, ImportedAuthMechanism, ImportedBindingStatus,
     ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
@@ -459,114 +460,32 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         group_grant,
         deadline_case,
     } = options;
-    let directory = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
     let issuer = MockServer::start().await;
     let endpoint = format!("{}/mcp", issuer.uri());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let key = directory.path().join("key");
-    std::fs::write(&key, URL_SAFE_NO_PAD.encode([75u8; 32])).unwrap();
-    let mut config = parse_broker_config_raw(
-        "oauth-scoped.toml",
-        &format!(
-            r#"
-[deployment]
-environment="development"
-[identity]
-mode="required"
-authority="managed"
-[[identity.sources]]
-name="broker"
-type="broker_tokens"
-header="Authorization"
-scheme="Bearer"
-[managed_store]
-type="sqlite"
-path={store:?}
-auto_migrate=true
-[credential_encryption]
-active_key="test"
-[[credential_encryption.keys]]
-id="test"
-provider="file"
-path={key:?}
-[broker_tokens]
-hash_key_ref={key_ref:?}
-[browser_auth]
-enabled=true
-public_origin={base:?}
-csrf_key_ref={key_ref:?}
-[browser_auth.local_password]
-enabled=true
-pepper_ref={key_ref:?}
-[management]
-enabled=true
-[audit]
-type="jsonl"
-path={audit:?}
-[policy]
-authority="managed"
-default_decision="deny"
-[imports]
-enabled=true
-allowed_kinds=["mcp_http"]
-allowed_endpoints=[{endpoint:?}]
-[mcp]
-enabled=true
-public_url={mcp_url:?}
-[oauth.registrations.personal]
-adapter="mcp_oauth"
-base_url={issuer_url:?}
-redirect_uri={redirect:?}
-client_id="scoped-oauth-fixture"
-client_auth="none"
-allow_insecure_loopback=true
-[oauth.registrations.personal.adapter_settings]
-resource={endpoint:?}
-protected_resource_metadata_url={resource_meta:?}
-authorization_server_metadata_url={issuer_meta:?}
-authorization_endpoint={authorize:?}
-token_endpoint={token_url:?}
-[oauth.registrations.personal.permission_profiles.access]
-{permission_settings}
-audience={endpoint:?}
-target={endpoint:?}
-[limits]
-upload_spool_dir={spool:?}
-"#,
-            store = directory.path().join("store.sqlite").display().to_string(),
-            audit = directory.path().join("audit.jsonl").display().to_string(),
-            key = key.display().to_string(),
-            key_ref = format!("file:{}", key.display()),
-            mcp_url = format!("{base}/mcp"),
-            issuer_url = issuer.uri(),
-            redirect = format!("{base}/v1/oauth/callback/personal"),
-            resource_meta = format!("{}/resource-metadata", issuer.uri()),
-            issuer_meta = format!("{}/issuer-metadata", issuer.uri()),
-            authorize = format!("{}/authorize", issuer.uri()),
-            token_url = format!("{}/token", issuer.uri()),
-            permission_settings = if server_default {
-                "scope_mode=\"server_default\""
-            } else {
-                "scopes=[\"metrics.read\",\"metrics.write\"]"
-            },
-            spool = directory.path().join("spool").display().to_string()
-        ),
-        &Arc::new(agent_access_broker::backend_registry()),
-    )
-    .unwrap();
-    if deadline_case.is_some() {
-        // Only these focused HTTP cases shorten the outer supervisor deadline.
-        config.mcp.operation_timeout_ms = 500;
-        config.limits.request_timeout_ms = 5_000;
-    }
+    let application = isolated_broker();
+    let directory = application.directory().clone();
+    // The listener is already bound, so the configuration can name it.
+    let base = application.public_url();
+    let key = directory
+        .secret_file("key", URL_SAFE_NO_PAD.encode([75u8; 32]))
+        .unwrap();
+    let key_ref = format!("file:{}", key.display());
+    let store_path = directory.join("store.sqlite").display().to_string();
+    let document = oauth_document(
+        &directory,
+        &base,
+        &issuer.uri(),
+        server_default,
+        deadline_case.is_some(),
+    );
+    // Seed the managed store before the broker opens and locks it.
     let store = ManagedStore::open(
-        config.managed_store.as_ref().unwrap(),
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: store_path,
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        },
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -631,7 +550,16 @@ upload_spool_dir={spool:?}
         .create_imported_service(definition, "alice", |_| Ok(()))
         .unwrap()
         .catalog;
-    let ring = CredentialKeyRing::load(config.credential_encryption.as_ref().unwrap()).unwrap();
+    let ring = CredentialKeyRing::load(&CredentialEncryptionConfig {
+        active_key: "test".into(),
+        keys: vec![CredentialEncryptionKeyConfig {
+            id: "test".into(),
+            provider: "file".into(),
+            env: None,
+            path: Some(key.display().to_string()),
+        }],
+    })
+    .unwrap();
     for (purpose, token) in [
         (ImportedCredentialPurpose::Execution, SHARED),
         (ImportedCredentialPurpose::Discovery, DISCOVERY),
@@ -736,7 +664,6 @@ upload_spool_dir={spool:?}
             agent_access_core::CredentialManagementPurpose::Administrative,
         )
         .unwrap();
-    let runtime = BrokerRuntime::new(config).unwrap();
     if group_grant {
         store
             .create_group(GroupWriteRequest {
@@ -750,28 +677,6 @@ upload_spool_dir={spool:?}
             .add_group("alice", "metrics-readers", "admin")
             .unwrap();
     }
-    runtime
-        .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
-            grant_id: Some("personal-metrics".into()),
-            subjects: vec![
-                if group_grant {
-                    "group:metrics-readers"
-                } else {
-                    "user:alice"
-                }
-                .into(),
-            ],
-            execution_contexts: vec!["default".into()],
-            service: "metrics".into(),
-            actions: vec!["item.read".into(), "item.write".into()],
-            resources: ResourceSelection::default(),
-            credential_mode: "per_user".into(),
-            priority: None,
-            status: None,
-            description: None,
-            created_by: "alice".into(),
-        })
-        .unwrap();
     if !switch_to_legacy {
         // The regular setup/invocation cases exercise an ordinary human. The
         // protocol-switch cases retain administrator discovery coverage below.
@@ -786,7 +691,7 @@ upload_spool_dir={spool:?}
     }
     store
         .enable_local_password(
-            runtime.local_password_hasher().unwrap(),
+            &LocalPasswordHasher::load("browser_auth.local_password.pepper_ref", &key_ref).unwrap(),
             LocalPasswordWriteRequest {
                 principal_id: "alice".into(),
                 password: "fixture-password".into(),
@@ -796,12 +701,17 @@ upload_spool_dir={spool:?}
             },
         )
         .unwrap();
-    let agent = store.issue_broker_token(runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: key_ref.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let agent = store.issue_broker_token(&hasher,BrokerTokenIssueRequest {
         principal_id:"alice".into(),name:"personal scoped MCP".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["metrics"],"allowedExecutionContexts":["default"]}),expires_at:None,created_by:"alice".into(),
     }).unwrap().token;
     let admin_token = store
         .issue_broker_token(
-            runtime.broker_token_hasher().unwrap(),
+            &hasher,
             BrokerTokenIssueRequest {
                 principal_id: "admin".into(),
                 name: "current runtime policy management".into(),
@@ -813,23 +723,29 @@ upload_spool_dir={spool:?}
         )
         .unwrap()
         .token;
-    let audit_runtime = runtime.clone();
-    let _broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            agent_access_broker_host::build_router(
-                runtime,
-                agent_access_broker::broker_build_status(),
-            )
-            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap()
-    }));
+    drop(store);
+    let broker = application.config_document(document).start().await.unwrap();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
+    // The administrator grants alice personal access through the running
+    // broker's management API.
+    write_policy_grant(
+        &client,
+        &base,
+        &admin_token,
+        "/v1/admin/policy/grants",
+        json!({
+            "grantId":"personal-metrics",
+            "subjects":[if group_grant { "group:metrics-readers" } else { "user:alice" }],
+            "executionContexts":["default"], "service":"metrics",
+            "actions":["item.read","item.write"],
+            "resources":{"resourceIds":[],"resourceGroupIds":[]},
+            "credentialMode":"per_user"
+        }),
+    )
+    .await;
     let login = client
         .post(format!("{base}/v1/auth/local/login"))
         .header("origin", &base)
@@ -1045,15 +961,7 @@ upload_spool_dir={spool:?}
             upstream.legacy = true;
             upstream.deadline_case = Some(case);
         }
-        exercise_deadline_case(
-            case,
-            &mut connection,
-            &upstream,
-            &issuer,
-            &audit_runtime,
-            directory.path(),
-        )
-        .await;
+        exercise_deadline_case(case, &mut connection, &upstream, &issuer, broker).await;
         return;
     }
     {
@@ -1179,7 +1087,7 @@ upload_spool_dir={spool:?}
     );
     assert_eq!(rejected["connection"]["status"], "reconnect_required");
     // Discovery can publish a replacement runtime. Mutate policy through the
-    // active HTTP state instead of the fixture's original runtime clone.
+    // active HTTP state.
     write_policy_grant(
         &client,
         &base,
@@ -1347,11 +1255,9 @@ upload_spool_dir={spool:?}
             assert_eq!(upstream.lists, 0);
         }
     }
-    audit_runtime
-        .shutdown_audit(std::time::Duration::from_secs(5))
-        .await
-        .unwrap();
-    let audit = std::fs::read_to_string(directory.path().join("audit.jsonl")).unwrap();
+    let audit = broker.audit().unwrap();
+    stop(broker).await;
+    let audit = audit.text();
     for private in [
         ACCESS,
         DISCOVERY,
@@ -1388,13 +1294,117 @@ upload_spool_dir={spool:?}
     issuer.verify().await;
 }
 
+/// Managed identity, policy and store, browser login, JSONL audit, MCP
+/// imports of `{issuer}/mcp` and HTTP MCP at `base`, with the `personal`
+/// OAuth registration at `issuer`. The deadline cases shorten the MCP
+/// operation timeout under the request timeout.
+fn oauth_document(
+    directory: &FixtureDir,
+    base: &str,
+    issuer: &str,
+    server_default: bool,
+    shortened_deadline: bool,
+) -> String {
+    let endpoint = format!("{issuer}/mcp");
+    let key = directory.join("key");
+    let key_ref = format!("file:{}", key.display());
+    // Only the focused deadline cases shorten the outer supervisor deadline.
+    let (mcp_timeouts, limits_timeouts) = if shortened_deadline {
+        ("operation_timeout_ms=500\n", "request_timeout_ms=5000\n")
+    } else {
+        ("", "")
+    };
+    format!(
+        r#"
+[deployment]
+environment="development"
+[identity]
+mode="required"
+authority="managed"
+[[identity.sources]]
+name="broker"
+type="broker_tokens"
+header="Authorization"
+scheme="Bearer"
+[managed_store]
+type="sqlite"
+path={store:?}
+auto_migrate=true
+[credential_encryption]
+active_key="test"
+[[credential_encryption.keys]]
+id="test"
+provider="file"
+path={key:?}
+[broker_tokens]
+hash_key_ref={key_ref:?}
+[browser_auth]
+enabled=true
+public_origin={base:?}
+csrf_key_ref={key_ref:?}
+[browser_auth.local_password]
+enabled=true
+pepper_ref={key_ref:?}
+[management]
+enabled=true
+[audit]
+type="jsonl"
+path={audit:?}
+[policy]
+authority="managed"
+default_decision="deny"
+[imports]
+enabled=true
+allowed_kinds=["mcp_http"]
+allowed_endpoints=[{endpoint:?}]
+[mcp]
+enabled=true
+public_url={mcp_url:?}
+{mcp_timeouts}[oauth.registrations.personal]
+adapter="mcp_oauth"
+base_url={issuer_url:?}
+redirect_uri={redirect:?}
+client_id="scoped-oauth-fixture"
+client_auth="none"
+allow_insecure_loopback=true
+[oauth.registrations.personal.adapter_settings]
+resource={endpoint:?}
+protected_resource_metadata_url={resource_meta:?}
+authorization_server_metadata_url={issuer_meta:?}
+authorization_endpoint={authorize:?}
+token_endpoint={token_url:?}
+[oauth.registrations.personal.permission_profiles.access]
+{permission_settings}
+audience={endpoint:?}
+target={endpoint:?}
+[limits]
+upload_spool_dir={spool:?}
+{limits_timeouts}"#,
+        store = directory.join("store.sqlite").display().to_string(),
+        audit = directory.join("audit.jsonl").display().to_string(),
+        key = key.display().to_string(),
+        mcp_url = format!("{base}/mcp"),
+        issuer_url = issuer,
+        redirect = format!("{base}/v1/oauth/callback/personal"),
+        resource_meta = format!("{issuer}/resource-metadata"),
+        issuer_meta = format!("{issuer}/issuer-metadata"),
+        authorize = format!("{issuer}/authorize"),
+        token_url = format!("{issuer}/token"),
+        permission_settings = if server_default {
+            "scope_mode=\"server_default\""
+        } else {
+            "scopes=[\"metrics.read\",\"metrics.write\"]"
+        },
+        spool = directory.join("spool").display().to_string()
+    )
+}
+
 async fn exercise_deadline_case(
     case: DeadlineCase,
     connection: &mut Client,
     upstream: &Arc<Mutex<Upstream>>,
     issuer: &MockServer,
-    runtime: &BrokerRuntime,
-    directory: &std::path::Path,
+    broker: RunningBroker,
 ) {
     let response = connection
         .request(
@@ -1463,11 +1473,9 @@ async fn exercise_deadline_case(
         "no upstream work may resume after the operation deadline"
     );
     assert_eq!(upstream.lock().unwrap().calls, 1);
-    runtime
-        .shutdown_audit(Duration::from_secs(5))
-        .await
-        .unwrap();
-    let audit = std::fs::read_to_string(directory.join("audit.jsonl")).unwrap();
+    let audit = broker.audit().unwrap();
+    stop(broker).await;
+    let audit = audit.text();
     let records = audit
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
