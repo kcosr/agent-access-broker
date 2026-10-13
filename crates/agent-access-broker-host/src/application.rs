@@ -5,8 +5,9 @@ use crate::lifecycle::{self, LoggingMode, ServeOptions, SignalSource};
 use crate::{BrokerBuildStatus, BuildProvenance};
 use agent_access_core::{
     API_CATALOG_VERSION, AuditStoreType, AuditVerifyReport, BrokerConfig, ConfigError,
-    SEND_SCHEMA_VERSION, StateLockSet, load_broker_config, resolve_node_id, validate_broker_config,
-    validate_broker_config_file, verify_sqlite_audit_database,
+    HostConfigError, RuntimeError, SEND_SCHEMA_VERSION, StateLockSet, load_broker_config,
+    resolve_node_id, validate_broker_config, validate_broker_config_file,
+    verify_sqlite_audit_database,
 };
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::ffi::OsString;
@@ -294,12 +295,35 @@ impl BrokerExit {
         }
     }
 
+    /// Exits 3 when the configuration could not be read, parsed or
+    /// validated, as `config validate` does, and 1 for any other failure.
     fn failed(error: anyhow::Error) -> Self {
+        let code = if is_configuration_error(&error) {
+            EXIT_CONFIG
+        } else {
+            EXIT_FAILURE
+        };
         Self {
-            code: EXIT_FAILURE,
+            code,
             failure: Some(Failure::Error(error)),
         }
     }
+}
+
+/// Whether a configuration error caused `error`, directly, through its
+/// context or sources, or inside a core error that wraps it transparently.
+fn is_configuration_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<ConfigError>()
+            || matches!(
+                cause.downcast_ref::<RuntimeError>(),
+                Some(RuntimeError::Config(_))
+            )
+            || matches!(
+                cause.downcast_ref::<HostConfigError>(),
+                Some(HostConfigError::Config(_))
+            )
+    })
 }
 
 impl From<CompositionError> for BrokerExit {
@@ -528,6 +552,37 @@ default_decision = "deny"
             .build()
             .unwrap_err();
         assert_eq!(BrokerExit::from(error).code(), 3);
+    }
+
+    #[test]
+    fn configuration_errors_exit_three_and_other_failures_exit_one() {
+        use anyhow::Context as _;
+        let invalid = || ConfigError::Invalid {
+            errors: vec!["identity.mode is invalid".into()],
+        };
+        assert_eq!(BrokerExit::failed(invalid().into()).code(), 3);
+        let wrapped = anyhow::Error::new(RuntimeError::Config(invalid())).context("details");
+        assert_eq!(BrokerExit::failed(wrapped).code(), 3);
+        let host = anyhow::Error::new(HostConfigError::Config(invalid()));
+        assert_eq!(BrokerExit::failed(host).code(), 3);
+        let secret = HostConfigError::MissingEnv {
+            label: "credentials.service.fake".into(),
+            name: "MISSING".into(),
+        };
+        assert_eq!(BrokerExit::failed(secret.into()).code(), 1);
+        let nested = Err::<(), _>(invalid())
+            .context("startup")
+            .context("serve")
+            .unwrap_err();
+        assert_eq!(BrokerExit::failed(nested).code(), 3);
+        let store = RuntimeError::ManagedStore {
+            message: "unavailable".into(),
+        };
+        assert_eq!(BrokerExit::failed(store.into()).code(), 1);
+        assert_eq!(
+            BrokerExit::failed(anyhow::anyhow!("address in use")).code(),
+            1
+        );
     }
 
     #[test]

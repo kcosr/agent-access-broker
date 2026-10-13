@@ -343,10 +343,19 @@ agent-access-broker --config /etc/agent-access-broker/config.toml serve \
 ```
 
 Without `--config`, broker commands read the file named by
-`AGENT_ACCESS_BROKER_CONFIG`, or else `/etc/agent-access/broker.toml`. Commands
-exit `0` on success, `1` on a runtime or startup failure, `2` for invalid
-arguments or a command that does not apply to the configuration, and `3` when
-the configuration or the compiled module composition is invalid.
+`AGENT_ACCESS_BROKER_CONFIG`, or else `/etc/agent-access/broker.toml`. Commands,
+including `serve` and the default command, exit:
+
+- `0` on success;
+- `3` when the configuration cannot be read, parsed, or validated, or the
+  compiled module composition is invalid;
+- `2` for command-line syntax errors, or for `audit verify` without a SQLite
+  audit store;
+- `1` for any other failure, such as a held state lock, a listener that cannot
+  bind, an out-of-range timeout or body-cap option, or a runtime error.
+
+`serve` reports its failure on stderr as an `Error: …` line after the JSON
+startup events.
 
 The public listener exposes health, discovery, authenticated runtime specs,
 invoke, self-service management, browser auth, and admin management routes under

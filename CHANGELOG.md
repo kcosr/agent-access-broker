@@ -48,6 +48,10 @@ All notable changes to this project are documented in this file.
   `agent_access_broker_host=info` explicitly, which the `fallback` field of
   `logging_filter_invalid` reports. The `agent_access_broker::handlers::oidc`
   diagnostic target is unchanged.
+- `agent-access-broker serve`, and the broker run without a subcommand, now exit
+  `3` instead of `1` when the configuration cannot be read, parsed, or
+  validated at startup, matching `config validate`. Other startup and runtime
+  failures still exit `1`, and the `Error: …` message is unchanged.
 
 ### Fixed
 
