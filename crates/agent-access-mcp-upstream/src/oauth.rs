@@ -1,5 +1,6 @@
 //! Preregistered MCP OAuth clients with operator-pinned resource and AS metadata.
 //! Metadata is evidence to validate, never authority to choose a new destination.
+use agent_access_core::imports::ImportOAuthCompanion;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use reqwest::Method;
@@ -7,11 +8,24 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
-pub static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
+static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
     id: "mcp_oauth",
     development_only: false,
     dialect: &McpOAuthDialect,
 };
+
+/// Personal MCP import connections: a registration approves the resource
+/// pinned by its validated adapter settings.
+pub(crate) const IMPORT_AUTHENTICATION: ImportOAuthCompanion = ImportOAuthCompanion {
+    dialect: &MCP_OAUTH_DIALECT,
+    approved_resource,
+};
+
+fn approved_resource(config: &OAuthRegistrationConfig) -> Option<String> {
+    endpoints(config)
+        .ok()
+        .map(|endpoints| endpoints.resource.to_owned())
+}
 
 struct McpOAuthDialect;
 const SETTINGS: [&str; 5] = [

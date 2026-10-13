@@ -22,6 +22,7 @@ chrono.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
 http.workspace = true
+jsonschema.workspace = true
 libc.workspace = true
 openidconnect.workspace = true
 percent-encoding.workspace = true
@@ -52,7 +53,6 @@ agent-access-gitlab = { path = "../agent-access-gitlab" }
 agent-access-jira = { path = "../agent-access-jira" }
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 filetime.workspace = true
-jsonschema.workspace = true
 rusqlite = { workspace = true, features = ["backup", "trace"] }
 tempfile.workspace = true
 tracing-subscriber.workspace = true

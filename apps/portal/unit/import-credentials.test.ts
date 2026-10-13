@@ -3,49 +3,75 @@ vi.mock("../src/app/session", () => ({ useSession: () => ({ session: { authentic
 import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ImportBinding, ImportOAuthRegistration, ImportPreviewResult } from "../src/import-types";
+import type { ImportAuthentication, ImportBinding, ImportOAuthRegistration, ImportPreviewResult } from "../src/import-types";
 import type { OAuthConnectionTarget } from "../src/types";
-import { importCredentialBindings, importOAuthError, matchingImportRegistrations, type ImportCredentialDraft } from "../src/lib/import-credentials";
+import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportCredentialDraft } from "../src/lib/import-credentials";
 import { ImportEditor } from "../src/features/catalog/import-editor";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
 import { OAuthConnectionRow, OAuthConnectionsTable } from "../src/components/oauth-connections";
 
 const endpoint = "https://tools.example.test/mcp";
-const registration: ImportOAuthRegistration = { id: "tools", adapterId: "mcp_oauth", issuer: "https://login.example.test", resource: endpoint, permissionProfiles: [{ id: "read", scopeMode: "explicit", scopes: ["metrics.read"] }, { id: "write", scopeMode: "explicit", scopes: ["metrics.read", "metrics.write"] }] };
+const registration: ImportOAuthRegistration = { id: "tools", issuer: "https://login.example.test", resource: endpoint, permissionProfiles: [{ id: "read", scopeMode: "explicit", scopes: ["metrics.read"] }, { id: "write", scopeMode: "explicit", scopes: ["metrics.read", "metrics.write"] }] };
+// The dialect ID is the Broker's metadata, not a portal constant.
+const group = (registrations: ImportOAuthRegistration[]): ImportAuthentication => ({ importKind: "mcp_http", dialectId: "tools_oauth", registrations });
+const mcp = group([registration]);
 const draft: ImportCredentialDraft = { shared: true, personal: true, personalAuth: "oauth", registrationId: "tools", profile: "read", delivery: { kind: "bearer" } };
 
 describe("imported personal authentication", () => {
+  test("the selected import kind's companion supplies its registrations", () => {
+    const other: ImportAuthentication = { importKind: "other_http", dialectId: "other_oauth", registrations: [registration] };
+    expect(importAuthenticationFor([other, mcp], "mcp_http")).toBe(mcp);
+    expect(importAuthenticationFor([other], "mcp_http")).toBeUndefined();
+    expect(importAuthenticationFor([mcp], "openapi_http")).toBeUndefined();
+  });
   test("only approved endpoint-specific registrations and profiles can enable OAuth", () => {
-    expect(matchingImportRegistrations([registration], endpoint)).toEqual([registration]);
-    expect(matchingImportRegistrations([registration], "https://other.example.test/mcp")).toEqual([]);
-    expect(importOAuthError([], endpoint, "tools", "read", false, false)).toContain("not approved");
-    expect(importOAuthError([registration], endpoint, "other", "read", false, false)).toContain("registration");
-    expect(importOAuthError([registration], endpoint, "tools", "unknown", false, false)).toContain("profile");
-    expect(importOAuthError([registration], endpoint, "tools", "read", false, false)).toBeNull();
-    expect(importOAuthError([registration], endpoint, "tools", "read", true, false)).toContain("Bearer");
-    expect(importOAuthError([registration], endpoint, "tools", "read", false, true)).toContain("transport");
+    expect(matchingImportRegistrations(mcp, endpoint)).toEqual([registration]);
+    expect(matchingImportRegistrations(mcp, "https://other.example.test/mcp")).toEqual([]);
+    expect(matchingImportRegistrations(undefined, endpoint)).toEqual([]);
+    expect(importOAuthError(undefined, endpoint, "tools", "read", false, false)).toContain("no OAuth authentication");
+    expect(importOAuthError(group([]), endpoint, "tools", "read", false, false)).toContain("not approved");
+    expect(importOAuthError(mcp, endpoint, "other", "read", false, false)).toContain("registration");
+    expect(importOAuthError(mcp, endpoint, "tools", "unknown", false, false)).toContain("profile");
+    expect(importOAuthError(mcp, endpoint, "tools", "read", false, false)).toBeNull();
+    expect(importOAuthError(mcp, endpoint, "tools", "read", true, false)).toContain("Bearer");
+    expect(importOAuthError(mcp, endpoint, "tools", "read", false, true)).toContain("transport");
   });
   test("OAuth is personal Bearer authority while the shared mode remains a static token", () => {
-    expect(importCredentialBindings([], draft)).toEqual([
+    expect(importCredentialBindings([], draft, mcp)).toEqual([
       { ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" },
-      { ownerMode: "per_user", mechanism: "oauth", delivery: { kind: "bearer" }, status: "configured", adapterId: "mcp_oauth", registrationId: "tools", profile: "read" },
+      { ownerMode: "per_user", mechanism: "oauth", delivery: { kind: "bearer" }, status: "configured", adapterId: "tools_oauth", registrationId: "tools", profile: "read" },
     ]);
+    // Without a companion no dialect is invented; saving is blocked instead.
+    expect(importCredentialBindings([], draft, undefined)[1]).not.toHaveProperty("adapterId");
   });
   test("unchanged binding order is retained when editing other configuration", () => {
-    const existing = importCredentialBindings([], draft).reverse();
-    expect(importCredentialBindings(existing, draft)).toEqual(existing);
+    const existing = importCredentialBindings([], draft, mcp).reverse();
+    expect(importCredentialBindings(existing, draft, mcp)).toEqual(existing);
   });
   test("retained modes and unsupported authentication are not silently removed or activated", () => {
     const retained: ImportBinding = { ownerMode: "per_user", mechanism: "oauth", delivery: { kind: "bearer" }, status: "unsupported", adapterId: "future_adapter", registrationId: "unavailable", profile: "custom" };
-    expect(importCredentialBindings([retained], { ...draft, shared: false, personal: false, personalAuth: "retained" })).toEqual([retained]);
-    const changed = importCredentialBindings([retained], { ...draft, shared: false });
-    expect(changed[0]).toMatchObject({ status: "configured", adapterId: "mcp_oauth", registrationId: "tools", profile: "read" });
-    expect(importCredentialBindings(changed, { ...draft, shared: false, personalAuth: "static_token" })[0]).toEqual({ ownerMode: "per_user", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" });
+    expect(retainedImportBinding(retained, mcp)).toBe(true);
+    expect(importCredentialBindings([retained], { ...draft, shared: false, personal: false, personalAuth: "retained" }, mcp)).toEqual([retained]);
+    const changed = importCredentialBindings([retained], { ...draft, shared: false }, mcp);
+    expect(changed[0]).toMatchObject({ status: "configured", adapterId: "tools_oauth", registrationId: "tools", profile: "read" });
+    expect(retainedImportBinding(changed[0], mcp)).toBe(false);
+    expect(importCredentialBindings(changed, { ...draft, shared: false, personalAuth: "static_token" }, mcp)[0]).toEqual({ ownerMode: "per_user", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" });
+  });
+  test("a stored binding of an unavailable companion is retained by its stored dialect", () => {
+    const stored = importCredentialBindings([], { ...draft, shared: false }, mcp);
+    // The kind's companion is not selected, or names another dialect.
+    for (const authentication of [undefined, { ...mcp, dialectId: "replacement_oauth" }]) {
+      expect(retainedImportBinding(stored[0], authentication)).toBe(true);
+      expect(importCredentialBindings(stored, { ...draft, shared: false, personalAuth: "retained" }, authentication)).toEqual(stored);
+    }
+    expect(retainedImportBinding(undefined, undefined)).toBe(false);
+    expect(retainedImportBinding({ ownerMode: "per_user", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }, undefined)).toBe(false);
   });
   test("the editor shows approved permissions and retains a missing registration visibly", () => {
-    const binding = importCredentialBindings([], { ...draft, shared: false });
-    const data: ImportPreviewResult = { catalogRevision: 1, operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], oauthRegistrations: [registration], preview: null, affectedGrants: [], affectedGrantsByAction: {}, service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint, connectionSettings: {}, executionBindings: binding, discovery: { kind: "per_user", principal: "admin" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" } };
-    const render = (registrations: ImportOAuthRegistration[]) => renderToStaticMarkup(createElement(ImportEditor, { availableKinds: ["mcp_http"], principal: "admin", data, registrations, onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const binding = importCredentialBindings([], { ...draft, shared: false }, mcp);
+    const data: ImportPreviewResult = { catalogRevision: 1, operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], importAuthentication: [mcp], preview: null, affectedGrants: [], affectedGrantsByAction: {}, service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint, connectionSettings: {}, executionBindings: binding, discovery: { kind: "per_user", principal: "admin" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" } };
+    const renderGroups = (authentication: ImportAuthentication[], preview = data) => renderToStaticMarkup(createElement(ImportEditor, { availableKinds: ["mcp_http"], principal: "admin", data: preview, authentication, onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const render = (registrations: ImportOAuthRegistration[]) => renderGroups([group(registrations)]);
     const current = render([registration]);
     expect(current).toContain("OAuth registration");
     expect(current).toContain("metrics.read");
@@ -58,6 +84,12 @@ describe("imported personal authentication", () => {
     expect(missing).toContain("tools (unavailable)");
     expect(missing).toContain("existing binding is retained");
     expect(data.service.definition.executionBindings[0].registrationId).toBe("tools");
+    // Without the kind's companion the binding is retained by its stored
+    // dialect, with no OAuth fields and no credential-change confirmation.
+    const unselected = renderGroups([], { ...data, affectedGrants: ["grant1"] });
+    expect(unselected).toContain("Retain unavailable binding (tools_oauth)");
+    expect(unselected).not.toContain("OAuth registration");
+    expect(unselected).not.toContain("existing grant(s)");
   });
   test("server-default permissions show unknown or known evidence on both connection surfaces", () => {
     const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Connect your account to authorize this imported service.", registration: "tools", permissionProfile: "access", scopeMode: "server_default", requestedScopes: [], target: endpoint, canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null };

@@ -4,8 +4,7 @@ mod protocol;
 mod schema;
 mod transport;
 
-pub use oauth::MCP_OAUTH_DIALECT;
-
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use base64::{Engine, prelude::BASE64_STANDARD};
@@ -31,8 +30,15 @@ use url::Url;
 
 pub use transport::PROTOCOL_VERSION;
 
+/// The `mcp_http` import selection, with its `mcp_oauth` companion dialect
+/// as the import-authentication role. Selecting it registers that dialect;
+/// an assembly must not select the dialect separately.
+pub fn registration() -> ImportedAdapterRegistration {
+    imported_adapter_registration(&McpAdapter, Some(oauth::IMPORT_AUTHENTICATION))
+}
+
 #[derive(Debug)]
-pub struct McpAdapter;
+struct McpAdapter;
 
 #[async_trait]
 impl ImportedAdapter for McpAdapter {

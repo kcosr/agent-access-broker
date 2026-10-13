@@ -1,11 +1,11 @@
 //! The modules an assembly links, validated once into an immutable
 //! composition that every command and runtime generation shares.
+use agent_access_core::imports::ImportedAdapterRegistration;
 use agent_access_core::{
     BackendRegistry, ConfigError, HttpRouteSpec, http_route_specs, parse_broker_config_raw,
 };
 use agent_access_provider::{
-    BackendRegistration, ImportedAdapter, OAuthDialectRegistration, ResourceTypeRegistry,
-    ServiceDescriptor,
+    BackendRegistration, OAuthDialectRegistration, ResourceTypeRegistry, ServiceDescriptor,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -34,9 +34,15 @@ impl BrokerComposition {
             .map(|registration| registration.kind)
     }
 
-    /// Selected OAuth dialect IDs.
+    /// Selected OAuth dialect IDs, including the companion dialects that
+    /// import selections contribute.
     pub fn oauth_dialect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.registry.oauth_dialect_ids()
+    }
+
+    /// Selected import kinds, in selection order.
+    pub fn import_kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.registry.imported_adapter_kinds()
     }
 
     /// Every resource type the broker and its selected natives define.
@@ -87,6 +93,7 @@ impl fmt::Debug for BrokerComposition {
                 "oauth_dialects",
                 &self.oauth_dialect_ids().collect::<Vec<_>>(),
             )
+            .field("import_kinds", &self.import_kinds().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
 }
@@ -97,7 +104,7 @@ impl fmt::Debug for BrokerComposition {
 pub struct BrokerCompositionBuilder {
     natives: Vec<&'static BackendRegistration>,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
-    import_adapters: Vec<&'static dyn ImportedAdapter>,
+    import_adapters: Vec<ImportedAdapterRegistration>,
 }
 
 impl BrokerCompositionBuilder {
@@ -107,20 +114,23 @@ impl BrokerCompositionBuilder {
         self
     }
 
-    /// Selects an OAuth dialect.
+    /// Selects an OAuth dialect. A dialect that an import selection
+    /// contributes as its companion must not be selected again.
     pub fn oauth(mut self, registration: &'static OAuthDialectRegistration) -> Self {
         self.oauth_dialects.push(registration);
         self
     }
 
-    /// Selects a shipped import adapter.
-    pub fn import_adapter(mut self, adapter: &'static dyn ImportedAdapter) -> Self {
-        self.import_adapters.push(adapter);
+    /// Selects a shipped import adapter through its `registration()`,
+    /// together with the OAuth companion it contributes, if any.
+    pub fn import_adapter(mut self, registration: ImportedAdapterRegistration) -> Self {
+        self.import_adapters.push(registration);
         self
     }
 
-    /// Validates the selections together: identifiers must be valid, and
-    /// service kinds, resource types, dialects and adapters must be unique.
+    /// Validates the selections together: identifiers must be valid, the
+    /// native kind `broker` is reserved, and service kinds, resource types,
+    /// dialects (including import companions) and adapters must be unique.
     pub fn build(self) -> Result<BrokerComposition, CompositionError> {
         let registry = BackendRegistry::new(self.natives)
             .and_then(|registry| registry.with_oauth_dialects(self.oauth_dialects))
@@ -196,7 +206,7 @@ default_decision = "deny"
             .native(&GITLAB_BACKEND)
             .native(&GMAIL_BACKEND)
             .oauth(&GOOGLE_OAUTH_DIALECT)
-            .import_adapter(&agent_access_mcp_upstream::McpAdapter)
+            .import_adapter(agent_access_mcp_upstream::registration())
     }
 
     #[test]
@@ -206,7 +216,12 @@ default_decision = "deny"
             composition.native_kinds().collect::<Vec<_>>(),
             ["jira", "gitlab", "gmail"]
         );
-        assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
+        assert_eq!(composition.import_kinds().collect::<Vec<_>>(), ["mcp_http"]);
+        // The MCP selection contributes its companion dialect.
+        assert_eq!(
+            composition.oauth_dialect_ids().collect::<Vec<_>>(),
+            ["google", "mcp_oauth"]
+        );
         assert!(
             composition
                 .registry()
@@ -308,11 +323,32 @@ default_decision = "deny"
             ["OAuth dialect google is registered more than once"]
         );
         let adapters = BrokerComposition::builder()
-            .import_adapter(&agent_access_openapi_upstream::OpenApiAdapter)
-            .import_adapter(&agent_access_openapi_upstream::OpenApiAdapter)
+            .import_adapter(agent_access_openapi_upstream::registration())
+            .import_adapter(agent_access_openapi_upstream::registration())
             .build()
             .unwrap_err();
-        assert_eq!(adapters.problems().len(), 1, "{adapters:?}");
+        assert_eq!(
+            adapters.problems(),
+            ["import adapter kind openapi_http is registered more than once"]
+        );
+    }
+
+    #[test]
+    fn an_import_companion_cannot_be_selected_again_as_a_dialect() {
+        static SECOND_MCP_OAUTH: OAuthDialectRegistration = OAuthDialectRegistration {
+            id: "mcp_oauth",
+            development_only: false,
+            dialect: GOOGLE_OAUTH_DIALECT.dialect,
+        };
+        let error = BrokerComposition::builder()
+            .oauth(&SECOND_MCP_OAUTH)
+            .import_adapter(agent_access_mcp_upstream::registration())
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            error.problems(),
+            ["OAuth dialect mcp_oauth is registered more than once"]
+        );
     }
 
     #[test]

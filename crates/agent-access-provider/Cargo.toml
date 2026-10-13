@@ -18,7 +18,6 @@ chrono.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
 jsonschema.workspace = true
-percent-encoding.workspace = true
 rand = "0.8.5"
 regex.workspace = true
 reqwest.workspace = true

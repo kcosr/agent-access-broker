@@ -3,9 +3,9 @@ import { AdminButton } from "../../components/admin-access";
 // MCP and OpenAPI adapters. Service ID and endpoint are fixed after creation;
 // adapter settings and credential delivery are fixed once actions are accepted.
 import { useState, type ReactNode } from "react";
-import type { ImportDefinition, ImportOAuthRegistration, ImportPreviewResult } from "../../import-types";
+import type { ImportAuthentication, ImportDefinition, ImportPreviewResult } from "../../import-types";
 import { importSourceKey } from "../../lib/imports";
-import { importCredentialBindings, importOAuthError, matchingImportRegistrations, type ImportPersonalAuth } from "../../lib/import-credentials";
+import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
 import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
 import { errorMessage } from "../../lib/helpers";
 import { Banner, Button, Checkbox, Field, Input, Select } from "../../workbench";
@@ -18,7 +18,8 @@ export type ImportEditorProps = {
   principal: string;
   /** The service being edited; absent when importing a new service. */
   data?: ImportPreviewResult | undefined;
-  registrations: ImportOAuthRegistration[];
+  /** The Broker's import-authentication projection, grouped by import kind. */
+  authentication: ImportAuthentication[];
   availableKinds: string[];
   /** Imports are enabled by operator configuration (new imports only). */
   operatorEnabled?: boolean;
@@ -164,7 +165,7 @@ export function ImportEditor(props: ImportEditorProps) {
 function McpImportForm({
   principal,
   data,
-  registrations,
+  authentication: groups,
   operatorEnabled = true,
   onClose,
   onSave,
@@ -175,16 +176,16 @@ function McpImportForm({
   const old = data?.service.definition;
   const mutable = !data || (data.service.status === "draft" && data.service.actions.length === 0);
   const personalBinding = old?.executionBindings.find((binding) => binding.ownerMode === "per_user");
+  // The OAuth companion of the selected import kind; a stored binding naming
+  // another dialect, or a kind without one, is retained unchanged.
+  const authentication = importAuthenticationFor(groups, kind);
+  const retainable = retainedImportBinding(personalBinding, authentication);
   const [name, setName] = useState(old?.service ?? "");
   const [label, setLabel] = useState(old?.displayName ?? "");
   const [endpoint, setEndpoint] = useState(old?.endpoint ?? "");
   const [shared, setShared] = useState(!old || old.executionBindings.some((binding) => binding.ownerMode === "service"));
   const [personal, setPersonal] = useState(Boolean(personalBinding));
-  const [personalAuth, setPersonalAuth] = useState<ImportPersonalAuth>(
-    personalBinding?.status === "unsupported" || (personalBinding?.mechanism === "oauth" && personalBinding.adapterId !== "mcp_oauth")
-      ? "retained"
-      : personalBinding?.mechanism ?? "static_token"
-  );
+  const [personalAuth, setPersonalAuth] = useState<ImportPersonalAuth>(retainable ? "retained" : personalBinding?.mechanism ?? "static_token");
   const [registrationId, setRegistrationId] = useState(personalBinding?.registrationId ?? "");
   const [profile, setProfile] = useState(personalBinding?.profile ?? "");
   const delivery = old?.executionBindings[0]?.delivery;
@@ -200,19 +201,23 @@ function McpImportForm({
   const busy = save.pending;
 
   const oauth = personal && personalAuth === "oauth";
-  const approved = matchingImportRegistrations(registrations, endpoint);
+  const approved = matchingImportRegistrations(authentication, endpoint);
   const registration = approved.find((entry) => entry.id === registrationId);
   const permissionProfile = registration?.permissionProfiles.find((entry) => entry.id === profile);
-  const bindings = importCredentialBindings(old?.executionBindings ?? [], {
-    shared,
-    personal,
-    personalAuth,
-    registrationId,
-    profile,
-    delivery: raw ? { kind: "raw_header", name: header.trim() } : { kind: "bearer" }
-  });
+  const bindings = importCredentialBindings(
+    old?.executionBindings ?? [],
+    {
+      shared,
+      personal,
+      personalAuth,
+      registrationId,
+      profile,
+      delivery: raw ? { kind: "raw_header", name: header.trim() } : { kind: "bearer" }
+    },
+    authentication
+  );
   const supportedPersonal = bindings.some((binding) => binding.ownerMode === "per_user" && binding.status === "configured");
-  const authError = oauth ? importOAuthError(registrations, endpoint, registrationId, profile, raw, transport) : null;
+  const authError = oauth ? importOAuthError(authentication, endpoint, registrationId, profile, raw, transport) : null;
   const bindingChanged = Boolean(old && importSourceKey(old.executionBindings) !== importSourceKey(bindings));
   const affected = bindingChanged ? data?.affectedGrants ?? [] : [];
   const retainedMissingRegistration = Boolean(oauth && authError && !bindingChanged && personalBinding);
@@ -297,12 +302,10 @@ function McpImportForm({
                 }}
               >
                 <option value="static_token">Static token</option>
-                <option value="oauth" disabled={!mutable && raw}>
+                <option value="oauth" disabled={(!mutable && raw) || !authentication}>
                   OAuth connection
                 </option>
-                {personalBinding?.status === "unsupported" || (personalBinding?.adapterId && personalBinding.adapterId !== "mcp_oauth") ? (
-                  <option value="retained">Retain unsupported binding</option>
-                ) : null}
+                {retainable ? <option value="retained">{`Retain unavailable binding${personalBinding?.adapterId ? ` (${personalBinding.adapterId})` : ""}`}</option> : null}
               </Select>
             </Field>
             {!mutable && raw ? <p className="pt-prose wb-small">OAuth requires Bearer delivery. Create a new service identity to change this header destination.</p> : null}

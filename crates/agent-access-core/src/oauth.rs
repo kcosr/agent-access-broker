@@ -1949,7 +1949,7 @@ fn make_lease(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::managed_store::oauth::{test_fixture, test_sql};
     use crate::network::EgressProxyEnvironment;
@@ -1966,7 +1966,7 @@ mod tests {
     // Tests core's mode-aware lifecycle without changing the production stub's
     // explicit-scope contract or coupling core to a protocol adapter.
     struct DefaultScopeDialect;
-    static DEFAULT_SCOPE_DIALECT: agent_access_provider::OAuthDialectRegistration =
+    pub(crate) static DEFAULT_SCOPE_DIALECT: agent_access_provider::OAuthDialectRegistration =
         agent_access_provider::OAuthDialectRegistration {
             id: "default_scope_fixture",
             development_only: true,

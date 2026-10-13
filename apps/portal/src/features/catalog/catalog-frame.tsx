@@ -85,7 +85,7 @@ function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () 
   return (
     <ImportEditor
       principal={session.principal ?? ""}
-      registrations={imports?.oauthRegistrations ?? []}
+      authentication={imports?.importAuthentication ?? []}
       availableKinds={imports?.availableKinds ?? []}
       operatorEnabled={imports?.operatorEnabled ?? false}
       onClose={() => {

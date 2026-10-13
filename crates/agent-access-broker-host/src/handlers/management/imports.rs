@@ -6,12 +6,12 @@ use super::common::{
     management_write_audit_completion, management_write_audit_preflight,
 };
 use crate::state::AppState;
-use agent_access_core::*;
-use agent_access_provider::{
-    ExecutionCredential, ImportedActionDefinition, ImportedCredentialMode,
-    ImportedCredentialPurpose, ImportedDiscovery, ImportedDiscoveryCredential,
-    ImportedServiceDefinition, is_action_name, is_service_name,
+use agent_access_core::imports::{
+    ImportedActionDefinition, ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscovery,
+    ImportedDiscoveryCredential, ImportedServiceDefinition,
 };
+use agent_access_core::*;
+use agent_access_provider::{ExecutionCredential, is_action_name, is_service_name};
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
@@ -126,7 +126,7 @@ fn check_versions(
 fn record_result(runtime: &BrokerRuntime, catalog: &ImportedCatalog, service: &str) -> Value {
     let record = catalog.service(service);
     let unavailable = runtime.imported_service_unavailable_reason(service);
-    json!({"catalogRevision": catalog.revision, "service":record, "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"oauthRegistrations":runtime.imported_oauth_registrations(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)})
+    json!({"catalogRevision": catalog.revision, "service":record, "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)})
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -298,7 +298,7 @@ pub(crate) async fn list(
         Err(r) => return *r,
     };
     let catalog = context.snapshot.runtime.imported_catalog();
-    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":catalog.services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"oauthRegistrations":context.snapshot.runtime.imported_oauth_registrations()})).await
+    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":catalog.services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
 }
 
 pub(crate) async fn get(
@@ -381,7 +381,7 @@ async fn preview_response(
         let by_action = grants_by_action(&store, &service_owned)?;
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
-        Ok(json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"oauthRegistrations":runtime.imported_oauth_registrations(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings}))
+        Ok(json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings}))
     }).await;
     match result {
         Ok(result) if preaudited => {
@@ -1218,7 +1218,7 @@ pub(crate) async fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::ImportedDiscoveredTool;
+    use agent_access_core::imports::ImportedDiscoveredTool;
 
     #[test]
     fn scoped_preview_warnings_are_provisional_and_do_not_change_the_manifest() {

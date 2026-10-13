@@ -1,14 +1,13 @@
 //! Provider preparation precedes locked mutations and preserves unrelated dispatches.
 use super::conformance_import::conformance_import_action;
 use super::*;
+use agent_access_core::imports::{ImportedCredentialDelivery, ImportedCredentialPurpose};
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, ImportedActionStatus,
     ImportedActionWrite, ImportedSecretDeleteRequest, ImportedSecretWriteRequest,
     ImportedServiceStatus, ImportedServiceUpdateRequest, ManagedPolicyGrantCreateRequest,
 };
-use agent_access_provider::{
-    ExecutionCredential, ImportedCredentialDelivery, ImportedCredentialPurpose,
-};
+use agent_access_provider::ExecutionCredential;
 
 async fn invoke(runtime: &BrokerRuntime, token: &str, service: &str) -> (StatusCode, Value) {
     let response = authed_json_request(

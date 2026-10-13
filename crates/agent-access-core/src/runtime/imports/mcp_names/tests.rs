@@ -1,6 +1,6 @@
 use super::*;
 use crate::ImportedActionRecord;
-use agent_access_provider::{
+use crate::imports::{
     ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
     ImportedDiscoveryCredential,
 };

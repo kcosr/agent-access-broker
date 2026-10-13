@@ -1004,7 +1004,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn operation(endpoint: &str, timeout: Duration) -> Operation {
-        use agent_access_provider::{ImportedServiceDefinition, test_support};
+        use agent_access_core::imports::ImportedServiceDefinition;
+        use agent_access_provider::test_support;
         let definition: ImportedServiceDefinition = serde_json::from_value(json!({"service":"race","displayName":"Race","adapterKind":"mcp_http","endpoint":endpoint,"executionBindings":[{"ownerMode":"service","mechanism":"static_token","delivery":{"kind":"bearer"},"status":"configured"}],"discovery":{"kind":"execution"}})).unwrap();
         let wire =
             crate::make_wire(&definition, &test_support::TestHost::default().context()).unwrap();

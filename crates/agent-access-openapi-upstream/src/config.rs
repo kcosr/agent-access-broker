@@ -1,4 +1,4 @@
-use agent_access_provider::*;
+use agent_access_core::imports::*;
 use url::Url;
 
 pub(crate) struct Settings {

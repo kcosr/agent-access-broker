@@ -211,9 +211,11 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
-  upstream client factories); contains no backend. Crates that use
-  backend-contract items import them from `agent_access_provider` directly,
-  not through core.
+  upstream client factories); contains no backend. Its internal `imports`
+  module owns the import adapter contract (`ImportedAdapter`, imported
+  definitions, bounded import schemas) and the opaque
+  `ImportedAdapterRegistration`. Crates that use backend-contract items import
+  them from `agent_access_provider` directly, not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
@@ -228,9 +230,12 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and
-  single-attempt execution over the host transport with the pinned SDK.
+  single-attempt execution over the host transport with the pinned SDK. Its
+  `registration()` selects the `mcp_http` adapter together with its `mcp_oauth`
+  companion dialect; the dialect has no separate export.
 - `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
-  bounded operation plans and single-attempt HTTP execution.
+  bounded operation plans and single-attempt HTTP execution; `registration()`
+  selects it, with no OAuth companion.
 - `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
 - `crates/agent-access-fake`: development fixtures, each selected separately:
   the `fake` backend used by smoke tests and fixtures, the `oauth_stub`

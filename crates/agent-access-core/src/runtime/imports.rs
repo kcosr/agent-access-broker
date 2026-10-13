@@ -2,6 +2,8 @@
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
+#[cfg(test)]
+mod authentication_tests;
 mod mcp_names;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
@@ -173,7 +175,7 @@ pub(super) fn descriptor(
             .definition
             .execution_bindings
             .iter()
-            .any(|b| b.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth)
+            .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
         {
             CredentialDescriptor::default()
                 .profile("token", "bearer_token")
@@ -220,14 +222,27 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
             })
 }
 
+/// Whether `binding` may authenticate `definition`. An OAuth binding needs
+/// the OAuth companion that the selected adapter for its import kind declares:
+/// the binding, the operator registration and that companion name the same
+/// dialect, and the registration's approved resource, the profile's target
+/// and its audience all equal the import endpoint exactly. Selecting a
+/// dialect without such an import role never makes it eligible.
 fn oauth_binding_allowed(
     config: &BrokerConfig,
     definition: &ImportedServiceDefinition,
-    binding: &agent_access_provider::ImportedCredentialBinding,
+    binding: &ImportedCredentialBinding,
 ) -> bool {
-    if binding.mechanism != agent_access_provider::ImportedAuthMechanism::Oauth {
+    if binding.mechanism != ImportedAuthMechanism::Oauth {
         return true;
     }
+    let Some(companion) = config
+        .providers
+        .registry()
+        .import_authentication(&definition.adapter_kind)
+    else {
+        return false;
+    };
     let Some(registration) = binding
         .registration_id
         .as_ref()
@@ -242,15 +257,59 @@ fn oauth_binding_allowed(
     else {
         return false;
     };
-    binding.adapter_id.as_deref() == Some(registration.adapter.as_str())
-        && config
-            .providers
-            .registry()
-            .oauth_dialect(registration.adapter.as_str())
-            .is_some()
+    binding.adapter_id.as_deref() == Some(companion.dialect.id)
+        && registration.adapter.as_str() == companion.dialect.id
         && profile.target == definition.endpoint
         && profile.audience == definition.endpoint
-        && registration.adapter_settings.get("resource") == Some(&definition.endpoint)
+        && (companion.approved_resource)(registration).as_deref()
+            == Some(definition.endpoint.as_str())
+}
+
+/// The safe import-authentication projection: one group per selected import
+/// kind whose adapter declares an OAuth companion, with that companion's
+/// dialect and every operator registration it approves (possibly none). Each
+/// registration carries its issuer, approved resource and permission
+/// profiles, never secrets, secret references or other adapter settings.
+fn import_authentication(config: &BrokerConfig) -> serde_json::Value {
+    let groups = config
+        .providers
+        .registry()
+        .import_authentications()
+        .map(|(kind, companion)| {
+            let registrations = config
+                .oauth
+                .registrations
+                .iter()
+                .filter(|(_, registration)| registration.adapter.as_str() == companion.dialect.id)
+                .filter_map(|(id, registration)| {
+                    let resource = (companion.approved_resource)(registration)?;
+                    let profiles = registration
+                        .permission_profiles
+                        .iter()
+                        .map(|(id, profile)| {
+                            json!({
+                                "id": id,
+                                "scopeMode": profile.scope_mode,
+                                "scopes": profile.requested_scopes(),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    Some(json!({
+                        "id": id,
+                        "issuer": registration.base_url,
+                        "resource": resource,
+                        "permissionProfiles": profiles,
+                    }))
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "importKind": kind,
+                "dialectId": companion.dialect.id,
+                "registrations": registrations,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(groups)
 }
 
 pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &ImportedCatalog) {
@@ -279,7 +338,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
                 .expect("selected mode");
-            let oauth = binding.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth;
+            let oauth = binding.mechanism == ImportedAuthMechanism::Oauth;
             config.credentials.per_user.insert(
                 service.clone(),
                 CredentialConfig {
@@ -799,14 +858,10 @@ pub(super) fn build_providers(
 }
 
 impl BrokerRuntime {
-    /// Only operator-approved, linked OAuth profiles are offered by import administration.
-    pub fn imported_oauth_registrations(&self) -> serde_json::Value {
-        serde_json::Value::Array(self.config.oauth.registrations.iter().filter_map(|(id, r)| {
-            if r.adapter.as_str() != "mcp_oauth" || self.config.providers.registry().oauth_dialect(r.adapter.as_str()).is_none() { return None; }
-            Some(serde_json::json!({"id":id,"adapterId":r.adapter.as_str(),"issuer":r.base_url,
-                "resource":r.adapter_settings.get("resource"),"permissionProfiles":r.permission_profiles.iter()
-                    .map(|(id,p)| serde_json::json!({"id":id,"scopeMode":p.scope_mode,"scopes":p.requested_scopes()})).collect::<Vec<_>>()}))
-        }).collect())
+    /// The safe import-authentication projection offered by import
+    /// administration; see [`import_authentication`].
+    pub fn import_authentication(&self) -> serde_json::Value {
+        import_authentication(&self.config)
     }
 
     /// Validate new or changed bindings. Retained unavailable bindings must not
@@ -829,7 +884,7 @@ impl BrokerRuntime {
     pub fn import_binding_available(
         &self,
         definition: &ImportedServiceDefinition,
-        binding: &agent_access_provider::ImportedCredentialBinding,
+        binding: &ImportedCredentialBinding,
     ) -> bool {
         binding.is_supported() && oauth_binding_allowed(&self.config, definition, binding)
     }

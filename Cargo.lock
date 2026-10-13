@@ -374,6 +374,7 @@ dependencies = [
 name = "agent-access-mcp-upstream"
 version = "0.1.0"
 dependencies = [
+ "agent-access-core",
  "agent-access-provider",
  "async-trait",
  "axum",
@@ -394,6 +395,7 @@ dependencies = [
 name = "agent-access-openapi-upstream"
 version = "0.1.0"
 dependencies = [
+ "agent-access-core",
  "agent-access-provider",
  "async-trait",
  "axum",
@@ -418,7 +420,6 @@ dependencies = [
  "futures-util",
  "hmac",
  "jsonschema",
- "percent-encoding",
  "rand 0.8.6",
  "regex",
  "reqwest",

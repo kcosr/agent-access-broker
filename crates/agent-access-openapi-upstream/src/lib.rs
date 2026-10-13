@@ -4,6 +4,7 @@ mod document;
 mod refs;
 mod transport;
 
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use config::Settings;
@@ -17,8 +18,14 @@ use std::time::{Duration, Instant};
 use transport::*;
 use url::Url;
 
+/// The `openapi_http` import selection. OpenAPI imports use static
+/// credentials only, so it declares no OAuth companion.
+pub fn registration() -> ImportedAdapterRegistration {
+    imported_adapter_registration(&OpenApiAdapter, None)
+}
+
 #[derive(Debug)]
-pub struct OpenApiAdapter;
+struct OpenApiAdapter;
 #[async_trait]
 impl ImportedAdapter for OpenApiAdapter {
     fn kind(&self) -> &'static str {

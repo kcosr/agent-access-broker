@@ -1,7 +1,8 @@
 //! Protocol-specific implementation seam for managed imported services.
-use crate::{
-    BuildContext, DelegatedCredential, ExecutionCredential, ImportedActionDefinition,
-    ImportedServiceDefinition, Provider, ProviderBuildError, ProviderError,
+use super::{ImportedActionDefinition, ImportedDiscoveryCredential, ImportedServiceDefinition};
+use agent_access_provider::{
+    BuildContext, DelegatedCredential, ExecutionCredential, Provider, ProviderBuildError,
+    ProviderError,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -46,10 +47,7 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()?;
         if !definition.connection_settings.is_empty()
-            || matches!(
-                definition.discovery,
-                crate::ImportedDiscoveryCredential::Anonymous
-            )
+            || matches!(definition.discovery, ImportedDiscoveryCredential::Anonymous)
         {
             return Err(
                 "import adapter does not support these connection settings or anonymous discovery"

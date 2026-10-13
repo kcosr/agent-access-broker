@@ -1,5 +1,5 @@
 //! References stay inside typed component locations of the fetched JSON document.
-use agent_access_provider::{BoundedImportSchema, IMPORT_MAX_SCHEMA_DEPTH};
+use agent_access_core::imports::{BoundedImportSchema, IMPORT_MAX_SCHEMA_DEPTH};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

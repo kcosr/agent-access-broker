@@ -71,19 +71,21 @@ export type ImportPreview = {
   expiresAt: string;
   createdBy: string;
 };
+/** An operator OAuth registration an import kind's companion approves. */
 export type ImportOAuthRegistration = {
   id: string;
-  adapterId: "mcp_oauth";
   issuer: string;
   resource: string;
   permissionProfiles: Array<{ id: string; scopeMode: OAuthScopeMode; scopes: string[] }>;
 };
+/** The OAuth companion that authenticates one selected import kind, with the registrations it approves (possibly none). */
+export type ImportAuthentication = { importKind: string; dialectId: string; registrations: ImportOAuthRegistration[] };
 export type ImportSecurityScheme = { name: string; kind: "bearer" | "raw_header"; header?: string };
-export type ImportListResult = { catalogRevision: number; operatorEnabled: boolean; availableKinds: string[]; oauthRegistrations: ImportOAuthRegistration[]; services: ImportedServiceRecord[] };
+export type ImportListResult = { catalogRevision: number; operatorEnabled: boolean; availableKinds: string[]; importAuthentication: ImportAuthentication[]; services: ImportedServiceRecord[] };
 export type ImportScopedMcpIssueCode = "service_unavailable" | "missing_name" | "invalid_name" | "reserved_name" | "duplicate_name" | "projection_budget";
 export type ImportScopedMcp = { ready: boolean; issues: Array<{ code: ImportScopedMcpIssueCode; actions: string[] }>; truncated: boolean };
 export type ImportScopedMcpWarning = { toolIndex: number; proposedAction: string; codes: ImportScopedMcpIssueCode[] };
-export type ImportRecordResult = { catalogRevision: number; operatorAllowed: boolean; oauthRegistrations: ImportOAuthRegistration[]; available?: boolean; unavailableReason?: string | null; scopedMcp: ImportScopedMcp; service: ImportedServiceRecord };
+export type ImportRecordResult = { catalogRevision: number; operatorAllowed: boolean; importAuthentication: ImportAuthentication[]; available?: boolean; unavailableReason?: string | null; scopedMcp: ImportScopedMcp; service: ImportedServiceRecord };
 export type ImportPreviewResult = ImportRecordResult & { scopedMcpWarnings: ImportScopedMcpWarning[]; preview: ImportPreview | null; affectedGrants: string[]; affectedGrantsByAction: Record<string, string[]> };
 export type ImportVersions = { expectedVersion: number; expectedCatalogRevision: number };
 export type ImportSelection = { source: Record<string, unknown>; action: string; label?: string; readOnly: boolean };

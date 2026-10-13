@@ -28,6 +28,7 @@ pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
 use crate::fs_permissions;
+use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
 use crate::network::{
     ClientCaller, EgressProxyEnvironment, HostNetwork, PreparedOutboundTls, preflight_egress_proxy,

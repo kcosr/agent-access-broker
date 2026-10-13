@@ -1,6 +1,7 @@
 //! Synthetic imported adapter: exercises the real DB loader without a network.
 //! Only test registries select it; the broker binary never links it.
 use agent_access_core::BackendRegistry;
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -15,7 +16,10 @@ pub static CONFORMANCE_IMPORT_ADAPTER: ConformanceImportAdapter = ConformanceImp
 /// import adapter.
 pub fn registry() -> BackendRegistry {
     crate::backend_registry()
-        .with_imported_adapters([&CONFORMANCE_IMPORT_ADAPTER as &dyn ImportedAdapter])
+        .with_imported_adapters([imported_adapter_registration(
+            &CONFORMANCE_IMPORT_ADAPTER,
+            None,
+        )])
         .expect("test import adapter registers consistently")
 }
 

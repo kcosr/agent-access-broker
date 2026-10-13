@@ -120,7 +120,18 @@ also includes a same-origin browser portal frontend:
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
   upstream client factories), and the response envelope types (`lib.rs`). It
   contains no backend and does not re-export the backend contract; the host,
-  the binary, and the CLI depend on `agent-access-provider` directly.
+  the binary, and the CLI depend on `agent-access-provider` directly. Its
+  internal `imports` module owns the import adapter contract: imported
+  service/action definitions, bounded import schemas, the `ImportedAdapter`
+  seam, and the opaque `ImportedAdapterRegistration` that the shipped adapter
+  crates build with an internal free function. That contract is Broker
+  implementation, not a provider-author interface.
+- **Import adapter crates** — `agent-access-mcp-upstream` and
+  `agent-access-openapi-upstream` implement the internal import contract and
+  depend on core. Each exports `registration()`; the binary selects imports
+  only through it. The MCP registration contributes its `mcp_oauth` companion
+  dialect as the import-authentication role, and selecting that dialect again
+  is rejected as a duplicate. OpenAPI declares no companion.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.
@@ -216,10 +227,13 @@ policy, then asks the provider to execute.
 ### Backend registration
 
 The broker binary selects the modules it links through `composition()` in the
-broker crate: native backends, OAuth dialects, and import adapters, validated
-once into an immutable `BrokerComposition` that every command and runtime
+broker crate: native backends, OAuth dialects, and import adapters (as the
+opaque registrations their crates' `registration()` returns), validated once
+into an immutable `BrokerComposition` that every command and runtime
 generation shares. Building it rejects invalid identifiers and duplicate
-backend kinds, resource types, dialects, and adapters. Each
+backend kinds, resource types, dialects, and adapters; an import's companion
+dialect counts as selected, so selecting it again with `.oauth(..)` is a
+duplicate. Each
 `BackendRegistration` names a kind, the resource types the
 backend defines, a strict parser for its `[providers.<kind>]` table, and whether
 it is a development fixture. Parsing a configuration routes each provider table
@@ -515,6 +529,11 @@ existence, ownership of a particular object, or an authorization outcome.
   and eligible rejected-probe sessions within a shared two-second budget and
   the parent deadline. Cleanup never changes a known outcome or rejects an OAuth
   token. Existing imports and OAuth connections require no migration or consent.
+  Import eligibility for personal OAuth comes from the selected import kind's
+  companion: the binding must name that companion's dialect, and the companion
+  supplies each registration's validated approved resource, which must equal
+  the endpoint along with the profile's target and audience. Selecting another
+  dialect never makes it eligible for an import.
   The adapter supports bounded JSON and finite SSE responses; server requests
   (including legacy `ping`), stream resumption and tool replay are unsupported.
   A legacy disconnect does not prove upstream cancellation. Redirects are

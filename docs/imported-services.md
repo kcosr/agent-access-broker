@@ -200,7 +200,16 @@ token work until expiry, then require a new connection. Refresh and MCP tool cal
 are single-attempt operations; an upstream 401 never replays an imported write.
 
 Other authentication adapters may be recorded as unsupported metadata, but cannot
-execute. OpenAPI imports use the same lifecycle with a separate document parser,
+execute. Import administration responses include an `importAuthentication` list
+with one entry per selected import kind that has an OAuth companion: its
+`importKind`, the companion `dialectId`, and the operator `registrations` it
+approves (possibly none), each with `id`, `issuer`, approved `resource` and
+`permissionProfiles`. It contains no secrets, secret references or other
+adapter settings. The portal offers only registrations from the entry for the
+import's kind whose resource equals the endpoint, and copies that entry's
+dialect ID into new bindings. A stored binding naming a dialect that is not the
+kind's current companion, or whose kind is unavailable, stays unchanged and
+unavailable; it is never rewritten to another registration. OpenAPI imports use the same lifecycle with a separate document parser,
 security-scheme picker and HTTP executor; see [OpenAPI setup](imported-openapi.md).
 Upstream stdio process hosting remains outside this release.
 

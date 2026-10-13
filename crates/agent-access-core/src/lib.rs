@@ -26,6 +26,7 @@ mod backends;
 mod config_error;
 mod fs_permissions;
 mod import_names;
+pub mod imports;
 mod imports_config;
 mod invocation_limits;
 mod managed_store;

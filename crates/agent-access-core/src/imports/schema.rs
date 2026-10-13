@@ -50,7 +50,7 @@ fn inspect_schema(schema: &Value) -> Result<(), String> {
         }
         Ok(())
     };
-    crate::visit_import_schema_nodes(schema, |node| {
+    super::visit_import_schema_nodes(schema, |node| {
         let Some(fields) = node.as_object() else {
             return Ok(());
         };

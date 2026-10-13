@@ -1,7 +1,7 @@
 //! Host-side preparation for administrative discovery and catalog publication.
 use super::*;
+use crate::imports::{ImportedDiscovery, ImportedDiscoveryCredential};
 use crate::{ImportedServiceStatus, assign_imported_action_names};
-use agent_access_provider::{ImportedDiscovery, ImportedDiscoveryCredential};
 
 impl BrokerRuntime {
     pub async fn discover_imported_service(
@@ -43,7 +43,7 @@ impl BrokerRuntime {
         {
             if let Some(binding) = record.definition.execution_bindings.iter().find(|b| {
                 b.owner_mode == ImportedCredentialMode::PerUser
-                    && b.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth
+                    && b.mechanism == crate::imports::ImportedAuthMechanism::Oauth
             }) {
                 if !self.import_binding_available(&record.definition, binding) {
                     return Err(import_control_unavailable());
@@ -96,10 +96,10 @@ impl BrokerRuntime {
                     &ring,
                 )
             };
-            use agent_access_provider::ImportedDiscoveryAuthentication::{Delegated, Static};
+            use crate::imports::ImportedDiscoveryAuthentication::{Delegated, Static};
             let execution = match &selected.definition.discovery {
                 ImportedDiscoveryCredential::Anonymous => {
-                    agent_access_provider::ImportedDiscoveryAuthentication::Anonymous
+                    crate::imports::ImportedDiscoveryAuthentication::Anonymous
                 }
                 ImportedDiscoveryCredential::Execution => {
                     Static(slot(ImportedCredentialPurpose::Execution)?)

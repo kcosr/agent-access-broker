@@ -413,7 +413,7 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
         key="edit"
         principal={session.principal ?? ""}
         data={dialog.data}
-        registrations={dialog.data.oauthRegistrations ?? imports?.oauthRegistrations ?? []}
+        authentication={dialog.data.importAuthentication ?? imports?.importAuthentication ?? []}
         availableKinds={imports?.availableKinds ?? []}
         onClose={close}
         onSave={(definition, confirmed) => actions.update(dialog.data, definition, confirmed)}

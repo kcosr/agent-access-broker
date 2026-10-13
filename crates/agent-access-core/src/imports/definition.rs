@@ -1,5 +1,5 @@
 //! Vendor-independent, secret-free definitions shared by import adapters and the host.
-use crate::{is_action_name, is_service_name};
+use agent_access_provider::{is_action_name, is_service_name};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -502,7 +502,7 @@ pub fn validate_import_schema(schema: &Value) -> Result<(), String> {
         }
         Ok(())
     })?;
-    crate::BoundedImportSchema::compile(schema)?;
+    super::BoundedImportSchema::compile(schema)?;
     Ok(())
 }
 

@@ -1,4 +1,5 @@
 //! The modules this broker distribution links.
+use agent_access_broker_host::ImportedAdapterRegistration;
 use agent_access_broker_host::{BrokerComposition, CompositionError};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
@@ -7,9 +8,7 @@ use agent_access_fake::{FAKE_BACKEND, OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 use agent_access_gitlab::GITLAB_BACKEND;
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use agent_access_jira::JIRA_BACKEND;
-use agent_access_mcp_upstream::{MCP_OAUTH_DIALECT, McpAdapter};
-use agent_access_openapi_upstream::OpenApiAdapter;
-use agent_access_provider::{BackendRegistration, ImportedAdapter, OAuthDialectRegistration};
+use agent_access_provider::{BackendRegistration, OAuthDialectRegistration};
 use agent_access_teams::TEAMS_BACKEND;
 
 /// Native providers, in resource-type listing order. The development
@@ -25,12 +24,18 @@ static NATIVES: [&BackendRegistration; 8] = [
     &TEAMS_BACKEND,
     &OAUTH_STUB_BACKEND,
 ];
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
-    &GOOGLE_OAUTH_DIALECT,
-    &MCP_OAUTH_DIALECT,
-    &STUB_OAUTH_DIALECT,
-];
-static IMPORT_ADAPTERS: [&dyn ImportedAdapter; 2] = [&McpAdapter, &OpenApiAdapter];
+/// OAuth dialects selected on their own. The MCP import selection
+/// contributes its `mcp_oauth` companion, so it is not listed here.
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] =
+    [&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT];
+
+/// Shipped import adapters, selected through their registrations.
+fn import_adapters() -> [ImportedAdapterRegistration; 2] {
+    [
+        agent_access_mcp_upstream::registration(),
+        agent_access_openapi_upstream::registration(),
+    ]
+}
 
 /// Every module this broker can configure. The development fixtures
 /// (`fake`, `oauth_stub` and the `stub` dialect) are selected but stay
@@ -43,7 +48,7 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
     for dialect in OAUTH_DIALECTS {
         builder = builder.oauth(dialect);
     }
-    for adapter in IMPORT_ADAPTERS {
+    for adapter in import_adapters() {
         builder = builder.import_adapter(adapter);
     }
     builder.build()
@@ -57,7 +62,7 @@ pub fn backend_registry() -> BackendRegistry {
         .expect("linked backends register consistently")
         .with_oauth_dialects(OAUTH_DIALECTS)
         .expect("linked OAuth dialects register consistently")
-        .with_imported_adapters(IMPORT_ADAPTERS)
+        .with_imported_adapters(import_adapters())
         .expect("linked imported adapters register consistently")
 }
 
@@ -89,6 +94,10 @@ mod tests {
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "mcp_oauth"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
+        assert_eq!(
+            composition.import_kinds().collect::<Vec<_>>(),
+            ["mcp_http", "openapi_http"]
+        );
         assert_eq!(
             composition
                 .resource_types()

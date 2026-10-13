@@ -895,3 +895,55 @@ async fn access_only_and_rotation_scopes_follow_actual_grant_evidence() {
         }
     }
 }
+
+#[tokio::test]
+async fn the_import_companion_approves_only_the_validated_resource() {
+    let fixture = Fixture::new(OAuthClientAuth::None).await;
+    let resource = fixture.config.adapter_settings["resource"].clone();
+    let approved = IMPORT_AUTHENTICATION.approved_resource;
+    assert_eq!(approved(&fixture.config), Some(resource.clone()));
+    let mut mismatched = fixture.config.clone();
+    mismatched
+        .permission_profiles
+        .get_mut("read")
+        .unwrap()
+        .target = format!("{resource}/other");
+    assert_eq!(approved(&mismatched), None);
+    let mut missing = fixture.config.clone();
+    missing.adapter_settings.remove("token_endpoint");
+    assert_eq!(approved(&missing), None);
+}
+
+#[test]
+fn the_mcp_selection_contributes_its_companion_exactly_once() {
+    use agent_access_core::BackendRegistry;
+    let registry = BackendRegistry::empty()
+        .with_imported_adapters([crate::registration()])
+        .unwrap();
+    assert_eq!(
+        registry.oauth_dialect_ids().collect::<Vec<_>>(),
+        ["mcp_oauth"]
+    );
+    assert_eq!(
+        registry
+            .import_authentication("mcp_http")
+            .map(|companion| companion.dialect.id),
+        Some("mcp_oauth")
+    );
+    // Selecting the same static again is a duplicate, in either order.
+    let duplicate = ["OAuth dialect mcp_oauth is registered more than once"];
+    assert_eq!(
+        registry
+            .with_oauth_dialects([&MCP_OAUTH_DIALECT])
+            .unwrap_err(),
+        duplicate
+    );
+    assert_eq!(
+        BackendRegistry::empty()
+            .with_oauth_dialects([&MCP_OAUTH_DIALECT])
+            .unwrap()
+            .with_imported_adapters([crate::registration()])
+            .unwrap_err(),
+        duplicate
+    );
+}

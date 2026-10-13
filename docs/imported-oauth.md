@@ -52,6 +52,10 @@ target = "https://tools.example.com/mcp"
 
 Keep the exact endpoint allowed under `[imports]` with `allowed_kinds =
 ["mcp_http"]`, as described in [imported services](imported-services.md).
+The `mcp_oauth` dialect is the OAuth companion of the `mcp_http` import kind:
+the Broker selects it together with MCP imports, and only an import of that
+kind can bind its registrations. Other dialects, including `google` and the
+development `stub`, are never offered to imports.
 `base_url` is the exact issuer identifier;
 `resource`, profile `audience`, profile `target`, and the imported MCP endpoint must
 match exactly. This adapter accepts HTTPS URLs without user information, queries,

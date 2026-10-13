@@ -1571,8 +1571,7 @@ mod tests {
 
     #[test]
     fn schemas_express_locator_and_build_alternatives() {
-        let validator =
-            |action| agent_access_provider::BoundedImportSchema::compile(&schema(action)).unwrap();
+        let validator = |action| jsonschema::validator_for(&schema(action)).unwrap();
         let build = validator("build.view");
         for valid in [
             json!({"controller":"team-ci","job":"a","buildNumber":1}),

@@ -15,7 +15,7 @@ import { inlineFrame } from "../src/features/catalog/catalog-ui";
 const tool = (action: string, readOnly = false): ImportActionDefinition => ({ action, source: { toolName: action }, description: action, inputSchema: { type: "object" }, annotations: {}, readOnly });
 function fixture(): ImportPreviewResult {
   return {
-    operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], oauthRegistrations: [], catalogRevision: 4, affectedGrants: ["grant1", "removed-grant"], affectedGrantsByAction: { read: ["grant1"], removed: ["removed-grant"] },
+    operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], catalogRevision: 4, affectedGrants: ["grant1", "removed-grant"], affectedGrantsByAction: { read: ["grant1"], removed: ["removed-grant"] },
     service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], connectionSettings: {}, discovery: { kind: "execution" }, transportAuth: false }, status: "enabled", version: 2, actions: [{ definition: tool("read", true), status: "enabled", version: 1, definitionHash: "old" }, { definition: tool("removed", true), status: "quarantined", version: 1, definitionHash: "old" }], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" },
     preview: { service: "metrics", serviceVersion: 2, catalogRevision: 4, configRevision: "cfg", credentialVersions: {}, manifestHash: "hash", manifest: { protocolVersion: "fixture", metadata: {}, tools: [{ definition: tool("read"), unsupportedReason: null, readOnlyHint: false }, { definition: tool("new"), unsupportedReason: null, readOnlyHint: true }, { definition: tool("unsupported"), unsupportedReason: "Requires streaming", readOnlyHint: true }] }, createdAt: "", expiresAt: "", createdBy: "admin" },
   };
@@ -134,7 +134,7 @@ test("retained unavailable selections can be maintained, but not added or duplic
 describe("catalog service index", () => {
   const imports = () => {
     const data = fixture();
-    return { catalogRevision: 4, operatorEnabled: true, availableKinds: ["mcp_http"], oauthRegistrations: [], services: [data.service] };
+    return { catalogRevision: 4, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [data.service] };
   };
   test("merges built-in and imported services with status, action and manager counts", () => {
     const list = imports();

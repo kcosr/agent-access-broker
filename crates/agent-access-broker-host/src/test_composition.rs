@@ -25,16 +25,12 @@ pub(crate) fn backend_registry() -> BackendRegistry {
         &OAUTH_STUB_BACKEND,
     ])
     .expect("linked backends register consistently")
-    .with_oauth_dialects([
-        &GOOGLE_OAUTH_DIALECT,
-        &agent_access_mcp_upstream::MCP_OAUTH_DIALECT,
-        &STUB_OAUTH_DIALECT,
-    ])
+    .with_oauth_dialects([&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT])
     .expect("linked OAuth dialects register consistently")
+    // The MCP selection contributes its mcp_oauth companion dialect.
     .with_imported_adapters([
-        &agent_access_mcp_upstream::McpAdapter as &dyn agent_access_provider::ImportedAdapter,
-        &agent_access_openapi_upstream::OpenApiAdapter
-            as &dyn agent_access_provider::ImportedAdapter,
+        agent_access_mcp_upstream::registration(),
+        agent_access_openapi_upstream::registration(),
     ])
     .expect("linked imported adapters register consistently")
 }

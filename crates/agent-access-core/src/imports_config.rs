@@ -90,11 +90,13 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::imports::{
+        ImportedActionDefinition, ImportedAdapter, ImportedDiscovery,
+        ImportedDiscoveryAuthentication, ImportedServiceDefinition, imported_adapter_registration,
+    };
     use crate::{BackendRegistry, ProvidersConfig, parse_broker_config_raw};
     use agent_access_provider::{
-        BuildContext, ExecutionCredential, ImportedActionDefinition, ImportedAdapter,
-        ImportedDiscovery, ImportedDiscoveryAuthentication, ImportedServiceDefinition, Provider,
-        ProviderBuildError, ProviderError,
+        BuildContext, ExecutionCredential, Provider, ProviderBuildError, ProviderError,
     };
     use std::sync::Arc;
 
@@ -150,8 +152,8 @@ mod tests {
     fn import_errors(environment: &str, enable_fake_service: bool, kind: &str) -> Vec<String> {
         let registry = BackendRegistry::empty()
             .with_imported_adapters([
-                &DEVELOPMENT_ADAPTER as &dyn ImportedAdapter,
-                &PRODUCTION_ADAPTER as &dyn ImportedAdapter,
+                imported_adapter_registration(&DEVELOPMENT_ADAPTER, None),
+                imported_adapter_registration(&PRODUCTION_ADAPTER, None),
             ])
             .unwrap();
         let mut config = parse_broker_config_raw(

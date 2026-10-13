@@ -1,5 +1,6 @@
 //! The backends a broker build links, and the `[providers]` tables that
 //! configure them.
+use crate::imports::{ImportOAuthCompanion, ImportedAdapter, ImportedAdapterRegistration};
 use agent_access_provider::{
     BackendConfig, BackendRegistration, GIT_REPOSITORY_RESOURCE, OAuthDialectRegistration,
     ResourceTypeDescriptor, ResourceTypeRegistry, is_service_name,
@@ -15,14 +16,15 @@ use toml::de::{DeValue, ValueDeserializer};
 /// the Git gateway's repositories.
 static HOST_RESOURCE_TYPE: &ResourceTypeDescriptor = &GIT_REPOSITORY_RESOURCE;
 
-/// The backends and OAuth dialects this build can configure, and every
-/// resource type they and the broker define. Built once by the broker binary.
+/// The backends, OAuth dialects and import adapters this build can
+/// configure, and every resource type they and the broker define. Built once
+/// by the broker binary.
 #[derive(Debug)]
 pub struct BackendRegistry {
     registrations: Vec<&'static BackendRegistration>,
     resource_types: ResourceTypeRegistry,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
-    imported_adapters: Vec<&'static dyn agent_access_provider::ImportedAdapter>,
+    imported_adapters: Vec<ImportedAdapterRegistration>,
 }
 
 impl BackendRegistry {
@@ -67,29 +69,91 @@ impl BackendRegistry {
         }
     }
 
+    /// Adds the selected import adapters. An adapter's OAuth companion is
+    /// selected with it; selecting that dialect again, here or through
+    /// [`Self::with_oauth_dialects`], is rejected as a duplicate.
     pub fn with_imported_adapters(
         mut self,
-        adapters: impl IntoIterator<Item = &'static dyn agent_access_provider::ImportedAdapter>,
+        registrations: impl IntoIterator<Item = ImportedAdapterRegistration>,
     ) -> Result<Self, Vec<String>> {
-        for adapter in adapters {
-            if !is_service_name(adapter.kind()) || self.imported_adapter(adapter.kind()).is_some() {
-                return Err(vec![
-                    "import adapter kind is invalid or registered more than once".into(),
-                ]);
+        let mut errors = Vec::new();
+        for registration in registrations {
+            let kind = registration.kind();
+            if !is_service_name(kind) {
+                errors.push(format!(
+                    "import adapter kind {kind} is not a valid service name"
+                ));
+            } else if self.imported_adapter(kind).is_some() {
+                errors.push(format!(
+                    "import adapter kind {kind} is registered more than once"
+                ));
+            } else if let Some(companion) = registration.authentication()
+                && let Err(error) = self.add_oauth_dialect(companion.dialect)
+            {
+                errors.push(error);
+            } else {
+                self.imported_adapters.push(registration);
             }
-            self.imported_adapters.push(adapter);
         }
-        Ok(self)
+        if errors.is_empty() {
+            Ok(self)
+        } else {
+            Err(errors)
+        }
     }
 
-    pub fn imported_adapter(
-        &self,
-        kind: &str,
-    ) -> Option<&'static dyn agent_access_provider::ImportedAdapter> {
+    pub fn imported_adapter(&self, kind: &str) -> Option<&'static dyn ImportedAdapter> {
+        self.imported_adapter_registration(kind)
+            .map(ImportedAdapterRegistration::adapter)
+    }
+
+    /// Selected import kinds, in selection order.
+    pub fn imported_adapter_kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.imported_adapters
             .iter()
-            .copied()
-            .find(|adapter| adapter.kind() == kind)
+            .map(ImportedAdapterRegistration::kind)
+    }
+
+    /// Each selected import kind whose adapter declares an OAuth companion,
+    /// with that companion, in selection order.
+    pub fn import_authentications(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &ImportOAuthCompanion)> + '_ {
+        self.imported_adapters
+            .iter()
+            .filter_map(|registration| Some((registration.kind(), registration.authentication()?)))
+    }
+
+    /// The OAuth companion that authenticates imports of `kind`, if the
+    /// selected adapter declares one.
+    pub fn import_authentication(&self, kind: &str) -> Option<&ImportOAuthCompanion> {
+        self.imported_adapter_registration(kind)?.authentication()
+    }
+
+    fn imported_adapter_registration(&self, kind: &str) -> Option<&ImportedAdapterRegistration> {
+        self.imported_adapters
+            .iter()
+            .find(|registration| registration.kind() == kind)
+    }
+
+    fn add_oauth_dialect(
+        &mut self,
+        dialect: &'static OAuthDialectRegistration,
+    ) -> Result<(), String> {
+        if !is_service_name(dialect.id) {
+            Err(format!(
+                "OAuth dialect {} is not a valid identifier",
+                dialect.id
+            ))
+        } else if self.oauth_dialect(dialect.id).is_some() {
+            Err(format!(
+                "OAuth dialect {} is registered more than once",
+                dialect.id
+            ))
+        } else {
+            self.oauth_dialects.push(dialect);
+            Ok(())
+        }
     }
 
     /// Adds the selected OAuth dialects, selectable by a registration's
@@ -100,18 +164,8 @@ impl BackendRegistry {
     ) -> Result<Self, Vec<String>> {
         let mut errors = Vec::new();
         for dialect in dialects {
-            if !is_service_name(dialect.id) {
-                errors.push(format!(
-                    "OAuth dialect {} is not a valid identifier",
-                    dialect.id
-                ));
-            } else if self.oauth_dialect(dialect.id).is_some() {
-                errors.push(format!(
-                    "OAuth dialect {} is registered more than once",
-                    dialect.id
-                ));
-            } else {
-                self.oauth_dialects.push(dialect);
+            if let Err(error) = self.add_oauth_dialect(dialect) {
+                errors.push(error);
             }
         }
         if errors.is_empty() {

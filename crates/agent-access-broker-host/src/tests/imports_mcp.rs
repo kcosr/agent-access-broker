@@ -1,15 +1,15 @@
 //! Real imported HTTP MCP providers use ordinary broker policy and credentials.
 use super::*;
+use agent_access_core::imports::{
+    ImportedActionDefinition, ImportedCredentialBinding, ImportedCredentialDelivery,
+    ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscoveryCredential,
+    ImportedInvocationLimit, ImportedServiceDefinition,
+};
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ImportedActionStatus,
     ImportedActionWrite, ImportedSecretWriteRequest, ImportedServiceStatus,
     ImportedServiceUpdateRequest, ImportsConfig, ManagedPolicyGrantCreateRequest, ProvidersConfig,
-};
-use agent_access_provider::{
-    ImportedActionDefinition, ImportedCredentialBinding, ImportedCredentialDelivery,
-    ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscoveryCredential,
-    ImportedInvocationLimit, ImportedServiceDefinition,
 };
 use axum::{Json, extract::State, http::HeaderMap, routing::post};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

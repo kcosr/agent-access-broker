@@ -58,7 +58,7 @@ fn accept(runtime: &BrokerRuntime, service: &str, name: &str) -> ImportedService
     let mut record = runtime.imported_catalog().service(service).unwrap().clone();
     record.status = ImportedServiceStatus::Enabled;
     record.actions.push(ImportedActionRecord {
-        definition: agent_access_provider::ImportedActionDefinition {
+        definition: agent_access_core::imports::ImportedActionDefinition {
             action: name.into(),
             ..conformance_import_action()
         },

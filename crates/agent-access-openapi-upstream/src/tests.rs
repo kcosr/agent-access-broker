@@ -546,3 +546,13 @@ fn scoped_mcp_names_use_exact_operation_ids_or_saved_unnamed_action_ids() {
         assert!(OpenApiAdapter.scoped_mcp_name(&action).is_err());
     }
 }
+
+#[test]
+fn the_openapi_selection_declares_no_oauth_companion() {
+    let registry = agent_access_core::BackendRegistry::empty()
+        .with_imported_adapters([crate::registration()])
+        .unwrap();
+    assert!(registry.imported_adapter("openapi_http").is_some());
+    assert!(registry.import_authentication("openapi_http").is_none());
+    assert_eq!(registry.oauth_dialect_ids().count(), 0);
+}

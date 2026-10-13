@@ -20,6 +20,9 @@ mod test_composition;
 #[cfg(test)]
 mod tests;
 
+/// The opaque import selection [`BrokerCompositionBuilder::import_adapter`]
+/// takes; shipped adapter crates return one from `registration()`.
+pub use agent_access_core::imports::ImportedAdapterRegistration;
 pub use application::{AssemblyIdentity, BrokerApplication, BrokerExit};
 pub use build_status::{BrokerBuildStatus, BuildProvenance};
 pub use composition::{BrokerComposition, BrokerCompositionBuilder, CompositionError};

@@ -38,6 +38,20 @@ All notable changes to this project are documented in this file.
   `base_url`; configure both, pointing at the same test server. The fixture
   still requires a non-production deployment with
   `deployment.enable_fake_service = true`.
+- Import administration responses (`GET /v1/admin/imports`, import inspect,
+  preview and mutation results) replace `oauthRegistrations` with
+  `importAuthentication`: one entry per selected import kind with an OAuth
+  companion, carrying `importKind`, `dialectId` and its approved
+  `registrations` (possibly empty). Registrations no longer carry `adapterId`.
+- The import adapter contract (`ImportedAdapter`, imported definitions and
+  bounded import schemas) moved from `agent-access-provider` to core's internal
+  `imports` module. `BrokerCompositionBuilder::import_adapter` takes the opaque
+  `ImportedAdapterRegistration` returned by
+  `agent_access_mcp_upstream::registration()` and
+  `agent_access_openapi_upstream::registration()`; `McpAdapter`,
+  `OpenApiAdapter` and `MCP_OAUTH_DIALECT` are no longer exported, and the MCP
+  registration supplies the `mcp_oauth` dialect. Selecting that dialect again
+  with `.oauth(..)` is rejected as a duplicate.
 
 ### Added
 
