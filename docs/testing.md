@@ -151,7 +151,11 @@ configuration configures, built for each generation, while configuration
 validation, admission and generation ownership still apply.
 `RunningBroker::audit` and `managed_store` give read-only views of the
 fixture's stores; the views keep the fixture directory and stay readable after
-`join`. `portal_service_catalog` exports the grant catalog that the portal
+`join`. Startup creates an empty audit store, so a test that checks that a
+value is absent from the audit first requires the exercised request's records
+with `AuditStoreView::require_request` or `require_action` (host unit tests use
+`require_audit_request` and `require_audit_action`); otherwise the check would
+pass if nothing were audited. `portal_service_catalog` exports the grant catalog that the portal
 conformance fixture records. The feature adds construction and control APIs
 only. Release builds must not enable it, and test binaries into which Cargo
 unifies it keep production semantics.
