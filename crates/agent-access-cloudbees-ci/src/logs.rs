@@ -1,15 +1,29 @@
 //! Bounded consoleText reads. Source positions always count entity bytes,
 //! never UTF-8 replacement bytes or Jenkins' annotated progressive-log offsets.
 use super::*;
-use agent_access_provider::OpaqueTokenSigner;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use agent_access_provider::{
+    ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
+    ContinuationSigner,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURSOR_CONTEXT: &[u8] = b"cloudbees/log-read/cursor/v2\0";
-const PREFIX_CONTEXT: &[u8] = b"cloudbees/log-read/prefix/v2\0";
+/// Head and search continuations. They carry the next source position and a
+/// keyed commitment to the consumed prefix, and expire after 15 minutes;
+/// without a configured stable key a reload or restart invalidates them.
+const LOG_CURSORS: ContinuationFamily = ContinuationFamily::new(
+    "cloudbees_ci",
+    "build-log-cursor",
+    3,
+    ContinuationLifetime::StableWhenConfigured,
+    CURSOR_PAYLOAD_BYTES,
+)
+.expires_after(Duration::from_secs(900));
+/// An 8-byte source position and a 32-byte prefix commitment.
+const CURSOR_PAYLOAD_BYTES: usize = 8 + 32;
+const CURSOR_MAX_BYTES: usize = LOG_CURSORS.max_token_bytes();
+const PREFIX_COMMITMENT: &str = "consumedPrefix";
 const CONTEXT_BYTES: u64 = 256;
 
 pub(super) fn default_scan_limit() -> u64 {
@@ -36,7 +50,7 @@ pub(super) fn input_properties() -> serde_json::Map<String, Value> {
         "mode":{"type":"string","enum":["head","tail","search"],"default":"tail"},
         "maxBytes":{"type":"integer","minimum":1024,"maximum":65536,"default":16384,
             "description":"Returned UTF-8 text budget, independent of the provider scan ceiling."},
-        "cursor":{"type":"string","minLength":1,"maxLength":2048,
+        "cursor":{"type":"string","minLength":1,"maxLength":CURSOR_MAX_BYTES,
             "description":"Opaque head/search continuation. Keep mode, query and output settings unchanged; each page rescans its prefix."},
         "query":{"type":"string","minLength":1,"maxLength":256,
             "description":"Search only: case-sensitive literal, at most 256 UTF-8 bytes. No regular expressions."},
@@ -93,7 +107,7 @@ impl<'a> LogInput<'a> {
         };
         let cursor = optional_string("cursor")?;
         let query = optional_string("query")?;
-        if cursor.is_some_and(|c| c.is_empty() || c.len() > 2048) {
+        if cursor.is_some_and(|c| c.is_empty() || c.len() > CURSOR_MAX_BYTES) {
             return Err(input_error(
                 "value_invalid",
                 Some("cursor"),
@@ -135,26 +149,15 @@ impl<'a> LogInput<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Cursor {
-    v: u8,
     position: u64,
-    #[serde(rename = "prefixTag")]
-    prefix_tag: String,
-    expires: u64,
+    prefix: [u8; 32],
 }
 fn hash(value: &impl Serialize) -> String {
     format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(value).expect("serializable log binding"))
     )
-}
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 fn cursor_error() -> ProviderError {
     ProviderError::deny(
@@ -168,84 +171,79 @@ fn signing_error() -> ProviderError {
         "Broker log cursor signing key is unavailable",
     )
 }
+fn cursor_failure(error: ContinuationError) -> ProviderError {
+    match error {
+        _ if error.is_token_rejection() => cursor_error(),
+        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
+            signing_error()
+        }
+        _ => ProviderError::error(
+            ReasonCode::OperationFailed,
+            "Broker could not encode the log cursor",
+        ),
+    }
+}
 
-fn signing_context(domain: &[u8], binding: &str) -> Vec<u8> {
-    // The request-binding digest is never serialized into the cursor. Including
-    // it in both MAC contexts also prevents cross-context prefix correlation.
-    [domain, binding.as_bytes(), b"\0"].concat()
+/// Binds a cursor to the admitted context and configuration, the numeric
+/// build and every read setting. The binding enters only the MACs, and the
+/// prefix commitment shares it, so a commitment never correlates across
+/// requests.
+fn cursor_binding(
+    request: &ProviderInvocation,
+    configuration: &str,
+    input: &JobInput<'_>,
+    options: &LogInput<'_>,
+) -> ContinuationBinding {
+    LOG_CURSORS
+        .bind(request.context(), configuration)
+        .text("controller", &input.controller)
+        .text("job", &input.job)
+        .optional_number("build", input.build_number)
+        .text("mode", options.mode)
+        .optional_text("query", options.query)
+        .number("maxBytes", options.max_bytes as u64)
+        .number("maxMatches", options.max_matches as u64)
 }
 
 fn verify_prefix(
-    signer: &OpaqueTokenSigner,
-    binding: &str,
+    signer: &ContinuationSigner,
+    binding: &ContinuationBinding,
     digest: &[u8; 32],
-    prefix_tag: &str,
+    prefix: &[u8; 32],
 ) -> Result<(), ProviderError> {
-    if !signer
-        .verify(
-            &signing_context(PREFIX_CONTEXT, binding),
-            digest,
-            prefix_tag,
-        )
-        .map_err(|_| signing_error())?
-    {
-        return Err(cursor_error());
-    }
-    Ok(())
+    signer
+        .verify_commitment(binding, PREFIX_COMMITMENT, digest, prefix)
+        .map_err(cursor_failure)
 }
 
 fn decode_cursor(
-    signer: &OpaqueTokenSigner,
+    signer: &ContinuationSigner,
     value: &str,
-    binding: &str,
+    binding: &ContinuationBinding,
     cap: u64,
 ) -> Result<Cursor, ProviderError> {
-    let (payload, signature) = value.split_once('.').ok_or_else(cursor_error)?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|_| cursor_error())?;
-    if !signer
-        .verify(&signing_context(CURSOR_CONTEXT, binding), &bytes, signature)
-        .map_err(|_| signing_error())?
-    {
+    let payload = signer.open(binding, value).map_err(cursor_failure)?;
+    let (position, prefix) = payload.split_first_chunk::<8>().ok_or_else(cursor_error)?;
+    let position = u64::from_be_bytes(*position);
+    let prefix = <[u8; 32]>::try_from(prefix).map_err(|_| cursor_error())?;
+    if position == 0 || position >= cap {
         return Err(cursor_error());
     }
-    let cursor: Cursor = serde_json::from_slice(&bytes).map_err(|_| cursor_error())?;
-    if cursor.v != 2
-        || cursor.position == 0
-        || cursor.position >= cap
-        || cursor.expires <= now()
-        || cursor.expires > now().saturating_add(900)
-    {
-        return Err(cursor_error());
-    }
-    Ok(cursor)
+    Ok(Cursor { position, prefix })
 }
 fn encode_cursor(
-    signer: &OpaqueTokenSigner,
-    binding: &str,
+    signer: &ContinuationSigner,
+    binding: &ContinuationBinding,
     position: u64,
     digest: &[u8; 32],
 ) -> Result<String, ProviderError> {
-    let prefix_tag = signer
-        .sign(&signing_context(PREFIX_CONTEXT, binding), digest)
-        .map_err(|_| signing_error())?;
-    let bytes = serde_json::to_vec(&Cursor {
-        v: 2,
-        position,
-        prefix_tag,
-        expires: now().saturating_add(900),
-    })
-    .map_err(|_| {
-        ProviderError::error(
-            ReasonCode::OperationFailed,
-            "Broker could not encode the log cursor",
-        )
-    })?;
-    let signature = signer
-        .sign(&signing_context(CURSOR_CONTEXT, binding), &bytes)
-        .map_err(|_| signing_error())?;
-    Ok(format!("{}.{}", URL_SAFE_NO_PAD.encode(bytes), signature))
+    let prefix = signer
+        .commit(binding, PREFIX_COMMITMENT, digest)
+        .map_err(cursor_failure)?;
+    let mut payload = Vec::with_capacity(CURSOR_PAYLOAD_BYTES);
+    payload.extend_from_slice(&position.to_be_bytes());
+    payload.extend_from_slice(&prefix);
+    signer.seal(binding, &payload).map_err(cursor_failure)
 }
 
 #[derive(Clone)]
@@ -469,19 +467,7 @@ impl CloudbeesCiProvider {
         deadline: tokio::time::Instant,
     ) -> Result<ProviderResult, ProviderError> {
         let options = input.log.as_ref().expect("parsed log input");
-        // The principal entry keeps the identity's established JSON shape, so
-        // existing cursors keep their binding hash.
-        let identity = request.identity();
-        let principal =
-            json!({"principal":identity.principal,"authenticated":identity.authenticated});
-        let binding = hash(
-            &json!({"service":request.service(),"action":request.action(),
-            "principal":principal,"credentialMode":request.credential_mode(),
-            "context":request.execution_context(),"provider":self.log_fingerprint,
-            "controller":input.controller,"job":input.job,"build":input.build_number,
-            "mode":options.mode,"query":options.query.map(|q| hash(&q)),
-            "maxBytes":options.max_bytes,"maxMatches":options.max_matches}),
-        );
+        let binding = cursor_binding(request, &self.log_fingerprint, input, options);
         let cursor = options
             .cursor
             .map(|c| decode_cursor(&self.log_signer, c, &binding, self.log_scan_limit))
@@ -593,7 +579,7 @@ impl CloudbeesCiProvider {
                 &self.log_signer,
                 &binding,
                 &scan.prefix_digest(),
-                &cursor.prefix_tag,
+                &cursor.prefix,
             )?;
         }
         let (mut result, stop) = match options.mode {
@@ -1412,10 +1398,10 @@ mod tests {
         assert!(result["nextCursor"].is_null());
     }
 
+    /// A stable key that signs `successes` times, then fails.
     struct FailingSigningKey {
         inner: Arc<dyn agent_access_provider::StableSigningKey>,
-        fail_cursor: bool,
-        fail_prefix: bool,
+        successes: std::sync::atomic::AtomicUsize,
     }
     impl agent_access_provider::StableSigningKey for FailingSigningKey {
         fn hmac_base64url(
@@ -1423,43 +1409,46 @@ mod tests {
             context: &[u8],
             payload: &[u8],
         ) -> Result<String, agent_access_provider::SigningError> {
-            if (self.fail_cursor && context.starts_with(CURSOR_CONTEXT))
-                || (self.fail_prefix && context.starts_with(PREFIX_CONTEXT))
-            {
-                Err(agent_access_provider::SigningError)
-            } else {
-                self.inner.hmac_base64url(context, payload)
-            }
+            use std::sync::atomic::Ordering;
+            self.successes
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .map_err(|_| agent_access_provider::SigningError)?;
+            self.inner.hmac_base64url(context, payload)
         }
+    }
+    fn failing_signer(successes: usize) -> ContinuationSigner {
+        ContinuationSigner::new(Some(Arc::new(FailingSigningKey {
+            inner: agent_access_provider::test_support::test_signing_key(7),
+            successes: successes.into(),
+        })))
+    }
+
+    fn test_binding(family: &ContinuationFamily) -> ContinuationBinding {
+        family.bind(
+            invocation("build.log.read", inputs("head")).context(),
+            "fingerprint",
+        )
     }
 
     #[test]
     fn unavailable_signing_keys_are_broker_errors_for_all_cursor_mac_paths() {
-        let key = agent_access_provider::test_support::test_signing_key(7);
-        let signer = OpaqueTokenSigner::new(Some(key.clone()));
+        let signer = failing_signer(usize::MAX);
+        let binding = test_binding(&LOG_CURSORS);
         let digest: [u8; 32] = Sha256::digest(b"prefix").into();
-        let cursor = encode_cursor(&signer, "binding", 1, &digest).unwrap();
-        let decoded = decode_cursor(&signer, &cursor, "binding", 100).unwrap();
-        let cursor_unavailable = OpaqueTokenSigner::new(Some(Arc::new(FailingSigningKey {
-            inner: key.clone(),
-            fail_cursor: true,
-            fail_prefix: false,
-        })));
-        let prefix_unavailable = OpaqueTokenSigner::new(Some(Arc::new(FailingSigningKey {
-            inner: key,
-            fail_cursor: false,
-            fail_prefix: true,
-        })));
+        let cursor = encode_cursor(&signer, &binding, 1, &digest).unwrap();
+        let decoded = decode_cursor(&signer, &cursor, &binding, 100).unwrap();
+        // Encoding commits to the prefix, then seals; decoding opens, and
+        // the prefix is verified after the rescan.
         for error in [
-            encode_cursor(&cursor_unavailable, "binding", 1, &digest).unwrap_err(),
-            encode_cursor(&prefix_unavailable, "binding", 1, &digest).unwrap_err(),
-            decode_cursor(&cursor_unavailable, &cursor, "binding", 100)
+            encode_cursor(&failing_signer(0), &binding, 1, &digest).unwrap_err(),
+            encode_cursor(&failing_signer(1), &binding, 1, &digest).unwrap_err(),
+            decode_cursor(&failing_signer(0), &cursor, &binding, 100)
                 .err()
                 .unwrap(),
-            verify_prefix(&prefix_unavailable, "binding", &digest, &decoded.prefix_tag)
-                .unwrap_err(),
+            verify_prefix(&failing_signer(0), &binding, &digest, &decoded.prefix).unwrap_err(),
         ] {
             assert_eq!(error.reason_code(), ReasonCode::CursorSigningUnavailable);
+            assert_eq!(error.decision(), agent_access_provider::Decision::Error);
             assert_eq!(
                 error.message,
                 "Broker log cursor signing key is unavailable"
@@ -1467,69 +1456,137 @@ mod tests {
         }
         let other_digest: [u8; 32] = Sha256::digest(b"rewritten prefix").into();
         assert_eq!(
-            verify_prefix(&signer, "binding", &other_digest, &decoded.prefix_tag)
+            verify_prefix(&signer, &binding, &other_digest, &decoded.prefix)
                 .unwrap_err()
                 .reason_code(),
             ReasonCode::InputInvalid
         );
     }
 
-    #[test]
-    fn cursor_exposes_neither_source_digest_nor_request_binding() {
-        let signer = OpaqueTokenSigner::new(None);
+    #[tokio::test]
+    async fn cursor_exposes_neither_source_digest_nor_request_binding() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let server = MockServer::start().await;
+        let ci = provider(&server);
+        let signer = ContinuationSigner::new(None);
         let digest: [u8; 32] = Sha256::digest(b"guessable secret prefix").into();
-        let binding = hash(&"guessable private query and context");
+        let request = InvocationBuilder::from(invocation("build.log.read", inputs("search")))
+            .principal("private-principal")
+            .execution_context("private-context")
+            .build();
+        let mut search = inputs("search");
+        search["query"] = json!("guessable private query");
+        let job = ci.parse("build.log.read", &search).unwrap();
+        let binding = cursor_binding(
+            &request,
+            "private-configuration",
+            &job,
+            job.log.as_ref().unwrap(),
+        );
         let token = encode_cursor(&signer, &binding, 10, &digest).unwrap();
-        let encoded_payload = token.split_once('.').unwrap().0;
-        let bytes = URL_SAFE_NO_PAD.decode(encoded_payload).unwrap();
-        let payload: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(payload["v"], 2);
-        assert_eq!(payload.as_object().unwrap().len(), 4);
-        assert!(payload.get("binding").is_none());
-        assert!(payload.get("prefix").is_none());
-        let public = String::from_utf8(bytes).unwrap();
+        let raw = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        // Version, expiry, position, prefix commitment and MAC only.
+        assert_eq!(raw.len(), 1 + 8 + CURSOR_PAYLOAD_BYTES + 32);
+        assert_eq!(token.len(), CURSOR_MAX_BYTES);
+        let contains = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+        assert!(!contains(&digest));
+        for private in [
+            "guessable private query",
+            "private-principal",
+            "private-context",
+            "private-configuration",
+            "payments/build-api",
+        ] {
+            assert!(!contains(private.as_bytes()), "{private}");
+        }
         let source_hex = digest
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
-        assert!(!public.contains(&source_hex));
-        assert!(!public.contains(&URL_SAFE_NO_PAD.encode(digest)));
-        assert!(!public.contains(&binding));
-        verify_prefix(
-            &signer,
-            &binding,
-            &digest,
-            payload["prefixTag"].as_str().unwrap(),
-        )
-        .unwrap();
-        let other = encode_cursor(&signer, "other context", 10, &digest).unwrap();
-        let other = decode_cursor(&signer, &other, "other context", 100).unwrap();
-        assert_ne!(payload["prefixTag"], other.prefix_tag);
+        assert!(!token.contains(&source_hex));
+        assert!(!token.contains(&URL_SAFE_NO_PAD.encode(digest)));
+        let decoded = decode_cursor(&signer, &token, &binding, 100).unwrap();
+        verify_prefix(&signer, &binding, &digest, &decoded.prefix).unwrap();
+        // The same prefix commits differently under another binding.
+        let other = test_binding(&LOG_CURSORS);
+        let other = encode_cursor(&signer, &other, 10, &digest).unwrap();
+        let other = decode_cursor(&signer, &other, &test_binding(&LOG_CURSORS), 100).unwrap();
+        assert_ne!(decoded.prefix, other.prefix);
     }
 
     #[test]
     fn cursors_expire_and_bind_configuration_without_plaintext_content() {
-        let signer = OpaqueTokenSigner::new(None);
+        let signer = ContinuationSigner::new(None);
+        let binding = test_binding(&LOG_CURSORS);
         let digest: [u8; 32] = Sha256::digest(b"prefix").into();
-        let expired = Cursor {
-            v: 2,
-            position: 1,
-            prefix_tag: signer
-                .sign(&signing_context(PREFIX_CONTEXT, "binding"), &digest)
-                .unwrap(),
-            expires: now() - 1,
-        };
-        let bytes = serde_json::to_vec(&expired).unwrap();
-        let token = format!(
-            "{}.{}",
-            URL_SAFE_NO_PAD.encode(&bytes),
-            signer
-                .sign(&signing_context(CURSOR_CONTEXT, "binding"), &bytes)
-                .unwrap()
+        let prefix = signer.commit(&binding, PREFIX_COMMITMENT, &digest).unwrap();
+        let payload = [1_u64.to_be_bytes().as_slice(), &prefix].concat();
+        let expired = signer
+            .seal_at(
+                &binding,
+                &payload,
+                std::time::SystemTime::now() - Duration::from_secs(901),
+            )
+            .unwrap();
+        let error = decode_cursor(&signer, &expired, &binding, 100)
+            .err()
+            .unwrap();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+        let valid = encode_cursor(&signer, &binding, 1, &digest).unwrap();
+        let other = LOG_CURSORS.bind(
+            invocation("build.log.read", inputs("head")).context(),
+            "other fingerprint",
         );
-        assert!(decode_cursor(&signer, &token, "binding", 100).is_err());
-        let valid = encode_cursor(&signer, "binding", 1, &digest).unwrap();
-        assert!(decode_cursor(&signer, &valid, "other", 100).is_err());
-        assert!(decode_cursor(&signer, &valid, "binding", 1).is_err());
+        assert!(decode_cursor(&signer, &valid, &other, 100).is_err());
+        assert!(decode_cursor(&signer, &valid, &binding, 1).is_err());
+    }
+
+    #[test]
+    fn obsolete_versions_other_purposes_and_oversized_cursors_are_rejected() {
+        let signer = ContinuationSigner::new(None);
+        let digest: [u8; 32] = Sha256::digest(b"prefix").into();
+        let current = test_binding(&LOG_CURSORS);
+        for family in [
+            ContinuationFamily::new(
+                "cloudbees_ci",
+                "build-log-cursor",
+                2,
+                ContinuationLifetime::StableWhenConfigured,
+                CURSOR_PAYLOAD_BYTES,
+            )
+            .expires_after(Duration::from_secs(900)),
+            ContinuationFamily::new(
+                "cloudbees_ci",
+                "build-artifact-cursor",
+                3,
+                ContinuationLifetime::StableWhenConfigured,
+                CURSOR_PAYLOAD_BYTES,
+            )
+            .expires_after(Duration::from_secs(900)),
+        ] {
+            let foreign = encode_cursor(&signer, &test_binding(&family), 1, &digest).unwrap();
+            let error = decode_cursor(&signer, &foreign, &current, 100)
+                .err()
+                .unwrap();
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+            assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+        }
+        // The schema and input bounds equal the exact encoded cursor size.
+        assert_eq!(input_properties()["cursor"]["maxLength"], CURSOR_MAX_BYTES);
+        assert_eq!(CURSOR_MAX_BYTES, 108);
+        let cursor = encode_cursor(&signer, &current, 1, &digest).unwrap();
+        assert_eq!(cursor.len(), CURSOR_MAX_BYTES);
+        for oversized in [format!("{cursor}A"), "A".repeat(2048)] {
+            let input = json!({"mode":"head","cursor":oversized});
+            assert!(LogInput::parse(input.as_object().unwrap()).is_err());
+            assert_eq!(
+                decode_cursor(&signer, &oversized, &current, 100)
+                    .err()
+                    .unwrap()
+                    .reason_code(),
+                ReasonCode::InputInvalid
+            );
+        }
     }
 }

@@ -49,7 +49,7 @@ pub struct CloudbeesCiProvider {
     download_idle_timeout: Duration,
     request_timeout: Duration,
     log_scan_limit: u64,
-    log_signer: agent_access_provider::OpaqueTokenSigner,
+    log_signer: agent_access_provider::ContinuationSigner,
     log_fingerprint: String,
 }
 
@@ -120,7 +120,7 @@ impl CloudbeesCiProvider {
         Ok(Self {
             controllers,
             log_scan_limit,
-            log_signer: agent_access_provider::OpaqueTokenSigner::new(None),
+            log_signer: agent_access_provider::ContinuationSigner::new(None),
             log_fingerprint,
             response_limit: limits.max_upstream_response_bytes.min(JSON_LIMIT),
             download_limit: limits.max_download_bytes,
@@ -1426,7 +1426,7 @@ impl BackendConfig for CloudbeesCiProviderConfig {
         let mut provider =
             CloudbeesCiProvider::new(self.clone(), host.limits().clone(), host.clients())?;
         provider.log_signer =
-            agent_access_provider::OpaqueTokenSigner::new(host.stable_signing_key().cloned());
+            agent_access_provider::ContinuationSigner::new(host.stable_signing_key().cloned());
         Ok(Arc::new(provider))
     }
 }
