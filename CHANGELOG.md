@@ -405,8 +405,11 @@ All notable changes to this project are documented in this file.
   `retrySafe: false`) and `applied_unverified(stage, safe_locators)`.
   `ProviderError::with_mutation_receipt` attaches one to a failure's result,
   keeping its other fields, `ProviderError::or_mutation_receipt` attaches one
-  unless the error already reports a `mutationStatus`, and
-  `MutationReceipt::write_into` writes one into a result value.
+  unless the error already reports a `mutationStatus`,
+  `ProviderError::unverified_after_mutation` reports a failed read-back after an
+  applied write as `applied_unverified` (keeping throttling's
+  `mutation_verification_failed`), and `MutationReceipt::write_into` writes one
+  into a result value.
   `MutationStatus` names the non-exhaustive status vocabulary.
 
 ### Changed

@@ -1100,9 +1100,13 @@ value with `write_into`:
 | `MutationReceipt::unknown()` | `unknown` | `false` | A write that may have reached the upstream without a definitive answer: a timeout, transport failure, stalled upload, unrecognized `UpstreamError` or 5xx response, with its ordinary reason. Also a batch that failed after any item may have applied, alongside its partial result. |
 | `MutationReceipt::applied_unverified(stage, safe_locators)` | `applied_unverified` | `false` | A write the upstream accepted (2xx) whose response then stalled, failed, exceeded a cap or failed validation, or whose read-back failed, with the failure's own reason; or `mutation_verification_failed` when the verification itself failed. Use a stage such as `mutation_response`, and safe locators from the validated request or an earlier verified response, never from the unreadable one. |
 
-A 4xx rejection, upstream throttling of the write itself, and a local failure
-before anything was sent, such as an upload file that cannot be opened, carry no
-receipt. Attach a receipt only to the action's own write and what follows it.
+Report a failed read-back after an applied write with
+`ProviderError::unverified_after_mutation(stage, safe_locators)`: throttling
+becomes `mutation_verification_failed`, as `unverified_if_throttled` reports
+it, and any other failure keeps its reason and gains the `applied_unverified`
+receipt. A 4xx rejection, upstream throttling of the write itself, and a local
+failure before anything was sent, such as an upload file that cannot be opened,
+carry no receipt. Attach a receipt only to the action's own write and what follows it.
 Reads never carry one, and once an earlier write in the action applied, a later
 failure is never `not_applied`. `MutationStatus` is non-exhaustive: a match on
 it ends with an arm that treats an unknown status as unsafe to retry, and a

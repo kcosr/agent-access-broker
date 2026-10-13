@@ -25,7 +25,8 @@
 //!   could not be read or validated, or a read-back after it failed:
 //!   [`MutationReceipt::applied_unverified`], whose safe locators come from the
 //!   validated request or earlier verified responses, never from the
-//!   unreadable one;
+//!   unreadable one ([`ProviderError::unverified_after_mutation`] maps a
+//!   failed read-back);
 //! - a batch in which an item may have applied before it failed:
 //!   [`MutationReceipt::unknown`], keeping the batch's partial result.
 //!
@@ -175,6 +176,20 @@ impl ProviderError {
         self
     }
 
+    /// For an error from a read-back or verification made after a mutation
+    /// was applied: throttling becomes `mutation_verification_failed`, as
+    /// [`Self::unverified_if_throttled`] reports it, and any other failure
+    /// keeps its reason and message and reports
+    /// [`MutationReceipt::applied_unverified`] at `verification_stage` with
+    /// `safe_locators`, unless it already reports a receipt.
+    pub fn unverified_after_mutation(self, verification_stage: &str, safe_locators: Value) -> Self {
+        self.unverified_if_throttled(verification_stage, safe_locators.clone())
+            .or_mutation_receipt(MutationReceipt::applied_unverified(
+                verification_stage,
+                safe_locators,
+            ))
+    }
+
     /// [`Self::with_mutation_receipt`] unless this error's result already
     /// reports a `mutationStatus`, which is more specific, such as the
     /// `applied_unverified` receipt of a throttled read-back.
@@ -310,6 +325,30 @@ mod tests {
         assert_eq!(
             plain.result.as_deref(),
             Some(&json!({"status": "partial", "mutationStatus": "unknown", "retrySafe": false}))
+        );
+
+        let throttled_readback = crate::upstream_rate_limited("jira", None)
+            .unverified_after_mutation("post_update_readback", json!({"issueKey": "OPS-1"}));
+        assert_eq!(
+            throttled_readback.reason_code,
+            ReasonCode::MutationVerificationFailed
+        );
+        assert_eq!(
+            throttled_readback.result.as_deref(),
+            Some(&json!({
+                "mutationStatus": "applied_unverified",
+                "retrySafe": false,
+                "verificationStage": "post_update_readback",
+                "safeLocators": {"issueKey": "OPS-1"},
+            }))
+        );
+        let failed_readback = ProviderError::error(ReasonCode::UpstreamTimeout, "timed out")
+            .unverified_after_mutation("post_update_readback", json!({"issueKey": "OPS-1"}));
+        assert_eq!(failed_readback.reason_code, ReasonCode::UpstreamTimeout);
+        assert_eq!(failed_readback.message, "timed out");
+        assert_eq!(
+            failed_readback.result.as_deref(),
+            throttled_readback.result.as_deref()
         );
 
         let mut scalar = json!("not an object");
