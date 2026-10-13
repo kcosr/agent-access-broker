@@ -841,10 +841,13 @@ If the current comment version differs from `baseVersion`, the broker returns
 `{ commentId, status: "deleted" }` after Confluence returns a successful
 no-content response.
 
-Comment list pagination uses signed `nextPageToken` values. Tokens are short
-lived and are bound to the action, comment kind, container type and ID, parent
-comment for reply lists, requested filters, authorized space, principal,
-credential mode, and upstream cursor. Upstream next links are accepted only when
+Comment list pagination uses opaque broker-signed `nextPageToken`
+continuations carrying Confluence's cursor. Tokens expire 15 minutes after they
+are issued and are bound to the action, comment kind, container type and ID,
+parent comment for reply lists, requested filters and effective `maxResults`,
+authorized space, execution context, principal and whether it authenticated,
+credential mode, credential type and the Confluence route configuration, like
+[attachment list tokens](#attachments). Upstream next links are accepted only when
 they remain on the same Confluence v2 comment collection and contain no
 unsupported query parameters. Pagination may come from `_links.next`, `next`, or
 an RFC `Link` header with `rel="next"`; multiple next links, changed resources,
@@ -871,13 +874,22 @@ then proves attachment→page membership, validates metadata, and streams the
 bounded content with up to 5 allowlisted redirects and same-origin-only auth.
 
 **`attachment.list`** is cursor-paginated. Its input accepts `{ pageId }` or
-`{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is a
-broker-signed opaque token, `base64url(payload).hmac`, binding
-`{ v, service, action, page_id, space, principal, credential_mode, next_position,
-issued_at, expires_at }` with a 15-minute TTL. When `broker_tokens.hash_key_ref`
-is configured, the token is signed with that stable key and validates across
-restarts and instances; otherwise the broker signs with a process-local random key
-that cannot validate after a restart or on a different instance.
+`{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is
+an opaque broker-signed continuation carrying Confluence's next position. It
+expires 15 minutes after it is issued and is bound to the action, the page ID
+and its space, the execution context, the principal and whether it
+authenticated, the credential mode, the selected credential's type (tenant or
+gateway route), and the Confluence route configuration (`tenant_host`,
+`cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
+tokens bind the blog ID, space key, and space ID instead of the page. When
+`broker_tokens.hash_key_ref` is configured, list tokens are signed with that
+stable key and validate across restarts and instances whose clocks differ by up
+to a minute; otherwise the broker signs with a key generated for each runtime
+generation that cannot validate after a reload, a restart, or on a different
+instance. Any other binding, an expired token, or an earlier token version is
+rejected with `input_invalid`; every page is authorized again. Confluence
+positions are bounded only by `limits.max_upstream_response_bytes`, as for
+search.
 
 Draft attachment list pagination tokens use the same 15-minute continuation
 model but bind the signed draft handle facts, the draft action, content type,

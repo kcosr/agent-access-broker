@@ -378,11 +378,12 @@ The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
 resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
 page tokens, Gmail and Jira search page tokens, and Confluence search cursors
-use it; Confluence keeps its own handling for its other tokens, which the
-Confluence documentation describes. A provider that uses the envelope declares
-each token family once: its service and purpose, a version, an explicit payload
-cap (a family relaying an upstream token may instead derive it at construction
-from a configured limit), an optional expiry, and a signing lifetime:
+and attachment and comment list tokens use it; Confluence keeps its own handling
+for draft handles, which the Confluence documentation describes. A provider that
+uses the envelope declares each token family once: its service and purpose, a
+version, an explicit payload cap (a family relaying an upstream token may
+instead derive it at construction from a configured limit), an optional expiry,
+and a signing lifetime:
 
 - **generation**: a key generated with the provider instance, so a reload or
   restart invalidates the tokens even when a stable key is configured;

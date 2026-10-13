@@ -1800,7 +1800,8 @@ fn comment_protocol_checks_reject_unsupported_containers_and_overreturns() {
 
 #[test]
 fn comment_pagination_token_is_bound_to_request_and_filters() {
-    let signer = ConfluenceTokenSigner::new(None);
+    let continuations =
+        ConfluenceContinuations::new(&confluence_config(), &ProviderLimits::default(), None);
     let request = invocation(
         "page.inline_comment.list",
         json!({
@@ -1811,6 +1812,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
             "maxResults": 2
         }),
     );
+    let credential = credential();
     let container = ConfluenceResolvedCommentContainer::Page(attachment_list_page());
     let inputs = CommentListInputs {
         container_id: "123456".to_string(),
@@ -1822,7 +1824,6 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     };
     let action = confluence_comment_action("page.inline_comment.list").unwrap();
     let binding = comment_list_binding(
-        &request,
         action,
         &container,
         None,
@@ -1830,113 +1831,59 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
         &inputs,
         2,
     );
-    let token = encode_confluence_comment_list_token(
-        &signer,
-        &binding,
-        request.admitted(),
-        "cursor-2".into(),
-    )
-    .unwrap();
-
+    let token = continuations
+        .seal_comment_page(request.context(), &credential, &binding, "cursor-2")
+        .unwrap();
+    assert_ne!(token, "cursor-2");
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, request.admitted())
+        continuations
+            .open_comment_page(request.context(), &credential, &binding, &token)
             .unwrap(),
         "cursor-2"
     );
 
-    let mut changed_binding = binding.clone();
-    changed_binding.action = "page.footer_comment.list".to_string();
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
+    let rejected = |request: &ProviderInvocation, binding: &ConfluenceCommentListBinding| {
+        let error = continuations
+            .open_comment_page(request.context(), &credential, binding, &token)
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.decision(), Decision::Deny);
+    };
+    let changes: [fn(&mut ConfluenceCommentListBinding); 8] = [
+        |binding| binding.kind = ConfluenceCommentKind::Footer,
+        |binding| binding.container_type = ConfluenceCommentContainerType::Blog,
+        |binding| binding.container_id = "654321".to_string(),
+        |binding| binding.comment_id = Some("777".to_string()),
+        |binding| binding.space = "OPS".to_string(),
+        |binding| binding.body_format = None,
+        |binding| binding.resolution_status = Some("resolved".to_string()),
+        |binding| binding.max_results = 1,
+    ];
+    for change in changes {
+        let mut changed = binding.clone();
+        change(&mut changed);
+        rejected(&request, &changed);
+    }
+    let mut changed = binding.clone();
+    changed.sort = Some("created-date".to_string());
+    rejected(&request, &changed);
 
-    let mut changed_binding = binding.clone();
-    changed_binding.kind = ConfluenceCommentKind::Footer;
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.container_id = "654321".to_string();
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.space = "OPS".to_string();
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.body_format = None;
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.resolution_status = Some("resolved".to_string());
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.sort = Some("created-date".to_string());
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_binding = binding.clone();
-    changed_binding.max_results = 1;
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_request = request.clone();
-    changed_request = InvocationBuilder::from(changed_request)
-        .principal("bob")
-        .build();
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut changed_request = request.clone();
-    changed_request = InvocationBuilder::from(changed_request)
-        .credential_mode(CredentialMode::PerUser)
-        .build();
-    assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::InputInvalid
-    );
+    for changed_request in [
+        InvocationBuilder::from(request.clone())
+            .action("page.footer_comment.list")
+            .build(),
+        InvocationBuilder::from(request.clone())
+            .principal("bob")
+            .build(),
+        InvocationBuilder::from(request.clone())
+            .credential_mode(CredentialMode::PerUser)
+            .build(),
+        InvocationBuilder::from(request.clone())
+            .execution_context("external")
+            .build(),
+    ] {
+        rejected(&changed_request, &binding);
+    }
 }
 
 #[test]
@@ -4199,98 +4146,82 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
 }
 
 #[test]
-fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions() {
-    let signer = ConfluenceTokenSigner::new(None);
+fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
+    let continuations =
+        ConfluenceContinuations::new(&confluence_config(), &ProviderLimits::default(), None);
+    let credential = credential();
     let page = attachment_list_page();
     let request = invocation("attachment.list", json!({"pageId": "123456"}));
 
-    let valid = encode_confluence_attachment_list_token(
-        &signer,
-        &page,
-        request.admitted(),
-        "start=1".to_string(),
-    )
-    .unwrap();
+    let valid = continuations
+        .seal_attachment_page(request.context(), &credential, &page, "start=1")
+        .unwrap();
     assert_eq!(
-        decode_confluence_attachment_list_token(&signer, &valid, &page, request.admitted())
+        continuations
+            .open_attachment_page(request.context(), &credential, &page, &valid)
             .unwrap(),
         "start=1"
     );
 
-    let mut expired =
-        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
-    expired.expires_at =
-        (Utc::now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    assert_eq!(
-        decode_confluence_attachment_list_token(
-            &signer,
-            &signed_attachment_list_token(&signer, &expired),
-            &page,
-            request.admitted(),
-        )
-        .unwrap_err()
-        .reason_code(),
-        ReasonCode::InputInvalid
-    );
+    let mut other_page = page.clone();
+    other_page.id = "654321".to_string();
+    let mut other_space = page.clone();
+    other_space.space = "OPS".to_string();
+    for (changed_request, changed_page, changed_credential) in [
+        (request.clone(), other_page, credential.clone()),
+        (request.clone(), other_space, credential.clone()),
+        (
+            InvocationBuilder::from(request.clone())
+                .principal("user:alice@example.com")
+                .build(),
+            page.clone(),
+            credential.clone(),
+        ),
+        (
+            InvocationBuilder::from(request.clone())
+                .credential_mode(CredentialMode::PerUser)
+                .build(),
+            page.clone(),
+            credential.clone(),
+        ),
+        (
+            InvocationBuilder::from(request.clone())
+                .execution_context("external")
+                .build(),
+            page.clone(),
+            credential.clone(),
+        ),
+        (
+            request.clone(),
+            page.clone(),
+            agent_access_provider::test_support::bearer_credential("token"),
+        ),
+    ] {
+        let error = continuations
+            .open_attachment_page(
+                changed_request.context(),
+                &changed_credential,
+                &changed_page,
+                &valid,
+            )
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(
+            error.message,
+            "Confluence attachment pagination token is invalid or does not match this request"
+        );
+    }
 
-    let mut cross_page =
-        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
-    cross_page.page_id = "654321".to_string();
+    let unsupported = continuations
+        .seal_attachment_page(request.context(), &credential, &page, "start=1&limit=1")
+        .unwrap();
+    let error = continuations
+        .open_attachment_page(request.context(), &credential, &page, &unsupported)
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(
-        decode_confluence_attachment_list_token(
-            &signer,
-            &signed_attachment_list_token(&signer, &cross_page),
-            &page,
-            request.admitted(),
-        )
-        .unwrap_err()
-        .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut cross_principal =
-        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
-    cross_principal.principal = "user:alice@example.com".to_string();
-    assert_eq!(
-        decode_confluence_attachment_list_token(
-            &signer,
-            &signed_attachment_list_token(&signer, &cross_principal),
-            &page,
-            request.admitted(),
-        )
-        .unwrap_err()
-        .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut cross_credential_mode =
-        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
-    cross_credential_mode.credential_mode = "per_user".to_string();
-    assert_eq!(
-        decode_confluence_attachment_list_token(
-            &signer,
-            &signed_attachment_list_token(&signer, &cross_credential_mode),
-            &page,
-            request.admitted(),
-        )
-        .unwrap_err()
-        .reason_code(),
-        ReasonCode::InputInvalid
-    );
-
-    let mut unsupported_position =
-        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
-    unsupported_position.next_position = "start=1&limit=1".to_string();
-    assert_eq!(
-        decode_confluence_attachment_list_token(
-            &signer,
-            &signed_attachment_list_token(&signer, &unsupported_position),
-            &page,
-            request.admitted(),
-        )
-        .unwrap_err()
-        .reason_code(),
-        ReasonCode::InputInvalid
+        error.message,
+        "Confluence attachment pagination token position is invalid"
     );
 }
 
@@ -8134,16 +8065,6 @@ fn attachment_list_backend() -> AttachmentListBackend {
         ],
         credential_observations: std::sync::Mutex::new(Vec::new()),
     }
-}
-
-fn signed_attachment_list_token(
-    signer: &ConfluenceTokenSigner,
-    payload: &ConfluenceAttachmentListTokenPayload,
-) -> String {
-    let payload_bytes = serde_json::to_vec(payload).unwrap();
-    let payload_encoded = URL_SAFE_NO_PAD.encode(&payload_bytes);
-    let signature = signer.sign(&payload_bytes).unwrap();
-    format!("{payload_encoded}.{signature}")
 }
 
 fn assert_invalid_draft_handle<T: std::fmt::Debug>(result: Result<T, ProviderError>) {

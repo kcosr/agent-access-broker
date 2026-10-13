@@ -1,15 +1,16 @@
-//! Confluence continuations: `search` and `blog.search` page tokens, sealed
-//! in SDK continuation envelopes.
+//! Confluence continuations: search, attachment list and comment list page
+//! tokens, sealed in SDK continuation envelopes.
 //!
-//! Search continuations relay Confluence's own cursor. They bind the admitted
-//! service, action, execution context and caller, the normalized search, the
-//! route fingerprint (tenant host, gateway cloud ID and whether the gateway
-//! is enabled) and the credential kind that selects the tenant or gateway
-//! route, because Confluence's cursor is route-relative. They never bind the
-//! effective grant boundary: the host authorizes every page again and the
-//! provider composes and checks it under the current boundary.
+//! Every family relays Confluence's own cursor and binds the admitted
+//! service, action, execution context and caller, the route fingerprint
+//! (tenant host, gateway cloud ID and whether the gateway is enabled) and
+//! the credential kind that selects the tenant or gateway route, because
+//! Confluence's cursors are route-relative, plus the request's resource and
+//! normalized settings. No family binds the effective grant boundary: the
+//! host authorizes every page again and the provider re-applies its
+//! containment checks.
 //!
-//! The broker adds no cursor cap of its own and never truncates: the family
+//! The broker adds no cursor cap of its own and never truncates: each family
 //! is bounded by the provider's upstream response limit, which bounds both
 //! the upstream response a cursor arrives in and the result its continuation
 //! leaves in.
@@ -19,8 +20,48 @@ use super::*;
 #[path = "continuation_tests.rs"]
 mod tests;
 
-/// How long search continuations stay valid after they are issued.
+/// How long list and search continuations stay valid after they are issued.
 const PAGE_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
+/// List continuations may be signed with the stable key shared by several
+/// broker instances, whose clocks may differ by up to a minute.
+const PAGE_TOKEN_CLOCK_SKEW: Duration = Duration::from_secs(60);
+
+/// `attachment.list` pages: Confluence's next attachment position. Stable
+/// when `broker_tokens.hash_key_ref` is configured. Declared without a
+/// payload cap; [`ConfluenceContinuations::new`] sizes it from the response
+/// limit.
+const ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
+    "confluence",
+    "attachment-list-page",
+    2,
+    ContinuationLifetime::StableWhenConfigured,
+    0,
+)
+.expires_after(PAGE_TOKEN_TTL)
+.clock_skew(PAGE_TOKEN_CLOCK_SKEW);
+
+/// `blog.attachment.list` pages, like [`ATTACHMENT_LIST_PAGES`].
+const BLOG_ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
+    "confluence",
+    "blog-attachment-list-page",
+    2,
+    ContinuationLifetime::StableWhenConfigured,
+    0,
+)
+.expires_after(PAGE_TOKEN_TTL)
+.clock_skew(PAGE_TOKEN_CLOCK_SKEW);
+
+/// Page and blog footer/inline comment list and reply-list pages:
+/// Confluence's next comment cursor.
+const COMMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
+    "confluence",
+    "comment-list-page",
+    2,
+    ContinuationLifetime::StableWhenConfigured,
+    0,
+)
+.expires_after(PAGE_TOKEN_TTL)
+.clock_skew(PAGE_TOKEN_CLOCK_SKEW);
 
 /// `search` and `blog.search` pages: Confluence's search cursor with a keyed
 /// commitment to the composed upstream CQL. Signed with a key generated for
@@ -63,7 +104,28 @@ fn within_response_limit(
 pub(crate) struct ConfluenceContinuations {
     signer: ContinuationSigner,
     route: [u8; 32],
+    attachment_pages: ContinuationFamily,
+    blog_attachment_pages: ContinuationFamily,
+    comment_pages: ContinuationFamily,
     search_pages: ContinuationFamily,
+}
+
+/// The list families, for their error messages.
+#[derive(Debug, Clone, Copy)]
+enum ListPages {
+    Attachment,
+    BlogAttachment,
+    Comment,
+}
+
+impl ListPages {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Attachment => "attachment",
+            Self::BlogAttachment => "blog attachment",
+            Self::Comment => "comment",
+        }
+    }
 }
 
 impl ConfluenceContinuations {
@@ -75,11 +137,14 @@ impl ConfluenceContinuations {
         Self {
             signer: ContinuationSigner::new(stable),
             route: route_fingerprint(config),
+            attachment_pages: within_response_limit(ATTACHMENT_LIST_PAGES, limits),
+            blog_attachment_pages: within_response_limit(BLOG_ATTACHMENT_LIST_PAGES, limits),
+            comment_pages: within_response_limit(COMMENT_LIST_PAGES, limits),
             search_pages: within_response_limit(SEARCH_PAGES, limits),
         }
     }
 
-    /// A search binding: the admitted context, the route
+    /// A list or search binding: the admitted context, the route
     /// fingerprint and the credential kind that selects the route.
     fn route_binding(
         &self,
@@ -90,6 +155,138 @@ impl ConfluenceContinuations {
         family
             .bind(context, self.route)
             .text("credentialKind", credential.kind().as_str())
+    }
+
+    fn attachment_binding(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        page: &ConfluencePage,
+    ) -> ContinuationBinding {
+        self.route_binding(&self.attachment_pages, context, credential)
+            .text("pageId", &page.id)
+            .text("space", &page.space)
+    }
+
+    pub(crate) fn seal_attachment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        page: &ConfluencePage,
+        position: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.attachment_binding(context, credential, page);
+        self.seal_list(ListPages::Attachment, &binding, position)
+    }
+
+    pub(crate) fn open_attachment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        page: &ConfluencePage,
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.attachment_binding(context, credential, page);
+        let position = self.open_list(ListPages::Attachment, &binding, token)?;
+        checked_position(ListPages::Attachment, position)
+    }
+
+    fn blog_attachment_binding(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        blog: &ConfluenceBlog,
+    ) -> ContinuationBinding {
+        self.route_binding(&self.blog_attachment_pages, context, credential)
+            .text("blogId", &blog.id)
+            .text("space", &blog.space)
+            .text("spaceId", &blog.space_id)
+    }
+
+    pub(crate) fn seal_blog_attachment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        blog: &ConfluenceBlog,
+        position: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.blog_attachment_binding(context, credential, blog);
+        self.seal_list(ListPages::BlogAttachment, &binding, position)
+    }
+
+    pub(crate) fn open_blog_attachment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        blog: &ConfluenceBlog,
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.blog_attachment_binding(context, credential, blog);
+        let position = self.open_list(ListPages::BlogAttachment, &binding, token)?;
+        checked_position(ListPages::BlogAttachment, position)
+    }
+
+    fn comment_binding(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        list: &ConfluenceCommentListBinding,
+    ) -> ContinuationBinding {
+        self.route_binding(&self.comment_pages, context, credential)
+            .text("commentKind", list.kind.as_str())
+            .text("containerType", list.container_type.as_str())
+            .text("containerId", &list.container_id)
+            .optional_text("commentId", list.comment_id.as_deref())
+            .text("space", &list.space)
+            .optional_text("bodyFormat", list.body_format.as_deref())
+            .optional_text("resolutionStatus", list.resolution_status.as_deref())
+            .optional_text("sort", list.sort.as_deref())
+            .number("maxResults", u64::from(list.max_results))
+    }
+
+    pub(crate) fn seal_comment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        list: &ConfluenceCommentListBinding,
+        cursor: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.comment_binding(context, credential, list);
+        self.seal_list(ListPages::Comment, &binding, cursor)
+    }
+
+    pub(crate) fn open_comment_page(
+        &self,
+        context: &AdmittedContext,
+        credential: &ExecutionCredential,
+        list: &ConfluenceCommentListBinding,
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        let binding = self.comment_binding(context, credential, list);
+        let cursor = self.open_list(ListPages::Comment, &binding, token)?;
+        checked_cursor(ListPages::Comment, cursor)
+    }
+
+    fn seal_list(
+        &self,
+        pages: ListPages,
+        binding: &ContinuationBinding,
+        position: &str,
+    ) -> Result<String, ProviderError> {
+        self.signer
+            .seal_relayed(binding, None, position)
+            .map_err(|error| list_token_failure(pages, error))
+    }
+
+    fn open_list(
+        &self,
+        pages: ListPages,
+        binding: &ContinuationBinding,
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        self.signer
+            .open_relayed(binding, None, token)
+            .map_err(|error| list_token_failure(pages, error))
     }
 
     fn search_binding(&self, search: &SearchPageRequest<'_>) -> ContinuationBinding {
@@ -142,6 +339,55 @@ pub(crate) struct SearchPageRequest<'a> {
     pub(crate) query: &'a BuiltConfluenceSearchQuery,
     pub(crate) requested_spaces: &'a BTreeSet<String>,
     pub(crate) max_results: u32,
+}
+
+fn list_token_failure(pages: ListPages, error: ContinuationError) -> ProviderError {
+    let label = pages.label();
+    match error {
+        ContinuationError::Expired => ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("Confluence {label} pagination token is expired"),
+        ),
+        error if error.is_token_rejection() => ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!(
+                "Confluence {label} pagination token is invalid or does not match this request"
+            ),
+        ),
+        ContinuationError::PayloadTooLarge { .. } => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            format!("Confluence {label} pagination position exceeds the provider response limit"),
+        ),
+        _ => pagination_signing_unavailable(),
+    }
+}
+
+/// An attachment position from a token still names exactly one supported
+/// Confluence position parameter.
+fn checked_position(pages: ListPages, position: String) -> Result<String, ProviderError> {
+    decoded_attachment_next_position(Some(&position), false).map_err(|_| {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!(
+                "Confluence {} pagination token position is invalid",
+                pages.label()
+            ),
+        )
+    })?;
+    Ok(position)
+}
+
+fn checked_cursor(pages: ListPages, cursor: String) -> Result<String, ProviderError> {
+    validate_comment_cursor(&cursor).map_err(|_| {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!(
+                "Confluence {} pagination token cursor is invalid",
+                pages.label()
+            ),
+        )
+    })?;
+    Ok(cursor)
 }
 
 fn search_token_failure(action: &str, error: ContinuationError) -> ProviderError {
