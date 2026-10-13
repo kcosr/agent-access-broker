@@ -224,7 +224,7 @@ pub async fn agent_access_provider::host::with_hook_context<F: core::future::fut
 pub async fn agent_access_provider::host::with_provider_context<F>(agent_access_provider::CorrelationContext, alloc::string::String, alloc::string::String, F) -> <F as core::future::future::Future>::Output where F: core::future::future::Future
 pub async fn agent_access_provider::host::with_provider_finalization<F: core::future::future::Future>(agent_access_provider::ProviderFinalizationContext, F) -> <F as core::future::future::Future>::Output
 pub mod agent_access_provider::presentation
-pub enum agent_access_provider::presentation::BodyPathSegment
+#[non_exhaustive] pub enum agent_access_provider::presentation::BodyPathSegment
 pub agent_access_provider::presentation::BodyPathSegment::Each
 pub agent_access_provider::presentation::BodyPathSegment::Field(&'static str)
 impl core::clone::Clone for agent_access_provider::presentation::BodyPathSegment
@@ -271,7 +271,7 @@ impl core::marker::Unpin for agent_access_provider::presentation::ReadContentFor
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ReadContentFormat
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ReadContentFormat
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ReadContentFormat
-pub enum agent_access_provider::presentation::RenderBudgetExhausted
+#[non_exhaustive] pub enum agent_access_provider::presentation::RenderBudgetExhausted
 pub agent_access_provider::presentation::RenderBudgetExhausted::Nodes
 pub agent_access_provider::presentation::RenderBudgetExhausted::WorkUnits
 impl core::clone::Clone for agent_access_provider::presentation::RenderBudgetExhausted
@@ -293,7 +293,7 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudgetEx
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
-pub enum agent_access_provider::presentation::ResponseFormat
+#[non_exhaustive] pub enum agent_access_provider::presentation::ResponseFormat
 pub agent_access_provider::presentation::ResponseFormat::Json
 pub agent_access_provider::presentation::ResponseFormat::Markdown
 impl agent_access_provider::presentation::ResponseFormat
@@ -320,11 +320,12 @@ impl core::marker::Unpin for agent_access_provider::presentation::ResponseFormat
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseFormat
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseFormat
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseFormat
-pub struct agent_access_provider::presentation::ActionPresentation
-pub agent_access_provider::presentation::ActionPresentation::embedded_bodies: &'static [agent_access_provider::presentation::EmbeddedBody]
-pub agent_access_provider::presentation::ActionPresentation::whole: core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>
+#[non_exhaustive] pub struct agent_access_provider::presentation::ActionPresentation
 impl agent_access_provider::presentation::ActionPresentation
 pub fn agent_access_provider::presentation::ActionPresentation::capabilities(&self) -> agent_access_provider::presentation::ResponseCapabilities
+pub const fn agent_access_provider::presentation::ActionPresentation::embedded_bodies(&self) -> &'static [agent_access_provider::presentation::EmbeddedBody]
+pub const fn agent_access_provider::presentation::ActionPresentation::new(&'static [agent_access_provider::presentation::EmbeddedBody], core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>) -> Self
+pub const fn agent_access_provider::presentation::ActionPresentation::whole(&self) -> core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>
 impl core::clone::Clone for agent_access_provider::presentation::ActionPresentation
 pub fn agent_access_provider::presentation::ActionPresentation::clone(&self) -> agent_access_provider::presentation::ActionPresentation
 impl core::cmp::PartialEq for agent_access_provider::presentation::ActionPresentation
@@ -339,10 +340,11 @@ impl core::marker::Unpin for agent_access_provider::presentation::ActionPresenta
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ActionPresentation
-pub struct agent_access_provider::presentation::EmbeddedBody
-pub agent_access_provider::presentation::EmbeddedBody::codec: &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec
-pub agent_access_provider::presentation::EmbeddedBody::owner_path: &'static [agent_access_provider::presentation::BodyPathSegment]
+#[non_exhaustive] pub struct agent_access_provider::presentation::EmbeddedBody
 impl agent_access_provider::presentation::EmbeddedBody
+pub const fn agent_access_provider::presentation::EmbeddedBody::codec(&self) -> &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec
+pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::owner_path(&self) -> &'static [agent_access_provider::presentation::BodyPathSegment]
 pub fn agent_access_provider::presentation::EmbeddedBody::owner_pointer(&self) -> alloc::string::String
 impl core::clone::Clone for agent_access_provider::presentation::EmbeddedBody
 pub fn agent_access_provider::presentation::EmbeddedBody::clone(&self) -> agent_access_provider::presentation::EmbeddedBody
@@ -412,7 +414,7 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudget
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudget
-pub struct agent_access_provider::presentation::RenderContext
+#[non_exhaustive] pub struct agent_access_provider::presentation::RenderContext
 pub agent_access_provider::presentation::RenderContext::budget: agent_access_provider::presentation::PresentationBudget
 pub agent_access_provider::presentation::RenderContext::max_body_bytes: u64
 pub agent_access_provider::presentation::RenderContext::out: agent_access_provider::presentation::MarkdownWriter
@@ -443,9 +445,11 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderError
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderError
-pub struct agent_access_provider::presentation::RenderedBody
+#[non_exhaustive] pub struct agent_access_provider::presentation::RenderedBody
 pub agent_access_provider::presentation::RenderedBody::format: agent_access_provider::presentation::ReadContentFormat
 pub agent_access_provider::presentation::RenderedBody::value: alloc::string::String
+impl agent_access_provider::presentation::RenderedBody
+pub fn agent_access_provider::presentation::RenderedBody::new(agent_access_provider::presentation::ReadContentFormat, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::presentation::RenderedBody
 pub fn agent_access_provider::presentation::RenderedBody::clone(&self) -> agent_access_provider::presentation::RenderedBody
 impl core::cmp::Eq for agent_access_provider::presentation::RenderedBody
@@ -463,10 +467,11 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderedBody
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderedBody
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderedBody
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderedBody
-pub struct agent_access_provider::presentation::ResponseCapabilities
+#[non_exhaustive] pub struct agent_access_provider::presentation::ResponseCapabilities
 pub agent_access_provider::presentation::ResponseCapabilities::read_content_formats: core::option::Option<&'static [&'static str]>
 pub agent_access_provider::presentation::ResponseCapabilities::response_formats: core::option::Option<&'static [&'static str]>
 impl agent_access_provider::presentation::ResponseCapabilities
+pub const fn agent_access_provider::presentation::ResponseCapabilities::new(core::option::Option<&'static [&'static str]>, core::option::Option<&'static [&'static str]>) -> Self
 pub fn agent_access_provider::presentation::ResponseCapabilities::supports_markdown_response(self) -> bool
 pub fn agent_access_provider::presentation::ResponseCapabilities::supports_read_content(self) -> bool
 impl core::clone::Clone for agent_access_provider::presentation::ResponseCapabilities
@@ -485,9 +490,11 @@ impl core::marker::Unpin for agent_access_provider::presentation::ResponseCapabi
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseCapabilities
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseCapabilities
-pub struct agent_access_provider::presentation::ResponseOptions
+#[non_exhaustive] pub struct agent_access_provider::presentation::ResponseOptions
 pub agent_access_provider::presentation::ResponseOptions::read_content_format: agent_access_provider::presentation::ReadContentFormat
 pub agent_access_provider::presentation::ResponseOptions::response_format: agent_access_provider::presentation::ResponseFormat
+impl agent_access_provider::presentation::ResponseOptions
+pub const fn agent_access_provider::presentation::ResponseOptions::new(agent_access_provider::presentation::ReadContentFormat, agent_access_provider::presentation::ResponseFormat) -> Self
 impl core::clone::Clone for agent_access_provider::presentation::ResponseOptions
 pub fn agent_access_provider::presentation::ResponseOptions::clone(&self) -> agent_access_provider::presentation::ResponseOptions
 impl core::cmp::Eq for agent_access_provider::presentation::ResponseOptions
@@ -544,7 +551,7 @@ pub fn agent_access_provider::presentation::scalar(&serde_json::value::Value) ->
 pub fn agent_access_provider::presentation::serialize_json_pretty_bounded(&serde_json::value::Value, u64) -> core::result::Result<alloc::string::String, agent_access_provider::presentation::RenderError>
 pub fn agent_access_provider::presentation::validate_response_options(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, agent_access_provider::presentation::ResponseOptions) -> core::result::Result<(), agent_access_provider::ProviderError>
 pub macro agent_access_provider::module_metadata!
-pub enum agent_access_provider::ActionIo
+#[non_exhaustive] pub enum agent_access_provider::ActionIo
 pub agent_access_provider::ActionIo::Json
 pub agent_access_provider::ActionIo::MultipartUpload
 pub agent_access_provider::ActionIo::MultipartUpload::plan: agent_access_provider::MultipartUploadSpec
@@ -570,7 +577,7 @@ impl core::marker::Unpin for agent_access_provider::ActionIo
 impl core::marker::UnsafeUnpin for agent_access_provider::ActionIo
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ActionIo
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionIo
-pub enum agent_access_provider::AttributionRepresentation
+#[non_exhaustive] pub enum agent_access_provider::AttributionRepresentation
 pub agent_access_provider::AttributionRepresentation::Adf
 pub agent_access_provider::AttributionRepresentation::ConfluenceStorage
 pub agent_access_provider::AttributionRepresentation::GitlabMarkdown
@@ -592,7 +599,7 @@ impl core::marker::Unpin for agent_access_provider::AttributionRepresentation
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionRepresentation
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionRepresentation
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionRepresentation
-pub enum agent_access_provider::AttributionVerb
+#[non_exhaustive] pub enum agent_access_provider::AttributionVerb
 pub agent_access_provider::AttributionVerb::Add
 pub agent_access_provider::AttributionVerb::Update
 impl agent_access_provider::AttributionVerb
@@ -616,7 +623,7 @@ impl core::marker::Unpin for agent_access_provider::AttributionVerb
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionVerb
-pub enum agent_access_provider::AuthorityMismatch
+#[non_exhaustive] pub enum agent_access_provider::AuthorityMismatch
 pub agent_access_provider::AuthorityMismatch::NotResources
 pub agent_access_provider::AuthorityMismatch::NotSearch
 impl agent_access_provider::AuthorityMismatch
@@ -642,7 +649,7 @@ impl core::marker::Unpin for agent_access_provider::AuthorityMismatch
 impl core::marker::UnsafeUnpin for agent_access_provider::AuthorityMismatch
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuthorityMismatch
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuthorityMismatch
-pub enum agent_access_provider::ClientProfile
+#[non_exhaustive] pub enum agent_access_provider::ClientProfile
 pub agent_access_provider::ClientProfile::Bounded
 pub agent_access_provider::ClientProfile::Bounded::connect: core::time::Duration
 pub agent_access_provider::ClientProfile::Bounded::total: core::time::Duration
@@ -772,7 +779,7 @@ impl core::marker::Unpin for agent_access_provider::CredentialMode
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialMode
-pub enum agent_access_provider::CredentialView<'a>
+#[non_exhaustive] pub enum agent_access_provider::CredentialView<'a>
 pub agent_access_provider::CredentialView::Basic
 pub agent_access_provider::CredentialView::Basic::token: &'a str
 pub agent_access_provider::CredentialView::Basic::username: &'a str
@@ -815,7 +822,7 @@ impl core::marker::Unpin for agent_access_provider::Decision
 impl core::marker::UnsafeUnpin for agent_access_provider::Decision
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Decision
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::Decision
-pub enum agent_access_provider::EgressDeclaration<'a>
+#[non_exhaustive] pub enum agent_access_provider::EgressDeclaration<'a>
 pub agent_access_provider::EgressDeclaration::LiteralLoopback
 pub agent_access_provider::EgressDeclaration::Ordinary(core::option::Option<&'a agent_access_provider::EgressProxyConfig>)
 impl<'a> core::clone::Clone for agent_access_provider::EgressDeclaration<'a>
@@ -830,7 +837,7 @@ impl<'a> core::marker::Unpin for agent_access_provider::EgressDeclaration<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::EgressDeclaration<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::EgressDeclaration<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::EgressDeclaration<'a>
-pub enum agent_access_provider::EgressProxySource
+#[non_exhaustive] pub enum agent_access_provider::EgressProxySource
 pub agent_access_provider::EgressProxySource::Environment
 pub agent_access_provider::EgressProxySource::Global
 pub agent_access_provider::EgressProxySource::Service
@@ -850,7 +857,7 @@ impl core::marker::Unpin for agent_access_provider::EgressProxySource
 impl core::marker::UnsafeUnpin for agent_access_provider::EgressProxySource
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::EgressProxySource
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::EgressProxySource
-pub enum agent_access_provider::ExecutionAccess
+#[non_exhaustive] pub enum agent_access_provider::ExecutionAccess
 pub agent_access_provider::ExecutionAccess::Delegated(agent_access_provider::DelegatedCredential)
 pub agent_access_provider::ExecutionAccess::None
 pub agent_access_provider::ExecutionAccess::Static(agent_access_provider::ExecutionCredential)
@@ -869,7 +876,7 @@ impl core::marker::Unpin for agent_access_provider::ExecutionAccess
 impl core::marker::UnsafeUnpin for agent_access_provider::ExecutionAccess
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ExecutionAccess
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ExecutionAccess
-pub enum agent_access_provider::HeaderEncoding
+#[non_exhaustive] pub enum agent_access_provider::HeaderEncoding
 pub agent_access_provider::HeaderEncoding::Base64Json
 impl core::clone::Clone for agent_access_provider::HeaderEncoding
 pub fn agent_access_provider::HeaderEncoding::clone(&self) -> agent_access_provider::HeaderEncoding
@@ -916,7 +923,7 @@ impl core::marker::Unpin for agent_access_provider::HookPhase
 impl core::marker::UnsafeUnpin for agent_access_provider::HookPhase
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::HookPhase
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::HookPhase
-pub enum agent_access_provider::InvocationAuthority
+#[non_exhaustive] pub enum agent_access_provider::InvocationAuthority
 pub agent_access_provider::InvocationAuthority::ActionOnly
 pub agent_access_provider::InvocationAuthority::Resources(agent_access_provider::ResourceScopes)
 pub agent_access_provider::InvocationAuthority::Search(agent_access_provider::SearchAuthorization)
@@ -945,7 +952,7 @@ impl core::marker::Unpin for agent_access_provider::IssuedRefreshToken
 impl core::marker::UnsafeUnpin for agent_access_provider::IssuedRefreshToken
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::IssuedRefreshToken
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::IssuedRefreshToken
-pub enum agent_access_provider::LookupRequirement
+#[non_exhaustive] pub enum agent_access_provider::LookupRequirement
 pub agent_access_provider::LookupRequirement::Execution
 pub agent_access_provider::LookupRequirement::None
 pub agent_access_provider::LookupRequirement::ScopeResolution
@@ -968,7 +975,7 @@ impl core::marker::Unpin for agent_access_provider::LookupRequirement
 impl core::marker::UnsafeUnpin for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LookupRequirement
-pub enum agent_access_provider::OAuthClientAuth
+#[non_exhaustive] pub enum agent_access_provider::OAuthClientAuth
 pub agent_access_provider::OAuthClientAuth::ClientSecretBasic
 pub agent_access_provider::OAuthClientAuth::ClientSecretPost
 pub agent_access_provider::OAuthClientAuth::None
@@ -994,7 +1001,7 @@ impl core::marker::Unpin for agent_access_provider::OAuthClientAuth
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthClientAuth
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthClientAuth
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthClientAuth
-pub enum agent_access_provider::OAuthDialectError
+#[non_exhaustive] pub enum agent_access_provider::OAuthDialectError
 pub agent_access_provider::OAuthDialectError::ClientRejected
 pub agent_access_provider::OAuthDialectError::Configuration
 pub agent_access_provider::OAuthDialectError::Failed
@@ -1023,7 +1030,7 @@ impl core::marker::Unpin for agent_access_provider::OAuthDialectError
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthDialectError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthDialectError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthDialectError
-pub enum agent_access_provider::OAuthRotation
+#[non_exhaustive] pub enum agent_access_provider::OAuthRotation
 pub agent_access_provider::OAuthRotation::PreserveOld
 pub agent_access_provider::OAuthRotation::RotateBoth
 pub agent_access_provider::OAuthRotation::RotateRefresh
@@ -1049,7 +1056,7 @@ impl core::marker::Unpin for agent_access_provider::OAuthRotation
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthRotation
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthRotation
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthRotation
-pub enum agent_access_provider::OAuthScopeMode
+#[non_exhaustive] pub enum agent_access_provider::OAuthScopeMode
 pub agent_access_provider::OAuthScopeMode::Explicit
 pub agent_access_provider::OAuthScopeMode::ServerDefault
 impl agent_access_provider::OAuthScopeMode
@@ -1076,7 +1083,7 @@ impl core::marker::Unpin for agent_access_provider::OAuthScopeMode
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthScopeMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthScopeMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthScopeMode
-pub enum agent_access_provider::OAuthTokenEncoding
+#[non_exhaustive] pub enum agent_access_provider::OAuthTokenEncoding
 pub agent_access_provider::OAuthTokenEncoding::Form
 pub agent_access_provider::OAuthTokenEncoding::Json
 impl core::clone::Clone for agent_access_provider::OAuthTokenEncoding
@@ -1101,7 +1108,7 @@ impl core::marker::Unpin for agent_access_provider::OAuthTokenEncoding
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenEncoding
-pub enum agent_access_provider::OpaqueTokenSigner
+#[non_exhaustive] pub enum agent_access_provider::OpaqueTokenSigner
 pub agent_access_provider::OpaqueTokenSigner::ProcessLocal(alloc::sync::Arc<[u8; 32]>)
 pub agent_access_provider::OpaqueTokenSigner::Stable(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>)
 impl agent_access_provider::OpaqueTokenSigner
@@ -1120,7 +1127,7 @@ impl core::marker::Unpin for agent_access_provider::OpaqueTokenSigner
 impl core::marker::UnsafeUnpin for agent_access_provider::OpaqueTokenSigner
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OpaqueTokenSigner
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::OpaqueTokenSigner
-#[non_exhaustive] pub enum agent_access_provider::ProviderFailureStatus
+pub enum agent_access_provider::ProviderFailureStatus
 pub agent_access_provider::ProviderFailureStatus::BadGateway
 pub agent_access_provider::ProviderFailureStatus::BadRequest
 pub agent_access_provider::ProviderFailureStatus::Conflict
@@ -1170,7 +1177,7 @@ impl core::marker::Unpin for agent_access_provider::ProviderResultStreamSource
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderResultStreamSource
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderResultStreamSource
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderResultStreamSource
-pub enum agent_access_provider::ProviderStateError
+#[non_exhaustive] pub enum agent_access_provider::ProviderStateError
 pub agent_access_provider::ProviderStateError::Missing
 pub agent_access_provider::ProviderStateError::TypeMismatch
 impl agent_access_provider::ProviderStateError
@@ -1196,7 +1203,7 @@ impl core::marker::Unpin for agent_access_provider::ProviderStateError
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderStateError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderStateError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderStateError
-pub enum agent_access_provider::ReasonCode
+#[non_exhaustive] pub enum agent_access_provider::ReasonCode
 pub agent_access_provider::ReasonCode::AttachmentIntegrityMismatch
 pub agent_access_provider::ReasonCode::AttachmentMediaTypeDenied
 pub agent_access_provider::ReasonCode::AttachmentSizeDenied
@@ -1386,7 +1393,7 @@ impl core::marker::Unpin for agent_access_provider::RefreshReplay
 impl core::marker::UnsafeUnpin for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RefreshReplay
-pub enum agent_access_provider::ResourceSelector
+#[non_exhaustive] pub enum agent_access_provider::ResourceSelector
 pub agent_access_provider::ResourceSelector::All
 pub agent_access_provider::ResourceSelector::Exact
 pub agent_access_provider::ResourceSelector::Exact::value: alloc::string::String
@@ -1421,7 +1428,7 @@ impl core::marker::Unpin for agent_access_provider::ResourceSelector
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceSelector
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceSelector
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceSelector
-pub enum agent_access_provider::ScopedMcpNameSource
+#[non_exhaustive] pub enum agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ScopedMcpNameSource::CanonicalAction
 pub agent_access_provider::ScopedMcpNameSource::Imported
 pub agent_access_provider::ScopedMcpNameSource::Imported::name: core::option::Option<alloc::string::String>
@@ -1470,7 +1477,7 @@ impl core::marker::Unpin for agent_access_provider::SearchAuthorizationScope
 impl core::marker::UnsafeUnpin for agent_access_provider::SearchAuthorizationScope
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SearchAuthorizationScope
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchAuthorizationScope
-pub enum agent_access_provider::ServiceSurface
+#[non_exhaustive] pub enum agent_access_provider::ServiceSurface
 pub agent_access_provider::ServiceSurface::Gateway
 pub agent_access_provider::ServiceSurface::Gateway::broker_hosts: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ServiceSurface::Gateway::kind: alloc::string::String
@@ -1507,7 +1514,7 @@ impl core::marker::Unpin for agent_access_provider::StateDisposition
 impl core::marker::UnsafeUnpin for agent_access_provider::StateDisposition
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::StateDisposition
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::StateDisposition
-pub enum agent_access_provider::StaticCredentialKind
+#[non_exhaustive] pub enum agent_access_provider::StaticCredentialKind
 pub agent_access_provider::StaticCredentialKind::BasicApiToken
 pub agent_access_provider::StaticCredentialKind::BearerToken
 impl agent_access_provider::StaticCredentialKind
@@ -1530,7 +1537,7 @@ impl core::marker::Unpin for agent_access_provider::StaticCredentialKind
 impl core::marker::UnsafeUnpin for agent_access_provider::StaticCredentialKind
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::StaticCredentialKind
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::StaticCredentialKind
-pub enum agent_access_provider::UpstreamError
+#[non_exhaustive] pub enum agent_access_provider::UpstreamError
 pub agent_access_provider::UpstreamError::NotAllowed
 pub agent_access_provider::UpstreamError::NotSent
 pub agent_access_provider::UpstreamError::NotSent::detail: alloc::string::String
@@ -1558,7 +1565,7 @@ impl core::marker::Unpin for agent_access_provider::UpstreamError
 impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamError
-pub enum agent_access_provider::UpstreamResourceOwnership
+#[non_exhaustive] pub enum agent_access_provider::UpstreamResourceOwnership
 pub agent_access_provider::UpstreamResourceOwnership::ActingUser
 impl core::clone::Clone for agent_access_provider::UpstreamResourceOwnership
 pub fn agent_access_provider::UpstreamResourceOwnership::clone(&self) -> agent_access_provider::UpstreamResourceOwnership
@@ -1580,7 +1587,7 @@ impl core::marker::Unpin for agent_access_provider::UpstreamResourceOwnership
 impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamResourceOwnership
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamResourceOwnership
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamResourceOwnership
-pub struct agent_access_provider::ActionCapabilities
+#[non_exhaustive] pub struct agent_access_provider::ActionCapabilities
 pub agent_access_provider::ActionCapabilities::action: alloc::string::String
 pub agent_access_provider::ActionCapabilities::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionCapabilities::description: alloc::string::String
@@ -1608,7 +1615,7 @@ impl core::marker::Unpin for agent_access_provider::ActionCapabilities
 impl core::marker::UnsafeUnpin for agent_access_provider::ActionCapabilities
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ActionCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionCapabilities
-pub struct agent_access_provider::ActionDescriptor
+#[non_exhaustive] pub struct agent_access_provider::ActionDescriptor
 pub agent_access_provider::ActionDescriptor::action: alloc::string::String
 pub agent_access_provider::ActionDescriptor::attribution: core::option::Option<agent_access_provider::AttributionCapability>
 pub agent_access_provider::ActionDescriptor::credential_modes: alloc::vec::Vec<alloc::string::String>
@@ -1727,7 +1734,7 @@ impl core::marker::Unpin for agent_access_provider::AttachmentLimitsConfig
 impl core::marker::UnsafeUnpin for agent_access_provider::AttachmentLimitsConfig
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttachmentLimitsConfig
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttachmentLimitsConfig
-pub struct agent_access_provider::AttributionCapability
+#[non_exhaustive] pub struct agent_access_provider::AttributionCapability
 pub agent_access_provider::AttributionCapability::representation: agent_access_provider::AttributionRepresentation
 pub agent_access_provider::AttributionCapability::required: bool
 pub agent_access_provider::AttributionCapability::target: &'static str
@@ -1751,7 +1758,7 @@ impl core::marker::Unpin for agent_access_provider::AttributionCapability
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionCapability
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionCapability
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionCapability
-pub struct agent_access_provider::AttributionMutation
+#[non_exhaustive] pub struct agent_access_provider::AttributionMutation
 pub agent_access_provider::AttributionMutation::deduped: bool
 pub agent_access_provider::AttributionMutation::representation: &'static str
 pub agent_access_provider::AttributionMutation::target: &'static str
@@ -1774,9 +1781,11 @@ impl core::marker::Unpin for agent_access_provider::AttributionMutation
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionMutation
-pub struct agent_access_provider::AuthorizationRequest<'a>
+#[non_exhaustive] pub struct agent_access_provider::AuthorizationRequest<'a>
 pub agent_access_provider::AuthorizationRequest::code_challenge_s256: &'a str
 pub agent_access_provider::AuthorizationRequest::state: &'a str
+impl<'a> agent_access_provider::AuthorizationRequest<'a>
+pub fn agent_access_provider::AuthorizationRequest<'a>::new(&'a str, &'a str) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::AuthorizationRequest<'a>
 pub fn agent_access_provider::AuthorizationRequest<'a>::clone(&self) -> agent_access_provider::AuthorizationRequest<'a>
 impl<'a> core::fmt::Debug for agent_access_provider::AuthorizationRequest<'a>
@@ -1828,7 +1837,7 @@ impl core::marker::Unpin for agent_access_provider::BodyAdmission
 impl core::marker::UnsafeUnpin for agent_access_provider::BodyAdmission
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BodyAdmission
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::BodyAdmission
-pub struct agent_access_provider::BrokerBodyPart
+#[non_exhaustive] pub struct agent_access_provider::BrokerBodyPart
 pub agent_access_provider::BrokerBodyPart::bytes: alloc::vec::Vec<u8>
 pub agent_access_provider::BrokerBodyPart::content_type: core::option::Option<alloc::string::String>
 pub agent_access_provider::BrokerBodyPart::file_name: core::option::Option<alloc::string::String>
@@ -1874,12 +1883,14 @@ impl core::marker::Unpin for agent_access_provider::BrokerBodyPartFile
 impl core::marker::UnsafeUnpin for agent_access_provider::BrokerBodyPartFile
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BrokerBodyPartFile
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::BrokerBodyPartFile
-pub struct agent_access_provider::BrokerBodyPartSpec
+#[non_exhaustive] pub struct agent_access_provider::BrokerBodyPartSpec
 pub agent_access_provider::BrokerBodyPartSpec::content_type: alloc::string::String
 pub agent_access_provider::BrokerBodyPartSpec::file_name: alloc::string::String
 pub agent_access_provider::BrokerBodyPartSpec::name: alloc::string::String
 pub agent_access_provider::BrokerBodyPartSpec::sha256: alloc::string::String
 pub agent_access_provider::BrokerBodyPartSpec::size: u64
+impl agent_access_provider::BrokerBodyPartSpec
+pub fn agent_access_provider::BrokerBodyPartSpec::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::BrokerBodyPartSpec
 pub fn agent_access_provider::BrokerBodyPartSpec::clone(&self) -> agent_access_provider::BrokerBodyPartSpec
 impl core::cmp::Eq for agent_access_provider::BrokerBodyPartSpec
@@ -1910,10 +1921,12 @@ impl<'a> core::marker::Unpin for agent_access_provider::BuildContext<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::BuildContext<'a>
 impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BuildContext<'a>
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::BuildContext<'a>
-pub struct agent_access_provider::CodeExchange<'a>
+#[non_exhaustive] pub struct agent_access_provider::CodeExchange<'a>
 pub agent_access_provider::CodeExchange::code: &'a str
 pub agent_access_provider::CodeExchange::code_verifier: &'a str
 pub agent_access_provider::CodeExchange::profile: &'a agent_access_provider::OAuthPermissionProfile
+impl<'a> agent_access_provider::CodeExchange<'a>
+pub fn agent_access_provider::CodeExchange<'a>::new(&'a str, &'a str, &'a agent_access_provider::OAuthPermissionProfile) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::CodeExchange<'a>
 pub fn agent_access_provider::CodeExchange<'a>::clone(&self) -> agent_access_provider::CodeExchange<'a>
 impl<'a> core::marker::Copy for agent_access_provider::CodeExchange<'a>
@@ -1924,9 +1937,12 @@ impl<'a> core::marker::Unpin for agent_access_provider::CodeExchange<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::CodeExchange<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CodeExchange<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::CodeExchange<'a>
-pub struct agent_access_provider::ConnectedIdentity
+#[non_exhaustive] pub struct agent_access_provider::ConnectedIdentity
 pub agent_access_provider::ConnectedIdentity::display_name: alloc::string::String
 pub agent_access_provider::ConnectedIdentity::subject: core::option::Option<alloc::string::String>
+impl agent_access_provider::ConnectedIdentity
+pub fn agent_access_provider::ConnectedIdentity::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ConnectedIdentity::with_subject(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::marker::Freeze for agent_access_provider::ConnectedIdentity
 impl core::marker::Send for agent_access_provider::ConnectedIdentity
 impl core::marker::Sync for agent_access_provider::ConnectedIdentity
@@ -2009,7 +2025,7 @@ impl core::marker::Unpin for agent_access_provider::ContinuationSigner
 impl core::marker::UnsafeUnpin for agent_access_provider::ContinuationSigner
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationSigner
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationSigner
-pub struct agent_access_provider::CorrelationContext
+#[non_exhaustive] pub struct agent_access_provider::CorrelationContext
 pub agent_access_provider::CorrelationContext::agent_request_id: alloc::string::String
 pub agent_access_provider::CorrelationContext::broker_request_id: alloc::string::String
 impl agent_access_provider::CorrelationContext
@@ -2031,7 +2047,7 @@ impl core::marker::Unpin for agent_access_provider::CorrelationContext
 impl core::marker::UnsafeUnpin for agent_access_provider::CorrelationContext
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CorrelationContext
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CorrelationContext
-pub struct agent_access_provider::CredentialDescriptor
+#[non_exhaustive] pub struct agent_access_provider::CredentialDescriptor
 pub agent_access_provider::CredentialDescriptor::delegated: core::option::Option<agent_access_provider::DelegatedConnection>
 pub agent_access_provider::CredentialDescriptor::execution_required: bool
 pub agent_access_provider::CredentialDescriptor::profiles: alloc::vec::Vec<agent_access_provider::CredentialProfile>
@@ -2060,7 +2076,7 @@ impl core::marker::Unpin for agent_access_provider::CredentialDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialDescriptor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialDescriptor
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialDescriptor
-pub struct agent_access_provider::CredentialProfile
+#[non_exhaustive] pub struct agent_access_provider::CredentialProfile
 pub agent_access_provider::CredentialProfile::kind: &'static str
 pub agent_access_provider::CredentialProfile::name: alloc::string::String
 impl agent_access_provider::CredentialProfile
@@ -2080,12 +2096,14 @@ impl core::marker::Unpin for agent_access_provider::CredentialProfile
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialProfile
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialProfile
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialProfile
-pub struct agent_access_provider::DelegatedAccess
-pub agent_access_provider::DelegatedAccess::audience: alloc::string::String
-pub agent_access_provider::DelegatedAccess::expires_at: i64
-pub agent_access_provider::DelegatedAccess::target: alloc::string::String
-pub agent_access_provider::DelegatedAccess::token: alloc::string::String
-pub agent_access_provider::DelegatedAccess::version: alloc::string::String
+#[non_exhaustive] pub struct agent_access_provider::DelegatedAccess
+impl agent_access_provider::DelegatedAccess
+pub fn agent_access_provider::DelegatedAccess::audience(&self) -> &str
+pub fn agent_access_provider::DelegatedAccess::expires_at(&self) -> i64
+pub fn agent_access_provider::DelegatedAccess::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, i64) -> Self
+pub fn agent_access_provider::DelegatedAccess::target(&self) -> &str
+pub fn agent_access_provider::DelegatedAccess::token(&self) -> &str
+pub fn agent_access_provider::DelegatedAccess::version(&self) -> &str
 impl core::clone::Clone for agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedAccess::clone(&self) -> agent_access_provider::DelegatedAccess
 impl core::cmp::Eq for agent_access_provider::DelegatedAccess
@@ -2122,7 +2140,7 @@ impl core::marker::Unpin for agent_access_provider::DelegatedBindingId
 impl core::marker::UnsafeUnpin for agent_access_provider::DelegatedBindingId
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::DelegatedBindingId
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::DelegatedBindingId
-pub struct agent_access_provider::DelegatedConnection
+#[non_exhaustive] pub struct agent_access_provider::DelegatedConnection
 pub agent_access_provider::DelegatedConnection::description: &'static str
 impl core::clone::Clone for agent_access_provider::DelegatedConnection
 pub fn agent_access_provider::DelegatedConnection::clone(&self) -> agent_access_provider::DelegatedConnection
@@ -2231,11 +2249,12 @@ impl core::marker::Unpin for agent_access_provider::InvalidReasonCodeId
 impl core::marker::UnsafeUnpin for agent_access_provider::InvalidReasonCodeId
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::InvalidReasonCodeId
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::InvalidReasonCodeId
-pub struct agent_access_provider::InvocationIdentity
+#[non_exhaustive] pub struct agent_access_provider::InvocationIdentity
 pub agent_access_provider::InvocationIdentity::authenticated: bool
 pub agent_access_provider::InvocationIdentity::principal: alloc::string::String
 impl agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::InvocationIdentity::anonymous() -> Self
+pub fn agent_access_provider::InvocationIdentity::new(impl core::convert::Into<alloc::string::String>, bool) -> Self
 impl core::clone::Clone for agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::InvocationIdentity::clone(&self) -> agent_access_provider::InvocationIdentity
 impl core::cmp::Eq for agent_access_provider::InvocationIdentity
@@ -2288,7 +2307,7 @@ impl core::marker::Unpin for agent_access_provider::ModuleMetadata
 impl core::marker::UnsafeUnpin for agent_access_provider::ModuleMetadata
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ModuleMetadata
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ModuleMetadata
-pub struct agent_access_provider::MultipartUploadSpec
+#[non_exhaustive] pub struct agent_access_provider::MultipartUploadSpec
 pub agent_access_provider::MultipartUploadSpec::caller_content_type_allowed: bool
 pub agent_access_provider::MultipartUploadSpec::field_name_prefix: alloc::string::String
 pub agent_access_provider::MultipartUploadSpec::locator_inputs: alloc::vec::Vec<alloc::string::String>
@@ -2297,6 +2316,12 @@ pub agent_access_provider::MultipartUploadSpec::metadata_fields: alloc::vec::Vec
 pub agent_access_provider::MultipartUploadSpec::metadata_pointer: alloc::string::String
 pub agent_access_provider::MultipartUploadSpec::min_files: usize
 pub agent_access_provider::MultipartUploadSpec::role: alloc::string::String
+impl agent_access_provider::MultipartUploadSpec
+pub fn agent_access_provider::MultipartUploadSpec::allowing_caller_content_type(self) -> Self
+pub fn agent_access_provider::MultipartUploadSpec::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::MultipartUploadSpec::with_file_count(self, usize, core::option::Option<usize>) -> Self
+pub fn agent_access_provider::MultipartUploadSpec::with_locator_inputs(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::MultipartUploadSpec::with_metadata_fields(self, alloc::vec::Vec<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::MultipartUploadSpec
 pub fn agent_access_provider::MultipartUploadSpec::clone(&self) -> agent_access_provider::MultipartUploadSpec
 impl core::cmp::Eq for agent_access_provider::MultipartUploadSpec
@@ -2316,11 +2341,13 @@ impl core::marker::Unpin for agent_access_provider::MultipartUploadSpec
 impl core::marker::UnsafeUnpin for agent_access_provider::MultipartUploadSpec
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::MultipartUploadSpec
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MultipartUploadSpec
-pub struct agent_access_provider::NamespaceSelectorDescriptor
-pub agent_access_provider::NamespaceSelectorDescriptor::example: &'static str
-pub agent_access_provider::NamespaceSelectorDescriptor::label: &'static str
-pub agent_access_provider::NamespaceSelectorDescriptor::members_label: &'static str
-pub agent_access_provider::NamespaceSelectorDescriptor::valid: fn(&str) -> bool
+#[non_exhaustive] pub struct agent_access_provider::NamespaceSelectorDescriptor
+impl agent_access_provider::NamespaceSelectorDescriptor
+pub const fn agent_access_provider::NamespaceSelectorDescriptor::example(&self) -> &'static str
+pub fn agent_access_provider::NamespaceSelectorDescriptor::is_valid(&self, &str) -> bool
+pub const fn agent_access_provider::NamespaceSelectorDescriptor::label(&self) -> &'static str
+pub const fn agent_access_provider::NamespaceSelectorDescriptor::members_label(&self) -> &'static str
+pub const fn agent_access_provider::NamespaceSelectorDescriptor::new(fn(&str) -> bool, &'static str, &'static str, &'static str) -> Self
 impl core::fmt::Debug for agent_access_provider::NamespaceSelectorDescriptor
 pub fn agent_access_provider::NamespaceSelectorDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::NamespaceSelectorDescriptor
@@ -2330,7 +2357,7 @@ impl core::marker::Unpin for agent_access_provider::NamespaceSelectorDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::NamespaceSelectorDescriptor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::NamespaceSelectorDescriptor
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::NamespaceSelectorDescriptor
-pub struct agent_access_provider::NamespaceSelectorMetadata
+#[non_exhaustive] pub struct agent_access_provider::NamespaceSelectorMetadata
 pub agent_access_provider::NamespaceSelectorMetadata::example: alloc::string::String
 pub agent_access_provider::NamespaceSelectorMetadata::label: alloc::string::String
 pub agent_access_provider::NamespaceSelectorMetadata::members_label: alloc::string::String
@@ -2378,11 +2405,12 @@ impl core::marker::Unpin for agent_access_provider::OAuthAdapter
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthAdapter
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthAdapter
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthAdapter
-pub struct agent_access_provider::OAuthCallbackIssuer
+#[non_exhaustive] pub struct agent_access_provider::OAuthCallbackIssuer
 pub agent_access_provider::OAuthCallbackIssuer::required: bool
 pub agent_access_provider::OAuthCallbackIssuer::value: alloc::string::String
 impl agent_access_provider::OAuthCallbackIssuer
 pub fn agent_access_provider::OAuthCallbackIssuer::accepts(&self, core::option::Option<&str>) -> bool
+pub fn agent_access_provider::OAuthCallbackIssuer::new(impl core::convert::Into<alloc::string::String>, bool) -> Self
 impl core::clone::Clone for agent_access_provider::OAuthCallbackIssuer
 pub fn agent_access_provider::OAuthCallbackIssuer::clone(&self) -> agent_access_provider::OAuthCallbackIssuer
 impl core::fmt::Debug for agent_access_provider::OAuthCallbackIssuer
@@ -2398,10 +2426,12 @@ impl core::marker::Unpin for agent_access_provider::OAuthCallbackIssuer
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthCallbackIssuer
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthCallbackIssuer
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthCallbackIssuer
-pub struct agent_access_provider::OAuthClient<'a>
+#[non_exhaustive] pub struct agent_access_provider::OAuthClient<'a>
 pub agent_access_provider::OAuthClient::client_secret: &'a str
 pub agent_access_provider::OAuthClient::config: &'a agent_access_provider::OAuthRegistrationConfig
 pub agent_access_provider::OAuthClient::registration_id: &'a str
+impl<'a> agent_access_provider::OAuthClient<'a>
+pub fn agent_access_provider::OAuthClient<'a>::new(&'a str, &'a agent_access_provider::OAuthRegistrationConfig, &'a str) -> Self
 impl core::fmt::Debug for agent_access_provider::OAuthClient<'_>
 pub fn agent_access_provider::OAuthClient<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Freeze for agent_access_provider::OAuthClient<'a>
@@ -2505,11 +2535,14 @@ impl core::marker::Unpin for agent_access_provider::OAuthResponse
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthResponse
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthResponse
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthResponse
-pub struct agent_access_provider::OAuthTarget
+#[non_exhaustive] pub struct agent_access_provider::OAuthTarget
 pub agent_access_provider::OAuthTarget::audience: alloc::string::String
 pub agent_access_provider::OAuthTarget::id: alloc::string::String
 pub agent_access_provider::OAuthTarget::name: alloc::string::String
 pub agent_access_provider::OAuthTarget::scopes: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+impl agent_access_provider::OAuthTarget
+pub fn agent_access_provider::OAuthTarget::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> Self
+pub fn agent_access_provider::OAuthTarget::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::OAuthTarget
 pub fn agent_access_provider::OAuthTarget::clone(&self) -> agent_access_provider::OAuthTarget
 impl core::fmt::Debug for agent_access_provider::OAuthTarget
@@ -2540,9 +2573,11 @@ impl core::marker::Unpin for agent_access_provider::PendingUpstreamTrace
 impl core::marker::UnsafeUnpin for agent_access_provider::PendingUpstreamTrace
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::PendingUpstreamTrace
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::PendingUpstreamTrace
-pub struct agent_access_provider::PreparedAuthorization
+#[non_exhaustive] pub struct agent_access_provider::PreparedAuthorization
 pub agent_access_provider::PreparedAuthorization::callback_issuer: agent_access_provider::OAuthCallbackIssuer
 pub agent_access_provider::PreparedAuthorization::url: url::Url
+impl agent_access_provider::PreparedAuthorization
+pub fn agent_access_provider::PreparedAuthorization::new(url::Url, agent_access_provider::OAuthCallbackIssuer) -> Self
 impl core::marker::Freeze for agent_access_provider::PreparedAuthorization
 impl core::marker::Send for agent_access_provider::PreparedAuthorization
 impl core::marker::Sync for agent_access_provider::PreparedAuthorization
@@ -2585,10 +2620,12 @@ impl core::marker::Unpin for agent_access_provider::ProviderBuildError
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderBuildError
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderBuildError
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderBuildError
-pub struct agent_access_provider::ProviderCredentialVerification
+#[non_exhaustive] pub struct agent_access_provider::ProviderCredentialVerification
 pub agent_access_provider::ProviderCredentialVerification::audit: serde_json::value::Value
 pub agent_access_provider::ProviderCredentialVerification::upstream_duration_ms: u64
 pub agent_access_provider::ProviderCredentialVerification::upstream_status: u16
+impl agent_access_provider::ProviderCredentialVerification
+pub fn agent_access_provider::ProviderCredentialVerification::new(u16, u64, serde_json::value::Value) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderCredentialVerification
 pub fn agent_access_provider::ProviderCredentialVerification::clone(&self) -> agent_access_provider::ProviderCredentialVerification
 impl core::cmp::Eq for agent_access_provider::ProviderCredentialVerification
@@ -2706,12 +2743,18 @@ impl core::marker::Unpin for agent_access_provider::ProviderInvocation
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderInvocation
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderInvocation
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderInvocation
-pub struct agent_access_provider::ProviderLimits
+#[non_exhaustive] pub struct agent_access_provider::ProviderLimits
 pub agent_access_provider::ProviderLimits::max_download_bytes: u64
 pub agent_access_provider::ProviderLimits::max_http_body_bytes: u64
 pub agent_access_provider::ProviderLimits::max_upstream_response_bytes: u64
 pub agent_access_provider::ProviderLimits::request_timeout_ms: u64
 pub agent_access_provider::ProviderLimits::streaming_idle_timeout_ms: u64
+impl agent_access_provider::ProviderLimits
+pub const fn agent_access_provider::ProviderLimits::with_max_download_bytes(self, u64) -> Self
+pub const fn agent_access_provider::ProviderLimits::with_max_http_body_bytes(self, u64) -> Self
+pub const fn agent_access_provider::ProviderLimits::with_max_upstream_response_bytes(self, u64) -> Self
+pub const fn agent_access_provider::ProviderLimits::with_request_timeout_ms(self, u64) -> Self
+pub const fn agent_access_provider::ProviderLimits::with_streaming_idle_timeout_ms(self, u64) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderLimits
 pub fn agent_access_provider::ProviderLimits::clone(&self) -> agent_access_provider::ProviderLimits
 impl core::cmp::Eq for agent_access_provider::ProviderLimits
@@ -2796,13 +2839,19 @@ impl core::marker::Unpin for agent_access_provider::ProviderReasonDefinition
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderReasonDefinition
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderReasonDefinition
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderReasonDefinition
-pub struct agent_access_provider::ProviderResult
+#[non_exhaustive] pub struct agent_access_provider::ProviderResult
 pub agent_access_provider::ProviderResult::audit: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ProviderResult::object_ids: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ProviderResult::result: serde_json::value::Value
 pub agent_access_provider::ProviderResult::stream: core::option::Option<agent_access_provider::ProviderResultStream>
 pub agent_access_provider::ProviderResult::upstream_duration_ms: core::option::Option<u64>
 pub agent_access_provider::ProviderResult::upstream_status: core::option::Option<u16>
+impl agent_access_provider::ProviderResult
+pub fn agent_access_provider::ProviderResult::new(serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_audit(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_object_ids(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_stream(self, agent_access_provider::ProviderResultStream) -> Self
+pub fn agent_access_provider::ProviderResult::with_upstream(self, core::option::Option<u16>, core::option::Option<u64>) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::clone(&self) -> agent_access_provider::ProviderResult
 impl core::cmp::PartialEq for agent_access_provider::ProviderResult
@@ -2821,7 +2870,7 @@ impl core::marker::Unpin for agent_access_provider::ProviderResult
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderResult
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderResult
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderResult
-pub struct agent_access_provider::ProviderResultStream
+#[non_exhaustive] pub struct agent_access_provider::ProviderResultStream
 pub agent_access_provider::ProviderResultStream::content_type: alloc::string::String
 pub agent_access_provider::ProviderResultStream::source: agent_access_provider::ProviderResultStreamSource
 impl agent_access_provider::ProviderResultStream
@@ -2864,7 +2913,7 @@ impl core::marker::Unpin for agent_access_provider::ProviderState
 impl core::marker::UnsafeUnpin for agent_access_provider::ProviderState
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderState
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderState
-pub struct agent_access_provider::ProviderStreamError
+#[non_exhaustive] pub struct agent_access_provider::ProviderStreamError
 pub agent_access_provider::ProviderStreamError::message: alloc::string::String
 pub agent_access_provider::ProviderStreamError::reason_code: agent_access_provider::ProviderReason
 impl agent_access_provider::ProviderStreamError
@@ -2928,13 +2977,12 @@ impl core::marker::Unpin for agent_access_provider::ReasonCodeId
 impl core::marker::UnsafeUnpin for agent_access_provider::ReasonCodeId
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ReasonCodeId
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ReasonCodeId
-pub struct agent_access_provider::RedirectRules<'a>
-pub agent_access_provider::RedirectRules::authorize: &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)
-pub agent_access_provider::RedirectRules::correlate_other_origins: bool
-pub agent_access_provider::RedirectRules::deadline: core::time::Duration
-pub agent_access_provider::RedirectRules::decorate: &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)
-pub agent_access_provider::RedirectRules::max_redirects: u32
-pub agent_access_provider::RedirectRules::vet: &'a (dyn core::ops::function::Fn(&url::Url) -> bool + core::marker::Sync)
+#[non_exhaustive] pub struct agent_access_provider::RedirectRules<'a>
+impl<'a> agent_access_provider::RedirectRules<'a>
+pub fn agent_access_provider::RedirectRules<'a>::correlating_other_origins(self) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::new(u32, core::time::Duration, &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::with_decorate(self, &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::with_vet(self, &'a (dyn core::ops::function::Fn(&url::Url) -> bool + core::marker::Sync)) -> Self
 impl<'a> core::marker::Freeze for agent_access_provider::RedirectRules<'a>
 impl<'a> core::marker::Send for agent_access_provider::RedirectRules<'a>
 impl<'a> core::marker::Sync for agent_access_provider::RedirectRules<'a>
@@ -2942,12 +2990,15 @@ impl<'a> core::marker::Unpin for agent_access_provider::RedirectRules<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::RedirectRules<'a>
-pub struct agent_access_provider::ResourceAttributeDescriptor
-pub agent_access_provider::ResourceAttributeDescriptor::description: &'static str
-pub agent_access_provider::ResourceAttributeDescriptor::label: &'static str
-pub agent_access_provider::ResourceAttributeDescriptor::name: &'static str
-pub agent_access_provider::ResourceAttributeDescriptor::required: bool
-pub agent_access_provider::ResourceAttributeDescriptor::validate: fn(&str) -> bool
+#[non_exhaustive] pub struct agent_access_provider::ResourceAttributeDescriptor
+impl agent_access_provider::ResourceAttributeDescriptor
+pub const fn agent_access_provider::ResourceAttributeDescriptor::description(&self) -> &'static str
+pub const fn agent_access_provider::ResourceAttributeDescriptor::is_required(&self) -> bool
+pub fn agent_access_provider::ResourceAttributeDescriptor::is_valid(&self, &str) -> bool
+pub const fn agent_access_provider::ResourceAttributeDescriptor::label(&self) -> &'static str
+pub const fn agent_access_provider::ResourceAttributeDescriptor::name(&self) -> &'static str
+pub const fn agent_access_provider::ResourceAttributeDescriptor::optional(&'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
+pub const fn agent_access_provider::ResourceAttributeDescriptor::required(&'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
 impl core::fmt::Debug for agent_access_provider::ResourceAttributeDescriptor
 pub fn agent_access_provider::ResourceAttributeDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::ResourceAttributeDescriptor
@@ -2957,7 +3008,7 @@ impl core::marker::Unpin for agent_access_provider::ResourceAttributeDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceAttributeDescriptor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceAttributeDescriptor
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceAttributeDescriptor
-pub struct agent_access_provider::ResourceAttributeMetadata
+#[non_exhaustive] pub struct agent_access_provider::ResourceAttributeMetadata
 pub agent_access_provider::ResourceAttributeMetadata::description: alloc::string::String
 pub agent_access_provider::ResourceAttributeMetadata::label: alloc::string::String
 pub agent_access_provider::ResourceAttributeMetadata::name: alloc::string::String
@@ -3008,9 +3059,11 @@ impl core::marker::Unpin for agent_access_provider::ResourceAttributes
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceAttributes
-pub struct agent_access_provider::ResourceScopeCapabilities
+#[non_exhaustive] pub struct agent_access_provider::ResourceScopeCapabilities
 pub agent_access_provider::ResourceScopeCapabilities::resource_type: agent_access_provider::ResourceType
 pub agent_access_provider::ResourceScopeCapabilities::selectors: alloc::vec::Vec<alloc::string::String>
+impl agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::new(agent_access_provider::ResourceType, alloc::vec::Vec<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::ResourceScopeCapabilities
 pub fn agent_access_provider::ResourceScopeCapabilities::clone(&self) -> agent_access_provider::ResourceScopeCapabilities
 impl core::cmp::PartialEq for agent_access_provider::ResourceScopeCapabilities
@@ -3061,21 +3114,24 @@ impl core::marker::Unpin for agent_access_provider::ResourceType
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceType
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceType
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceType
-pub struct agent_access_provider::ResourceTypeDescriptor
-pub agent_access_provider::ResourceTypeDescriptor::action_inputs: core::option::Option<agent_access_provider::ResourceActionInputs>
-pub agent_access_provider::ResourceTypeDescriptor::attributes: &'static [agent_access_provider::ResourceAttributeDescriptor]
-pub agent_access_provider::ResourceTypeDescriptor::canonical: fn(&str) -> bool
-pub agent_access_provider::ResourceTypeDescriptor::example: &'static str
-pub agent_access_provider::ResourceTypeDescriptor::id: agent_access_provider::ResourceType
-pub agent_access_provider::ResourceTypeDescriptor::label: &'static str
-pub agent_access_provider::ResourceTypeDescriptor::namespace: core::option::Option<agent_access_provider::NamespaceSelectorDescriptor>
-pub agent_access_provider::ResourceTypeDescriptor::plural_label: &'static str
+#[non_exhaustive] pub struct agent_access_provider::ResourceTypeDescriptor
 impl agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::accepts(&self, &agent_access_provider::ResourceSelector) -> bool
+pub fn agent_access_provider::ResourceTypeDescriptor::action_inputs(&self, &agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
+pub const fn agent_access_provider::ResourceTypeDescriptor::attributes(&self) -> &'static [agent_access_provider::ResourceAttributeDescriptor]
+pub const fn agent_access_provider::ResourceTypeDescriptor::example(&self) -> &'static str
+pub const fn agent_access_provider::ResourceTypeDescriptor::id(&self) -> &agent_access_provider::ResourceType
 pub fn agent_access_provider::ResourceTypeDescriptor::is_canonical_target(&self, &str) -> bool
+pub const fn agent_access_provider::ResourceTypeDescriptor::label(&self) -> &'static str
 pub fn agent_access_provider::ResourceTypeDescriptor::metadata(&self) -> agent_access_provider::ResourceTypeMetadata
+pub const fn agent_access_provider::ResourceTypeDescriptor::namespace(&self) -> core::option::Option<&agent_access_provider::NamespaceSelectorDescriptor>
+pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &'static str
 pub fn agent_access_provider::ResourceTypeDescriptor::selector_kinds(&self) -> alloc::vec::Vec<&'static str>
 pub fn agent_access_provider::ResourceTypeDescriptor::validate_attributes(&self, &agent_access_provider::ResourceSelector, &agent_access_provider::ResourceAttributes, bool) -> core::result::Result<(), alloc::string::String>
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_action_inputs(self, agent_access_provider::ResourceActionInputs) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_attributes(self, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_namespace(self, agent_access_provider::NamespaceSelectorDescriptor) -> Self
 impl core::fmt::Debug for agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::ResourceTypeDescriptor
@@ -3085,7 +3141,7 @@ impl core::marker::Unpin for agent_access_provider::ResourceTypeDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceTypeDescriptor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceTypeDescriptor
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTypeDescriptor
-pub struct agent_access_provider::ResourceTypeMetadata
+#[non_exhaustive] pub struct agent_access_provider::ResourceTypeMetadata
 pub agent_access_provider::ResourceTypeMetadata::attributes: alloc::vec::Vec<agent_access_provider::ResourceAttributeMetadata>
 pub agent_access_provider::ResourceTypeMetadata::example: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::id: agent_access_provider::ResourceType
@@ -3172,9 +3228,11 @@ impl core::marker::Unpin for agent_access_provider::ScopeResolution
 impl core::marker::UnsafeUnpin for agent_access_provider::ScopeResolution
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeResolution
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeResolution
-pub struct agent_access_provider::SearchAuthorization
+#[non_exhaustive] pub struct agent_access_provider::SearchAuthorization
 pub agent_access_provider::SearchAuthorization::scope: agent_access_provider::SearchAuthorizationScope
 pub agent_access_provider::SearchAuthorization::scope_type: alloc::string::String
+impl agent_access_provider::SearchAuthorization
+pub fn agent_access_provider::SearchAuthorization::new(impl core::convert::Into<alloc::string::String>, agent_access_provider::SearchAuthorizationScope) -> Self
 impl core::clone::Clone for agent_access_provider::SearchAuthorization
 pub fn agent_access_provider::SearchAuthorization::clone(&self) -> agent_access_provider::SearchAuthorization
 impl core::cmp::Eq for agent_access_provider::SearchAuthorization
@@ -3207,7 +3265,7 @@ impl core::marker::Unpin for agent_access_provider::SearchLimitsConfig
 impl core::marker::UnsafeUnpin for agent_access_provider::SearchLimitsConfig
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SearchLimitsConfig
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchLimitsConfig
-pub struct agent_access_provider::ServiceCapabilities
+#[non_exhaustive] pub struct agent_access_provider::ServiceCapabilities
 pub agent_access_provider::ServiceCapabilities::actions: alloc::vec::Vec<agent_access_provider::ActionCapabilities>
 pub agent_access_provider::ServiceCapabilities::broker_hosts: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ServiceCapabilities::credential_verification_inputs: alloc::vec::Vec<alloc::string::String>
@@ -3235,9 +3293,11 @@ impl core::marker::Unpin for agent_access_provider::ServiceCapabilities
 impl core::marker::UnsafeUnpin for agent_access_provider::ServiceCapabilities
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceCapabilities
-pub struct agent_access_provider::ServiceCredentialKinds<'a>
+#[non_exhaustive] pub struct agent_access_provider::ServiceCredentialKinds<'a>
 pub agent_access_provider::ServiceCredentialKinds::per_user: core::option::Option<&'a str>
 pub agent_access_provider::ServiceCredentialKinds::service: core::option::Option<&'a str>
+impl<'a> agent_access_provider::ServiceCredentialKinds<'a>
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::new(core::option::Option<&'a str>, core::option::Option<&'a str>) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::clone(&self) -> agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::default::Default for agent_access_provider::ServiceCredentialKinds<'a>
@@ -3252,7 +3312,7 @@ impl<'a> core::marker::Unpin for agent_access_provider::ServiceCredentialKinds<'
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceCredentialKinds<'a>
-pub struct agent_access_provider::ServiceDescriptor
+#[non_exhaustive] pub struct agent_access_provider::ServiceDescriptor
 pub agent_access_provider::ServiceDescriptor::actions: alloc::vec::Vec<agent_access_provider::ActionDescriptor>
 pub agent_access_provider::ServiceDescriptor::credentials: agent_access_provider::CredentialDescriptor
 pub agent_access_provider::ServiceDescriptor::display_name: alloc::string::String
@@ -3268,9 +3328,15 @@ pub fn agent_access_provider::ServiceDescriptor::capabilities(&self) -> agent_ac
 pub fn agent_access_provider::ServiceDescriptor::credential_profile_kind(&self, &str) -> core::option::Option<&'static str>
 pub fn agent_access_provider::ServiceDescriptor::credential_verification_inputs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ServiceDescriptor::is_gateway(&self) -> bool
+pub fn agent_access_provider::ServiceDescriptor::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::scope_types(&self) -> alloc::collections::btree::set::BTreeSet<alloc::string::String>
 pub fn agent_access_provider::ServiceDescriptor::validate(&self) -> core::result::Result<(), alloc::vec::Vec<alloc::string::String>>
 pub fn agent_access_provider::ServiceDescriptor::validate_builtin_mcp_names(&self) -> core::result::Result<(), alloc::vec::Vec<alloc::string::String>>
+pub fn agent_access_provider::ServiceDescriptor::with_actions(self, alloc::vec::Vec<agent_access_provider::ActionDescriptor>) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_credentials(self, agent_access_provider::CredentialDescriptor) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_presentation_body_limit(self, u64) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_resource_scopes(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_surface(self, agent_access_provider::ServiceSurface) -> Self
 impl agent_access_provider::ServiceDescriptor
 pub fn agent_access_provider::ServiceDescriptor::validate_resource_types(&self, &agent_access_provider::ResourceTypeRegistry) -> alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for agent_access_provider::ServiceDescriptor
@@ -3287,7 +3353,7 @@ impl core::marker::Unpin for agent_access_provider::ServiceDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::ServiceDescriptor
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceDescriptor
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceDescriptor
-pub struct agent_access_provider::ServiceProvider
+#[non_exhaustive] pub struct agent_access_provider::ServiceProvider
 pub agent_access_provider::ServiceProvider::descriptor: agent_access_provider::ServiceDescriptor
 pub agent_access_provider::ServiceProvider::provider: alloc::sync::Arc<dyn agent_access_provider::Provider>
 impl agent_access_provider::ServiceProvider
@@ -3323,13 +3389,17 @@ impl core::marker::Unpin for agent_access_provider::SigningError
 impl core::marker::UnsafeUnpin for agent_access_provider::SigningError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SigningError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SigningError
-pub struct agent_access_provider::TokenGrant
+#[non_exhaustive] pub struct agent_access_provider::TokenGrant
 pub agent_access_provider::TokenGrant::access_token: alloc::string::String
 pub agent_access_provider::TokenGrant::expires_in: u64
 pub agent_access_provider::TokenGrant::refresh_token: agent_access_provider::IssuedRefreshToken
 pub agent_access_provider::TokenGrant::scopes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::TokenGrant::supersedes_other_access: bool
 pub agent_access_provider::TokenGrant::token_type: alloc::string::String
+impl agent_access_provider::TokenGrant
+pub fn agent_access_provider::TokenGrant::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, agent_access_provider::IssuedRefreshToken) -> Self
+pub fn agent_access_provider::TokenGrant::with_scopes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::TokenGrant::with_supersedes_other_access(self, bool) -> Self
 impl core::marker::Freeze for agent_access_provider::TokenGrant
 impl core::marker::Send for agent_access_provider::TokenGrant
 impl core::marker::Sync for agent_access_provider::TokenGrant
@@ -3357,11 +3427,12 @@ impl core::marker::Unpin for agent_access_provider::UnsupportedCredentialMode
 impl core::marker::UnsafeUnpin for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UnsupportedCredentialMode
-pub struct agent_access_provider::UpstreamCall<'a>
+#[non_exhaustive] pub struct agent_access_provider::UpstreamCall<'a>
 pub agent_access_provider::UpstreamCall::attempt: u32
 pub agent_access_provider::UpstreamCall::operation: &'a str
 impl<'a> agent_access_provider::UpstreamCall<'a>
 pub fn agent_access_provider::UpstreamCall<'a>::new(&'a str) -> Self
+pub fn agent_access_provider::UpstreamCall<'a>::with_attempt(self, u32) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::UpstreamCall<'a>
 pub fn agent_access_provider::UpstreamCall<'a>::clone(&self) -> agent_access_provider::UpstreamCall<'a>
 impl<'a> core::fmt::Debug for agent_access_provider::UpstreamCall<'a>
@@ -3395,14 +3466,10 @@ impl core::marker::Unpin for agent_access_provider::UpstreamClient
 impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamClient
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamClient
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamClient
-pub struct agent_access_provider::UpstreamClientSpec<'a>
-pub agent_access_provider::UpstreamClientSpec::allowed_upstream_hosts: &'a [alloc::string::String]
-pub agent_access_provider::UpstreamClientSpec::base: &'a url::Url
-pub agent_access_provider::UpstreamClientSpec::egress: agent_access_provider::EgressDeclaration<'a>
-pub agent_access_provider::UpstreamClientSpec::label: &'a str
-pub agent_access_provider::UpstreamClientSpec::profile: agent_access_provider::ClientProfile
-pub agent_access_provider::UpstreamClientSpec::provider: &'static str
-pub agent_access_provider::UpstreamClientSpec::status_reasons: &'static [(u16, agent_access_provider::ReasonCode)]
+#[non_exhaustive] pub struct agent_access_provider::UpstreamClientSpec<'a>
+impl<'a> agent_access_provider::UpstreamClientSpec<'a>
+pub fn agent_access_provider::UpstreamClientSpec<'a>::new(&'a str, &'static str, &'a url::Url, agent_access_provider::EgressDeclaration<'a>, &'a [alloc::string::String], agent_access_provider::ClientProfile) -> Self
+pub fn agent_access_provider::UpstreamClientSpec<'a>::with_status_reasons(self, &'static [(u16, agent_access_provider::ReasonCode)]) -> Self
 impl<'a> core::marker::Freeze for agent_access_provider::UpstreamClientSpec<'a>
 impl<'a> core::marker::Send for agent_access_provider::UpstreamClientSpec<'a>
 impl<'a> core::marker::Sync for agent_access_provider::UpstreamClientSpec<'a>
@@ -3437,7 +3504,7 @@ impl core::marker::Unpin for agent_access_provider::UpstreamRetryAfter
 impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamRetryAfter
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamRetryAfter
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamRetryAfter
-pub struct agent_access_provider::UpstreamTrace<'a>
+#[non_exhaustive] pub struct agent_access_provider::UpstreamTrace<'a>
 pub agent_access_provider::UpstreamTrace::attempt: u32
 pub agent_access_provider::UpstreamTrace::duration_ms: u64
 pub agent_access_provider::UpstreamTrace::egress_proxy_mode: &'a str
@@ -3448,6 +3515,11 @@ pub agent_access_provider::UpstreamTrace::reason_code: core::option::Option<agen
 pub agent_access_provider::UpstreamTrace::status: core::option::Option<u16>
 pub agent_access_provider::UpstreamTrace::upstream_operation: &'a str
 pub agent_access_provider::UpstreamTrace::upstream_origin: &'a str
+impl<'a> agent_access_provider::UpstreamTrace<'a>
+pub fn agent_access_provider::UpstreamTrace<'a>::new(&'a str, agent_access_provider::UpstreamCall<'a>, &'a str, &'a str, &'a str, u64) -> Self
+pub fn agent_access_provider::UpstreamTrace<'a>::with_path_template(self, core::option::Option<&'a str>) -> Self
+pub fn agent_access_provider::UpstreamTrace<'a>::with_reason_code(self, core::option::Option<agent_access_provider::ProviderReason>) -> Self
+pub fn agent_access_provider::UpstreamTrace<'a>::with_status(self, core::option::Option<u16>) -> Self
 impl<'a> core::marker::Freeze for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::marker::Send for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::marker::Sync for agent_access_provider::UpstreamTrace<'a>
@@ -3455,13 +3527,14 @@ impl<'a> core::marker::Unpin for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamTrace<'a>
-pub struct agent_access_provider::ValidationContext<'a>
+#[non_exhaustive] pub struct agent_access_provider::ValidationContext<'a>
 pub agent_access_provider::ValidationContext::credentials: agent_access_provider::ServiceCredentialKinds<'a>
 pub agent_access_provider::ValidationContext::environment: &'a str
 pub agent_access_provider::ValidationContext::limits: &'a agent_access_provider::ProviderLimits
 pub agent_access_provider::ValidationContext::policy_authority: &'a str
-impl agent_access_provider::ValidationContext<'_>
-pub fn agent_access_provider::ValidationContext<'_>::production(&self) -> bool
+impl<'a> agent_access_provider::ValidationContext<'a>
+pub fn agent_access_provider::ValidationContext<'a>::new(&'a str, &'a str, &'a agent_access_provider::ProviderLimits, agent_access_provider::ServiceCredentialKinds<'a>) -> Self
+pub fn agent_access_provider::ValidationContext<'a>::production(&self) -> bool
 impl<'a> core::clone::Clone for agent_access_provider::ValidationContext<'a>
 pub fn agent_access_provider::ValidationContext<'a>::clone(&self) -> agent_access_provider::ValidationContext<'a>
 impl<'a> core::fmt::Debug for agent_access_provider::ValidationContext<'a>
@@ -3578,154 +3651,154 @@ pub type agent_access_provider::UploadProgress = tokio::sync::watch::Receiver<to
 
 // Implementation and construction contracts of the items above
 
-enum agent_access_provider::ActionIo: exhaustive
-enum agent_access_provider::AttributionRepresentation: exhaustive
-enum agent_access_provider::AttributionVerb: exhaustive
-enum agent_access_provider::AuthorityMismatch: exhaustive
-enum agent_access_provider::ClientProfile: exhaustive
+enum agent_access_provider::ActionIo: non-exhaustive
+enum agent_access_provider::AttributionRepresentation: non-exhaustive
+enum agent_access_provider::AttributionVerb: non-exhaustive
+enum agent_access_provider::AuthorityMismatch: non-exhaustive
+enum agent_access_provider::ClientProfile: non-exhaustive
 enum agent_access_provider::ContinuationError: non-exhaustive
 enum agent_access_provider::ContinuationLifetime: non-exhaustive
 enum agent_access_provider::ContinuationOwner: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
-enum agent_access_provider::CredentialView: exhaustive
+enum agent_access_provider::CredentialView: non-exhaustive
 enum agent_access_provider::Decision: exhaustive
-enum agent_access_provider::EgressDeclaration: exhaustive
-enum agent_access_provider::EgressProxySource: exhaustive
-enum agent_access_provider::ExecutionAccess: exhaustive
-enum agent_access_provider::HeaderEncoding: exhaustive
+enum agent_access_provider::EgressDeclaration: non-exhaustive
+enum agent_access_provider::EgressProxySource: non-exhaustive
+enum agent_access_provider::ExecutionAccess: non-exhaustive
+enum agent_access_provider::HeaderEncoding: non-exhaustive
 enum agent_access_provider::HookPhase: non-exhaustive
-enum agent_access_provider::InvocationAuthority: exhaustive
+enum agent_access_provider::InvocationAuthority: non-exhaustive
 enum agent_access_provider::IssuedRefreshToken: exhaustive
-enum agent_access_provider::LookupRequirement: exhaustive
-enum agent_access_provider::OAuthClientAuth: exhaustive
-enum agent_access_provider::OAuthDialectError: exhaustive
-enum agent_access_provider::OAuthRotation: exhaustive
-enum agent_access_provider::OAuthScopeMode: exhaustive
-enum agent_access_provider::OAuthTokenEncoding: exhaustive
-enum agent_access_provider::OpaqueTokenSigner: exhaustive
-enum agent_access_provider::ProviderFailureStatus: non-exhaustive
+enum agent_access_provider::LookupRequirement: non-exhaustive
+enum agent_access_provider::OAuthClientAuth: non-exhaustive
+enum agent_access_provider::OAuthDialectError: non-exhaustive
+enum agent_access_provider::OAuthRotation: non-exhaustive
+enum agent_access_provider::OAuthScopeMode: non-exhaustive
+enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
+enum agent_access_provider::OpaqueTokenSigner: non-exhaustive
+enum agent_access_provider::ProviderFailureStatus: exhaustive
 enum agent_access_provider::ProviderResultStreamSource: exhaustive
-enum agent_access_provider::ProviderStateError: exhaustive
-enum agent_access_provider::ReasonCode: exhaustive
+enum agent_access_provider::ProviderStateError: non-exhaustive
+enum agent_access_provider::ReasonCode: non-exhaustive
 enum agent_access_provider::RefreshReplay: exhaustive
-enum agent_access_provider::ResourceSelector: exhaustive
-enum agent_access_provider::ScopedMcpNameSource: exhaustive
+enum agent_access_provider::ResourceSelector: non-exhaustive
+enum agent_access_provider::ScopedMcpNameSource: non-exhaustive
 enum agent_access_provider::SearchAuthorizationScope: exhaustive
-enum agent_access_provider::ServiceSurface: exhaustive
+enum agent_access_provider::ServiceSurface: non-exhaustive
 enum agent_access_provider::StateDisposition: exhaustive
-enum agent_access_provider::StaticCredentialKind: exhaustive
-enum agent_access_provider::UpstreamError: exhaustive
-enum agent_access_provider::UpstreamResourceOwnership: exhaustive
+enum agent_access_provider::StaticCredentialKind: non-exhaustive
+enum agent_access_provider::UpstreamError: non-exhaustive
+enum agent_access_provider::UpstreamResourceOwnership: non-exhaustive
 enum agent_access_provider::host::ContractViolation: non-exhaustive
 enum agent_access_provider::host::HostPort: non-exhaustive
-enum agent_access_provider::presentation::BodyPathSegment: exhaustive
+enum agent_access_provider::presentation::BodyPathSegment: non-exhaustive
 enum agent_access_provider::presentation::ReadContentFormat: exhaustive
-enum agent_access_provider::presentation::RenderBudgetExhausted: exhaustive
-enum agent_access_provider::presentation::ResponseFormat: exhaustive
-struct agent_access_provider::ActionCapabilities: named fields
-struct agent_access_provider::ActionDescriptor: named fields
+enum agent_access_provider::presentation::RenderBudgetExhausted: non-exhaustive
+enum agent_access_provider::presentation::ResponseFormat: non-exhaustive
+struct agent_access_provider::ActionCapabilities: named fields, non-exhaustive
+struct agent_access_provider::ActionDescriptor: named fields, non-exhaustive
 struct agent_access_provider::AdmittedContext: tuple fields, private fields
 struct agent_access_provider::AdmittedRequest: named fields, private fields
 struct agent_access_provider::AttachmentLimitsConfig: named fields
-struct agent_access_provider::AttributionCapability: named fields
-struct agent_access_provider::AttributionMutation: named fields
-struct agent_access_provider::AuthorizationRequest: named fields
+struct agent_access_provider::AttributionCapability: named fields, non-exhaustive
+struct agent_access_provider::AttributionMutation: named fields, non-exhaustive
+struct agent_access_provider::AuthorizationRequest: named fields, non-exhaustive
 struct agent_access_provider::BackendRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::BodyAdmission: named fields, private fields
-struct agent_access_provider::BrokerBodyPart: named fields
+struct agent_access_provider::BrokerBodyPart: named fields, non-exhaustive
 struct agent_access_provider::BrokerBodyPartFile: named fields, private fields
-struct agent_access_provider::BrokerBodyPartSpec: named fields
+struct agent_access_provider::BrokerBodyPartSpec: named fields, non-exhaustive
 struct agent_access_provider::BuildContext: named fields, private fields
-struct agent_access_provider::CodeExchange: named fields
-struct agent_access_provider::ConnectedIdentity: named fields
+struct agent_access_provider::CodeExchange: named fields, non-exhaustive
+struct agent_access_provider::ConnectedIdentity: named fields, non-exhaustive
 struct agent_access_provider::ContinuationBinding: named fields, private fields
 struct agent_access_provider::ContinuationFamily: named fields, private fields
 struct agent_access_provider::ContinuationSigner: named fields, private fields
-struct agent_access_provider::CorrelationContext: named fields
-struct agent_access_provider::CredentialDescriptor: named fields
-struct agent_access_provider::CredentialProfile: named fields
-struct agent_access_provider::DelegatedAccess: named fields
+struct agent_access_provider::CorrelationContext: named fields, non-exhaustive
+struct agent_access_provider::CredentialDescriptor: named fields, non-exhaustive
+struct agent_access_provider::CredentialProfile: named fields, non-exhaustive
+struct agent_access_provider::DelegatedAccess: named fields, private fields, non-exhaustive
 struct agent_access_provider::DelegatedBindingId: tuple fields, private fields
-struct agent_access_provider::DelegatedConnection: named fields
+struct agent_access_provider::DelegatedConnection: named fields, non-exhaustive
 struct agent_access_provider::DelegatedCredential: tuple fields, private fields
 struct agent_access_provider::EgressProxyConfig: named fields
 struct agent_access_provider::EgressRoute: named fields, private fields
 struct agent_access_provider::ExecutionCredential: named fields, private fields
 struct agent_access_provider::InvalidReasonCodeId: unit
-struct agent_access_provider::InvocationIdentity: named fields
+struct agent_access_provider::InvocationIdentity: named fields, non-exhaustive
 struct agent_access_provider::InvocationScope: named fields, private fields
 struct agent_access_provider::ModuleMetadata: named fields, private fields, non-exhaustive
-struct agent_access_provider::MultipartUploadSpec: named fields
-struct agent_access_provider::NamespaceSelectorDescriptor: named fields
-struct agent_access_provider::NamespaceSelectorMetadata: named fields
+struct agent_access_provider::MultipartUploadSpec: named fields, non-exhaustive
+struct agent_access_provider::NamespaceSelectorDescriptor: named fields, private fields, non-exhaustive
+struct agent_access_provider::NamespaceSelectorMetadata: named fields, non-exhaustive
 struct agent_access_provider::OAuthAdapter: tuple fields, private fields
-struct agent_access_provider::OAuthCallbackIssuer: named fields
-struct agent_access_provider::OAuthClient: named fields
+struct agent_access_provider::OAuthCallbackIssuer: named fields, non-exhaustive
+struct agent_access_provider::OAuthClient: named fields, non-exhaustive
 struct agent_access_provider::OAuthDialectRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::OAuthHttp: named fields, private fields
 struct agent_access_provider::OAuthPermissionProfile: named fields
 struct agent_access_provider::OAuthRegistrationConfig: named fields
 struct agent_access_provider::OAuthResponse: named fields, private fields
-struct agent_access_provider::OAuthTarget: named fields
+struct agent_access_provider::OAuthTarget: named fields, non-exhaustive
 struct agent_access_provider::PendingUpstreamTrace: tuple fields, private fields
-struct agent_access_provider::PreparedAuthorization: named fields
+struct agent_access_provider::PreparedAuthorization: named fields, non-exhaustive
 struct agent_access_provider::ProviderAttributionConfig: named fields, private fields
 struct agent_access_provider::ProviderBuildError: named fields, private fields
-struct agent_access_provider::ProviderCredentialVerification: named fields
+struct agent_access_provider::ProviderCredentialVerification: named fields, non-exhaustive
 struct agent_access_provider::ProviderError: named fields, private fields
 struct agent_access_provider::ProviderFinalizationContext: named fields, private fields
 struct agent_access_provider::ProviderFinalizationGuard: named fields, private fields
 struct agent_access_provider::ProviderInvocation: named fields, private fields
-struct agent_access_provider::ProviderLimits: named fields
+struct agent_access_provider::ProviderLimits: named fields, non-exhaustive
 struct agent_access_provider::ProviderReason: tuple fields, private fields
 struct agent_access_provider::ProviderReasonDefinition: named fields, private fields, non-exhaustive
-struct agent_access_provider::ProviderResult: named fields
-struct agent_access_provider::ProviderResultStream: named fields
+struct agent_access_provider::ProviderResult: named fields, non-exhaustive
+struct agent_access_provider::ProviderResultStream: named fields, non-exhaustive
 struct agent_access_provider::ProviderState: tuple fields, private fields
-struct agent_access_provider::ProviderStreamError: named fields
+struct agent_access_provider::ProviderStreamError: named fields, non-exhaustive
 struct agent_access_provider::ReasonCodeId: tuple fields, private fields
-struct agent_access_provider::RedirectRules: named fields
-struct agent_access_provider::ResourceAttributeDescriptor: named fields
-struct agent_access_provider::ResourceAttributeMetadata: named fields
+struct agent_access_provider::RedirectRules: named fields, private fields, non-exhaustive
+struct agent_access_provider::ResourceAttributeDescriptor: named fields, private fields, non-exhaustive
+struct agent_access_provider::ResourceAttributeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributes: tuple fields, private fields
-struct agent_access_provider::ResourceScopeCapabilities: named fields
+struct agent_access_provider::ResourceScopeCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ResourceType: tuple fields, private fields
-struct agent_access_provider::ResourceTypeDescriptor: named fields
-struct agent_access_provider::ResourceTypeMetadata: named fields
+struct agent_access_provider::ResourceTypeDescriptor: named fields, private fields, non-exhaustive
+struct agent_access_provider::ResourceTypeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceTypeRegistry: named fields, private fields
 struct agent_access_provider::ScopeRequest: named fields, private fields
 struct agent_access_provider::ScopeResolution: named fields, private fields
-struct agent_access_provider::SearchAuthorization: named fields
+struct agent_access_provider::SearchAuthorization: named fields, non-exhaustive
 struct agent_access_provider::SearchLimitsConfig: named fields
-struct agent_access_provider::ServiceCapabilities: named fields
-struct agent_access_provider::ServiceCredentialKinds: named fields
-struct agent_access_provider::ServiceDescriptor: named fields
-struct agent_access_provider::ServiceProvider: named fields
+struct agent_access_provider::ServiceCapabilities: named fields, non-exhaustive
+struct agent_access_provider::ServiceCredentialKinds: named fields, non-exhaustive
+struct agent_access_provider::ServiceDescriptor: named fields, non-exhaustive
+struct agent_access_provider::ServiceProvider: named fields, non-exhaustive
 struct agent_access_provider::SigningError: unit
-struct agent_access_provider::TokenGrant: named fields
+struct agent_access_provider::TokenGrant: named fields, non-exhaustive
 struct agent_access_provider::UnsupportedCredentialMode: unit
-struct agent_access_provider::UpstreamCall: named fields
+struct agent_access_provider::UpstreamCall: named fields, non-exhaustive
 struct agent_access_provider::UpstreamClient: named fields, private fields
-struct agent_access_provider::UpstreamClientSpec: named fields
+struct agent_access_provider::UpstreamClientSpec: named fields, private fields, non-exhaustive
 struct agent_access_provider::UpstreamRetryAfter: named fields, private fields
-struct agent_access_provider::UpstreamTrace: named fields
-struct agent_access_provider::ValidationContext: named fields
+struct agent_access_provider::UpstreamTrace: named fields, non-exhaustive
+struct agent_access_provider::ValidationContext: named fields, non-exhaustive
 struct agent_access_provider::host::AdmittedRequestParts: named fields
 struct agent_access_provider::host::ClientTransportSpec: named fields, private fields
 struct agent_access_provider::host::HookContext: named fields, private fields
 struct agent_access_provider::host::ScopeRequestParts: named fields
 struct agent_access_provider::host::TransportClient: named fields, private fields
 struct agent_access_provider::host::UpstreamClientFactoryError: tuple fields, private fields
-struct agent_access_provider::presentation::ActionPresentation: named fields
-struct agent_access_provider::presentation::EmbeddedBody: named fields
+struct agent_access_provider::presentation::ActionPresentation: named fields, private fields, non-exhaustive
+struct agent_access_provider::presentation::EmbeddedBody: named fields, private fields, non-exhaustive
 struct agent_access_provider::presentation::MarkdownWriter: named fields, private fields
 struct agent_access_provider::presentation::PresentationBudget: named fields, private fields
 struct agent_access_provider::presentation::RenderBudget: named fields, private fields
-struct agent_access_provider::presentation::RenderContext: named fields
+struct agent_access_provider::presentation::RenderContext: named fields, non-exhaustive
 struct agent_access_provider::presentation::RenderError: unit
-struct agent_access_provider::presentation::RenderedBody: named fields
-struct agent_access_provider::presentation::ResponseCapabilities: named fields
-struct agent_access_provider::presentation::ResponseOptions: named fields
+struct agent_access_provider::presentation::RenderedBody: named fields, non-exhaustive
+struct agent_access_provider::presentation::ResponseCapabilities: named fields, non-exhaustive
+struct agent_access_provider::presentation::ResponseOptions: named fields, non-exhaustive
 trait agent_access_provider::BackendConfig: dyn-compatible
 trait agent_access_provider::BackendConfig::build: required fn
 trait agent_access_provider::BackendConfig::descriptor: required fn
