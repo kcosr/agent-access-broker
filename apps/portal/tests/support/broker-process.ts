@@ -68,20 +68,24 @@ export function failedWithAddressInUse(output: string): boolean {
  * Starts the Broker on a fresh loopback port and waits until `/v1/healthz`
  * answers. A Broker that exits first fails the start at once, unless its own
  * startup event shows that another process took the port; that startup is
- * retried on a new port, up to `attempts` startups in all.
+ * retried on a new port, up to `attempts` startups in all. `timeoutMs`
+ * bounds every start together, and a Broker that does not become ready is
+ * stopped.
  */
 export async function startBroker(options: BrokerStart): Promise<StartedBroker> {
   const attempts = options.attempts ?? 3;
+  const deadline = Date.now() + options.timeoutMs;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await startOnce(options, await freeLoopbackPort());
+      return await startOnce(options, await freeLoopbackPort(), deadline);
     } catch (error) {
-      if (!(error instanceof BrokerExitedError) || attempt >= attempts || !failedWithAddressInUse(error.output)) throw error;
+      if (!(error instanceof BrokerExitedError) || attempt >= attempts || Date.now() >= deadline
+          || !failedWithAddressInUse(error.output)) throw error;
     }
   }
 }
 
-async function startOnce(options: BrokerStart, port: number): Promise<StartedBroker> {
+async function startOnce(options: BrokerStart, port: number, deadline: number): Promise<StartedBroker> {
   const baseUrl = `http://127.0.0.1:${port}`;
   const config = await options.configure(port, baseUrl);
   const output: string[] = [];
@@ -94,35 +98,50 @@ async function startOnce(options: BrokerStart, port: number): Promise<StartedBro
     env: options.env ?? process.env
   });
   const closed = once(child, "close").catch(() => undefined);
+  // Ends any readiness request or pause once the Broker exits or fails to
+  // spawn, so a listener that accepts without answering, such as another
+  // process holding the port, cannot hide the Broker's exit.
+  const ended = new AbortController();
+  child.once("exit", () => ended.abort());
   child.stdout.on("data", (chunk: Buffer) => record(String(chunk)));
   child.stderr.on("data", (chunk: Buffer) => record(String(chunk)));
   const failure: { spawn?: Error } = {};
   child.on("error", (error) => {
     failure.spawn = error;
     record(error.message);
+    ended.abort();
   });
-  const deadline = Date.now() + options.timeoutMs;
-  while (Date.now() < deadline) {
-    if (failure.spawn) throw failure.spawn;
-    if (child.exitCode !== null || child.signalCode !== null) {
-      await closed;
-      throw new BrokerExitedError(output.join(""));
+  try {
+    for (;;) {
+      if (failure.spawn) throw failure.spawn;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        await closed;
+        throw new BrokerExitedError(output.join(""));
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`broker did not become ready\n${output.join("")}`);
+      const headers = options.readinessHeaders?.() ?? {};
+      try {
+        const response = await fetch(`${baseUrl}/v1/healthz`, {
+          headers,
+          signal: AbortSignal.any([ended.signal, AbortSignal.timeout(remaining)])
+        });
+        await response.body?.cancel();
+        if (response.ok) return { child, port, baseUrl };
+      } catch {
+        // Retry while the broker starts; the checks above end the wait.
+      }
+      await delay(Math.min(250, Math.max(0, deadline - Date.now())), undefined, { signal: ended.signal }).catch(() => undefined);
     }
-    try {
-      const response = await fetch(`${baseUrl}/v1/healthz`, { headers: options.readinessHeaders?.() ?? {} });
-      if (response.ok) return { child, port, baseUrl };
-    } catch {
-      // Retry while the broker starts.
-    }
-    await delay(250);
+  } catch (error) {
+    await stopBroker(child);
+    throw error;
   }
-  await stopBroker(child);
-  throw new Error(`broker did not become ready\n${output.join("")}`);
 }
 
 /** Stops the Broker with SIGTERM, then SIGKILL after five seconds. */
-async function stopBroker(child: ChildProcessWithoutNullStreams | undefined): Promise<void> {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+async function stopBroker(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, "exit");
   child.kill("SIGTERM");
   const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
