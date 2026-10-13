@@ -395,8 +395,35 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
         }
         assert_eq!(error.result.as_ref().unwrap()["mutationStatus"], "unknown");
         assert_eq!(error.result.as_ref().unwrap()["retrySafe"], false);
+        assert_eq!(error.result.as_ref().unwrap()["operationDispatched"], true);
         assert_eq!(fixture.call_count(), 1);
     }
+}
+#[tokio::test]
+async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let def = definition(&format!("{base}/api"), &format!("{base}/definition.json"));
+    let host = test_host();
+    let provider = OpenApiAdapter
+        .build(&def, &[action(&def)], None, &host.context())
+        .unwrap();
+    let error = provider.invoke(invocation(input())).await.err().unwrap();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert_eq!(error.message, "upstream HTTP operation did not complete");
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "not_applied",
+            "retrySafe": true,
+            "operationDispatched": false,
+        }))
+    );
+    assert_eq!(
+        error.audit.as_deref().unwrap()["operationDispatched"],
+        false
+    );
 }
 #[tokio::test]
 async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {

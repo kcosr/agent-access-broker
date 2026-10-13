@@ -382,15 +382,17 @@ impl Provider for McpProvider {
             }
             Err(mut error) => {
                 if !action.definition.read_only {
-                    let mut result = error.result.take().map(|v| *v).unwrap_or_else(|| json!({}));
-                    result["mutationStatus"] = json!(if state.call_dispatched {
-                        "unknown"
+                    // A tool call that was never dispatched, or that the SDK
+                    // refused or proved unsent, applied nothing; anything
+                    // else may have been applied.
+                    error = error.with_mutation_receipt(if state.call_dispatched {
+                        MutationReceipt::unknown()
                     } else {
-                        "not_applied"
+                        MutationReceipt::not_applied()
                     });
-                    result["retrySafe"] = json!(false);
-                    result["toolDispatched"] = json!(state.call_dispatched);
-                    error.result = Some(Box::new(result));
+                    if let Some(result) = error.result.as_deref_mut() {
+                        result["toolDispatched"] = json!(state.call_dispatched);
+                    }
                 }
                 Err(error
                     .with_upstream(state.status, Some(elapsed))

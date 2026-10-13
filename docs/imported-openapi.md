@@ -127,9 +127,18 @@ omitted while retaining the HTTP failure status. Empty successful responses have
 a null body.
 
 Successful write responses are `applied_unverified`: receiving a success response
-does not establish a verified business outcome. Failures after dispatch can have
-an unknown outcome and are not safe to retry automatically. Local output saving
-uses the existing receipt behavior and never replays the API operation.
+does not establish a verified business outcome. A failed write reports whether
+its request was dispatched in `operationDispatched`, with a mutation receipt:
+
+- after dispatch, including an HTTP error status, an invalid response or a
+  timeout, the outcome is unknown: `mutationStatus: "unknown"` and
+  `retrySafe: false`. Do not retry it automatically; inspect the API first.
+- when the Broker refused the request URL or proved the request was never sent,
+  such as a refused connection, nothing was applied: `mutationStatus:
+  "not_applied"` and `retrySafe: true`, so the write can be repeated.
+
+The failure keeps its ordinary reason code. Local output saving uses the
+existing receipt behavior and never replays the API operation.
 
 ## Connecting one imported service
 

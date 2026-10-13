@@ -286,7 +286,8 @@ fn assert_write(error: &ProviderError, dispatched: bool) {
         result["mutationStatus"],
         if dispatched { "unknown" } else { "not_applied" }
     );
-    assert_eq!(result["retrySafe"], false);
+    // Only a tool call that was never dispatched is safe to repeat.
+    assert_eq!(result["retrySafe"], !dispatched);
     assert_eq!(result["toolDispatched"], dispatched);
 }
 fn assert_legacy_requests(fixture: &CompatFixture, session: Option<&str>) {

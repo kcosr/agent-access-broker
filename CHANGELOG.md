@@ -489,6 +489,12 @@ All notable changes to this project are documented in this file.
   `upstream_timeout` or `upstream_connection_failed` error, which previously
   carried no result. Failures after GitLab answered, with an error status or
   with a success status whose body then failed, keep their plain error.
+- Imported MCP and OpenAPI write failures whose request was never dispatched
+  (`toolDispatched: false` or `operationDispatched: false`: the tool call was
+  never sent, or the Broker refused its URL or proved it unsent) now report
+  `retrySafe: true` with their unchanged `mutationStatus: "not_applied"`
+  instead of `retrySafe: false`. Dispatched failures keep
+  `mutationStatus: "unknown"`, `retrySafe: false`.
 
 ### Fixed
 
