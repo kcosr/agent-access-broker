@@ -87,7 +87,7 @@ impl OAuthRecordsProvider {
         // Like the registration's authorization server, a loopback records
         // API is reached directly.
         let direct = EgressProxyRuntimeConfig::direct();
-        let network = if crate::oauth::is_loopback(&base) {
+        let network = if crate::is_literal_loopback(&base) {
             UpstreamNetwork {
                 egress: &direct,
                 ..network

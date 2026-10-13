@@ -695,6 +695,62 @@ async fn metadata_bounds_and_registration_errors_fail_closed() {
     assert_eq!(fixture.token_calls(), 0);
 }
 
+/// Moves every approved endpoint, including the resource bound by each
+/// profile, from the fixture's `http://127.0.0.1` origin to `origin`.
+fn with_endpoint_origin(config: &OAuthRegistrationConfig, origin: &str) -> OAuthRegistrationConfig {
+    let move_origin = |value: &str| value.replacen("http://127.0.0.1", origin, 1);
+    let mut config = config.clone();
+    config.base_url = move_origin(&config.base_url);
+    for value in config.adapter_settings.values_mut() {
+        *value = move_origin(value);
+    }
+    for profile in config.permission_profiles.values_mut() {
+        profile.audience = move_origin(&profile.audience);
+        profile.target = move_origin(&profile.target);
+    }
+    config
+}
+
+#[tokio::test]
+async fn insecure_endpoints_require_literal_loopback_addresses() {
+    let fixture = Fixture::new(OAuthClientAuth::None).await;
+    for origin in ["http://127.0.0.1", "http://[::1]", "https://localhost"] {
+        McpOAuthDialect
+            .validate_registration(&with_endpoint_origin(&fixture.config, origin))
+            .unwrap_or_else(|error| panic!("{origin}: {error}"));
+    }
+    for origin in ["http://localhost", "http://LOCALHOST", "http://mcp.example"] {
+        assert!(
+            McpOAuthDialect
+                .validate_registration(&with_endpoint_origin(&fixture.config, origin))
+                .is_err(),
+            "{origin}"
+        );
+    }
+    // Each endpoint is checked on its own: an approved loopback issuer does not
+    // admit a plain-HTTP `localhost` endpoint beside it.
+    let insecure = with_endpoint_origin(&fixture.config, "http://localhost");
+    let mut config = fixture.config.clone();
+    config.base_url = insecure.base_url.clone();
+    assert!(McpOAuthDialect.validate_registration(&config).is_err());
+    for key in SETTINGS {
+        let mut config = fixture.config.clone();
+        config
+            .adapter_settings
+            .insert(key.into(), insecure.adapter_settings[key].clone());
+        if key == "resource" {
+            config.permission_profiles = insecure.permission_profiles.clone();
+        }
+        assert!(
+            McpOAuthDialect.validate_registration(&config).is_err(),
+            "{key}"
+        );
+    }
+    let mut config = fixture.config.clone();
+    config.allow_insecure_loopback = false;
+    assert!(McpOAuthDialect.validate_registration(&config).is_err());
+}
+
 #[tokio::test]
 async fn both_permission_modes_require_exact_resource_and_valid_scope_configuration() {
     assert!(McpOAuthDialect.supports_server_default_scopes());

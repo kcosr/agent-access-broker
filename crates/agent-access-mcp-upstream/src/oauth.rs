@@ -32,13 +32,7 @@ struct Endpoints<'a> {
 
 fn approved_url(raw: &str, insecure_loopback: bool) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|_| "MCP OAuth endpoint must be an absolute URL")?;
-    let loopback = url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host
-                .trim_matches(['[', ']'])
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    });
+    let loopback = is_literal_loopback(&url);
     if raw.len() > 2048
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -49,7 +43,7 @@ fn approved_url(raw: &str, insecure_loopback: bool) -> Result<Url, String> {
         || raw.chars().any(char::is_control)
         || !(url.scheme() == "https" || (insecure_loopback && loopback && url.scheme() == "http"))
     {
-        return Err("MCP OAuth endpoints require HTTPS without credentials, query, fragment or wildcards; HTTP needs explicit loopback permission".into());
+        return Err("MCP OAuth endpoints require HTTPS without credentials, query, fragment or wildcards; HTTP needs explicit loopback permission and a literal loopback IP address".into());
     }
     Ok(url)
 }

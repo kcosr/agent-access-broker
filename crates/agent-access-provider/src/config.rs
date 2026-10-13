@@ -373,6 +373,18 @@ pub fn is_loopback_or_localhost(host: Option<Host<&str>>) -> bool {
     }
 }
 
+/// Whether a URL names a literal IPv4 or IPv6 loopback address. Only such URLs
+/// receive the OAuth loopback exceptions (plain HTTP and the direct route).
+/// Host names never qualify, including `localhost`: name resolution must not
+/// grant the exception.
+pub fn is_literal_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        _ => false,
+    }
+}
+
 pub fn is_secret_ref(value: &str) -> bool {
     if let Some(name) = value.strip_prefix("env:") {
         return is_env_name(name);
@@ -395,6 +407,31 @@ fn env_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_loopback_requires_an_ip_address() {
+        for url in [
+            "http://127.0.0.1:8787/token",
+            "https://127.0.0.2/",
+            "http://[::1]:8787/token",
+            "https://[::1]/",
+        ] {
+            assert!(is_literal_loopback(&Url::parse(url).unwrap()), "{url}");
+        }
+        for url in [
+            "http://localhost:8787/token",
+            "https://localhost/",
+            "http://LOCALHOST/",
+            "http://localhost./",
+            "http://127.0.0.1.example/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::2]/",
+            "http://192.0.2.1/",
+            "https://issuer.example/",
+        ] {
+            assert!(!is_literal_loopback(&Url::parse(url).unwrap()), "{url}");
+        }
+    }
 
     #[test]
     fn upstream_http_accepts_only_exact_local_hosts_outside_production() {

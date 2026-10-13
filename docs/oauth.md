@@ -183,8 +183,10 @@ and carries the Broker's upstream correlation headers: the invocation's request
 IDs during refresh, and the consent callback's during code exchange and
 discovery. Each approved metadata, token, identity, or target endpoint origin
 independently follows global egress proxy resolution (`NO_PROXY`, environment
-proxy, then `network.egress_proxy`). Loopback IPs and `localhost` destinations
-connect directly; the issuer's route does not determine another host's route. Records API reads use the same routing, are limited
+proxy, then `network.egress_proxy`). Only literal loopback IP destinations, such
+as `127.0.0.1` or `[::1]`, connect directly. Host names, including `localhost`,
+follow that resolution, and the issuer's route does not determine another
+destination's route. Records API reads use the same routing, are limited
 to paths under `base_url`, are bounded by `limits.request_timeout_ms`, and are
 traced and correlated like any backend request.
 

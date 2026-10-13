@@ -1873,8 +1873,9 @@ the development-only `stub` dialect, and this binary links `google` and
 `mcp_oauth`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
 connect), the registration's allowlist, and upstream traces. Egress proxy
-resolution is independent for each approved destination origin; loopback IPs and
-`localhost` destinations connect directly without affecting other hosts. The manager
+resolution is independent for each approved destination origin; only literal
+loopback IP destinations connect directly, without affecting other hosts. Host
+names, including `localhost`, never receive that exception. The manager
 validates every grant's bounds, scopes and targets regardless of dialect.
 
 The Gmail backend is a separately linked provider crate. Its Google OAuth dialect

@@ -356,13 +356,9 @@ fn identifier(value: &str) -> bool {
 fn bounded(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
-pub(crate) fn is_loopback(url: &Url) -> bool {
-    matches!(url.host(), Some(url::Host::Ipv4(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback())
-}
 fn checked_url(raw: &str, insecure: bool) -> Result<Url, OAuthError> {
     let url = Url::parse(raw).map_err(|_| OAuthError::Configuration)?;
-    let loopback = is_loopback(&url);
+    let loopback = crate::is_literal_loopback(&url);
     if !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()

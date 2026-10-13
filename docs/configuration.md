@@ -1506,8 +1506,10 @@ the same rules:
 
 The runtime resolution precedence (`NO_PROXY` -> environment proxy -> service
 scope -> global -> direct) is described in `docs/design.md`. Delegated OAuth
-requests have no service scope and use the global resolution, except that a
-literal loopback registration `base_url` connects directly.
+requests have no service scope. Each approved OAuth destination origin uses the
+global resolution independently, except that a literal IPv4 or IPv6 loopback
+address, such as `127.0.0.1` or `[::1]`, connects directly. Host names,
+including `localhost`, always use the global resolution.
 
 ## `[limits]`
 
@@ -2017,8 +2019,12 @@ documented in [oauth.md](oauth.md). They require managed storage/encryption and
 browser management. A registration's `adapter` must name a linked OAuth dialect:
 `google` for Gmail, `mcp_oauth` for approved imported MCP services, or the
 development-only `stub`. This is separate from Microsoft OIDC browser login.
-OAuth requests follow the global egress proxy resolution; a literal loopback
-`base_url` connects directly.
+Each approved OAuth destination origin (issuer, metadata, token, identity or
+target endpoint) follows the global egress proxy resolution independently. Only
+literal IPv4/IPv6 loopback addresses connect directly, and a loopback issuer
+never changes another destination's route. Plain HTTP requires
+`allow_insecure_loopback = true` and a literal loopback address; `http://localhost`
+is rejected, and `https://localhost` follows the global resolution.
 
 ## Gmail OAuth
 

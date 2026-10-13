@@ -956,9 +956,9 @@ Providers never hold the OAuth manager or refresh material: the runtime lends
 each admitted invocation the caller's current access and rechecks it just
 before dispatch. OAuth requests pass through the same upstream client boundary
 as backends:
-each registration may reach only its dialect's allowlist, uses the global egress
-proxy unless its base is a literal loopback address, and is traced without
-tokens, codes or response bodies.
+each registration may reach only its dialect's allowlist, routes each approved
+destination through the global egress proxy unless that destination is a literal
+loopback IP address, and is traced without tokens, codes or response bodies.
 
 Gmail consent uses `gmail.modify`, whose upstream authority exceeds the Broker’s
 supported action set. Broker grants expose reads, archive, Trash and restore only;

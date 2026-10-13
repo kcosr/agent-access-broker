@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- OAuth loopback exceptions now require a literal IPv4/IPv6 loopback address.
+  `http://localhost` is rejected for MCP OAuth endpoints and OAuth destinations;
+  use `http://127.0.0.1` or `http://[::1]` with `allow_insecure_loopback = true`.
+  `https://localhost` and every other host name now follow the global egress
+  proxy resolution instead of connecting directly. Each approved OAuth
+  destination origin is routed independently.
+
 ### Added
 
 ### Changed
