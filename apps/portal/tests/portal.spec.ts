@@ -1,24 +1,20 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { RESOURCE_TYPES } from "../unit/resource-types.fixture";
 import { brokerBinary, portalDist } from "./support/binaries";
+import { startBroker } from "./support/broker-process";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 let broker: ChildProcessWithoutNullStreams | undefined;
 let baseUrl = "";
 let tempDir = "";
-let brokerPort = 0;
 let requestCounter = 0;
-const brokerLogs: string[] = [];
 const credentialName = "workstation-token";
 const initialAdminPassword = "admin-password";
 const updatedAdminPassword = "admin-password-updated";
@@ -42,28 +38,20 @@ async function expectDialogWithinViewport(dialog: Locator) {
 test.beforeAll(async () => {
   await fs.access(path.join(portalDist, "index.html"));
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "aab-portal-e2e-"));
-  brokerPort = await freePort();
-  baseUrl = `http://127.0.0.1:${brokerPort}`;
-  await writeBrokerFixture(tempDir, brokerPort);
-  broker = spawn(
-    brokerBinary,
-    [
-      "--config",
-      path.join(tempDir, "broker.toml"),
-      "serve",
-      "--listen",
-      `127.0.0.1:${brokerPort}`
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        RUST_LOG: "agent_access_broker=warn,agent_access_core=warn"
-      }
-    }
-  );
-  collectBrokerLogs(broker);
-  await waitForBroker();
+  ({ child: broker, baseUrl } = await startBroker({
+    binary: brokerBinary,
+    configure: async (port) => {
+      await writeBrokerFixture(tempDir, port);
+      return path.join(tempDir, "broker.toml");
+    },
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      RUST_LOG: "agent_access_broker=warn,agent_access_core=warn"
+    },
+    readinessHeaders: () => ({ "X-Agent-Access-Request-Id": `playwright-health-${++requestCounter}` }),
+    timeoutMs: 90_000
+  }));
 });
 
 test.afterAll(async () => {
@@ -2947,27 +2935,6 @@ default = { requests = 1000, window = "1m" }
 `;
 }
 
-async function waitForBroker() {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 90_000) {
-    if (broker?.exitCode !== null) {
-      throw new Error(`broker exited before readiness\n${brokerLogs.join("")}`);
-    }
-    try {
-      const response = await fetch(`${baseUrl}/v1/healthz`, {
-        headers: {
-          "X-Agent-Access-Request-Id": `playwright-health-${++requestCounter}`
-        }
-      });
-      if (response.ok) return;
-    } catch {
-      // Retry while the broker binds.
-    }
-    await delay(250);
-  }
-  throw new Error(`broker did not become ready\n${brokerLogs.join("")}`);
-}
-
 async function stopBroker() {
   if (!broker || broker.exitCode !== null) return;
   broker.kill("SIGTERM");
@@ -2975,25 +2942,6 @@ async function stopBroker() {
     if (broker && broker.exitCode === null) broker.kill("SIGKILL");
   });
   await Promise.race([once(broker, "exit"), timeout]);
-}
-
-function collectBrokerLogs(child: ChildProcessWithoutNullStreams) {
-  child.stdout.on("data", (chunk: Buffer) => brokerLogs.push(chunk.toString()));
-  child.stderr.on("data", (chunk: Buffer) => brokerLogs.push(chunk.toString()));
-}
-
-async function freePort() {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.close(() => resolve());
-  });
-  return address.port;
 }
 
 function base64UrlByte(value: number) {

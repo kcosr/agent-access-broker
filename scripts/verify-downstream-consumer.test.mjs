@@ -769,6 +769,76 @@ createServer((request, response) => { response.writeHead(503); response.end(); }
   assert.ok(existsSync(join(evidence, "acceptance", "broker.log")));
 });
 
+// A stand-in assembled broker: `config` subcommands succeed as the real
+// validation does for these configurations, and `serve` runs `serve`, a
+// script body with `args` in scope.
+const standInBroker = (directory, serve) => {
+  const broker = join(directory, "stand-in-broker.mjs");
+  writeFileSync(broker, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+const args = process.argv.slice(2);
+const config = readFileSync(args[1], "utf8");
+if (args[2] === "config") {
+  if (config.includes("enable_fake_service = false")) {
+    process.stderr.write("- providers.conformance is a development backend\\n");
+    process.exit(3);
+  }
+  process.exit(0);
+}
+${serve}
+`);
+  chmodSync(broker, 0o755);
+  return broker;
+};
+
+const acceptanceRun = (directory, broker) => {
+  const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
+  const acceptance = runProcessAcceptance({ supervisor, binary: broker, cli: join(directory, "unused-cli"),
+    run: join(directory, "run"), evidence: join(directory, "evidence"),
+    env: sanitizedEnvironment(process.env).env, expectedStatus: {} });
+  return { supervisor, acceptance };
+};
+
+test("broker acceptance binds port 0 and reaches the address broker_listening reports", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const broker = standInBroker(directory, `
+if (args[4] !== "127.0.0.1:0") process.exit(9);
+const server = createServer((request, response) => {
+  response.writeHead(request.url === "/v1/readyz" ? 200 : 503);
+  response.end();
+});
+server.listen(0, "127.0.0.1", () => {
+  process.stdout.write(JSON.stringify({ event: "broker_starting", publicListen: args[4] }) + "\\n");
+  process.stdout.write(JSON.stringify({ event: "broker_listening", listener: "public", address: "127.0.0.1:" + server.address().port }) + "\\n");
+});
+process.on("SIGTERM", () => process.exit(0));
+`);
+  const { supervisor, acceptance } = acceptanceRun(directory, broker);
+  try {
+    // Readiness passed at the reported address; the next check fails there.
+    await assert.rejects(acceptance, /Process acceptance failed: healthz \(\{"status":503\}\)/);
+  } finally {
+    await supervisor.stopAll();
+  }
+});
+
+test("a broker that exits before reporting its listener fails acceptance at once", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const broker = standInBroker(directory, `
+process.stderr.write(JSON.stringify({ event: "broker_start_failed", error: "Address already in use (os error 98)" }) + "\\n");
+process.exit(1);
+`);
+  const { supervisor, acceptance } = acceptanceRun(directory, broker);
+  const started = Date.now();
+  try {
+    await assert.rejects(acceptance, /The assembled broker exited before readiness with 1/);
+    assert.ok(Date.now() - started < 30_000, "early exit must not wait for the readiness deadline");
+  } finally {
+    await supervisor.stopAll();
+  }
+});
+
 // A leader that starts one descendant in its own process group and waits
 // until the descendant is ready. The descendant writes its pid once it has
 // installed its signal handling; `leader` decides what the leader does next.

@@ -18,6 +18,7 @@ import {
   parseCargoTree,
   parseProvenanceArguments,
   provenanceBuildPlan,
+  publicListeningAddress,
   referenceCrates,
   releaseFeatureTreeArgs,
   releasePackageOrigins,
@@ -59,6 +60,25 @@ function releaseStatus() {
     sendSchemaVersion: "agent-access.send.v1",
   };
 }
+
+test("reads the bound public address from the broker_listening event", () => {
+  const event = (fields) => JSON.stringify({ level: "INFO", event: "broker_listening", nodeId: "node-1", ...fields });
+  const starting = JSON.stringify({ event: "broker_starting", publicListen: "127.0.0.1:0" });
+  assert.equal(publicListeningAddress(""), null);
+  assert.equal(publicListeningAddress(`${starting}\nnot json\n`), null);
+  assert.equal(publicListeningAddress(`${event({ listener: "gateway", address: "127.0.0.1:41000" })}\n`), null);
+  assert.equal(
+    publicListeningAddress(`${starting}\nnot json\n${event({ listener: "public", address: "127.0.0.1:41001" })}\n`),
+    "127.0.0.1:41001",
+  );
+  // A partial line is not yet an event.
+  assert.equal(publicListeningAddress(`${starting}\n{"event":"broker_listening","listener":"pub`), null);
+  // A broker that echoes the requested port 0 cannot be reached there.
+  for (const address of ["127.0.0.1:0", "0.0.0.0:41001", "127.0.0.1:65536", "127.0.0.1", undefined]) {
+    assert.throws(() => publicListeningAddress(`${event({ listener: "public", address })}\n`),
+      /broker_listening must report the bound 127\.0\.0\.1 address/);
+  }
+});
 
 test("accepts the exact release status", () => {
   assert.doesNotThrow(() => assertReleaseStatus(releaseStatus(), expected));

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { createServer as createHttpServer, type Server, type IncomingHttpHeaders } from "node:http";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
+import { startBroker } from "./support/broker-process";
 import type { ImportPreviewResult } from "../src/import-types";
 
 test.use({ actionTimeout: 15_000 });
@@ -53,17 +54,13 @@ test.beforeAll(async () => {
   documentServer.listen(0, "127.0.0.1"); await once(documentServer, "listening");
   const documents = `http://127.0.0.1:${(documentServer.address() as AddressInfo).port}`;
   definitionUrl = `${documents}/public.json`; privateDefinitionUrl = `${documents}/private.json`;
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  baseUrl = `http://127.0.0.1:${port}`;
   for (const [index, name] of ["encryption", "hash", "csrf", "pepper"].entries()) {
     await fs.writeFile(path.join(root, name), Buffer.alloc(32, index + 1).toString("base64url"));
   }
   const quoted = (relative: string) => JSON.stringify(path.join(root, relative));
-  await fs.writeFile(path.join(root, "broker.toml"), `
+  const configure = async (_port: number, url: string) => {
+    baseUrl = url;
+    await fs.writeFile(path.join(root, "broker.toml"), `
 [deployment]
 environment = "development"
 [identity]
@@ -121,13 +118,15 @@ upload_spool_dir = ${quoted("spool")}
 [limits.invocations]
 default = { requests = 1000, window = "1m" }
 `);
-  broker = spawn(brokerBinary, ["--config", path.join(root, "broker.toml"), "serve", "--listen", `127.0.0.1:${port}`], { cwd: repoRoot });
-  broker.stdout.on("data", chunk => logs.push(String(chunk)));
-  broker.stderr.on("data", chunk => logs.push(String(chunk)));
-  await expect.poll(async () => {
-    if (broker?.exitCode !== null) throw new Error(logs.join(""));
-    try { return (await fetch(`${baseUrl}/v1/healthz`)).ok; } catch { return false; }
-  }, { timeout: 30_000 }).toBe(true);
+    return path.join(root, "broker.toml");
+  };
+  ({ child: broker } = await startBroker({
+    binary: brokerBinary,
+    configure,
+    cwd: repoRoot,
+    timeoutMs: 30_000,
+    onOutput: (text) => logs.push(text)
+  }));
 });
 
 test.afterAll(async () => {

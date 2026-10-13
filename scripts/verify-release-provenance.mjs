@@ -3,7 +3,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, chmodSync, constants, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -378,20 +377,27 @@ function buildBinaries(plan) {
   });
 }
 
-function freeLoopbackPort() {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : null;
-      server.close((error) => {
-        if (error) reject(error);
-        else if (port === null) reject(new Error("failed to allocate a loopback port"));
-        else resolve(port);
-      });
-    });
-  });
+// The address of the public `broker_listening` event in `log`, the Broker's
+// JSON lines, or null before it is logged. A Broker started with
+// `--listen <host>:0` reports the port it bound there, so no port has to be
+// chosen in advance and left for another process to take.
+export function publicListeningAddress(log, host = "127.0.0.1") {
+  for (const line of log.split("\n")) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.event !== "broker_listening" || event.listener !== "public") continue;
+    const match = typeof event.address === "string" ? /^(.+):(\d+)$/.exec(event.address) : null;
+    const port = match ? Number(match[2]) : 0;
+    if (!match || match[1] !== host || port < 1 || port > 65_535) {
+      throw new Error(`broker_listening must report the bound ${host} address; found ${JSON.stringify(event.address)}`);
+    }
+    return `${host}:${port}`;
+  }
+  return null;
 }
 
 function appendTail(current, chunk) {
@@ -443,10 +449,9 @@ authority = "toml"
 default_decision = "deny"
 `;
   writeFileSync(configPath, config, { mode: 0o600 });
-  const port = await freeLoopbackPort();
   const child = spawn(
     binary,
-    ["--config", configPath, "serve", "--listen", `127.0.0.1:${port}`],
+    ["--config", configPath, "serve", "--listen", "127.0.0.1:0"],
     {
       cwd: ROOT,
       env: { ...process.env, AGENT_ACCESS_PROVENANCE_VERIFY_TOKEN: token },
@@ -462,8 +467,19 @@ default_decision = "deny"
   child.stdout.on("data", (chunk) => {
     stdoutTail = appendTail(stdoutTail, chunk);
   });
+  let address = null;
+  let addressError = null;
+  let addressLog = "";
   child.stderr.on("data", (chunk) => {
     stderrTail = appendTail(stderrTail, chunk);
+    if (address === null && addressError === null) {
+      addressLog += chunk.toString("utf8");
+      try {
+        address = publicListeningAddress(addressLog);
+      } catch (error) {
+        addressError = error;
+      }
+    }
   });
 
   try {
@@ -474,10 +490,16 @@ default_decision = "deny"
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new Error(`broker exited before verification with code ${child.exitCode ?? "null"}`);
       }
+      if (addressError) throw addressError;
+      if (address === null) {
+        lastError = "broker did not report its public listener";
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 1_000);
-        const response = await fetch(`http://127.0.0.1:${port}/v1/broker/status`, {
+        const response = await fetch(`http://${address}/v1/broker/status`, {
           headers: {
             Authorization: `Bearer ${token}`,
             "X-Agent-Access-Request-Id": "release-provenance-verification",

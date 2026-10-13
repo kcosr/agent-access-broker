@@ -4,13 +4,13 @@
 // targets, which don't depend on the request's context, not from agent
 // discovery (`/v1/services`).
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
 import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { brokerBinary, portalDist, repoRoot } from "./support/binaries";
+import { startBroker } from "./support/broker-process";
 
 test.use({ actionTimeout: 15_000 });
 
@@ -26,12 +26,6 @@ const USER_PASSWORD = "casey-password";
 
 test.beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "aab-my-access-"));
-  const probe = createServer();
-  probe.listen(0, "127.0.0.1");
-  await once(probe, "listening");
-  const port = (probe.address() as AddressInfo).port;
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  baseUrl = `http://127.0.0.1:${port}`;
   for (const [index, name] of ["encryption", "hash", "csrf", "pepper"].entries()) {
     await fs.writeFile(path.join(root, name), Buffer.alloc(32, index + 11).toString("base64url"));
   }
@@ -39,9 +33,11 @@ test.beforeAll(async () => {
   // Jira grants live in `internal`; Git is also available in `external`.
   // Jira also grants `sandbox`, where its resource is ineligible, leaving no effective access.
   // Browser sessions resolve to `default`, where the user has no grants.
-  await fs.writeFile(
-    path.join(root, "broker.toml"),
-    `
+  const configure = async (_port: number, url: string) => {
+    baseUrl = url;
+    await fs.writeFile(
+      path.join(root, "broker.toml"),
+      `
 [deployment]
 environment = "development"
 [identity]
@@ -115,26 +111,18 @@ upload_spool_dir = ${quoted("spool")}
 type = "jsonl"
 path = ${quoted("audit.jsonl")}
 `
-  );
-  broker = spawn(brokerBinary, ["--config", path.join(root, "broker.toml"), "serve", "--listen", `127.0.0.1:${port}`], {
+    );
+    return path.join(root, "broker.toml");
+  };
+  ({ child: broker } = await startBroker({
+    binary: brokerBinary,
+    configure,
     cwd: repoRoot,
-    env: { ...process.env, RUST_LOG: "agent_access_broker=warn,agent_access_core=warn" }
-  });
-  broker.stdout.on("data", (chunk) => logs.push(String(chunk)));
-  broker.stderr.on("data", (chunk) => logs.push(String(chunk)));
-  await expect
-    .poll(
-      async () => {
-        if (broker?.exitCode !== null) throw new Error(logs.join(""));
-        try {
-          return (await fetch(`${baseUrl}/v1/healthz`, { headers: { "X-Agent-Access-Request-Id": "my-access-health" } })).ok;
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 60_000 }
-    )
-    .toBe(true);
+    env: { ...process.env, RUST_LOG: "agent_access_broker=warn,agent_access_core=warn" },
+    readinessHeaders: () => ({ "X-Agent-Access-Request-Id": "my-access-health" }),
+    timeoutMs: 60_000,
+    onOutput: (text) => logs.push(text)
+  }));
 });
 
 test.afterAll(async () => {
