@@ -1255,11 +1255,14 @@ fn runtime_exposes_its_audit_store_type_path_and_database_id() {
     );
 }
 
+/// A record stamped now. The timestamp always has nine fractional digits:
+/// `to_rfc3339` drops trailing zero groups, so records built at different
+/// instants would differ in serialized size.
 pub(super) fn test_audit_record() -> AuditRecord {
     AuditRecord {
         caller_id: None,
         search_authorization: None,
-        timestamp: Utc::now().to_rfc3339(),
+        timestamp: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false),
         agent_request_id: "agent-req-test".to_string(),
         broker_request_id: "broker-req-test".to_string(),
         config_generation: None,
