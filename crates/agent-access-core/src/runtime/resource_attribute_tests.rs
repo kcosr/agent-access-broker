@@ -120,6 +120,10 @@ fn fixture() -> (tempfile::TempDir, BrokerRuntime, Arc<Mutex<Vec<String>>>) {
         allowed_values: vec!["default".into(), "external".into()],
         default_context: None,
     });
+    config.audit = Some(crate::AuditConfig::new(
+        crate::AuditStoreType::Jsonl,
+        directory.path().join("audit.jsonl").display().to_string(),
+    ));
     let backend = FixtureConfig::default();
     let observed = backend.observed.clone();
     config.providers =
@@ -266,11 +270,19 @@ async fn private_resources_require_configuration_and_do_not_require_dummy_creden
     runtime.patch_managed_resource(change).unwrap();
     assert_ne!(send(&runtime, "one").await.status, 200);
     assert_eq!(*observed.lock().unwrap(), vec!["secret-one", "secret-two"]);
+    // Invocation audit names the destination but never its private value.
+    runtime
+        .shutdown_audit(std::time::Duration::from_secs(1))
+        .await
+        .unwrap();
+    let audit = fs::read_to_string(_dir.path().join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"destination\":[\"two\"]"), "{audit}");
+    assert!(!audit.contains("secret-"), "{audit}");
 }
 
 #[tokio::test]
 async fn replacing_disabling_or_reusing_alias_invalidates_prepared_private_resource_calls() {
-    for change in ["replace", "disable", "rename", "recreate"] {
+    for change in ["replace", "disable", "context", "rename", "recreate"] {
         let (_dir, runtime, observed) = fixture();
         create(&runtime, "one", exact("one"), attributes("secret-one")).unwrap();
         create(&runtime, "all", ResourceSelector::All, Default::default()).unwrap();
@@ -296,6 +308,7 @@ async fn replacing_disabling_or_reusing_alias_invalidates_prepared_private_resou
             match change {
                 "replace" => request.attributes = attributes("secret-two"),
                 "disable" => request.enabled = Some(false),
+                "context" => request.allowed_execution_contexts = Some(vec!["external".into()]),
                 _ => request.selector = Some(exact("renamed")),
             }
             runtime.patch_managed_resource(request).unwrap();

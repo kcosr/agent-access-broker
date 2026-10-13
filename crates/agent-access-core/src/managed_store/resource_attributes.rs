@@ -606,6 +606,54 @@ mod tests {
     }
 
     #[test]
+    fn stale_disabled_and_ineligible_bindings_are_refused_before_decryption() {
+        let (_temp, store, ring) = fixture();
+        let created = store.create_resource(create("release"), accept).unwrap();
+        let stale = created.catalog.attribute_bindings[0].clone();
+        let mut disable = patch(1);
+        disable.enabled = Some(false);
+        let disabled = store.patch_resource(disable, accept).unwrap().catalog;
+        let other = store
+            .create_resource(create("other"), accept)
+            .unwrap()
+            .catalog;
+        let binding = |catalog: &ManagedResourceCatalog, id: &str| {
+            catalog
+                .attribute_bindings
+                .iter()
+                .find(|binding| binding.resource_id == id)
+                .unwrap()
+                .clone()
+        };
+        // Material that can no longer be decrypted: reaching decryption
+        // reports CredentialDecryptFailed rather than a fence failure.
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE resource_secret_material SET nonce=zeroblob(12)", [])
+            .unwrap();
+        assert!(matches!(
+            store.resolve_resource_attributes(&binding(&other, "other"), "internal", &ring),
+            Err(ManagedStoreError::CredentialDecryptFailed)
+        ));
+        for (binding, context) in [
+            (stale, "internal"),
+            (binding(&disabled, "release"), "internal"),
+            (binding(&other, "other"), "external"),
+        ] {
+            let result = store.resolve_resource_attributes(&binding, context, &ring);
+            assert!(
+                matches!(
+                    result,
+                    Err(ManagedStoreError::VersionConflict | ManagedStoreError::InputInvalid(_))
+                ),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[test]
     fn disabled_material_participates_in_readiness_key_accounting_and_rewrap() {
         let (temp, store, ring) = fixture();
         let mut request = create("release");
