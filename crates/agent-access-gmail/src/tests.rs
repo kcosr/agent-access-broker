@@ -416,7 +416,13 @@ async fn rate_limits_and_ambiguous_mutations_never_replay() {
         assert!(!err.message.contains("secret"));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         if expected != ReasonCode::UpstreamRateLimited {
-            assert!(err.result.is_none());
+            // Only a 5xx leaves the mutation's outcome unknown.
+            assert_eq!(
+                err.result.as_deref(),
+                (status >= 500)
+                    .then(|| json!({"mutationStatus":"unknown","retrySafe":false}))
+                    .as_ref()
+            );
             continue;
         }
         assert_eq!(err.decision(), Decision::Error);
@@ -527,9 +533,15 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
                 .unwrap_err();
             assert_eq!(error.reason_code(), reason);
             assert_eq!(error.upstream_status, Some(status));
+            let uncertain = status >= 500 && action.ends_with("trash");
+            assert_eq!(error.message.contains("unknown"), uncertain);
+            // A proxy can answer 5xx after Gmail applied the change.
             assert_eq!(
-                error.message.contains("unknown"),
-                status >= 500 && action.ends_with("trash")
+                error
+                    .result
+                    .as_deref()
+                    .and_then(|result| result.get("mutationStatus")),
+                uncertain.then_some(&json!("unknown"))
             );
             assert!(!error.message.contains("private"));
         }
@@ -537,7 +549,7 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
 }
 
 #[tokio::test]
-async fn only_proven_unsent_mutations_are_not_applied() {
+async fn mutation_receipts_follow_what_gmail_may_have_applied() {
     use tokio::io::AsyncReadExt;
     let host = agent_access_provider::test_support::TestHost::default();
     let gmail = |origin: &str| {
@@ -570,7 +582,8 @@ async fn only_proven_unsent_mutations_are_not_applied() {
             );
         }
     }
-    // A mutation read in full and then dropped unanswered may have applied.
+    // A mutation read in full and then dropped unanswered may have applied,
+    // and one Gmail accepted with an unreadable body applied.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -588,6 +601,44 @@ async fn only_proven_unsent_mutations_are_not_applied() {
     server.await.unwrap();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
     assert!(error.message.contains("mutation outcome may be unknown"));
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus":"unknown","retrySafe":false}))
+    );
+    let server = MockServer::start().await;
+    Mock::given(path("/gmail/v1/users/me/threads/a123/trash"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{not json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = provider(&server)
+        .invoke(invocation("thread.trash", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(
+        error.message,
+        "Gmail response is invalid or exceeds a bound; mutation outcome may be unknown, inspect before retrying"
+    );
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "mutation_response",
+            "safeLocators": {"thread": "a123"},
+        }))
+    );
+    // A read with an unreadable body carries no receipt.
+    let server = MockServer::start().await;
+    Mock::given(path("/gmail/v1/users/me/threads/a123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{not json"))
+        .mount(&server)
+        .await;
+    let error = provider(&server)
+        .invoke(invocation("thread.view", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
     assert!(error.result.is_none());
 }
 

@@ -523,7 +523,14 @@ All notable changes to this project are documented in this file.
   unchanged `upstream_connection_failed` or `upstream_timeout`, and its message
   drops the `mutation outcome may be unknown, inspect before retrying` suffix
   (`Gmail request failed`). Mutations that may have reached Gmail keep the
-  suffix and carry no result.
+  suffix.
+- Gmail archive, trash and restore failures that may have applied now carry a
+  receipt with their unchanged reason and message: `mutationStatus:
+  "unknown"`, `retrySafe: false` after a timeout or transport failure once
+  sent, a 5xx response or the operation deadline, and `mutationStatus:
+  "applied_unverified"`, `verificationStage: "mutation_response"` with the
+  requested `message` or `thread` ID as `safeLocators` when Gmail answered
+  with a success status whose body could not be read or parsed.
 - Jira write actions (`issue.create`, `issue.child.create`, `issue.update`,
   `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`,
   `comment.update`, `comment.delete`, `comment.property.set`,
