@@ -236,6 +236,42 @@ fn mime_projection_decodes_text_marks_omissions_and_rejects_invalid_base64() {
         json!(["part_limit"])
     );
 }
+
+/// Gmail presents only access bound to exactly its target and audience. A
+/// lease for another target or audience is denied before any upstream
+/// request, both for a direct call and before a search continuation opens.
+#[tokio::test]
+async fn access_for_another_target_or_audience_is_denied_before_any_request() {
+    for (target, audience) in [
+        ("https://other.example.test/", GMAIL_AUDIENCE),
+        (GMAIL_TARGET, "https://other.example.test/api"),
+    ] {
+        for action in ["account.view", "message.search"] {
+            let server = MockServer::start().await;
+            let mut lease = lease(BINDING, "secret");
+            lease.target = target;
+            lease.audience = audience;
+            let error = provider(&server)
+                .invoke(
+                    request(action, json!({}))
+                        .delegated(delegated(lease))
+                        .build(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.decision(), Decision::Deny, "{action}");
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
+            assert_eq!(
+                error.message,
+                "Gmail needs an account-bound Gmail OAuth connection"
+            );
+            assert!(
+                server.received_requests().await.unwrap().is_empty(),
+                "{action}"
+            );
+        }
+    }
+}
 #[tokio::test]
 async fn message_and_thread_mutations_use_explicit_routes_with_no_bulk_expansion() {
     let server = MockServer::start().await;
