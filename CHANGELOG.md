@@ -373,6 +373,11 @@ All notable changes to this project are documented in this file.
   blockquote or on a list item's marker line, and every staged Rust file must
   be read by a compiled target. The assembly guide's example must share its
   `main.rs` and `build.rs` with the fixture's assembly as the guide states.
+- The provider SDK streams a bounded raw download with
+  `ProviderResultStream::from_bounded_response` and a `BoundedDownload`: a
+  label, a byte cap with the late reason it reports, an idle timeout and an
+  optional expected size. Stalls, read failures, cap overruns and size
+  mismatches fail late with code-only reasons.
 
 ### Changed
 
@@ -435,6 +440,15 @@ All notable changes to this project are documented in this file.
   proved the target unchanged; other writes returned the same error without a
   receipt. Failures after the request may have been sent keep their existing
   outcome.
+- Late raw-download failures of GitLab, Jira, Confluence and CloudBees CI
+  record uniform messages in their terminal audit record, such as
+  `GitLab download exceeded the download limit` or
+  `Jira attachment download stalled`, without upstream error detail. Reason
+  codes are unchanged, except that a GitLab repository file download whose
+  request deadline expires mid-body reports `upstream_timeout` instead of
+  `upstream_connection_failed`. A GitLab, Jira or Confluence download whose
+  body overruns its `Content-Length` now fails before the excess is delivered
+  instead of at the end, still with `upstream_protocol_failed`.
 
 ### Fixed
 

@@ -80,9 +80,9 @@ contracts section of each inventory shows the result per type.
   the presentation's `ActionPresentation` and `EmbeddedBody`) have private
   fields, are non-exhaustive and are declared with `const` constructors and
   builders; their data is read through `const` accessors.
-- Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`) and
-  lent credential material (`DelegatedAccess`, like `ExecutionCredential`)
-  have private fields and constructors.
+- Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`,
+  `BoundedDownload`) and lent credential material (`DelegatedAccess`, like
+  `ExecutionCredential`) have private fields and constructors.
 - Other data types keep public fields where those fields are the data the
   other side reads (`ProviderResult`, `ProviderLimits`, `ServiceDescriptor`,
   `TokenGrant`, `ConnectedIdentity`, `OAuthTarget` and the rest). They are

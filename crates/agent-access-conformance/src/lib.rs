@@ -13,10 +13,10 @@ use agent_access_provider::presentation::{
 };
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
-    BrokerBodyPart, BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor,
-    CredentialView, EgressDeclaration, EgressProxyConfig, NamespaceSelectorDescriptor, Provider,
-    ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
-    ProviderState, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
+    BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext, ClientProfile,
+    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
+    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
     ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
     ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
     UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
@@ -716,41 +716,6 @@ impl ConformanceProvider {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("application/octet-stream")
             .to_owned();
-        let (idle, cap) = (self.idle_timeout, self.max_download_bytes);
-        let chunks = futures_util::stream::try_unfold(
-            (response, 0_u64),
-            move |(mut response, read)| async move {
-                let chunk = tokio::time::timeout(idle, response.chunk())
-                    .await
-                    .map_err(|_| {
-                        ProviderStreamError::new(
-                            ReasonCode::UpstreamTimeout,
-                            "conformance download stalled",
-                        )
-                    })?
-                    .map_err(|_| {
-                        ProviderStreamError::new(
-                            ReasonCode::UpstreamConnectionFailed,
-                            "conformance download failed",
-                        )
-                    })?;
-                let Some(chunk) = chunk else {
-                    return Ok(None);
-                };
-                let read = read + chunk.len() as u64;
-                if read > cap {
-                    return Err(ProviderStreamError::new(
-                        ReasonCode::AttachmentSizeDenied,
-                        "conformance content exceeds the download limit",
-                    ));
-                }
-                Ok(Some((chunk, (response, read))))
-            },
-        );
-        let mut stream = ProviderResultStream::from_stream(content_type.clone(), chunks);
-        if let Some(size) = size {
-            stream = stream.with_expected_size(size, "conformance content length did not match");
-        }
         let mut result = Self::result(
             "item.download",
             item,
@@ -758,7 +723,17 @@ impl ConformanceProvider {
             status,
             started,
         );
-        result.stream = Some(stream);
+        result.stream = Some(ProviderResultStream::from_bounded_response(
+            content_type,
+            response,
+            BoundedDownload::new(
+                "conformance download",
+                self.max_download_bytes,
+                ReasonCode::AttachmentSizeDenied,
+                self.idle_timeout,
+            )
+            .with_expected_size(size),
+        ));
         Ok(result)
     }
 

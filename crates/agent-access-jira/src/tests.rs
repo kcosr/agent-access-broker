@@ -3,7 +3,7 @@ use agent_access_provider::test_support::{
     InvocationBuilder, basic_credential, bearer_credential, credential_token, credential_username,
 };
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

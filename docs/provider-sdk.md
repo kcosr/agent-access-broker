@@ -678,6 +678,15 @@ for JSON bodies read into memory, `max_download_bytes` and
 `max_http_body_bytes`. Read bodies chunk by chunk against the cap; never trust
 a `Content-Length` alone.
 
+Return a raw download with `ProviderResultStream::from_bounded_response(content_type,
+response, BoundedDownload::new(label, byte_cap, cap_reason, idle_timeout)
+.with_expected_size(response.content_length()))`. The stream fails once no chunk
+arrives within the idle timeout, past the byte cap with the cap reason you
+choose, and when the body overruns or falls short of the expected size, each as
+a [late stream failure](#late-stream-failures) whose message names only the
+label. Reject a declared length over the cap before returning the result, while
+it can still be an ordinary error.
+
 Report upstream throttling with `upstream_rate_limited(service, retry_after)`,
 where `UpstreamRetryAfter::from_headers` reads a bounded `Retry-After`. Its
 result names the service and the wait. Throttling after a mutation was applied
@@ -959,7 +968,11 @@ A raw download that fails after its response started reports a
 response and its own late-failure decision and records the code in the terminal
 audit record. Standard codes are limited to `attachment_size_denied`,
 `upstream_connection_failed`, `upstream_protocol_failed` and `upstream_timeout`;
-the provider's domain reasons are also accepted.
+the provider's domain reasons are also accepted. A bounded download
+(`ProviderResultStream::from_bounded_response`) reports a stall or an expired
+client deadline as `upstream_timeout`, another read failure as
+`upstream_connection_failed`, a size mismatch as `upstream_protocol_failed` and
+an overrun of its byte cap with the reason its `BoundedDownload` names.
 
 ### Upstream traces
 
@@ -987,9 +1000,11 @@ lease's failures, and the SDK's own `ProviderStateError` and
 A successful invocation returns `ProviderResult::new(result)`, with optional
 `with_stream` for a single-consumption raw download body, `with_audit` for safe
 provider audit data, `with_upstream` for the upstream status and duration, and
-`with_object_ids`. Build streams with
+`with_object_ids`. Return an upstream download with
+`ProviderResultStream::from_bounded_response` (see
+[limits and throttling](#limits-and-throttling)). Build any other stream with
 `ProviderResultStream::from_stream`, bound each chunk, and add
-`with_expected_size` when the upstream declared a length. A stream is handed to
+`with_expected_size` when its length is known. A stream is handed to
 the host once; it is never buffered into base64 JSON or replayed. Provider audit
 data cannot replace host-owned identity, admission, decision or provenance
 fields.

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use thiserror::Error;
 
 /// A successful outcome: its JSON result or a streamed body, with optional
@@ -106,6 +107,74 @@ impl ProviderResultStream {
         }
     }
 
+    /// Streams `response`'s body as a raw download within `download`'s
+    /// bounds. Each failure after the headers is a late, code-only
+    /// [`ProviderStreamError`]:
+    ///
+    /// - no chunk within the idle timeout, or the client's own deadline
+    ///   expiring, is `upstream_timeout`;
+    /// - another failed read is `upstream_connection_failed`;
+    /// - more bytes than the cap is the download's cap reason;
+    /// - a body that overruns the expected size, or ends short of it, is
+    ///   `upstream_protocol_failed`.
+    ///
+    /// Messages name the download by its label and carry no URL or upstream
+    /// detail. Reject a declared `Content-Length` over the cap before calling
+    /// this, while the failure can still be an ordinary provider error.
+    pub fn from_bounded_response(
+        content_type: impl Into<String>,
+        response: reqwest::Response,
+        download: BoundedDownload,
+    ) -> Self {
+        let BoundedDownload {
+            label,
+            byte_cap,
+            cap_reason,
+            idle_timeout,
+            expected_size,
+        } = download;
+        let chunks =
+            stream::try_unfold((response, 0_u64), move |(mut response, size)| async move {
+                let chunk = tokio::time::timeout(idle_timeout, response.chunk())
+                    .await
+                    .map_err(|_| {
+                        ProviderStreamError::new(
+                            ReasonCode::UpstreamTimeout,
+                            format!("{label} stalled"),
+                        )
+                    })?
+                    .map_err(|error| {
+                        let reason = if error.is_timeout() {
+                            ReasonCode::UpstreamTimeout
+                        } else {
+                            ReasonCode::UpstreamConnectionFailed
+                        };
+                        ProviderStreamError::new(reason, format!("{label} failed"))
+                    })?;
+                let Some(chunk) = chunk else {
+                    return Ok(None);
+                };
+                let size = size
+                    .checked_add(chunk.len() as u64)
+                    .filter(|size| *size <= byte_cap)
+                    .ok_or_else(|| {
+                        ProviderStreamError::new(
+                            cap_reason,
+                            format!("{label} exceeded the download limit"),
+                        )
+                    })?;
+                Ok(Some((chunk, (response, size))))
+            });
+        let stream = Self::from_stream(content_type, chunks);
+        match expected_size {
+            Some(expected_size) => stream.with_expected_size(
+                expected_size,
+                format!("{label} size did not match Content-Length"),
+            ),
+            None => stream,
+        }
+    }
+
     pub fn with_expected_size(
         self,
         expected_size: u64,
@@ -197,6 +266,51 @@ impl ProviderResultStream {
             ProviderResultStreamSource::Memory(bytes) => Some(bytes.len()),
             ProviderResultStreamSource::Stream(_) => None,
         }
+    }
+}
+
+/// How [`ProviderResultStream::from_bounded_response`] bounds a raw
+/// download after its headers arrived.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub struct BoundedDownload {
+    label: &'static str,
+    byte_cap: u64,
+    cap_reason: ProviderReason,
+    idle_timeout: Duration,
+    expected_size: Option<u64>,
+}
+
+impl BoundedDownload {
+    /// A download of at most `byte_cap` bytes, failing with `cap_reason`
+    /// beyond it, that fails once no chunk arrives for `idle_timeout`.
+    /// `label` names it in failure messages, such as `"Notes attachment
+    /// download"`.
+    ///
+    /// The cap reason must be one a late stream may report: a standard one
+    /// [`ReasonCode::permits_late_stream`] admits, such as
+    /// `upstream_protocol_failed` or `attachment_size_denied`, or one of the
+    /// backend's domain reasons.
+    pub fn new(
+        label: &'static str,
+        byte_cap: u64,
+        cap_reason: impl Into<ProviderReason>,
+        idle_timeout: Duration,
+    ) -> Self {
+        Self {
+            label,
+            byte_cap,
+            cap_reason: cap_reason.into(),
+            idle_timeout,
+            expected_size: None,
+        }
+    }
+
+    /// The body must be exactly `expected_size` bytes when it is known,
+    /// usually the response's `Content-Length`.
+    pub fn with_expected_size(mut self, expected_size: Option<u64>) -> Self {
+        self.expected_size = expected_size;
+        self
     }
 }
 
@@ -441,6 +555,105 @@ impl ProviderCredentialVerification {
             upstream_status,
             upstream_duration_ms,
             audit,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The bytes a stream yields before it ends or fails.
+    async fn drain(stream: ProviderResultStream) -> (Vec<u8>, Option<ProviderStreamError>) {
+        let ProviderResultStreamSource::Stream(stream) = stream.source else {
+            panic!("bounded downloads stream");
+        };
+        let mut stream = stream.lock().unwrap().take().unwrap();
+        let mut bytes = Vec::new();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(chunk) => bytes.extend_from_slice(&chunk),
+                Err(error) => return (bytes, Some(error)),
+            }
+        }
+        (bytes, None)
+    }
+
+    #[tokio::test]
+    async fn bounded_downloads_fail_late_with_their_cap_reason_and_expected_size() {
+        let server = MockServer::start().await;
+        Mock::given(path("/blob"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"12345678".to_vec()))
+            .mount(&server)
+            .await;
+        let fetch = || async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("{}/blob", server.uri()))
+                .send()
+                .await
+                .unwrap()
+        };
+        let idle = Duration::from_secs(10);
+        let download = |byte_cap, expected_size| {
+            BoundedDownload::new(
+                "Example download",
+                byte_cap,
+                ReasonCode::AttachmentSizeDenied,
+                idle,
+            )
+            .with_expected_size(expected_size)
+        };
+
+        let complete = ProviderResultStream::from_bounded_response(
+            "application/octet-stream",
+            fetch().await,
+            download(8, Some(8)),
+        );
+        assert_eq!(complete.content_type, "application/octet-stream");
+        assert_eq!(drain(complete).await, (b"12345678".to_vec(), None));
+
+        let cases = [
+            // Over the cap: the download's own reason.
+            (
+                download(4, None),
+                ReasonCode::AttachmentSizeDenied,
+                "Example download exceeded the download limit",
+            ),
+            // Past the expected size: fails before the excess is delivered.
+            (
+                download(1024, Some(4)),
+                ReasonCode::UpstreamProtocolFailed,
+                "Example download size did not match Content-Length",
+            ),
+            // Short of the expected size: fails at the end.
+            (
+                download(1024, Some(10)),
+                ReasonCode::UpstreamProtocolFailed,
+                "Example download size did not match Content-Length",
+            ),
+        ];
+        for (download, reason, message) in cases {
+            let stream = ProviderResultStream::from_bounded_response(
+                "application/octet-stream",
+                fetch().await,
+                download,
+            );
+            let (bytes, failure) = drain(stream).await;
+            let failure = failure.expect("the download fails late");
+            assert_eq!(
+                failure.reason_code,
+                ProviderReason::from(reason),
+                "{failure:?}"
+            );
+            assert!(reason.permits_late_stream());
+            assert_eq!(failure.message, message);
+            let expected_size = download.expected_size.unwrap_or(u64::MAX);
+            assert!(bytes.len() as u64 <= expected_size.min(download.byte_cap));
         }
     }
 }

@@ -274,8 +274,8 @@ pub use resource::{
     is_repository_selector_path,
 };
 pub use result::{
-    ProviderByteStream, ProviderCredentialVerification, ProviderError, ProviderResult,
-    ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
+    BoundedDownload, ProviderByteStream, ProviderCredentialVerification, ProviderError,
+    ProviderResult, ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
 pub use signing::{SigningError, StableSigningKey};

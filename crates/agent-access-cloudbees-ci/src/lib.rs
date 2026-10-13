@@ -2,20 +2,19 @@
 //! artifact, and trigger actions across configured controllers, authorized
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, EgressRoute,
-    ExecutionCredential, Provider, ProviderBuildError, ProviderError, ProviderFailureStatus,
-    ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderResult,
-    ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
-    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
-    is_service_name, parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    ActionDescriptor, BackendConfig, BackendRegistration, BoundedDownload, BuildContext,
+    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
+    EgressRoute, ExecutionCredential, Provider, ProviderBuildError, ProviderError,
+    ProviderFailureStatus, ProviderInvocation, ProviderLimits, ProviderReasonDefinition,
+    ProviderResult, ProviderResultStream, ReasonCode, RedirectRules, ResourceScopeCapabilities,
+    ResourceScopes, ResourceType, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamRetryAfter, ValidationContext,
+    complete_upstream_trace, current_provider_action, is_service_name, parse_backend_config,
+    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
-use futures_util::stream;
 use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -829,45 +828,6 @@ impl CloudbeesCiProvider {
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or("application/octet-stream")
                 .to_owned();
-            let cap = self.download_limit;
-            let idle = self.download_idle_timeout;
-            let byte_stream =
-                stream::try_unfold((response, 0_u64), move |(mut response, size)| async move {
-                    let chunk = tokio::time::timeout(idle, response.chunk())
-                        .await
-                        .map_err(|_| {
-                            ProviderStreamError::new(
-                                ReasonCode::UpstreamTimeout,
-                                "CloudBees CI artifact download stalled",
-                            )
-                        })?
-                        .map_err(|error| {
-                            ProviderStreamError::new(
-                                if error.is_timeout() {
-                                    ReasonCode::UpstreamTimeout
-                                } else {
-                                    ReasonCode::UpstreamConnectionFailed
-                                },
-                                "CloudBees CI artifact download failed",
-                            )
-                        })?;
-                    let Some(chunk) = chunk else {
-                        return Ok(None);
-                    };
-                    let next = size.checked_add(chunk.len() as u64).ok_or_else(|| {
-                        ProviderStreamError::new(
-                            ReasonCode::AttachmentSizeDenied,
-                            "CloudBees CI artifact exceeds download limit",
-                        )
-                    })?;
-                    if next > cap {
-                        return Err(ProviderStreamError::new(
-                            ReasonCode::AttachmentSizeDenied,
-                            "CloudBees CI artifact exceeds download limit",
-                        ));
-                    }
-                    Ok(Some((chunk, (response, next))))
-                });
             let value = json!({"controller":input.controller,"job":&input.job,
                 "buildNumber":number,"artifactPath":path,"fileName":item["fileName"],
                 "contentType":content_type,"size":size});
@@ -885,14 +845,17 @@ impl CloudbeesCiProvider {
                 &reply,
                 controller.client.egress_route(),
             );
-            let mut stream = ProviderResultStream::from_stream(content_type, byte_stream);
-            if let Some(size) = size {
-                stream = stream.with_expected_size(
-                    size,
-                    "CloudBees CI artifact response size did not match Content-Length",
-                );
-            }
-            result.stream = Some(stream);
+            result.stream = Some(ProviderResultStream::from_bounded_response(
+                content_type,
+                response,
+                BoundedDownload::new(
+                    "CloudBees CI artifact download",
+                    self.download_limit,
+                    ReasonCode::AttachmentSizeDenied,
+                    self.download_idle_timeout,
+                )
+                .with_expected_size(size),
+            ));
             return Ok(result);
         }
         if reads::is_action(request.action()) {

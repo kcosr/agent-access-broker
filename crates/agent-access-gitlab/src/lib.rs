@@ -22,7 +22,6 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
-use futures_util::stream;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 pub use provisioning::{
     GitlabProvisioningConfig, GitlabProvisioningOperation, GitlabProvisioningRequest,

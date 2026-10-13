@@ -3608,45 +3608,17 @@ pub(crate) fn confluence_response_stream(
     expected_size: Option<u64>,
     content_type: String,
 ) -> ProviderResultStream {
-    let stream = stream::try_unfold((response, 0_u64), move |(mut response, size)| async move {
-        let chunk = tokio::time::timeout(idle_timeout, response.chunk())
-            .await
-            .map_err(|_| {
-                ProviderStreamError::new(
-                    ReasonCode::UpstreamTimeout,
-                    "Confluence attachment download stalled",
-                )
-            })?
-            .map_err(|_| {
-                ProviderStreamError::new(
-                    ReasonCode::UpstreamConnectionFailed,
-                    "Confluence attachment download failed",
-                )
-            })?;
-        let Some(chunk) = chunk else {
-            if expected_size.is_some_and(|expected_size| expected_size != size) {
-                return Err(ProviderStreamError::new(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "Confluence attachment response size did not match Content-Length",
-                ));
-            }
-            return Ok(None);
-        };
-        let next_size = size.checked_add(chunk.len() as u64).ok_or_else(|| {
-            ProviderStreamError::new(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence attachment response exceeded the configured byte cap",
-            )
-        })?;
-        if next_size > byte_cap {
-            return Err(ProviderStreamError::new(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence attachment response exceeded the configured byte cap",
-            ));
-        }
-        Ok(Some((chunk, (response, next_size))))
-    });
-    ProviderResultStream::from_stream(content_type, stream)
+    ProviderResultStream::from_bounded_response(
+        content_type,
+        response,
+        BoundedDownload::new(
+            "Confluence attachment download",
+            byte_cap,
+            ReasonCode::UpstreamProtocolFailed,
+            idle_timeout,
+        )
+        .with_expected_size(expected_size),
+    )
 }
 
 pub(crate) struct ConfluenceUploadPart {
