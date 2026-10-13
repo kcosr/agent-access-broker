@@ -240,6 +240,8 @@ the envelope. Imported results can be nested under `result.upstreamMcp` or
 - **`not_applied` with `retrySafe: true`:** The provider proved the write was
   never sent, so nothing changed and it may be repeated. Without that pair,
   assume nothing about whether a failed write applied.
+- **`unknown` with `retrySafe: false`:** The write may have reached the service
+  without a response. Inspect the target before repeating it.
 - **`applied_unverified`:** Report that the write was applied but not verified.
   Do not turn this into verified success. Service-specific receipts can also
   mean acceptance only, such as Teams endpoint acceptance rather than delivery.

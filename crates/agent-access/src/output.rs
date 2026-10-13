@@ -507,6 +507,51 @@ mod tests {
     }
 
     #[test]
+    fn provider_failure_receipts_keep_their_operation_status_and_retry_safety() {
+        let output = FileOutput::new(
+            Path::new("saved.json"),
+            2,
+            "digest".into(),
+            "application/json",
+            false,
+        );
+        for (mutation, retry_safe, operation) in [
+            ("unknown", false, "unknown"),
+            ("not_applied", true, "not_applied"),
+        ] {
+            let envelope = json!({
+                "decision": "error",
+                "reasonCode": "upstream_timeout",
+                "brokerRequestId": "request",
+                "result": {"mutationStatus": mutation, "retrySafe": retry_safe},
+            });
+            let compact = receipt(&envelope, &output, false, &[]);
+            assert_eq!(compact["operationStatus"], operation, "{mutation}");
+            assert_eq!(compact["retrySafe"], retry_safe, "{mutation}");
+            assert_eq!(compact["reasonCode"], "upstream_timeout");
+            // `unknown` is reported through `operationStatus` alone.
+            assert_eq!(
+                compact.get("mutationStatus"),
+                (mutation == "not_applied").then_some(&json!("not_applied"))
+            );
+            let failure = LocalOutputFailure::response(
+                &envelope,
+                Path::new("saved.json"),
+                anyhow::anyhow!("forced failure"),
+                &[],
+            );
+            assert_eq!(failure.details["operationStatus"], operation);
+            assert_eq!(failure.details["retrySafe"], retry_safe);
+            assert!(
+                failure.details["message"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Operation outcome requires reconciliation")
+            );
+        }
+    }
+
+    #[test]
     fn abandoned_output_preserves_existing_destination_and_removes_temporary_file() {
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("result");

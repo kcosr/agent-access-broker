@@ -2255,6 +2255,24 @@ and unsafe to retry automatically. Failures while taking the pre-publication
 snapshot occur before the mutation and retain the ordinary sanitized upstream
 or protocol contract.
 
+### Mutation receipts
+
+A write action's `result` can carry a mutation receipt: `mutationStatus` and
+`retrySafe`, which say whether the write took effect and whether repeating it
+is safe. Reads never carry one. A failure keeps its ordinary reason code and
+HTTP status; the receipt only adds what is known about the write:
+
+| `mutationStatus` | `retrySafe` | Meaning |
+| --- | --- | --- |
+| `not_applied` | `true` | The Broker proved the write's request never reached the upstream, for example because no connection was established. Nothing changed, and the request may be repeated. Native providers, Teams and imported MCP and OpenAPI writes report it; it accompanies an ordinary reason such as `upstream_connection_failed` or `upstream_timeout`. |
+| `unknown` | `false` | The request may have reached the upstream, but no response said what happened. GitLab writes without a verification contract and dispatched imported MCP and OpenAPI writes report it. Inspect the target before repeating the write. |
+| `applied_unverified` | `false` | The upstream applied the write, or may have, but the Broker could not verify it; see `mutation_verification_failed` above. A success can also report it, such as an imported write or a CloudBees CI trigger without a queue location. |
+| `applied` | `false` | The write succeeded; repeating it would apply it again. |
+
+A failed write without a receipt makes no claim either way: treat it as
+possibly applied, and inspect the target before repeating it. Imported writes
+also report `toolDispatched` (MCP) or `operationDispatched` (OpenAPI).
+
 ## Reason-code table
 
 `reasonCode` is a `snake_case` identifier of at most 64 bytes

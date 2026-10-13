@@ -98,6 +98,12 @@ use the narrowest upstream role that supports the approved workflow.
   `mutationStatus: "applied_unverified"`, `retrySafe: false`, and the created or
   changed IDs, and no retry wait. See
   [http-api.md](http-api.md#reason-code-table).
+- **Mutation receipts** - a write the Broker proves was never sent adds
+  `mutationStatus: "not_applied"`, `retrySafe: true` to its ordinary error, for
+  every native provider, Teams and imported service. GitLab writes without a
+  verification contract and dispatched imported writes that got no response
+  report `mutationStatus: "unknown"`, `retrySafe: false`. See
+  [mutation receipts](http-api.md#mutation-receipts).
 - **Correlation headers** - broker-owned upstream Jira, Confluence, GitLab REST, and CloudBees CI
   requests include `X-Agent-Access-Request-Id` and
   `X-Agent-Access-Broker-Request-Id`. Git HTTP gateways attach the same headers
