@@ -118,18 +118,21 @@ impl PreparedOutboundTls {
             if bytes.len() as u64 > MAX_CA_BUNDLE_BYTES {
                 return Err(invalid("ca_certificate exceeds the 4 MiB bundle limit"));
             }
-            // Preserve the CLI's strict PEM grammar before extracting DER for the
-            // shared verifier. Custom trust must never skip malformed entries.
-            parse_strict_certificate_pem_bundle(&bytes)
-                .map_err(|error| invalid(format!("ca_certificate {error}")))?;
-            for certificate in CertificateDer::pem_slice_iter(&bytes) {
-                let certificate =
-                    certificate.map_err(|error| invalid(format!("ca_certificate {error}")))?;
-                roots
-                    .add(certificate)
-                    .map_err(|error| invalid(format!("ca_certificate {error}")))?;
-            }
+            add_custom_roots(&mut roots, &bytes)?;
         }
+        Self::from_roots(roots)
+    }
+
+    /// Custom trust in exactly the certificates of a PEM bundle, for test
+    /// fixtures embedded in the test support module.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn custom_from_pem(bundle: &[u8]) -> Result<Self, ConfigError> {
+        let mut roots = rustls::RootCertStore::empty();
+        add_custom_roots(&mut roots, bundle)?;
+        Self::from_roots(roots)
+    }
+
+    fn from_roots(roots: rustls::RootCertStore) -> Result<Self, ConfigError> {
         #[cfg(test)]
         let root_count = roots.len();
         let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -156,6 +159,21 @@ impl PreparedOutboundTls {
         // copy the root store. The preconfigured backend bypasses built-in roots.
         builder.use_preconfigured_tls((*self.tls).clone())
     }
+}
+
+fn add_custom_roots(roots: &mut rustls::RootCertStore, bundle: &[u8]) -> Result<(), ConfigError> {
+    // Preserve the CLI's strict PEM grammar before extracting DER for the
+    // shared verifier. Custom trust must never skip malformed entries.
+    parse_strict_certificate_pem_bundle(bundle)
+        .map_err(|error| invalid(format!("ca_certificate {error}")))?;
+    for certificate in CertificateDer::pem_slice_iter(bundle) {
+        let certificate =
+            certificate.map_err(|error| invalid(format!("ca_certificate {error}")))?;
+        roots
+            .add(certificate)
+            .map_err(|error| invalid(format!("ca_certificate {error}")))?;
+    }
+    Ok(())
 }
 
 fn native_error_details(errors: &[rustls_native_certs::Error]) -> String {

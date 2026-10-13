@@ -1,7 +1,8 @@
-//! Helpers for backend and host tests.
+//! Helpers for backend and host tests. Fixtures are embedded from
+//! `test_support/fixtures/`; nothing is read from the filesystem.
 use crate::{
-    OpaqueTokenSigner, OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls, Provider,
-    ServiceDescriptor, ServiceProvider, SigningError, StableSigningKey,
+    OpaqueTokenSigner, PreparedOutboundTls, Provider, ServiceDescriptor, ServiceProvider,
+    SigningError, StableSigningKey,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -24,15 +25,12 @@ impl<P: DescribedProvider> From<Arc<P>> for ServiceProvider {
 /// A self-signed CA certificate for PEM parsing tests.
 pub const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBgDCCASegAwIBAgIUPHDUu9WL36yvTmFeNFZVe/qhClcwCgYIKoZIzj0EAwIw\nHTEbMBkGA1UEAwwSUnVzdGxzIFJvYnVzdCBSb290MCAXDTc1MDEwMTAwMDAwMFoY\nDzQwOTYwMTAxMDAwMDAwWjAdMRswGQYDVQQDDBJSdXN0bHMgUm9idXN0IFJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASW/VkDFs5iGDQvH8jaXYT4jMx66jo+\n5CWKyMt4OlTDdBfKfnmQ9LYeK/PsYfJ8wVizuSlPzXi9je8SnyYejGP3o0MwQTAP\nBgNVHQ8BAf8EBQMDB4QAMB0GA1UdDgQWBBRqY/oMENJbNo7y39iL6GW3tDs0rzAP\nBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQCIEUbrmSUjANju9nNpFop\nPAl9Wh8tBxI5IY+BPh466+aUAiA1/9+prypt6s3Doo0GDsnoFGJi1UBivUg1qdik\ncy4eNw==\n-----END CERTIFICATE-----\n";
 
-/// Outbound TLS trust that accepts only the shared test CA fixture.
+/// Outbound TLS trust that accepts only this package's embedded test CA
+/// (`test_support/fixtures/outbound-tls-ca.pem`).
 pub fn test_outbound_tls() -> PreparedOutboundTls {
-    PreparedOutboundTls::load(&OutboundTlsConfig {
-        trust: OutboundTlsTrustMode::Custom,
-        ca_certificate: Some(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../agent-access-core/tests/fixtures/outbound-tls/ca-a.pem"),
-        ),
-    })
+    PreparedOutboundTls::custom_from_pem(
+        include_bytes!("test_support/fixtures/outbound-tls-ca.pem").as_slice(),
+    )
     .expect("test CA is valid")
 }
 
