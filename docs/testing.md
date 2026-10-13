@@ -393,9 +393,11 @@ for the assembly, host, SDK and every module, and that each of those packages
 resolves to exactly one tracked path package in the checkout. It checks CLI
 startup with `--help` and fails if the checkout is dirty or `HEAD` changes. It
 does not publish artifacts or perform the source release. Its script tests run
-`cargo tree` on a small generated workspace to show that test support enabled
+`cargo tree` on small generated workspaces to show that test support enabled
 through a release package's default features is rejected while a dev-only
-activation is allowed.
+activation is allowed, and that a second module origin from a local Git
+repository is ignored when only a development feature selects it but rejected
+when production selects it.
 
 To opt into a configured remote build service explicitly:
 

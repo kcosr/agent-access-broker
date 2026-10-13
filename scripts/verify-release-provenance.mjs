@@ -187,20 +187,24 @@ export function releaseFeatureTreeArgs(host) {
 }
 
 // Parses `releaseFeatureTreeArgs` output, one `<package>\t<features>` line per
-// unit, into packages with the union of their resolved features. Headings,
-// blank lines and `(*)` repeat markers name no unit.
+// unit, into packages with the union of their resolved features. A package is
+// its `{p}` identity: name, version and, outside crates.io, the source Cargo
+// displays (an absolute directory for a path package, `url#<short commit>` for
+// Git), so two origins of one name and version stay distinct. Headings, blank
+// lines and `(*)` repeat markers name no unit.
 export function parseCargoTree(output) {
   const packages = new Map();
   for (const line of output.split(/\r?\n/)) {
     const [unit, features = ""] = line.split("\t");
-    const pkg = /^(\S+) v(\S+)/.exec(unit.trim());
+    const pkg = /^(\S+) v(\S+)(?: \(proc-macro\))?(?: \((.*)\))?$/.exec(unit.trim());
     if (!pkg) continue;
-    const key = `${pkg[1]} ${pkg[2]}`;
-    const entry = packages.get(key) ?? { name: pkg[1], version: pkg[2], features: new Set() };
+    const identity = unit.trim();
+    const entry = packages.get(identity)
+      ?? { name: pkg[1], version: pkg[2], source: pkg[3] ?? null, features: new Set() };
     for (const feature of features.replace(/ \(\*\)$/, "").split(",")) {
       if (feature.trim()) entry.features.add(feature.trim());
     }
-    packages.set(key, entry);
+    packages.set(identity, entry);
   }
   return [...packages.values()].map((entry) => ({ ...entry, features: [...entry.features].sort() }));
 }
@@ -232,34 +236,15 @@ export function assertReleaseFeatureGraph(output, references) {
   }
 }
 
-// The packages in the normal and build closure of the release roots, from
-// `cargo metadata --filter-platform <host>`, keyed by `name version`. Each key
-// keeps every resolved origin, its package ID, source (null for a path) and
-// manifest path, so packages from different origins are never merged.
-export function releasePackageOrigins(metadata, roots = RELEASE_PACKAGES) {
-  const packages = new Map((metadata.packages ?? []).map((pkg) => [pkg.id, pkg]));
-  const nodes = new Map((metadata.resolve?.nodes ?? []).map((node) => [node.id, node]));
-  const start = (metadata.workspace_members ?? []).filter((id) => roots.includes(packages.get(id)?.name));
-  const missing = roots.filter((name) => !start.some((id) => packages.get(id).name === name));
-  if (missing.length || !metadata.resolve?.nodes) {
-    throw new Error(`cargo metadata has no resolved release package ${missing.join(", ") || "graph"}`);
-  }
-  const seen = new Set(start);
-  const pending = [...start];
-  while (pending.length) {
-    for (const dep of nodes.get(pending.pop())?.deps ?? []) {
-      const kinds = dep.dep_kinds?.length ? dep.dep_kinds : [{ kind: null }];
-      if (seen.has(dep.pkg) || !kinds.some((entry) => entry.kind === null || entry.kind === "build")) continue;
-      seen.add(dep.pkg);
-      pending.push(dep.pkg);
-    }
-  }
+// The source origins of each `name version` among the units a release build
+// selects, from the same no-dev resolution as the feature check. Optional
+// dependencies that only development features activate are not selected, and
+// origins are never merged.
+export function releasePackageOrigins(output) {
   const origins = new Map();
-  for (const id of seen) {
-    const pkg = packages.get(id);
+  for (const pkg of parseCargoTree(output)) {
     const key = `${pkg.name} ${pkg.version}`;
-    origins.set(key, [...(origins.get(key) ?? []),
-      { id, source: pkg.source ?? null, manifestPath: pkg.manifest_path }]);
+    origins.set(key, [...(origins.get(key) ?? []), { source: pkg.source }]);
   }
   return origins;
 }
@@ -276,16 +261,16 @@ export function assertStampedSources(status, origins, { root, tracked, realpath 
     const resolved = origins.get(key) ?? [];
     if (resolved.length !== 1) {
       problems.push(resolved.length
-        ? `${key} resolves to ${resolved.length} source origins (${resolved.map((origin) => origin.id).join(", ")})`
+        ? `${key} resolves to ${resolved.length} source origins (${resolved.map((origin) => origin.source ?? "crates.io").sort().join(", ")})`
         : `${key} is not in the resolved release graph`);
       continue;
     }
-    const [origin] = resolved;
-    const manifest = origin.source === null
-      ? relative(checkout, realpath(origin.manifestPath)).split(sep).join("/")
+    const [{ source }] = resolved;
+    const manifest = source !== null && isAbsolute(source)
+      ? relative(checkout, realpath(join(source, "Cargo.toml"))).split(sep).join("/")
       : null;
     if (manifest === null || manifest.startsWith("../") || isAbsolute(manifest) || !tracked.has(manifest)) {
-      problems.push(`${key} resolves to ${origin.source ?? origin.manifestPath}, not a committed path package in the qualified checkout`);
+      problems.push(`${key} resolves to ${source ?? "crates.io"}, not a committed path package in the qualified checkout`);
     }
   }
   if (problems.length) {
@@ -298,7 +283,7 @@ function fail(message) {
   process.exit(1);
 }
 
-// Resolved Cargo metadata for the whole dependency graph is several MiB.
+// Resolved dependency trees and metadata can exceed the default 1 MiB.
 const CAPTURE_MAX_BYTES = 256 * 1024 * 1024;
 
 function capture(command, args, env = process.env) {
@@ -354,20 +339,21 @@ function localCargoEnv(toolchain, env) {
   return { ...env, CARGO: toolchain.cargoPath, RUSTC: toolchain.rustcPath, CARGO_BUILD_RUSTC: toolchain.rustcPath };
 }
 
-function releaseMetadata(toolchain, env) {
-  const metadata = JSON.parse(capture(toolchain.cargoPath, ["metadata", "--locked", "--format-version", "1",
-    "--filter-platform", toolchain.host], localCargoEnv(toolchain, env)));
-  const broker = metadata.packages.find((entry) => entry.name === "agent-access-broker"
-    && metadata.workspace_members.includes(entry.id));
+function workspaceMetadata(toolchain, env) {
+  const metadata = JSON.parse(capture(toolchain.cargoPath,
+    ["metadata", "--locked", "--no-deps", "--format-version", "1"], localCargoEnv(toolchain, env)));
+  const broker = metadata.packages.find((entry) => entry.name === "agent-access-broker");
   if (!broker) {
     fail("agent-access-broker package was not found in cargo metadata");
   }
-  return { version: broker.version, references: referenceCrates(metadata), origins: releasePackageOrigins(metadata) };
+  return { version: broker.version, references: referenceCrates(metadata) };
 }
 
+// Checks the release units' features and returns their source origins.
 function verifyReleaseFeatures(toolchain, env, references) {
-  assertReleaseFeatureGraph(capture(toolchain.cargoPath, releaseFeatureTreeArgs(toolchain.host),
-    localCargoEnv(toolchain, env)), references);
+  const output = capture(toolchain.cargoPath, releaseFeatureTreeArgs(toolchain.host), localCargoEnv(toolchain, env));
+  assertReleaseFeatureGraph(output, references);
+  return releasePackageOrigins(output);
 }
 
 function trackedFiles() {
@@ -533,9 +519,9 @@ async function main() {
     assertCleanAt(commit, "before build");
     const toolchain = inspectLocalToolchain();
     const plan = provenanceBuildPlan(commit, { ...options, toolchain });
-    const { version, references, origins } = releaseMetadata(toolchain, plan.env);
+    const { version, references } = workspaceMetadata(toolchain, plan.env);
     const tracked = trackedFiles();
-    verifyReleaseFeatures(toolchain, plan.env, references);
+    const origins = verifyReleaseFeatures(toolchain, plan.env, references);
     console.log(`Release feature check: no ${FORBIDDEN_RELEASE_FEATURE} feature or reference crate (${references.join(", ") || "none declared"}) in the normal/build graph of ${RELEASE_PACKAGES.join(" and ")}`);
     console.log(`Toolchain verification: ${JSON.stringify({
       ...toolchain,

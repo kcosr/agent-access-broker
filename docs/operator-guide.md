@@ -443,8 +443,9 @@ Cargo resolves no dev units, and `{f}` lists each package's resolved features,
 including those a release package's default features enable. The check fails
 when any package has the `test-support` feature or the graph links a workspace
 crate whose `[package.metadata.agent-access] role` is `reference`. The verifier
-also records the resolved package identities and source origins of that
-normal/build graph from `cargo metadata --filter-platform <host-triple>`. After
+also keeps each selected package's identity from that output, including its
+source origin, so an optional dependency that only development features
+activate is never counted. After
 the build it rechecks the clean, unchanged `HEAD`, checks CLI startup with
 `--help`, and starts the Broker on loopback with a temporary static identity.
 Authenticated status must name the `agent-access-broker` assembly at the expected

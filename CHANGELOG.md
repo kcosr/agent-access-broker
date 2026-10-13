@@ -157,9 +157,10 @@ All notable changes to this project are documented in this file.
   `agent-access-broker` and `agent-access` (`cargo tree -e normal,build
   --format '{p}\t{f}'`) must not include `test-support`, and the graph must link
   no `reference` crate. It also requires each host, SDK and module package that
-  the status stamps with the qualified commit to resolve, in `cargo metadata`,
-  to exactly one tracked path package in the checkout, rejecting a same-version
-  package from another source and two origins sharing a crate name and version.
+  the status stamps with the qualified commit to resolve, among those selected
+  units, to exactly one tracked path package in the checkout, rejecting a
+  same-version package from another source and two selected origins sharing a
+  crate name and version.
 
 ### Changed
 

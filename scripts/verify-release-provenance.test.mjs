@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   StatusMetadataMismatch,
@@ -296,14 +296,27 @@ test("the release feature check resolves both release packages without dev units
     "--format", "{p}\t{f}"]);
 });
 
-test("parses each unit's resolved features from cargo tree output", () => {
-  assert.deepEqual(parseCargoTree(CLEAN_TREE).map((pkg) => `${pkg.name}@${pkg.version}:${pkg.features.join(",")}`), [
-    "agent-access-broker@0.1.0:default", "agent-access-broker-host@0.1.0:", "agent-access-provider@0.1.0:",
-    "serde@1.0.228:default,derive,std", "serde_derive@1.0.228:default", "cc@1.2.0:", "agent-access@0.1.0:",
+test("parses each unit's identity and resolved features from cargo tree output", () => {
+  assert.deepEqual(parseCargoTree(CLEAN_TREE).map((pkg) => `${pkg.name}@${pkg.version}[${pkg.source}]:${pkg.features.join(",")}`), [
+    "agent-access-broker@0.1.0[/checkout/crates/agent-access-broker]:default",
+    "agent-access-broker-host@0.1.0[/checkout/crates/agent-access-broker-host]:",
+    "agent-access-provider@0.1.0[/checkout/crates/agent-access-provider]:",
+    "serde@1.0.228[null]:default,derive,std", "serde_derive@1.0.228[null]:default", "cc@1.2.0[null]:",
+    "agent-access@0.1.0[/checkout/crates/agent-access]:",
   ]);
-  // Units of one package with different feature sets are merged.
-  const merged = parseCargoTree("tokio v1.0.0\tio-util\ntokio v1.0.0\tmacros,rt (*)\n");
-  assert.deepEqual(merged, [{ name: "tokio", version: "1.0.0", features: ["io-util", "macros", "rt"] }]);
+  // Units of one package with different feature sets are merged; origins are not.
+  const parsed = parseCargoTree([
+    "tokio v1.0.0\tio-util", "tokio v1.0.0\tmacros,rt (*)",
+    "pm v0.1.0 (proc-macro) (/checkout/crates/pm)\t",
+    "agent-access-jira v0.1.0 (/checkout/crates/agent-access-jira)\t",
+    "agent-access-jira v0.1.0 (https://example.test/other.git?rev=v1#ffffffff)\t",
+  ].join("\n"));
+  assert.deepEqual(parsed, [
+    { name: "tokio", version: "1.0.0", source: null, features: ["io-util", "macros", "rt"] },
+    { name: "pm", version: "0.1.0", source: "/checkout/crates/pm", features: [] },
+    { name: "agent-access-jira", version: "0.1.0", source: "/checkout/crates/agent-access-jira", features: [] },
+    { name: "agent-access-jira", version: "0.1.0", source: "https://example.test/other.git?rev=v1#ffffffff", features: [] },
+  ]);
 });
 
 test("reference crates come from workspace role metadata", () => {
@@ -377,39 +390,17 @@ test("real cargo tree: a dev-only test-support activation stays allowed", (t) =>
 const ROOT = "/checkout";
 const TRACKED = new Set(["crates/agent-access-broker/Cargo.toml", "crates/agent-access-broker-host/Cargo.toml",
   "crates/agent-access-provider/Cargo.toml", "crates/agent-access-jira/Cargo.toml", "crates/agent-access/Cargo.toml"]);
-const pathPackage = (name) => ({
-  id: `path+file:///checkout/crates/${name}#0.1.0`, name, version: "0.1.0", source: null,
-  manifest_path: `/checkout/crates/${name}/Cargo.toml`,
-});
-const JIRA_ELSEWHERE = {
-  id: "git+https://example.test/other.git?rev=v0.1.0#ffffffffffffffffffffffffffffffffffffffff",
-  name: "agent-access-jira", version: "0.1.0",
-  source: "git+https://example.test/other.git?rev=v0.1.0#ffffffffffffffffffffffffffffffffffffffff",
-  manifest_path: "/cargo/git/checkouts/other/crates/agent-access-jira/Cargo.toml",
-};
-
-// Synthetic `cargo metadata --filter-platform` output: the broker links the
-// host and a Jira module, the CLI links the SDK, and a dev-only package and a
-// different-origin Jira hang off dev edges.
-function releaseMetadata({ jira = pathPackage("agent-access-jira"), extra = [] } = {}) {
-  const broker = pathPackage("agent-access-broker");
-  const cli = pathPackage("agent-access");
-  const host = pathPackage("agent-access-broker-host");
-  const sdk = pathPackage("agent-access-provider");
-  const devOnly = { ...JIRA_ELSEWHERE, id: "dev-only-jira", name: "agent-access-dev-tool" };
-  const packages = [broker, cli, host, sdk, jira, devOnly, ...extra];
-  const dep = (pkg, kind = null) => ({ pkg: pkg.id, dep_kinds: [{ kind, target: null }] });
-  return {
-    workspace_members: [broker.id, cli.id, host.id, sdk.id],
-    packages,
-    resolve: { nodes: [
-      { id: broker.id, deps: [dep(host), dep(jira), dep(devOnly, "dev"), ...extra.map((pkg) => dep(pkg, "build"))] },
-      { id: cli.id, deps: [dep(sdk)] },
-      { id: host.id, deps: [dep(sdk)] },
-      ...[sdk, jira, devOnly, ...extra].map((pkg) => ({ id: pkg.id, deps: [] })),
-    ] },
-  };
-}
+const unit = (name, source) => `${name} v0.1.0${source ? ` (${source})` : ""}\t`;
+const RELEASE_TREE = [
+  unit("agent-access-broker", "/checkout/crates/agent-access-broker"),
+  unit("agent-access-broker-host", "/checkout/crates/agent-access-broker-host"),
+  unit("agent-access-provider", "/checkout/crates/agent-access-provider"),
+  unit("agent-access-jira", "/checkout/crates/agent-access-jira"),
+  "",
+  unit("agent-access", "/checkout/crates/agent-access"),
+  `${unit("agent-access-provider", "/checkout/crates/agent-access-provider")} (*)`,
+].join("\n");
+const withJira = (source) => `${RELEASE_TREE}\n${unit("agent-access-jira", source)}`;
 
 function stampedStatus() {
   const status = releaseStatus();
@@ -420,20 +411,19 @@ function stampedStatus() {
 const sources = (tracked = TRACKED) => ({ root: ROOT, tracked, realpath: (file) => file });
 
 test("stamped packages resolving to committed path packages in the checkout are accepted", () => {
-  const origins = releasePackageOrigins(releaseMetadata());
+  const origins = releasePackageOrigins(RELEASE_TREE);
   assert.deepEqual([...origins.keys()].sort(), ["agent-access 0.1.0", "agent-access-broker 0.1.0",
     "agent-access-broker-host 0.1.0", "agent-access-jira 0.1.0", "agent-access-provider 0.1.0"]);
+  assert.equal(origins.get("agent-access-provider 0.1.0").length, 1, "repeated units are one origin");
   assert.doesNotThrow(() => assertStampedSources(stampedStatus(), origins, sources()));
 });
 
 test("a same-version module from another source cannot carry the qualified commit", () => {
-  for (const jira of [
-    JIRA_ELSEWHERE,
-    { ...JIRA_ELSEWHERE, id: "registry-jira", source: "registry+https://github.com/rust-lang/crates.io-index" },
-    { ...pathPackage("agent-access-jira"), manifest_path: "/elsewhere/agent-access-jira/Cargo.toml" },
-  ]) {
-    const origins = releasePackageOrigins(releaseMetadata({ jira }));
-    assert.throws(() => assertStampedSources(stampedStatus(), origins, sources()), (error) => {
+  const tree = (source) => RELEASE_TREE.replace(unit("agent-access-jira", "/checkout/crates/agent-access-jira"),
+    unit("agent-access-jira", source));
+  for (const source of ["https://example.test/other.git?rev=v0.1.0#ffffffff", null, "registry `internal`",
+    "/elsewhere/agent-access-jira"]) {
+    assert.throws(() => assertStampedSources(stampedStatus(), releasePackageOrigins(tree(source)), sources()), (error) => {
       assert.ok(error instanceof StatusMetadataMismatch);
       assert.match(error.message, /agent-access-jira 0\.1\.0 resolves to .*, not a committed path package in the qualified checkout/);
       return true;
@@ -441,27 +431,87 @@ test("a same-version module from another source cannot carry the qualified commi
   }
   // A path package inside the checkout that Git does not track is not committed.
   const untracked = new Set([...TRACKED].filter((file) => !file.includes("jira")));
-  assert.throws(() => assertStampedSources(stampedStatus(), releasePackageOrigins(releaseMetadata()), sources(untracked)),
-    /agent-access-jira 0\.1\.0 resolves to \/checkout\/crates\/agent-access-jira\/Cargo\.toml, not a committed path package/);
+  assert.throws(() => assertStampedSources(stampedStatus(), releasePackageOrigins(RELEASE_TREE), sources(untracked)),
+    /agent-access-jira 0\.1\.0 resolves to \/checkout\/crates\/agent-access-jira, not a committed path package/);
 });
 
-test("two source origins sharing a stamped module key are rejected, never merged", () => {
-  const origins = releasePackageOrigins(releaseMetadata({ extra: [JIRA_ELSEWHERE] }));
+test("two selected origins sharing a stamped module key are rejected, never merged", () => {
+  const origins = releasePackageOrigins(withJira("https://example.test/other.git?rev=v0.1.0#ffffffff"));
   assert.equal(origins.get("agent-access-jira 0.1.0").length, 2);
   assert.throws(() => assertStampedSources(stampedStatus(), origins, sources()), (error) => {
     assert.ok(error instanceof StatusMetadataMismatch);
-    assert.match(error.message, /agent-access-jira 0\.1\.0 resolves to 2 source origins \(path\+file:\/\/\/checkout\/crates\/agent-access-jira#0\.1\.0, git\+https:\/\/example\.test\/other\.git/);
+    assert.match(error.message, /agent-access-jira 0\.1\.0 resolves to 2 source origins \(\/checkout\/crates\/agent-access-jira, https:\/\/example\.test\/other\.git\?rev=v0\.1\.0#ffffffff\)/);
     return true;
   });
 });
 
-test("dev-only packages are outside the release graph and stamped packages must be in it", () => {
-  const origins = releasePackageOrigins(releaseMetadata());
-  assert.ok(!origins.has("agent-access-dev-tool 0.1.0"));
+test("stamped packages must be among the selected release units", () => {
   const status = stampedStatus();
   status.modules.push({ crate: "agent-access-teams", version: "0.1.0", roles: [], source: status.host.source });
-  assert.throws(() => assertStampedSources(status, origins, sources()),
+  assert.throws(() => assertStampedSources(status, releasePackageOrigins(RELEASE_TREE), sources()),
     /agent-access-teams 0\.1\.0 is not in the resolved release graph/);
-  assert.throws(() => releasePackageOrigins({ ...releaseMetadata(), workspace_members: [] }),
-    /no resolved release package agent-access-broker, agent-access/);
+});
+
+// A real workspace whose stamped Jira module is a tracked path member. A second
+// `agent-access-jira 0.1.0`, from a local Git repository, is an optional normal
+// dependency of the SDK behind its `alt` feature. The CLI enables `alt` only
+// through a dev-dependency, unless `brokerAlt` makes the broker enable it too.
+function originFixture(t, { brokerAlt }) {
+  const root = temporary(t);
+  const write = (file, contents) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), contents);
+  };
+  const manifest = (name, body = "") => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${body}`;
+  const env = { ...process.env };
+  delete env.CARGO_TARGET_DIR;
+  const run = (command, args, cwd) => execFileSync(command, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  write("other/agent-access-jira/Cargo.toml", manifest("agent-access-jira"));
+  write("other/agent-access-jira/src/lib.rs", "");
+  const other = path.join(root, "other", "agent-access-jira");
+  run("git", ["init", "--quiet"], other);
+  run("git", ["add", "."], other);
+  run("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--quiet", "-m", "other"], other);
+  const sdk = 'agent-access-provider = { path = "../agent-access-provider" }';
+  write("ws/Cargo.toml", '[workspace]\nmembers = ["agent-access-broker", "agent-access", "agent-access-broker-host", '
+    + '"agent-access-provider", "agent-access-jira"]\nresolver = "2"\n');
+  write("ws/agent-access-broker/Cargo.toml", manifest("agent-access-broker", `\n[dependencies]\n${sdk}\n`
+    + 'agent-access-broker-host = { path = "../agent-access-broker-host" }\n'
+    + 'agent-access-jira = { path = "../agent-access-jira" }\n'
+    + (brokerAlt ? '\n[features]\ndefault = ["agent-access-provider/alt"]\n' : "")));
+  write("ws/agent-access/Cargo.toml", manifest("agent-access", `\n[dependencies]\n${sdk}\n\n[dev-dependencies]\n`
+    + 'agent-access-provider = { path = "../agent-access-provider", features = ["alt"] }\n'));
+  write("ws/agent-access-broker-host/Cargo.toml", manifest("agent-access-broker-host"));
+  write("ws/agent-access-jira/Cargo.toml", manifest("agent-access-jira"));
+  write("ws/agent-access-provider/Cargo.toml", manifest("agent-access-provider",
+    `\n[dependencies]\njira-alt = { package = "agent-access-jira", git = "${pathToFileURL(other).href}", optional = true }\n`
+    + '\n[features]\nalt = ["dep:jira-alt"]\n'));
+  for (const crate of ["agent-access-broker", "agent-access", "agent-access-broker-host", "agent-access-provider", "agent-access-jira"]) {
+    write(`ws/${crate}/src/lib.rs`, "");
+  }
+  const workspace = path.join(root, "ws");
+  run("cargo", ["generate-lockfile"], workspace);
+  const host = /^host: (\S+)$/m.exec(run("rustc", ["-vV"], workspace))[1];
+  const output = run("cargo", releaseFeatureTreeArgs(host), workspace);
+  const tracked = new Set(["agent-access-broker", "agent-access", "agent-access-broker-host", "agent-access-provider",
+    "agent-access-jira"].map((crate) => `${crate}/Cargo.toml`));
+  const status = releaseStatus();
+  status.modules = [{ ...status.modules[1], crate: "agent-access-jira" }];
+  const metadata = JSON.parse(run("cargo", ["metadata", "--locked", "--format-version", "1", "--filter-platform", host], workspace));
+  return {
+    check: () => assertStampedSources(status, releasePackageOrigins(output), { root: workspace, tracked }),
+    metadataJiraOrigins: metadata.packages.filter((pkg) => pkg.name === "agent-access-jira").length,
+  };
+}
+
+test("real cargo tree: a second module origin that only a dev feature activates is not selected", (t) => {
+  const fixture = originFixture(t, { brokerAlt: false });
+  // Cargo metadata's feature-enabled workspace graph still lists both origins.
+  assert.equal(fixture.metadataJiraOrigins, 2);
+  assert.doesNotThrow(fixture.check);
+});
+
+test("real cargo tree: two module origins selected for production are rejected", (t) => {
+  assert.throws(originFixture(t, { brokerAlt: true }).check,
+    /agent-access-jira 0\.1\.0 resolves to 2 source origins \(\/.*\/ws\/agent-access-jira, file:\/\/.*\/other\/agent-access-jira#[0-9a-f]{8}\)/);
 });
