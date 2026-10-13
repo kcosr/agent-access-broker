@@ -4116,6 +4116,10 @@ pub(crate) mod tests {
             if failure == "retry_after" {
                 assert!(matches!(error, OAuthError::RetryLater(1..=2)));
             }
+            // The first backoff lasts one or two seconds, which a loaded host
+            // can spend before the restarted manager acquires. Extend it so
+            // the restart is checked inside the cooldown.
+            let retry_not_before = hold_cooldown(&manager);
             let restarted = stub_manager(store, ring, config).unwrap();
             restarted.activate().unwrap();
             // The cooldown's cause survives a restart: only throttling reads
@@ -4140,7 +4144,7 @@ pub(crate) mod tests {
                     .unwrap()
                     .family
                     .retry_not_before,
-                c.family.retry_not_before
+                retry_not_before
             );
             release_cooldown(&restarted);
             server.reset().await;
@@ -4516,6 +4520,19 @@ pub(crate) mod tests {
         assert!(access_entry(grant("DPoP", 3600), OAuthScopeMode::Explicit).is_err());
         assert!(access_entry(grant("Bearer", 0), OAuthScopeMode::Explicit).is_err());
         assert!(access_entry(grant("Bearer", 31_536_001), OAuthScopeMode::Explicit).is_err());
+    }
+
+    /// Extends the connection's cooldown by an hour and returns its new end.
+    fn hold_cooldown(manager: &OAuthManager) -> i64 {
+        manager
+            .update("user", "stub", |_, current| {
+                let mut slot = current.unwrap();
+                let family = &mut slot.connection.as_mut().unwrap().family;
+                family.retry_not_before += 3_600_000;
+                let retry_not_before = family.retry_not_before;
+                Ok((slot, retry_not_before))
+            })
+            .unwrap()
     }
 
     fn release_cooldown(manager: &OAuthManager) {
