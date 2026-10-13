@@ -6296,7 +6296,8 @@ async fn body_admission_accepts_only_project_upload_and_states_its_disposition()
 }
 
 #[test]
-fn only_sdk_proven_unsent_writes_report_not_applied() {
+fn plain_write_receipts_follow_what_gitlab_may_have_applied() {
+    let write = PlainWrite::new(json!({ "project": "sip/service", "issueIid": 7 }));
     let not_applied = json!({ "mutationStatus": "not_applied", "retrySafe": true });
     for (timed_out, reason) in [
         (false, ReasonCode::UpstreamConnectionFailed),
@@ -6313,7 +6314,7 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
                 MutationVerificationStage::MutationResponse,
                 MutationSafeLocators::new().with_webhook_ids(vec![7]),
             ),
-            gitlab_write_error(error.clone()),
+            write.failed(error.clone()),
         ] {
             assert_eq!(failure.decision(), Decision::Error);
             assert_eq!(failure.reason_code(), reason);
@@ -6348,11 +6349,21 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
         GitlabBackendError::NoResponse { timed_out: false }
     );
     let unknown = json!({ "mutationStatus": "unknown", "retrySafe": false });
-    for (timed_out, reason) in [
-        (false, ReasonCode::UpstreamConnectionFailed),
-        (true, ReasonCode::UpstreamTimeout),
+    for (error, reason) in [
+        (
+            GitlabBackendError::NoResponse { timed_out: false },
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (
+            GitlabBackendError::NoResponse { timed_out: true },
+            ReasonCode::UpstreamTimeout,
+        ),
+        // A proxy can return a 5xx after GitLab committed the write.
+        (
+            GitlabBackendError::HttpStatus(502),
+            ReasonCode::UpstreamFailed,
+        ),
     ] {
-        let error = GitlabBackendError::NoResponse { timed_out };
         let failure = mutation_backend_error(
             error.clone(),
             MutationVerificationStage::MutationResponse,
@@ -6369,18 +6380,29 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
         assert_eq!(failure.result.as_deref().unwrap()["retrySafe"], false);
         // A write without a verification contract keeps its reason and
         // message, with an unknown outcome.
-        let write = gitlab_write_error(error.clone());
-        assert_eq!(write.decision(), Decision::Error);
-        assert_eq!(write.reason_code(), reason);
-        assert_eq!(write.message, gitlab_backend_error(error.clone()).message);
-        assert_eq!(write.result.as_deref(), Some(&unknown));
+        let failure = write.failed(error.clone());
+        assert_eq!(failure.decision(), Decision::Error);
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(failure.message, gitlab_backend_error(error.clone()).message);
+        assert_eq!(failure.result.as_deref(), Some(&unknown));
         // Reads carry no mutation receipt.
         let read = gitlab_backend_error(error);
         assert_eq!(read.reason_code(), reason);
         assert!(read.result.is_none());
     }
-    // A failure after GitLab's status arrived, such as an interrupted or
-    // oversized body, and a definitive error status keep their plain error.
+    // Only redirect-following reads report a redirect failure.
+    assert_eq!(
+        gitlab_upstream_error(UpstreamError::Redirect),
+        GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
+    );
+    // A success status followed by an interrupted, stalled, oversized or
+    // unparseable body: GitLab accepted the write.
+    let unverified = json!({
+        "mutationStatus": "applied_unverified",
+        "retrySafe": false,
+        "verificationStage": "mutation_response",
+        "safeLocators": { "project": "sip/service", "issueIid": 7 },
+    });
     for (error, reason) in [
         (
             GitlabBackendError::Transport("body".to_string()),
@@ -6395,14 +6417,60 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
             GitlabBackendError::Protocol("shape".to_string()),
             ReasonCode::UpstreamProtocolFailed,
         ),
+    ] {
+        let failure = write.failed(error.clone());
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(failure.message, gitlab_backend_error(error.clone()).message);
+        assert_eq!(failure.result.as_deref(), Some(&unverified));
+    }
+    // A later validation failure keeps its reason with the same receipt, and a
+    // more specific receipt is kept.
+    let mismatch = write.unverified(ProviderError::error(
+        ReasonCode::UpstreamProtocolFailed,
+        "GitLab issue is outside the project",
+    ));
+    assert_eq!(mismatch.result.as_deref(), Some(&unverified));
+    let kept = write.unverified(
+        ProviderError::error(ReasonCode::UpstreamTimeout, "timed out")
+            .with_mutation_receipt(MutationReceipt::unknown()),
+    );
+    assert_eq!(kept.result.as_deref(), Some(&unknown));
+    // A definitive rejection, throttling and a failure before anything was
+    // sent keep their plain error.
+    for (error, reason) in [
         (
-            GitlabBackendError::HttpStatus(500),
+            GitlabBackendError::HttpStatus(409),
             ReasonCode::UpstreamFailed,
         ),
+        (
+            GitlabBackendError::Validation {
+                status: 422,
+                message: "invalid".to_string(),
+            },
+            ReasonCode::InputInvalid,
+        ),
+        (GitlabBackendError::Forbidden, ReasonCode::UpstreamForbidden),
+        (
+            GitlabBackendError::RateLimited(None),
+            ReasonCode::UpstreamRateLimited,
+        ),
+        (
+            GitlabBackendError::Transport("upload file".to_string()).unbuilt(),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (
+            gitlab_upstream_error(UpstreamError::NotAllowed),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
     ] {
-        let write = gitlab_write_error(error);
-        assert_eq!(write.reason_code(), reason);
-        assert!(write.result.is_none());
+        let failure = write.failed(error);
+        assert_eq!(failure.reason_code(), reason);
+        assert!(
+            failure
+                .result
+                .as_deref()
+                .is_none_or(|result| result.get("mutationStatus").is_none())
+        );
     }
 }
 
@@ -6419,6 +6487,12 @@ enum WriteFate {
     /// The write is read in full and answered with a success status whose
     /// body is cut short.
     TruncatedSuccess,
+    /// The write is read in full and answered with a 502, as a proxy can
+    /// after GitLab committed it.
+    BadGateway,
+    /// The write is read in full and answered with a success whose issue is
+    /// in another project.
+    ForeignSuccess,
 }
 
 /// A raw GitLab stand-in that answers `reads` in order, one connection each,
@@ -6484,6 +6558,22 @@ fn scripted_gitlab(
                 let _ = write!(
                     socket,
                     "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{{\"id\":"
+                );
+                let _ = socket.flush();
+            }
+            WriteFate::ForeignSuccess => {
+                let body = r#"{"iid":5,"project_id":99}"#;
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.flush();
+            }
+            WriteFate::BadGateway => {
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                 );
                 let _ = socket.flush();
             }
@@ -6586,9 +6676,31 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
             Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
         ),
         (
+            WriteFate::BadGateway,
+            ReasonCode::UpstreamFailed,
+            Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
+        ),
+        // The response does not match the request: GitLab accepted a write
+        // the Broker cannot confirm.
+        (
+            WriteFate::ForeignSuccess,
+            ReasonCode::ScopeUnresolved,
+            Some(json!({
+                "mutationStatus": "applied_unverified",
+                "retrySafe": false,
+                "verificationStage": "mutation_response",
+                "safeLocators": { "project": "sip/service" },
+            })),
+        ),
+        (
             WriteFate::TruncatedSuccess,
             ReasonCode::UpstreamConnectionFailed,
-            None,
+            Some(json!({
+                "mutationStatus": "applied_unverified",
+                "retrySafe": false,
+                "verificationStage": "mutation_response",
+                "safeLocators": { "project": "sip/service" },
+            })),
         ),
     ] {
         let (base, seen) = scripted_gitlab(vec![project.clone()], fate);

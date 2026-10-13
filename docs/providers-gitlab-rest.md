@@ -237,7 +237,7 @@ header changes, as well as review and discussion readbacks), the error is
 `mutationStatus: "applied_unverified"`, `retrySafe: false`,
 `verificationStage`, and `safeLocators`, and no retry wait: refresh by the
 returned IDs instead of repeating the mutation. A write proven never sent is
-reported as `not_applied`, and one that may have been sent without a response
+reported as `not_applied`, and one that may have applied without confirmation
 as `applied_unverified` or `unknown`; see
 [Unsent and unanswered writes](#unsent-and-unanswered-writes).
 
@@ -1257,33 +1257,33 @@ Nothing was applied, and the action can be repeated. This covers every write,
 with or without a verification contract, including provisioning and project
 uploads. A read that was never sent carries no mutation receipt.
 
-Only that proof yields `not_applied`. When the request may have been sent but
-no response arrived, because it timed out (including a stalled upload) or its
-connection failed after sending:
+Only that proof yields `not_applied`. Writes with a verification contract
+(inline discussions, discussion replies, draft notes, draft publication, review
+submission, approvals, suggestion application, webhook and provisioning
+mutations) report any failure after the request may have been sent as
+`mutation_verification_failed`/409 with `mutationStatus = "applied_unverified"`
+and `retrySafe = false`, or the ordinary error when readback proves the target
+unchanged.
 
-- writes with a verification contract (inline discussions, discussion
-  replies, draft notes, draft publication, review submission, approvals,
-  suggestion application, webhook and provisioning mutations) return
-  `mutation_verification_failed`/409 with `mutationStatus =
-  "applied_unverified"` and `retrySafe = false`, or the ordinary error when
-  readback proves the target unchanged; and
-- other writes (issue, note, merge-request and merge, general discussion,
-  discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline
-  and job mutations, and project uploads) return their ordinary
-  `upstream_timeout` (HTTP 504) or `upstream_connection_failed` (HTTP 502)
-  with a result of:
+Other writes (issue, note, merge-request and merge, general discussion,
+discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and
+job mutations, and project uploads) keep their ordinary sanitized error and
+reason, and add a receipt for what GitLab may have done:
 
-  ```json
-  { "mutationStatus": "unknown", "retrySafe": false }
-  ```
+| What happened | Receipt |
+| --- | --- |
+| The request may have been sent, but no response arrived: a timeout (including a stalled upload) or a connection failure after sending (`upstream_timeout`, HTTP 504, or `upstream_connection_failed`, HTTP 502) | `{ "mutationStatus": "unknown", "retrySafe": false }` |
+| GitLab, or a proxy in front of it, answered with a 5xx (`upstream_failed`); the write may have committed first | `{ "mutationStatus": "unknown", "retrySafe": false }` |
+| GitLab answered with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse, carried a body on a no-content response, or did not match the request, such as an issue in another project | `mutationStatus = "applied_unverified"`, `retrySafe = false`, `verificationStage = "mutation_response"` and `safeLocators` |
 
-  The write may have applied. Inspect the target before repeating it.
-
-Those other writes keep their ordinary sanitized error without a mutation
-receipt when GitLab answered: an HTTP error status, or a success status whose
-body then failed, stalled, exceeded the byte cap or could not be parsed. A
-failure before the request is built, such as an upload file the Broker cannot
-open, also carries no receipt.
+The `safeLocators` name the target from the validated request, never from the
+response: always `project`, and `issueIid`, `mergeRequestIid`, `noteId`,
+`discussionId`, `branch`, `path`, `ref`, `pipelineId`, `jobId`, or
+`sourceBranch` and `targetBranch`, as the action has them. Inspect the target
+before repeating a write with either receipt. A rejection with another HTTP
+status, such as 400, 403, 404, 409, 422 or 429, a redirect, and a failure before
+the request is sent, such as an upload file the Broker cannot open, carry no
+receipt.
 
 A later request that fails after a write applied, such as a readback or the
 `review.submit` summary note, never reports `not_applied`.

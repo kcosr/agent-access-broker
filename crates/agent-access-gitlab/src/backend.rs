@@ -2083,12 +2083,15 @@ pub enum GitlabBackendError {
     #[error("GitLab request was not sent")]
     NotSent { timed_out: bool },
     /// The request may have reached GitLab, but no response arrived: it timed
-    /// out (`timed_out`), or its connection failed after it was sent.
+    /// out (`timed_out`), its connection failed after it was sent, or the SDK
+    /// reported a failure GitLab does not classify.
     #[error("GitLab request got no response")]
     NoResponse { timed_out: bool },
-    /// Reading GitLab's response failed after its status arrived, an upload
-    /// file could not be opened, or the SDK reported a failure it does not
-    /// classify.
+    /// The Broker could not prepare the request, so nothing was sent; reported
+    /// like the wrapped failure.
+    #[error("GitLab request could not be prepared: {0}")]
+    RequestUnbuilt(Box<GitlabBackendError>),
+    /// Reading GitLab's response failed after its status arrived.
     #[error("GitLab transport failed: {0}")]
     Transport(String),
     /// Reading GitLab's response stalled after its status arrived.
@@ -2100,6 +2103,13 @@ pub enum GitlabBackendError {
     DraftPositionShapeInvalid,
     #[error("GitLab response protocol error: {0}")]
     Protocol(String),
+}
+
+impl GitlabBackendError {
+    /// This failure, which happened before anything was sent.
+    pub(crate) fn unbuilt(self) -> Self {
+        Self::RequestUnbuilt(Box::new(self))
+    }
 }
 
 #[derive(Clone)]
@@ -2157,7 +2167,7 @@ impl HttpGitlabBackend {
     pub(crate) fn endpoint(&self, suffix: &str) -> Result<Url, GitlabBackendError> {
         self.api_base
             .join(suffix)
-            .map_err(|error| GitlabBackendError::Protocol(error.to_string()))
+            .map_err(|error| GitlabBackendError::Protocol(error.to_string()).unbuilt())
     }
 
     pub(crate) async fn get_json(
@@ -2332,7 +2342,8 @@ impl HttpGitlabBackend {
             _ => {
                 return Err(GitlabBackendError::Protocol(
                     "unsupported GitLab no-content JSON method".to_string(),
-                ));
+                )
+                .unbuilt());
             }
         };
         let response = send_gitlab_request(
@@ -2370,7 +2381,8 @@ impl HttpGitlabBackend {
             _ => {
                 return Err(GitlabBackendError::Protocol(
                     "unsupported GitLab JSON method".to_string(),
-                ));
+                )
+                .unbuilt());
             }
         };
         let response = send_gitlab_request(
@@ -2497,6 +2509,7 @@ impl GitlabBackend for HttpGitlabBackend {
         let (part, progress) = if let Some(path) = upload.temp_file_path() {
             let (body, progress) = file_upload_body(path).await.map_err(|_| {
                 GitlabBackendError::Transport("GitLab upload file could not be opened".to_string())
+                    .unbuilt()
             })?;
             (
                 reqwest::multipart::Part::stream_with_length(body, upload.size()),
@@ -2521,6 +2534,7 @@ impl GitlabBackend for HttpGitlabBackend {
             )
             .map_err(|_| {
                 GitlabBackendError::Protocol("GitLab upload media type is invalid".to_string())
+                    .unbuilt()
             })?;
         let started = Instant::now();
         let response = send_gitlab_upload(
@@ -4714,9 +4728,10 @@ pub(crate) fn authenticated_gitlab_request(
 ) -> Result<reqwest::RequestBuilder, GitlabBackendError> {
     match credential.view() {
         CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
-        _ => Err(GitlabBackendError::Protocol(
-            "unsupported GitLab credential kind".to_string(),
-        )),
+        _ => Err(
+            GitlabBackendError::Protocol("unsupported GitLab credential kind".to_string())
+                .unbuilt(),
+        ),
     }
 }
 
@@ -4766,11 +4781,17 @@ pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError 
         UpstreamError::NotSent { timed_out, .. } => GitlabBackendError::NotSent { timed_out },
         UpstreamError::Timeout => GitlabBackendError::NoResponse { timed_out: true },
         UpstreamError::Transport(_) => GitlabBackendError::NoResponse { timed_out: false },
-        UpstreamError::NotAllowed | UpstreamError::Redirect => {
+        // The SDK refused the URL before sending it.
+        UpstreamError::NotAllowed => {
+            GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
+                .unbuilt()
+        }
+        UpstreamError::Redirect => {
             GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
         }
-        // Any other failure produced no usable response.
-        other => GitlabBackendError::Transport(other.to_string()),
+        // Any other failure produced no usable response and may have reached
+        // GitLab.
+        _ => GitlabBackendError::NoResponse { timed_out: false },
     }
 }
 

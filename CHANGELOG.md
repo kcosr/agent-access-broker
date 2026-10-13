@@ -489,8 +489,15 @@ All notable changes to this project are documented in this file.
   (including a stalled upload) or its connection failed after sending, now add
   `mutationStatus: "unknown"`, `retrySafe: false` to their unchanged
   `upstream_timeout` or `upstream_connection_failed` error, which previously
-  carried no result. Failures after GitLab answered, with an error status or
-  with a success status whose body then failed, keep their plain error.
+  carried no result. The same writes now also report `mutationStatus:
+  "unknown"`, `retrySafe: false` for a 5xx response (`upstream_failed`) and for
+  an upstream failure GitLab does not classify, and `mutationStatus:
+  "applied_unverified"`, `retrySafe: false`, `verificationStage:
+  "mutation_response"` with request-derived `safeLocators` when GitLab answered
+  with a success status whose response then failed, stalled, exceeded the byte
+  cap, did not parse, carried a body on a no-content response or did not match
+  the request. Reasons, statuses and messages are unchanged; 4xx rejections,
+  throttling and failures before sending keep no receipt.
 - Imported MCP and OpenAPI write failures whose request was never dispatched
   (`toolDispatched: false` or `operationDispatched: false`: the tool call was
   never sent, or the Broker refused its URL or proved it unsent) now report

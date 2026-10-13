@@ -766,10 +766,11 @@ Any GitLab write the Broker proves was never sent (no connection was made)
 fails with `upstream_connection_failed` or `upstream_timeout` and
 `mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and the
 request may be repeated. Any other transport failure is not that proof. A
-GitLab write without a verification contract that may have been sent but got
-no response keeps `upstream_timeout` or `upstream_connection_failed` with
-`mutationStatus: "unknown"`, `retrySafe: false`: it may have applied, so
-inspect the target before repeating it.
+GitLab write without a verification contract keeps its ordinary error and
+reports `mutationStatus: "unknown"`, `retrySafe: false` when it got no response
+or a 5xx, and `mutationStatus: "applied_unverified"` with `safeLocators` when
+GitLab answered with a success whose response could not be read or validated.
+Either way it may have applied, so inspect the target before repeating it.
 Suggestion success is based on scoped discussion/note reread, not the possibly
 stale immediate response flag. It contains no commit ID/SHA and does not imply
 thread resolution.

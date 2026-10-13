@@ -267,6 +267,10 @@ fn provisioning_unverified(locators: &Value) -> ProviderError {
     )
 }
 fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> ProviderError {
+    // A request that was never prepared keeps the mapping of its cause.
+    if let GitlabBackendError::RequestUnbuilt(error) = error {
+        return provisioning_failure(*error, mutation);
+    }
     // Every provisioning action performs at most one write, after its reads.
     if let (GitlabBackendError::NotSent { timed_out }, Some(_)) = (&error, mutation) {
         return mutation_not_sent(*timed_out);
