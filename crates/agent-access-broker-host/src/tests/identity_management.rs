@@ -295,6 +295,12 @@ async fn identity_management_binding_cas_ownership_and_namespace_availability() 
     let (_, replacement) = admin(&fixture, Method::POST, BINDINGS, Some(CREATE)).await;
     assert_ne!(replacement["result"]["bindingId"], binding);
     assert_eq!(replacement["result"]["version"], 1);
+    // The binding creations carried the username.
+    require_audit_action(
+        fixture.audit_path.as_deref().unwrap(),
+        "broker",
+        "admin.principals.identity_bindings.create",
+    );
     let audits = serde_json::to_string(&fixture.records()).unwrap();
     assert!(!audits.contains("Alice+team@example.test"));
     assert!(!audits.contains("synthetic-caller-secret"));

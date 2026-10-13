@@ -281,6 +281,12 @@ async fn confluence_rendered_content_is_absent_from_tracing_audit_and_errors() {
     event_by_name_and_agent(&events, "invoke_completed", "confluence-read-malformed-adf");
     let events = serde_json::to_string(&events).unwrap();
     assert!(!events.contains(NATIVE_SENTINEL));
+    require_audit_request(
+        &audit_path,
+        "confluence-read-malformed-adf",
+        "confluence",
+        "page.view",
+    );
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     assert!(!audit.contains(NATIVE_SENTINEL));
     for record in read_audit_records(&audit_path) {

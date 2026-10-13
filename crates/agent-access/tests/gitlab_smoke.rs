@@ -210,7 +210,9 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             backend.uploaded_projects.lock().unwrap().is_empty(),
             "{case} reached upstream upload"
         );
-        let audit = broker.audit().unwrap().text();
+        let audit = broker.audit().unwrap();
+        audit.require_action("gitlab", "project.upload");
+        let audit = audit.text();
         assert!(!audit.contains("private-agent-session-content"));
         assert!(!audit.contains("gitlab-service-token"));
         stop(broker).await;
@@ -2489,7 +2491,10 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
         );
     }
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "merge_request.discussion.note.add");
+    audit.require_action("gitlab", "merge_request.draft_note.add");
+    let audit = audit.text();
     assert!(!audit.contains("per-user reply secret"));
     assert!(!audit.contains("per-user draft secret"));
     stop(broker).await;
@@ -2564,7 +2569,13 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
             .unwrap()
             .is_empty()
     );
-    let narrowed_audit = broker.audit().unwrap().text();
+    let narrowed_audit = broker.audit().unwrap();
+    narrowed_audit.require_request(
+        "gitlab-review-policy-denied",
+        "gitlab",
+        "merge_request.draft_note.add",
+    );
+    let narrowed_audit = narrowed_audit.text();
     assert!(!narrowed_audit.contains("policy-denied secret"));
 
     stop(broker).await;
@@ -2818,7 +2829,20 @@ async fn gitlab_review_preflights_reject_unproven_identity_and_scope_without_wri
         );
     }
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-wrong-draft-owner",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-invalid-current-user",
+            "merge_request.draft_note.add",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "owner mismatch secret",
         "reply mismatch secret",
@@ -3098,7 +3122,36 @@ async fn gitlab_review_verification_failures_expose_only_action_specific_safe_st
         serde_json::json!({"noteId":990,"draftNoteIds":[804]}),
     );
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-verification-success-contract",
+            "merge_request.draft_note.add",
+        ),
+        (
+            "gitlab-inline-readback-stage",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-draft-update-readback-stage",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-draft-position-readback-stage",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-draft-position-replay-preflight",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-summary-response-stage",
+            "merge_request.draft_note.publish_all",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "verified success secret",
         "inline verification secret",
@@ -3356,7 +3409,36 @@ async fn gitlab_review_positions_and_write_failures_preserve_retry_contracts() {
         bulk_writes
     );
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-fractional-image-position",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-integer-image-position",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-normalized-reply-readback",
+            "merge_request.discussion.note.add",
+        ),
+        (
+            "gitlab-normalized-summary-readback",
+            "merge_request.review.submit",
+        ),
+        (
+            "gitlab-reply-upstream-5xx",
+            "merge_request.discussion.note.add",
+        ),
+        (
+            "gitlab-review-quick-action-body",
+            "merge_request.review.submit",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "fractional image secret",
         "integer image secret",
@@ -3675,7 +3757,26 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         2
     );
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "issue.view");
+    for (request_id, action) in [
+        ("gitlab-direct-merge-request-search", "merge_request.search"),
+        (
+            "gitlab-direct-discussion-list",
+            "merge_request.discussion.list",
+        ),
+        (
+            "gitlab-direct-discussion-resolve",
+            "merge_request.discussion.resolve",
+        ),
+        ("gitlab-direct-note-add", "issue.note.add"),
+        ("gitlab-mutation-markdown-unsupported", "issue.note.add"),
+        ("gitlab-direct-search-native", "issue.search"),
+        ("gitlab-direct-search-markdown", "issue.search"),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         ISSUE_BODY,
         MERGE_REQUEST_BODY,
@@ -3834,7 +3935,15 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         ["project", "project", "file"]
     );
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "issue.note.list");
+    audit.require_request(
+        "gitlab-oversized-discussion-native",
+        "gitlab",
+        "merge_request.discussion.list",
+    );
+    audit.require_action("gitlab", "file.view");
+    let audit = audit.text();
     for sentinel in [
         OVERSIZED_NOTE_SENTINEL,
         OVERSIZED_DISCUSSION_SENTINEL,

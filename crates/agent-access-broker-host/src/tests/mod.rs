@@ -13668,6 +13668,13 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
     }
     let events = serde_json::to_string(&events).unwrap();
     assert!(!events.contains(JIRA_READ_NATIVE_SENTINEL));
+    for (request_id, action) in [
+        ("jira-read-embedded-success", "issue.view"),
+        ("jira-read-whole-success", "issue.view"),
+        ("jira-read-whole-mismatch", "verify"),
+    ] {
+        require_audit_request(&audit_path, request_id, "jira", action);
+    }
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     assert!(!audit.contains(JIRA_READ_NATIVE_SENTINEL));
     for record in read_audit_records(&audit_path) {
@@ -13788,6 +13795,12 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
         assert!(!serialized_events.contains(sentinel));
     }
 
+    for request_id in [
+        "agent-req-jira-normalized-write-success",
+        "agent-req-jira-normalized-write-failed",
+    ] {
+        require_audit_request(&audit_path, request_id, "jira", "issue.create");
+    }
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     for sentinel in [
         JIRA_WRITE_SOURCE_SENTINEL,
@@ -13957,6 +13970,12 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
         assert!(!serialized_events.contains(sentinel));
     }
 
+    for request_id in [
+        "agent-req-confluence-normalized-write-success",
+        "agent-req-confluence-normalized-write-failed",
+    ] {
+        require_audit_request(&audit_path, request_id, "confluence", "page.create");
+    }
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     for sentinel in [
         CONFLUENCE_WRITE_SOURCE_SENTINEL,
@@ -14123,6 +14142,12 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
         assert!(!serialized_events.contains(sentinel));
     }
 
+    for request_id in [
+        "agent-req-gitlab-normalized-write-success",
+        "agent-req-gitlab-normalized-write-failed",
+    ] {
+        require_audit_request(&audit_path, request_id, "gitlab", "issue.create");
+    }
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     for sentinel in [
         GITLAB_WRITE_SOURCE_SENTINEL,
@@ -14209,6 +14234,18 @@ async fn gitlab_review_failures_preserve_exact_http_contract_without_echoing_con
         assert!(!position.to_string().contains(content));
     }
 
+    for request_id in [
+        "agent-req-gitlab-review-mutation-unverified",
+        "agent-req-gitlab-review-coordinates-unresolved",
+        "agent-req-gitlab-review-patch-unavailable",
+    ] {
+        require_audit_request(
+            &audit_path,
+            request_id,
+            "gitlab",
+            "merge_request.discussion.inline.add",
+        );
+    }
     let audit = std::fs::read_to_string(audit_path).unwrap();
     for secret in [
         GITLAB_REVIEW_MUTATION_SECRET_SENTINEL,
@@ -19163,6 +19200,30 @@ fn read_audit_records_without_reloads(path: &Path) -> Vec<Value> {
 
 fn read_audit_record(path: &Path) -> Value {
     read_audit_records(path).into_iter().next().unwrap()
+}
+
+/// The records of `request_id` for `service` and `action` in the audit store
+/// at `path`. Panics when there are none: startup creates an empty store, so
+/// a check that a value is absent from the audit requires the exercised
+/// request's records first.
+fn require_audit_request(path: &Path, request_id: &str, service: &str, action: &str) -> Vec<Value> {
+    agent_access_core::test_support::require_audit_records(
+        read_audit_records(path),
+        Some(request_id),
+        service,
+        action,
+    )
+}
+
+/// The records of every request for `service` and `action` in the audit
+/// store at `path`. Panics like [`require_audit_request`] when there are none.
+fn require_audit_action(path: &Path, service: &str, action: &str) -> Vec<Value> {
+    agent_access_core::test_support::require_audit_records(
+        read_audit_records(path),
+        None,
+        service,
+        action,
+    )
 }
 
 #[tokio::test]

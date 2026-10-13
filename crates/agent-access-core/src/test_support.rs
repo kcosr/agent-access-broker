@@ -135,6 +135,46 @@ pub fn read_audit_records(kind: AuditStoreType, path: &Path) -> Vec<Value> {
     }
 }
 
+/// The records among `records` for `service` and `action`, limited to the
+/// agent request ID `request_id` when one is given, in their order. Panics,
+/// listing every record's request ID, service and action, when none match. A
+/// test that checks a value is absent from the audit requires the exercised
+/// request's records first, so the check cannot pass because nothing was
+/// audited.
+pub fn require_audit_records(
+    records: Vec<Value>,
+    request_id: Option<&str>,
+    service: &str,
+    action: &str,
+) -> Vec<Value> {
+    let field = |record: &Value, name: &str| record[name].as_str().unwrap_or("-").to_owned();
+    let (matching, others): (Vec<_>, Vec<_>) = records.into_iter().partition(|record| {
+        record["service"] == service
+            && record["action"] == action
+            && request_id.is_none_or(|request_id| record["agentRequestId"] == request_id)
+    });
+    if matching.is_empty() {
+        let stored = others
+            .iter()
+            .map(|record| {
+                format!(
+                    "{} {}.{}",
+                    field(record, "agentRequestId"),
+                    field(record, "service"),
+                    field(record, "action")
+                )
+            })
+            .collect::<Vec<_>>();
+        match request_id {
+            Some(request_id) => panic!(
+                "no audit record of request {request_id} for {service}.{action}; stored: {stored:?}"
+            ),
+            None => panic!("no audit record for {service}.{action}; stored: {stored:?}"),
+        }
+    }
+    matching
+}
+
 /// The records in the audit store of type `kind` at `path` as JSONL text:
 /// the file itself for JSONL, and each stored `record_json` (exactly the line
 /// JSONL would write) followed by a newline for SQLite.

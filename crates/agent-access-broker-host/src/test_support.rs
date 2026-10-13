@@ -828,6 +828,31 @@ impl AuditStoreView {
     pub fn text(&self) -> String {
         agent_access_core::test_support::read_audit_text(self.kind, &self.path)
     }
+
+    /// The records of the request `request_id` for `service` and `action`,
+    /// in write order. Panics, listing what the store holds, when there are
+    /// none. Startup creates an empty store, so a test that checks a value is
+    /// absent from the audit requires the exercised request's records first.
+    pub fn require_request(&self, request_id: &str, service: &str, action: &str) -> Vec<Value> {
+        agent_access_core::test_support::require_audit_records(
+            self.records(),
+            Some(request_id),
+            service,
+            action,
+        )
+    }
+
+    /// The records of every request for `service` and `action`, in write
+    /// order, such as those of CLI commands, whose request IDs the CLI
+    /// generates. Panics like [`Self::require_request`] when there are none.
+    pub fn require_action(&self, service: &str, action: &str) -> Vec<Value> {
+        agent_access_core::test_support::require_audit_records(
+            self.records(),
+            None,
+            service,
+            action,
+        )
+    }
 }
 
 /// Read-only access to an isolated broker's managed store.

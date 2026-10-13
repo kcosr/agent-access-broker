@@ -1097,7 +1097,25 @@ async fn cli_and_http_download_archived_artifact_with_bounded_metadata() {
             .iter()
             .all(|request| request.headers.get("authorization").is_some())
     );
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    let phases = audit
+        .require_request(
+            "cloudbees-smoke-raw",
+            "cloudbees_ci",
+            "build.artifact.download",
+        )
+        .into_iter()
+        .map(|record| record["providerAudit"]["streamPhase"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(phases, [json!("started"), json!("completed")]);
+    // The typed CLI download writes the same two records.
+    assert_eq!(
+        audit
+            .require_action("cloudbees_ci", "build.artifact.download")
+            .len(),
+        4
+    );
+    let audit = audit.text();
     assert!(!audit.contains("<testsuite"));
     assert!(!audit.contains("basic-secret"));
     stop(broker).await;
@@ -1210,7 +1228,14 @@ async fn large_log_head_returns_cursor_and_trigger_returns_queue_receipt() {
         json!({"controller": "team-ci", "job": JOB})
     );
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    audit.require_request("cloudbees-smoke-head", "cloudbees_ci", "build.log.read");
+    // The HTTP head read and the CLI continuation.
+    assert_eq!(
+        audit.require_action("cloudbees_ci", "build.log.read").len(),
+        2
+    );
+    let audit = audit.text();
     assert!(!audit.contains(&"x".repeat(128)));
     assert!(!audit.contains(cursor));
     assert!(!audit.contains("basic-secret"));
@@ -1273,7 +1298,18 @@ async fn continued_log_read_is_denied_without_upstream_access_after_grant_revoca
         "authorization must precede cursor verification: {denied}"
     );
     assert_eq!(controller.received_requests().await.unwrap().len(), 1);
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    let decisions = audit
+        .require_request(
+            "cloudbees-cursor-revocation",
+            "cloudbees_ci",
+            "build.log.read",
+        )
+        .into_iter()
+        .map(|record| record["decision"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(decisions, [json!("allow"), json!("deny")]);
+    let audit = audit.text();
     assert!(!audit.contains(cursor));
     assert!(!audit.contains(&"x".repeat(128)));
     stop(broker).await;
@@ -1409,9 +1445,10 @@ async fn cli_reads_log_and_queue_without_auditing_log_or_other_jobs_queue_detail
             request.url.path() == format!("/team-ci/queue/item/{queue_id}/api/json")
         }));
     }
-    let audit = broker.audit().unwrap().text();
-    assert!(audit.contains("\"action\":\"build.log.read\""));
-    assert!(audit.contains("\"action\":\"queue.view\""));
+    let audit = broker.audit().unwrap();
+    audit.require_action("cloudbees_ci", "build.log.read");
+    audit.require_action("cloudbees_ci", "queue.view");
+    let audit = audit.text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
     assert!(!audit.contains("log-secret-never-audit"));
     assert!(!audit.contains("queue-secret-never-audit"));
@@ -1495,7 +1532,14 @@ async fn artifact_redirect_to_unapproved_origin_is_rejected_without_credentials_
         .unwrap();
     assert_ne!(denied.status(), reqwest::StatusCode::OK);
     assert!(outside.received_requests().await.unwrap().is_empty());
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    let rejected = audit.require_request(
+        "cloudbees-smoke-redirect",
+        "cloudbees_ci",
+        "build.artifact.download",
+    );
+    assert_eq!(rejected.len(), 1);
+    let audit = audit.text();
     assert!(!audit.contains("never-log-this"));
     assert!(!audit.contains("basic-secret"));
     stop(broker).await;
@@ -1716,7 +1760,9 @@ async fn large_log_reads_work_through_http_and_stdio_mcp_with_bounded_wire_outpu
             "{command} is missing the log input schema"
         );
     }
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    audit.require_action("cloudbees_ci", "build.log.read");
+    let audit = audit.text();
     assert!(!audit.contains("BEGIN123"));
     assert!(!audit.contains("ERROR:"));
     assert!(!audit.contains("basic-secret"));

@@ -789,6 +789,13 @@ async fn webhook_destination_reload_denies_introduction_but_preserves_existing_m
     );
     assert_eq!(upstream_state.create_requests.load(Ordering::SeqCst), 1);
 
+    // The create before the reload carried the secret and the URL.
+    require_audit_request(
+        &audit_path,
+        "gitlab-webhook-create-before-reload",
+        "gitlab",
+        "webhook.create",
+    );
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     assert!(!audit.contains("reload-secret"));
     assert!(!audit.contains("https://hooks.example.com/gitlab/events"));

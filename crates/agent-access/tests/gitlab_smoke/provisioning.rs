@@ -99,8 +99,14 @@ impl Fixture {
         assert_eq!(value["decision"], "allow", "{value}");
         value
     }
-    fn assert_audit_safe(&self) {
-        let audit = self.broker.audit().unwrap().text();
+    /// Requires the records of the GitLab `audited` actions, then checks
+    /// that no credential or private account field reached the audit.
+    fn assert_audit_safe(&self, audited: &[&str]) {
+        let audit = self.broker.audit().unwrap();
+        for action in audited {
+            audit.require_action("gitlab", action);
+        }
+        let audit = audit.text();
         for secret in [
             ISSUED,
             "gitlab-per-user-token",
@@ -296,7 +302,7 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
             json!({"project":"sip/service","tokenId":11}),
         )
         .await;
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create", "project.access_token.rotate"]);
     fixture.stop().await;
 }
 
@@ -462,7 +468,11 @@ async fn provisioning_service_account_create_membership_tokens_rotation_and_revo
             json!({"project":"sip/service","userId":70}),
         )
         .await;
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&[
+        "service_account.create",
+        "service_account.token.create",
+        "service_account.token.rotate",
+    ]);
     fixture.stop().await;
 }
 
@@ -713,7 +723,7 @@ async fn provisioning_unknown_mutations_and_malformed_token_responses_never_expo
     assert!(!result.to_string().contains(ISSUED));
     let record = fixture.broker.audit().unwrap().records().pop().unwrap();
     assert_eq!(record["upstreamStatus"], 422);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create"]);
     fixture.stop().await;
 }
 
@@ -815,7 +825,7 @@ async fn provisioning_member_set_adds_only_a_proven_project_service_account() {
         )
         .await;
     assert_eq!(result["result"]["member"]["userId"], 70);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["service_account.member.set"]);
     fixture.stop().await;
 }
 
@@ -901,7 +911,7 @@ async fn provisioning_token_file_denials_cleanup_but_uncertain_writes_preserve_r
                     .all(|r| r.method.as_str() == "GET")
             );
         }
-        fixture.assert_audit_safe();
+        fixture.assert_audit_safe(&["project.access_token.create"]);
         fixture.stop().await;
     }
 }
@@ -980,7 +990,7 @@ async fn provisioning_service_account_rotation_lookup_pagination_is_bounded_befo
             assert!(result["result"].get("mutationStatus").is_none());
         }
         fixture.upstream.verify().await;
-        fixture.assert_audit_safe();
+        fixture.assert_audit_safe(&["service_account.token.rotate"]);
         fixture.stop().await;
     }
 }
@@ -1035,6 +1045,6 @@ async fn provisioning_token_file_cleanup_failure_preserves_denial_and_exit_code(
     assert!(warning.contains(output_path.to_str().unwrap()));
     assert!(!warning.contains(ISSUED));
     assert_eq!(std::fs::metadata(&output_path).unwrap().len(), 0);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create"]);
     fixture.stop().await;
 }
