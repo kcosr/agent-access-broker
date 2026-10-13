@@ -15,8 +15,8 @@ use agent_access_core::{
     new_broker_request_id, parse_ttl_seconds,
 };
 use agent_access_provider::{
-    Decision, ProviderCredentialVerification, ProviderError, ReasonCode, ReasonCodeId,
-    ResourceScopes, is_action_name,
+    Decision, ProviderCredentialVerification, ProviderError, ProviderReason, ReasonCode,
+    ReasonCodeId, ResourceScopes, is_action_name,
 };
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -1985,12 +1985,29 @@ pub(super) fn management_store_public_error_message(
     }
 }
 
-/// Reports a failed provider hook, or the host work verifying or discovering
-/// on its behalf, with the failure's own outcome: a domain reason's or host
-/// port's fixed decision and status, or a standard reason's deny or error.
-/// The response and its audit record carry the same decision. A management
-/// failure never reports allow, which only an invocation's verification
-/// result may carry, so an allow outcome is reported as deny.
+/// Reports a host failure, such as a store read or import preparation, with
+/// management's own decision for it, deny, and its reason's status.
+pub(super) async fn management_host_error_response(
+    context: &ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    reason_code: impl Into<ProviderReason>,
+    message: &str,
+) -> axum::response::Response {
+    let reason_code = reason_code.into();
+    let status = StatusCode::from_u16(reason_code.http_status())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    management_context_error_response(context, status, operation, reason_code, message, target)
+        .await
+}
+
+/// Reports a failed provider hook or adapter discovery, a host port acting
+/// for one, or the gateway's upstream credential verification, with the
+/// failure's own outcome: a domain reason's or host port's fixed decision and
+/// status, or a standard reason's deny or error. The response and its audit
+/// record carry the same decision. A management failure never reports allow,
+/// which only an invocation's verification result may carry, so an allow
+/// outcome is reported as deny.
 pub(super) async fn management_provider_error_response(
     context: &ManagementContext,
     operation: &str,

@@ -1,4 +1,5 @@
 //! Exercise the administrator workflow through the real router and store.
+use super::conformance_import::UNREACHABLE_DISCOVERY_TOKEN;
 use super::imports_foundation::{Fixture, definition, fixture, update};
 use super::*;
 use agent_access_core::imports::ImportedDiscoveryCredential;
@@ -509,6 +510,79 @@ async fn deleted_grants_do_not_block_restoration_or_appear_in_import_preview() {
     assert_eq!(status, StatusCode::OK, "{preview}");
     assert_eq!(preview["result"]["affectedGrants"], json!([]));
     assert_eq!(preview["result"]["affectedGrantsByAction"], json!({}));
+}
+
+#[tokio::test]
+async fn discovery_reports_adapter_outcomes_and_host_preparation_failures_apart() {
+    let fixture = fixture();
+    let token = admin_token(&fixture);
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let current = detail(&app, &token, "observability").await;
+    let mut secret = versions(&current);
+    secret["token"] = json!(UNREACHABLE_DISCOVERY_TOKEN);
+    let (status, put) = request(
+        &app,
+        &token,
+        Method::PUT,
+        "/v1/admin/imports/observability/credentials/execution",
+        Some(secret),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{put}");
+    let discover = || {
+        request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/observability/discover",
+            Some(versions(&put["result"])),
+        )
+    };
+
+    // The adapter cannot reach its upstream: its own error outcome.
+    let (status, failed) = discover().await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
+    assert_eq!(failed["decision"], "error", "{failed}");
+    assert_eq!(
+        failed["reasonCode"], "upstream_connection_failed",
+        "{failed}"
+    );
+
+    // The execution secret's key has left the ring, so the host cannot read
+    // the discovery credential and the adapter never runs. Management keeps
+    // reporting that store failure as deny.
+    rusqlite::Connection::open(&fixture.config.managed_store.as_ref().unwrap().path)
+        .unwrap()
+        .execute(
+            "UPDATE imported_secret_material SET key_id = 'retired-key' \
+             WHERE service = 'observability' AND purpose = 'execution'",
+            [],
+        )
+        .unwrap();
+    let (status, failed) = discover().await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failed}");
+    assert_eq!(failed["decision"], "deny", "{failed}");
+    assert_eq!(failed["reasonCode"], "encryption_key_missing", "{failed}");
+    assert_eq!(
+        failed["error"]["message"], "managed credential encryption key is missing",
+        "{failed}"
+    );
+
+    let outcomes = read_audit_records(Path::new(&fixture.config.audit.as_ref().unwrap().path))
+        .into_iter()
+        .filter(|record| {
+            record["action"] == "admin.imports.discover"
+                && record["providerAudit"]["management"]["phase"].is_null()
+        })
+        .map(|record| (record["decision"].clone(), record["reasonCode"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        [
+            (json!("error"), json!("upstream_connection_failed")),
+            (json!("deny"), json!("encryption_key_missing")),
+        ]
+    );
 }
 
 #[tokio::test]

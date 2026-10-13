@@ -3,32 +3,84 @@ use super::*;
 use crate::imports::{ImportedDiscovery, ImportedDiscoveryCredential};
 use crate::{ImportedServiceStatus, assign_imported_action_names};
 
+/// Why administrative discovery produced no preview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportDiscoveryError {
+    /// The host could not prepare discovery or its catalog publication.
+    Preparation(ImportPreparationError),
+    /// The adapter's discovery, or a host port acting for it such as a
+    /// delegated OAuth lease, failed with its own outcome.
+    Discovery(ProviderError),
+}
+
+/// A host failure preparing discovery or its catalog publication: the import
+/// is retired or its destination, discovery credential or adapter is
+/// unavailable, the managed store could not provide the credential, or the
+/// discovered tools cannot be named. It carries a reason and a public
+/// message but no decision; host management reports it as its own failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportPreparationError {
+    reason_code: ReasonCode,
+    message: &'static str,
+}
+
+impl ImportPreparationError {
+    fn new(reason_code: ReasonCode, message: &'static str) -> Self {
+        Self {
+            reason_code,
+            message,
+        }
+    }
+
+    pub fn reason_code(&self) -> ReasonCode {
+        self.reason_code
+    }
+
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+impl From<ManagedStoreError> for ImportPreparationError {
+    fn from(error: ManagedStoreError) -> Self {
+        Self::new(error.reason_code(), managed_store_failure_message(&error))
+    }
+}
+
+impl From<ImportPreparationError> for ImportDiscoveryError {
+    fn from(error: ImportPreparationError) -> Self {
+        Self::Preparation(error)
+    }
+}
+
 impl BrokerRuntime {
     pub async fn discover_imported_service(
         &self,
         service: &str,
         administrator: &str,
-    ) -> Result<(ImportedDiscovery, BTreeMap<String, String>), ProviderError> {
+    ) -> Result<(ImportedDiscovery, BTreeMap<String, String>), ImportDiscoveryError> {
         let record = self
             .imported_catalog
             .service(service)
             .cloned()
             .ok_or_else(import_control_unavailable)?;
         self.require_import_destination(&record.definition)
-            .map_err(provider_error_from_managed_store)?;
+            .map_err(ImportPreparationError::from)?;
         if record.status == ImportedServiceStatus::Retired {
-            return Err(ProviderError::deny(
+            return Err(ImportPreparationError::new(
                 ReasonCode::InputInvalid,
                 "retired imports cannot be discovered",
-            ));
+            )
+            .into());
         }
         if let ImportedDiscoveryCredential::PerUser { principal } = &record.definition.discovery
             && principal != administrator
         {
-            return Err(ProviderError::deny(
+            return Err(ImportPreparationError::new(
                 ReasonCode::InputInvalid,
                 "personal discovery must use the invoking administrator's credential",
-            ));
+            )
+            .into());
         }
         let store = self
             .managed_store
@@ -46,7 +98,7 @@ impl BrokerRuntime {
                     && b.mechanism == crate::imports::ImportedAuthMechanism::Oauth
             }) {
                 if !self.import_binding_available(&record.definition, binding) {
-                    return Err(import_control_unavailable());
+                    return Err(import_control_unavailable().into());
                 }
                 let manager = self
                     .oauth_manager()
@@ -66,12 +118,13 @@ impl BrokerRuntime {
                             .ok_or_else(import_control_unavailable)?,
                     },
                 )
-                .await?;
+                .await
+                .map_err(ImportDiscoveryError::Discovery)?;
                 let access = lease.access();
                 if access.target != record.definition.endpoint
                     || access.audience != record.definition.endpoint
                 {
-                    return Err(import_control_unavailable());
+                    return Err(import_control_unavailable().into());
                 }
                 Some(lease)
             } else {
@@ -136,7 +189,7 @@ impl BrokerRuntime {
             Ok((execution, transport, versions))
         })
         .await
-        .map_err(provider_error_from_managed_store)?;
+        .map_err(ImportPreparationError::from)?;
         let adapter = self
             .config
             .providers
@@ -154,9 +207,10 @@ impl BrokerRuntime {
         );
         let mut discovery = adapter
             .discover(&record.definition, &execution, transport, &host)
-            .await?;
+            .await
+            .map_err(ImportDiscoveryError::Discovery)?;
         assign_imported_action_names(&record, &mut discovery).map_err(|_| {
-            ProviderError::error(
+            ImportPreparationError::new(
                 ReasonCode::UpstreamProtocolFailed,
                 "upstream returned duplicate or invalid tool identities",
             )
@@ -165,8 +219,8 @@ impl BrokerRuntime {
     }
 }
 
-fn import_control_unavailable() -> ProviderError {
-    ProviderError::deny(
+fn import_control_unavailable() -> ImportPreparationError {
+    ImportPreparationError::new(
         ReasonCode::CredentialNotProvisioned,
         "imported discovery credential is unavailable",
     )

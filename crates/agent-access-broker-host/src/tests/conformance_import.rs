@@ -25,6 +25,9 @@ pub fn registry() -> BackendRegistry {
         .expect("test import adapter registers consistently")
 }
 
+/// A discovery credential with which the synthetic upstream is unreachable.
+pub const UNREACHABLE_DISCOVERY_TOKEN: &str = "import-upstream-unreachable";
+
 /// The fixture deliberately has a source identity unlike its grant action ID.
 pub fn conformance_import_action() -> ImportedActionDefinition {
     ImportedActionDefinition {
@@ -97,10 +100,18 @@ impl ImportedAdapter for ConformanceImportAdapter {
     async fn discover(
         &self,
         _definition: &ImportedServiceDefinition,
-        _authentication: &ImportedDiscoveryAuthentication,
+        authentication: &ImportedDiscoveryAuthentication,
         _transport: Option<ExecutionCredential>,
         _host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, ProviderError> {
+        if let ImportedDiscoveryAuthentication::Static(credential) = authentication
+            && credential_token(credential) == UNREACHABLE_DISCOVERY_TOKEN
+        {
+            return Err(ProviderError::error(
+                ReasonCode::UpstreamConnectionFailed,
+                "conformance upstream is unreachable",
+            ));
+        }
         Ok(ImportedDiscovery {
             protocol_version: "conformance-v1".into(),
             metadata: json!({}),

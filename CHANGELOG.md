@@ -137,8 +137,10 @@ All notable changes to this project are documented in this file.
   provider failure's own decision in the response and its management audit
   record instead of always `deny`: upstream failures such as `upstream_timeout`,
   host-origin failures such as a delegated lease's `concurrency_limited`, and
-  domain reasons defined as `error` now report `decision = error`. Their reason
-  codes and HTTP statuses are unchanged.
+  domain reasons defined as `error` now report `decision = error`. Host
+  failures preparing discovery, such as an unavailable store or a missing
+  encryption key, still report `deny`. Reason codes and HTTP statuses are
+  unchanged.
 
 ### Removed
 

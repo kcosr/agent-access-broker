@@ -11,6 +11,7 @@ mod availability;
 mod client_category_tests;
 mod discovery;
 mod import_control;
+pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 mod mcp_views;
 mod owned;
@@ -7840,7 +7841,22 @@ fn check_credential_ready(
 
 fn provider_error_from_managed_store(error: ManagedStoreError) -> ProviderError {
     let reason_code = error.reason_code();
-    let message = match &error {
+    let message = managed_store_failure_message(&error);
+    match reason_code {
+        ReasonCode::ManagedStoreUnavailable
+        | ReasonCode::ManagedStoreMigrationRequired
+        | ReasonCode::EncryptionKeyMissing
+        | ReasonCode::EncryptionKeyInvalid
+        | ReasonCode::CredentialDecryptFailed
+        | ReasonCode::CredentialEncryptFailed => ProviderError::error(reason_code, message),
+        _ => ProviderError::deny(reason_code, message),
+    }
+}
+
+/// The public message for a managed-store failure the host reports, which
+/// never carries the store's internal detail.
+fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
+    match error {
         ManagedStoreError::CredentialNotFound => "managed per_user credential is not provisioned",
         ManagedStoreError::CredentialExpired => "managed per_user credential is expired",
         ManagedStoreError::CredentialDecryptFailed => "managed per_user credential cannot decrypt",
@@ -7910,15 +7926,6 @@ fn provider_error_from_managed_store(error: ManagedStoreError) -> ProviderError 
         | ManagedStoreError::LocalLoginLocked
         | ManagedStoreError::LocalPasswordBusy
         | ManagedStoreError::RightMissing => "managed credential authorization failed",
-    };
-    match reason_code {
-        ReasonCode::ManagedStoreUnavailable
-        | ReasonCode::ManagedStoreMigrationRequired
-        | ReasonCode::EncryptionKeyMissing
-        | ReasonCode::EncryptionKeyInvalid
-        | ReasonCode::CredentialDecryptFailed
-        | ReasonCode::CredentialEncryptFailed => ProviderError::error(reason_code, message),
-        _ => ProviderError::deny(reason_code, message),
     }
 }
 

@@ -1,6 +1,6 @@
 //! Base-administrator management of database-owned imported services.
 use super::common::{
-    ManagementAccess, ManagementContext, management_context,
+    ManagementAccess, ManagementContext, management_context, management_host_error_response,
     management_pre_audited_success_response, management_provider_error_response,
     management_store_call, management_store_error_response, management_success_response,
     management_write_audit_completion, management_write_audit_preflight,
@@ -1089,7 +1089,19 @@ pub(crate) async fn discover(
         .await
     {
         Ok(v) => v,
-        Err(e) => return management_provider_error_response(&context, operation, target, e).await,
+        Err(ImportDiscoveryError::Preparation(error)) => {
+            return management_host_error_response(
+                &context,
+                operation,
+                target,
+                error.reason_code(),
+                error.message(),
+            )
+            .await;
+        }
+        Err(ImportDiscoveryError::Discovery(error)) => {
+            return management_provider_error_response(&context, operation, target, error).await;
+        }
     };
     let quarantine = record
         .actions
