@@ -121,6 +121,17 @@ environment of concurrent tests. The ignored `outbound_tls_child` test is only
 intended to run through that parent; do not invoke it with `--include-ignored`.
 Run the harness with `cargo test -p agent-access-core --test outbound_tls`.
 
+Provider and Broker unit tests share the `test-support` feature of
+`agent-access-provider`. Its `test_outbound_tls()` trusts a disposable test CA
+embedded in that package. Tests that assert `tracing` events call
+`install_trace_capture()`, which installs one capturing dispatcher as the test
+binary's global default, then start a capture and run the observed work through
+`TraceCapture::run` or `in_scope`. A capture records only the events inside its
+span, including owned work carried by `InvocationScope` or another instrumented
+future, so concurrent tests need no lock. Events on uninstrumented tasks,
+blocking closures, or plain threads are not captured. A test binary that uses it
+must not install another global subscriber.
+
 Reload behavior fixtures use the production admission and shutdown budgets.
 Runtime construction loads the host CA store and performs local filesystem work,
 which can exceed a one-second deadline under parallel test load. Tests that

@@ -255,28 +255,30 @@ async fn confluence_formats_transform_success_and_mismatch_and_reject_before_pro
 
 #[tokio::test(flavor = "current_thread")]
 async fn confluence_rendered_content_is_absent_from_tracing_audit_and_errors() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let audit_path = temp_path("confluence-normalized-read.audit.jsonl");
     let fixture = presentation_fixture(audit_path.to_str().unwrap());
-    let malformed = presentation_request(
-        fixture.app,
-        "confluence-read-malformed-adf",
-        "page.view",
-        json!({
-            "inputs": { "pageId": "malformed-adf" },
-            "readContentFormat": "markdown"
-        }),
-    )
-    .await;
+    let malformed = captured
+        .run(presentation_request(
+            fixture.app,
+            "confluence-read-malformed-adf",
+            "page.view",
+            json!({
+                "inputs": { "pageId": "malformed-adf" },
+                "readContentFormat": "markdown"
+            }),
+        ))
+        .await;
     assert_eq!(malformed.status(), StatusCode::BAD_GATEWAY);
     let malformed = response_json(malformed).await;
     assert_eq!(malformed["reasonCode"], "upstream_protocol_failed");
     assert!(!malformed.to_string().contains(NATIVE_SENTINEL));
 
-    let events = serde_json::to_string(&captured.take()).unwrap();
+    let events = captured.take_events();
+    // The capture observed the request, so the sentinel check covers it.
+    event_by_name_and_agent(&events, "invoke_completed", "confluence-read-malformed-adf");
+    let events = serde_json::to_string(&events).unwrap();
     assert!(!events.contains(NATIVE_SENTINEL));
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     assert!(!audit.contains(NATIVE_SENTINEL));

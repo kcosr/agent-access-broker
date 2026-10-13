@@ -1160,20 +1160,21 @@ async fn legacy_trace_projection_keeps_sessions_errors_payloads_and_instructions
         ..Plan::default()
     })
     .await;
-    test_support::start_capturing_events();
-    let result = with_provider_context(
-        CorrelationContext::for_tests(),
-        "example".into(),
-        "item.update".into(),
-        fixture.invoke(),
-    )
-    .await
-    .unwrap();
+    let capture = test_support::install_trace_capture().start();
+    let result = capture
+        .run(with_provider_context(
+            CorrelationContext::for_tests(),
+            "example".into(),
+            "item.update".into(),
+            fixture.invoke(),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
         result.result["upstreamMcp"]["content"][0]["text"],
         "private-tool-output"
     );
-    let logged = serde_json::to_string(&test_support::captured_events()).unwrap();
+    let logged = serde_json::to_string(&capture.take_events()).unwrap();
     for private in [
         SESSION,
         PROBE_SESSION,

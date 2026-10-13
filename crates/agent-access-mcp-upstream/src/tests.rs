@@ -586,24 +586,24 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
             &host.context(),
         )
         .unwrap();
-    test_support::start_capturing_events();
-    let result = with_provider_context(
-        CorrelationContext::for_tests(),
-        "example".into(),
-        "item.update".into(),
-        provider.invoke(invocation(
-            json!({"region":"private-input-value"}),
-            "private-execution-token",
-        )),
-    )
-    .await
-    .unwrap();
+    let capture = test_support::install_trace_capture().start();
+    let result = capture
+        .run(with_provider_context(
+            CorrelationContext::for_tests(),
+            "example".into(),
+            "item.update".into(),
+            provider.invoke(invocation(
+                json!({"region":"private-input-value"}),
+                "private-execution-token",
+            )),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
         result.result["upstreamMcp"]["structuredContent"]["secret"],
         "upstream-sensitive-result"
     );
-    let events = test_support::captured_events();
-    let logged = serde_json::to_string(&events).unwrap();
+    let logged = serde_json::to_string(&capture.take_events()).unwrap();
     for secret in [
         "private-input-value",
         "private-execution-token",

@@ -991,9 +991,7 @@ async fn microsoft_oidc_browser_happy_path_binds_code_pkce_nonce_cookie_and_reje
 
 #[tokio::test(flavor = "current_thread")]
 async fn microsoft_oidc_debug_tracing_reports_validated_claims_without_protocol_secrets() {
-    let _capture_guard = super::event_capture_lock().await;
-    let captured = super::captured_events_for_test();
-    captured.take();
+    let captured = super::install_trace_capture().start();
 
     let fixture = oidc_browser_fixture(false).await;
     let pending = start_browser_login(&fixture, None).await;
@@ -1008,14 +1006,26 @@ async fn microsoft_oidc_debug_tracing_reports_validated_claims_without_protocol_
         .split_once('=')
         .map(|(_, value)| value)
         .unwrap();
-    let response = finish_browser_login(&fixture, &pending, "oidc-debug-success").await;
+    let response = captured
+        .run(finish_browser_login(
+            &fixture,
+            &pending,
+            "oidc-debug-success",
+        ))
+        .await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
     let mut overage_claims = FakeTokenClaims::valid(FIXED_NOW + 1);
     overage_claims.groups = FakeGroupClaims::Overage;
     fixture.provider.set_next_claims(overage_claims);
     let overage = start_browser_login(&fixture, Some(&pending.binding_cookie)).await;
-    let response = finish_browser_login(&fixture, &overage, "oidc-debug-overage").await;
+    let response = captured
+        .run(finish_browser_login(
+            &fixture,
+            &overage,
+            "oidc-debug-overage",
+        ))
+        .await;
     assert_callback_error(
         &response,
         "oidc_group_claims_incomplete",
@@ -1035,10 +1045,16 @@ async fn microsoft_oidc_debug_tracing_reports_validated_claims_without_protocol_
         .set_external_group_binding_enabled(&binding.binding_id, false, "test")
         .unwrap();
     let denied = start_browser_login(&denied_fixture, None).await;
-    let response = finish_browser_login(&denied_fixture, &denied, "oidc-debug-denied").await;
+    let response = captured
+        .run(finish_browser_login(
+            &denied_fixture,
+            &denied,
+            "oidc-debug-denied",
+        ))
+        .await;
     assert_callback_error(&response, "oidc_admission_denied", "oidc-debug-denied");
 
-    let events = captured.take();
+    let events = captured.take_events();
     let oidc_events = events
         .iter()
         .filter(|event| {

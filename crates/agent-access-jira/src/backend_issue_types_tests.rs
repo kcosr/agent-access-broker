@@ -303,18 +303,19 @@ async fn issue_types_traces_semantic_protocol_failure_without_response_text() {
         .respond_with(ResponseTemplate::new(200).set_body_json(value))
         .mount(&api)
         .await;
-    agent_access_provider::test_support::start_capturing_events();
+    let capture = agent_access_provider::test_support::install_trace_capture().start();
     let credential = credential();
-    let error = with_provider_context(
-        CorrelationContext::for_tests(),
-        "jira".to_string(),
-        "issue_type.list".to_string(),
-        backend.issue_types("PROJ", request(0, 2), &credential),
-    )
-    .await
-    .unwrap_err();
+    let error = capture
+        .run(with_provider_context(
+            CorrelationContext::for_tests(),
+            "jira".to_string(),
+            "issue_type.list".to_string(),
+            backend.issue_types("PROJ", request(0, 2), &credential),
+        ))
+        .await
+        .unwrap_err();
     assert!(matches!(error, JiraBackendError::Protocol(_)));
-    let events = agent_access_provider::test_support::captured_upstream_requests();
+    let events = capture.take_upstream_requests();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["upstreamOperation"], "issue_type.list");
     assert_eq!(events[0]["http.statusCode"], 200);

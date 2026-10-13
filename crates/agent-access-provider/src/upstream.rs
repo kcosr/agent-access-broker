@@ -841,19 +841,19 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/page", service.uri())).unwrap();
         for reason in [None, Some(ReasonCode::UpstreamProtocolFailed)] {
-            let mut response = client
-                .send(
+            let mut response = capture
+                .run(client.send(
                     client.request(Method::PUT, url.clone()),
                     UpstreamCall::new("page.update"),
-                )
+                ))
                 .await
                 .unwrap();
-            complete_upstream_trace(&mut response, reason);
+            capture.in_scope(|| complete_upstream_trace(&mut response, reason));
         }
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events[0]["reasonCode"], "version_conflict");
         assert_eq!(events[1]["reasonCode"], "upstream_protocol_failed");
     }
@@ -862,15 +862,15 @@ mod tests {
     async fn requests_that_cannot_be_built_are_traced_as_failures() {
         let service = MockServer::start().await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let request = client
             .request(
                 Method::GET,
                 Url::parse(&format!("{}/item", service.uri())).unwrap(),
             )
             .bearer_auth("token\r\ninjected: header");
-        let error = client
-            .send(request, UpstreamCall::new("item.view"))
+        let error = capture
+            .run(client.send(request, UpstreamCall::new("item.view")))
             .await
             .unwrap_err();
         assert!(
@@ -883,7 +883,7 @@ mod tests {
             ),
             "{error:?}"
         );
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0]["upstreamOperation"], "item.view");
         assert_eq!(events[0]["reasonCode"], "upstream_connection_failed");
@@ -955,7 +955,7 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
         let send = || async {
             client
@@ -975,22 +975,26 @@ mod tests {
             )
         };
 
-        let outlived = in_scope("item.view").await;
-        drop(outlived);
-        let retained = in_scope("item.view").await;
-        let extensions = retained.extensions().clone();
-        crate::with_provider_context(
-            crate::CorrelationContext::for_tests(),
-            "other".to_string(),
-            "other.action".to_string(),
-            async move {
-                drop(retained);
-                drop(extensions);
-            },
-        )
-        .await;
+        capture
+            .run(async {
+                let outlived = in_scope("item.view").await;
+                drop(outlived);
+                let retained = in_scope("item.view").await;
+                let extensions = retained.extensions().clone();
+                crate::with_provider_context(
+                    crate::CorrelationContext::for_tests(),
+                    "other".to_string(),
+                    "other.action".to_string(),
+                    async move {
+                        drop(retained);
+                        drop(extensions);
+                    },
+                )
+                .await;
+            })
+            .await;
 
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 2, "{events:?}");
         for event in &events {
             assert_eq!(event["service"], "example");
@@ -1006,44 +1010,48 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
 
-        let mut classified = client
-            .send(
-                client.request(Method::GET, url.clone()),
-                UpstreamCall::new("item.view"),
-            )
-            .await
-            .unwrap();
-        complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed));
-        complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout));
-        drop(classified);
-        let dropped = client
-            .send(
-                client.request(Method::GET, url),
-                UpstreamCall::new("item.list"),
-            )
-            .await
-            .unwrap();
-        drop(dropped);
+        capture
+            .run(async {
+                let mut classified = client
+                    .send(
+                        client.request(Method::GET, url.clone()),
+                        UpstreamCall::new("item.view"),
+                    )
+                    .await
+                    .unwrap();
+                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed));
+                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout));
+                drop(classified);
+                let dropped = client
+                    .send(
+                        client.request(Method::GET, url),
+                        UpstreamCall::new("item.list"),
+                    )
+                    .await
+                    .unwrap();
+                drop(dropped);
 
-        let mut detached = client
-            .send(
-                client.request(
-                    Method::GET,
-                    Url::parse(&format!("{}/item", service.uri())).unwrap(),
-                ),
-                UpstreamCall::new("item.update"),
-            )
-            .await
-            .unwrap();
-        let trace = take_upstream_trace(&mut detached).unwrap();
-        assert_eq!(trace.operation(), "item.update");
-        drop(detached);
-        trace.complete(Some(ReasonCode::UpstreamProtocolFailed));
+                let mut detached = client
+                    .send(
+                        client.request(
+                            Method::GET,
+                            Url::parse(&format!("{}/item", service.uri())).unwrap(),
+                        ),
+                        UpstreamCall::new("item.update"),
+                    )
+                    .await
+                    .unwrap();
+                let trace = take_upstream_trace(&mut detached).unwrap();
+                assert_eq!(trace.operation(), "item.update");
+                drop(detached);
+                trace.complete(Some(ReasonCode::UpstreamProtocolFailed));
+            })
+            .await;
 
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 3, "{events:?}");
         assert_eq!(events[0]["upstreamOperation"], "item.view");
         assert_eq!(events[0]["reasonCode"], "upstream_failed");

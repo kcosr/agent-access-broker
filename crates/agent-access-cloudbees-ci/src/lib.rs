@@ -2222,24 +2222,25 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"artifact".to_vec()))
             .mount(&server)
             .await;
-        agent_access_provider::test_support::start_capturing_events();
+        let capture = agent_access_provider::test_support::install_trace_capture().start();
         let ci = provider(&server);
-        agent_access_provider::with_provider_context(
-            agent_access_provider::CorrelationContext::for_tests(),
-            "cloudbees_ci".into(),
-            "build.artifact.download".into(),
-            ci.invoke(invocation(
-                "build.artifact.download",
-                json!({
-                    "controller":"team-ci","job":"payments/build-api","buildNumber":42,
-                    "artifactPath":"reports/out.txt"
-                }),
-            )),
-        )
-        .await
-        .unwrap();
+        capture
+            .run(agent_access_provider::with_provider_context(
+                agent_access_provider::CorrelationContext::for_tests(),
+                "cloudbees_ci".into(),
+                "build.artifact.download".into(),
+                ci.invoke(invocation(
+                    "build.artifact.download",
+                    json!({
+                        "controller":"team-ci","job":"payments/build-api","buildNumber":42,
+                        "artifactPath":"reports/out.txt"
+                    }),
+                )),
+            ))
+            .await
+            .unwrap();
 
-        let events = agent_access_provider::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         // The artifact listing, then each hop of the download.
         let expected = [(200, 1), (302, 1), (200, 2)];
         assert_eq!(events.len(), expected.len(), "{events:?}");

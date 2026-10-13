@@ -9289,28 +9289,29 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
         },
         Url::parse(&format!("{origin}/rest/api/3/")).unwrap(),
     );
-    agent_access_provider::test_support::start_capturing_events();
-    let error = with_provider_context(
-        CorrelationContext::for_tests(),
-        "jira".to_string(),
-        "attachment.add".to_string(),
-        backend.add_attachment(
-            "PROJ-1",
-            JiraAttachmentUpload {
-                filename: "evidence.txt".to_string(),
-                content_type: "text/plain".to_string(),
-                size: 8,
-                sha256: sha256_hex(b"evidence"),
-                bytes: b"evidence".to_vec(),
-                temp_file: None,
-            },
-            &test_credential(),
-        ),
-    )
-    .await
-    .unwrap_err();
+    let capture = agent_access_provider::test_support::install_trace_capture().start();
+    let error = capture
+        .run(with_provider_context(
+            CorrelationContext::for_tests(),
+            "jira".to_string(),
+            "attachment.add".to_string(),
+            backend.add_attachment(
+                "PROJ-1",
+                JiraAttachmentUpload {
+                    filename: "evidence.txt".to_string(),
+                    content_type: "text/plain".to_string(),
+                    size: 8,
+                    sha256: sha256_hex(b"evidence"),
+                    bytes: b"evidence".to_vec(),
+                    temp_file: None,
+                },
+                &test_credential(),
+            ),
+        ))
+        .await
+        .unwrap_err();
     assert!(matches!(error, JiraBackendError::Timeout), "{error:?}");
-    let events = agent_access_provider::test_support::captured_upstream_requests();
+    let events = capture.take_upstream_requests();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["upstreamOperation"], "attachment.add");
     assert_eq!(events[0]["http.statusCode"], 200);

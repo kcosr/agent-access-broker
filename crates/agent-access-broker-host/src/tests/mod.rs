@@ -24,6 +24,7 @@ use agent_access_core::{
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use agent_access_gitlab::PositionInputCategory;
 use agent_access_jira::JIRA_PROJECT_RESOURCE;
+use agent_access_provider::test_support::install_trace_capture;
 use agent_access_provider::{
     ActionDescriptor, BROKER_REQUEST_ID_HEADER, BrokerBodyPartSpec, CredentialDescriptor,
     GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError, ProviderInvocation,
@@ -52,8 +53,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use tower::ServiceExt;
+use tracing::Subscriber;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::Context as TracingLayerContext;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
@@ -3074,9 +3075,7 @@ async fn failed_http_reload_returns_audit_unavailable_when_failure_audit_cannot_
 
 #[tokio::test(flavor = "current_thread")]
 async fn failed_admin_reload_emits_error_level_reload_event() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let config_path = temp_path("reload-trace-invalid.toml");
     let audit_path = temp_path("reload-trace-invalid.audit.jsonl");
@@ -3100,17 +3099,18 @@ async fn failed_admin_reload_emits_error_level_reload_event() {
     let admin = build_public_router(state);
 
     std::fs::write(&config_path, "[policy]\ndefault_decision = ").unwrap();
-    let response = admin_request(
-        admin,
-        Method::POST,
-        "/v1/admin/config/reload",
-        Some("agent-req-admin-trace-parse-failed"),
-        Some("admin-token"),
-    )
-    .await;
+    let response = captured
+        .run(admin_request(
+            admin,
+            Method::POST,
+            "/v1/admin/config/reload",
+            Some("agent-req-admin-trace-parse-failed"),
+            Some("admin-token"),
+        ))
+        .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let events = captured.take();
+    let events = captured.take_events();
     let failed = event_by_name_and_agent(
         &events,
         "config_reload_failed",
@@ -4987,24 +4987,23 @@ async fn admin_principals_patch_distinguishes_null_from_omitted_fields() {
 
 #[tokio::test]
 async fn management_sqlite_failure_is_logged_but_not_returned() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
     let fixture = token_context_fixture();
     let snapshot = fixture.state.current();
     let conn =
         rusqlite::Connection::open(snapshot.runtime.managed_store().unwrap().path()).unwrap();
     conn.execute_batch("CREATE TRIGGER reject_security_test_token BEFORE INSERT ON broker_tokens BEGIN SELECT RAISE(ABORT, 'private-sqlite-security-marker'); END;").unwrap();
-    let response = authed_json_request(
-        fixture.app,
-        Method::POST,
-        "/v1/admin/principals/alice/tokens",
-        "security-store-error",
-        "Authorization",
-        format!("Bearer {}", fixture.admin_token),
-        Some(r#"{"name":"test","tokenClass":"user_manage","ttl":"2h"}"#),
-    )
-    .await;
+    let response = captured
+        .run(authed_json_request(
+            fixture.app,
+            Method::POST,
+            "/v1/admin/principals/alice/tokens",
+            "security-store-error",
+            "Authorization",
+            format!("Bearer {}", fixture.admin_token),
+            Some(r#"{"name":"test","tokenClass":"user_manage","ttl":"2h"}"#),
+        ))
+        .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response.headers()[axum::http::header::CACHE_CONTROL],
@@ -5014,7 +5013,7 @@ async fn management_sqlite_failure_is_logged_but_not_returned() {
     assert_eq!(body["reasonCode"], "managed_store_unavailable");
     assert_eq!(body["error"]["message"], "managed store is unavailable");
     assert!(!body.to_string().contains("private-sqlite-security-marker"));
-    let events = captured.take();
+    let events = captured.take_events();
     assert!(events.iter().any(|event| {
         event
             .get("error")
@@ -13427,9 +13426,7 @@ async fn anonymous_source_rate_limit_applies_by_ip() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn source_rate_limit_event_includes_request_correlation_fields() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let mut config = fake_config("");
     config.limits.auth_requests_per_source_per_minute = 1;
@@ -13443,12 +13440,19 @@ async fn source_rate_limit_event_includes_request_correlation_fields() {
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK);
-    let second = invoke_fake(app, "127.0.0.1:41033", "agent-req-rate-event-2", &[]).await;
+    let second = captured
+        .run(invoke_fake(
+            app,
+            "127.0.0.1:41033",
+            "agent-req-rate-event-2",
+            &[],
+        ))
+        .await;
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     let value = response_json(second).await;
     assert_eq!(value["reasonCode"], "rate_limited");
 
-    let events = captured.take();
+    let events = captured.take_events();
     let limited = event_by_name_and_agent(&events, "request_limited", "agent-req-rate-event-2");
     assert_eq!(string_field(limited, "level"), Some("WARN"));
     assert_eq!(
@@ -13536,23 +13540,22 @@ async fn jira_read_response_options_are_closed_and_rejected_before_provider_acce
 
 #[tokio::test(flavor = "current_thread")]
 async fn jira_read_formats_transform_success_and_allow_with_result_without_observability_leaks() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let audit_path = temp_path("jira-normalized-read.audit.jsonl");
     let fixture = jira_read_presentation_fixture(audit_path.to_str().unwrap());
 
-    let embedded = jira_read_presentation_request(
-        fixture.app.clone(),
-        "jira-read-embedded-success",
-        "issue.view",
-        json!({
-            "inputs": { "issue": "PROJ-7" },
-            "readContentFormat": "markdown"
-        }),
-    )
-    .await;
+    let embedded = captured
+        .run(jira_read_presentation_request(
+            fixture.app.clone(),
+            "jira-read-embedded-success",
+            "issue.view",
+            json!({
+                "inputs": { "issue": "PROJ-7" },
+                "readContentFormat": "markdown"
+            }),
+        ))
+        .await;
     assert_eq!(embedded.status(), StatusCode::OK);
     let embedded = response_json(embedded).await;
     assert_eq!(embedded["decision"], "allow");
@@ -13566,16 +13569,17 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
         JIRA_READ_NATIVE_SENTINEL
     );
 
-    let whole = jira_read_presentation_request(
-        fixture.app.clone(),
-        "jira-read-whole-success",
-        "issue.view",
-        json!({
-            "inputs": { "issue": "PROJ-7" },
-            "responseFormat": "markdown"
-        }),
-    )
-    .await;
+    let whole = captured
+        .run(jira_read_presentation_request(
+            fixture.app.clone(),
+            "jira-read-whole-success",
+            "issue.view",
+            json!({
+                "inputs": { "issue": "PROJ-7" },
+                "responseFormat": "markdown"
+            }),
+        ))
+        .await;
     assert_eq!(whole.status(), StatusCode::OK);
     let whole = response_json(whole).await;
     assert_eq!(whole["decision"], "allow");
@@ -13587,16 +13591,17 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
     assert!(!markdown.contains("\"type\":\"doc\""));
     assert!(markdown.ends_with('\n'));
 
-    let mismatch = jira_read_presentation_request(
-        fixture.app.clone(),
-        "jira-read-whole-mismatch",
-        "verify",
-        json!({
-            "inputs": { "issue": "PROJ-7" },
-            "responseFormat": "markdown"
-        }),
-    )
-    .await;
+    let mismatch = captured
+        .run(jira_read_presentation_request(
+            fixture.app.clone(),
+            "jira-read-whole-mismatch",
+            "verify",
+            json!({
+                "inputs": { "issue": "PROJ-7" },
+                "responseFormat": "markdown"
+            }),
+        ))
+        .await;
     assert_eq!(mismatch.status(), StatusCode::CONFLICT);
     let mismatch = response_json(mismatch).await;
     assert_eq!(mismatch["decision"], "allow");
@@ -13610,7 +13615,16 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
     assert_eq!(fixture.scope_resolutions.load(Ordering::SeqCst), 3);
     assert_eq!(fixture.invocations.load(Ordering::SeqCst), 3);
 
-    let events = serde_json::to_string(&captured.take()).unwrap();
+    let events = captured.take_events();
+    // The capture observed each request, so the sentinel check covers them.
+    for request_id in [
+        "jira-read-embedded-success",
+        "jira-read-whole-success",
+        "jira-read-whole-mismatch",
+    ] {
+        event_by_name_and_agent(&events, "invoke_completed", request_id);
+    }
+    let events = serde_json::to_string(&events).unwrap();
     assert!(!events.contains(JIRA_READ_NATIVE_SENTINEL));
     let audit = std::fs::read_to_string(&audit_path).unwrap();
     assert!(!audit.contains(JIRA_READ_NATIVE_SENTINEL));
@@ -13630,9 +13644,7 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
 
 #[tokio::test(flavor = "current_thread")]
 async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let audit_path = temp_path("jira-normalized-write-tracing.audit.jsonl");
     let service_username_path = temp_path("jira-normalized-write-tracing-service-username");
@@ -13685,13 +13697,12 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
         broker_build_status(),
     );
 
-    let successful = app
-        .clone()
-        .oneshot(jira_normalized_write_request(
+    let successful = captured
+        .run(app.clone().oneshot(jira_normalized_write_request(
             "agent-req-jira-normalized-write-success",
             "127.0.0.1:43110",
             JIRA_WRITE_SOURCE_SENTINEL,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(successful.status(), StatusCode::OK);
@@ -13702,12 +13713,12 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
     assert!(!successful_body.contains(JIRA_WRITE_SOURCE_SENTINEL));
     assert!(!successful_body.contains(JIRA_WRITE_NATIVE_SENTINEL));
 
-    let failed = app
-        .oneshot(jira_normalized_write_request(
+    let failed = captured
+        .run(app.oneshot(jira_normalized_write_request(
             "agent-req-jira-normalized-write-failed",
             "127.0.0.1:43111",
             JIRA_WRITE_INVALID_SOURCE_SENTINEL,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(failed.status(), StatusCode::BAD_REQUEST);
@@ -13719,7 +13730,15 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
     assert!(!failed_body.contains(JIRA_WRITE_INVALID_SOURCE_SENTINEL));
     assert!(!failed_body.contains(JIRA_WRITE_NATIVE_SENTINEL));
 
-    let serialized_events = serde_json::to_string(&captured.take()).unwrap();
+    let events = captured.take_events();
+    // The capture observed both requests, so the sentinel check covers them.
+    for request_id in [
+        "agent-req-jira-normalized-write-success",
+        "agent-req-jira-normalized-write-failed",
+    ] {
+        event_by_name_and_agent(&events, "invoke_completed", request_id);
+    }
+    let serialized_events = serde_json::to_string(&events).unwrap();
     for sentinel in [
         JIRA_WRITE_SOURCE_SENTINEL,
         JIRA_WRITE_INVALID_SOURCE_SENTINEL,
@@ -13769,9 +13788,7 @@ fn jira_normalized_write_request(request_id: &str, remote: &str, content: &str) 
 
 #[tokio::test(flavor = "current_thread")]
 async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let audit_path = temp_path("confluence-normalized-write-tracing.audit.jsonl");
     let service_username_path = temp_path("confluence-normalized-write-tracing-service-username");
@@ -13846,13 +13863,12 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
         broker_build_status(),
     );
 
-    let successful = app
-        .clone()
-        .oneshot(confluence_normalized_write_request(
+    let successful = captured
+        .run(app.clone().oneshot(confluence_normalized_write_request(
             "agent-req-confluence-normalized-write-success",
             "127.0.0.1:43120",
             CONFLUENCE_WRITE_SOURCE_SENTINEL,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(successful.status(), StatusCode::OK);
@@ -13868,12 +13884,12 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
         CONFLUENCE_WRITE_OVERSIZED_SOURCE_SENTINEL,
         "x".repeat(256)
     );
-    let failed = app
-        .oneshot(confluence_normalized_write_request(
+    let failed = captured
+        .run(app.oneshot(confluence_normalized_write_request(
             "agent-req-confluence-normalized-write-failed",
             "127.0.0.1:43121",
             &oversized_content,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(failed.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -13885,7 +13901,15 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
     assert!(!failed_body.contains(CONFLUENCE_WRITE_OVERSIZED_SOURCE_SENTINEL));
     assert!(!failed_body.contains(CONFLUENCE_WRITE_NATIVE_SENTINEL));
 
-    let serialized_events = serde_json::to_string(&captured.take()).unwrap();
+    let events = captured.take_events();
+    // The capture observed both requests, so the sentinel check covers them.
+    for request_id in [
+        "agent-req-confluence-normalized-write-success",
+        "agent-req-confluence-normalized-write-failed",
+    ] {
+        event_by_name_and_agent(&events, "invoke_completed", request_id);
+    }
+    let serialized_events = serde_json::to_string(&events).unwrap();
     for sentinel in [
         CONFLUENCE_WRITE_SOURCE_SENTINEL,
         CONFLUENCE_WRITE_OVERSIZED_SOURCE_SENTINEL,
@@ -13938,9 +13962,7 @@ fn confluence_normalized_write_request(
 
 #[tokio::test(flavor = "current_thread")]
 async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
 
     let audit_path = temp_path("gitlab-normalized-write-tracing.audit.jsonl");
     let service_token_path = temp_path("gitlab-normalized-write-tracing-service-token");
@@ -14006,13 +14028,12 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
         broker_build_status(),
     );
 
-    let successful = app
-        .clone()
-        .oneshot(gitlab_normalized_write_request(
+    let successful = captured
+        .run(app.clone().oneshot(gitlab_normalized_write_request(
             "agent-req-gitlab-normalized-write-success",
             "127.0.0.1:43130",
             GITLAB_WRITE_SOURCE_SENTINEL,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(successful.status(), StatusCode::OK);
@@ -14028,12 +14049,12 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
         GITLAB_WRITE_OVERSIZED_SOURCE_SENTINEL,
         "x".repeat(256)
     );
-    let failed = app
-        .oneshot(gitlab_normalized_write_request(
+    let failed = captured
+        .run(app.oneshot(gitlab_normalized_write_request(
             "agent-req-gitlab-normalized-write-failed",
             "127.0.0.1:43131",
             &oversized_content,
-        ))
+        )))
         .await
         .unwrap();
     assert_eq!(failed.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -14045,7 +14066,15 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
     assert!(!failed_body.contains(GITLAB_WRITE_OVERSIZED_SOURCE_SENTINEL));
     assert!(!failed_body.contains(GITLAB_WRITE_NATIVE_SENTINEL));
 
-    let serialized_events = serde_json::to_string(&captured.take()).unwrap();
+    let events = captured.take_events();
+    // The capture observed both requests, so the sentinel check covers them.
+    for request_id in [
+        "agent-req-gitlab-normalized-write-success",
+        "agent-req-gitlab-normalized-write-failed",
+    ] {
+        event_by_name_and_agent(&events, "invoke_completed", request_id);
+    }
+    let serialized_events = serde_json::to_string(&events).unwrap();
     for sentinel in [
         GITLAB_WRITE_SOURCE_SENTINEL,
         GITLAB_WRITE_OVERSIZED_SOURCE_SENTINEL,
@@ -18913,10 +18942,10 @@ path="{}"
 }
 
 fn event_by_name_and_agent<'a>(
-    events: &'a [BTreeMap<String, Value>],
+    events: &'a [Value],
     name: &str,
     agent_request_id: &str,
-) -> &'a BTreeMap<String, Value> {
+) -> &'a Value {
     events
         .iter()
         .find(|event| {
@@ -18926,68 +18955,12 @@ fn event_by_name_and_agent<'a>(
         .unwrap_or_else(|| panic!("event {name} for {agent_request_id} is captured in {events:?}"))
 }
 
-fn string_field<'a>(event: &'a BTreeMap<String, Value>, field: &str) -> Option<&'a str> {
+fn string_field<'a>(event: &'a Value, field: &str) -> Option<&'a str> {
     event.get(field).and_then(Value::as_str)
 }
 
-fn number_field(event: &BTreeMap<String, Value>, field: &str) -> Option<u64> {
+fn number_field(event: &Value, field: &str) -> Option<u64> {
     event.get(field).and_then(Value::as_u64)
-}
-
-#[derive(Clone, Default)]
-struct CapturedEvents {
-    events: Arc<std::sync::Mutex<Vec<BTreeMap<String, Value>>>>,
-}
-
-impl CapturedEvents {
-    fn push(&self, event: BTreeMap<String, Value>) {
-        self.events.lock().unwrap().push(event);
-    }
-
-    fn take(&self) -> Vec<BTreeMap<String, Value>> {
-        std::mem::take(&mut *self.events.lock().unwrap())
-    }
-}
-
-fn captured_events_for_test() -> CapturedEvents {
-    static EVENTS: OnceLock<CapturedEvents> = OnceLock::new();
-    EVENTS
-        .get_or_init(|| {
-            let events = CapturedEvents::default();
-            let subscriber = tracing_subscriber::registry().with(EventCaptureLayer {
-                events: events.clone(),
-            });
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("test event capture subscriber installs");
-            tracing_core::callsite::rebuild_interest_cache();
-            events
-        })
-        .clone()
-}
-
-async fn event_capture_lock() -> tokio::sync::MutexGuard<'static, ()> {
-    crate::observability::tracing_capture_test_lock()
-        .lock()
-        .await
-}
-
-struct EventCaptureLayer {
-    events: CapturedEvents,
-}
-
-impl<S> tracing_subscriber::Layer<S> for EventCaptureLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: TracingLayerContext<'_, S>) {
-        let mut fields = BTreeMap::new();
-        fields.insert(
-            "level".to_string(),
-            Value::String(event.metadata().level().to_string()),
-        );
-        event.record(&mut JsonVisitor(&mut fields));
-        self.events.push(fields);
-    }
 }
 
 struct JsonVisitor<'a>(&'a mut BTreeMap<String, Value>);

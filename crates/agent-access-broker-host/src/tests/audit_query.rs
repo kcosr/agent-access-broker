@@ -862,9 +862,7 @@ async fn cursors_continue_with_the_first_request_bounds_and_bind_route_and_calle
 
 #[tokio::test]
 async fn successful_queries_are_neither_audited_nor_logged() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
     let fixture = audit_fixture(Backend::Sqlite);
     let id = uuid::Uuid::new_v4().to_string();
     for seconds in [10, 20, 30] {
@@ -874,36 +872,36 @@ async fn successful_queries_are_neither_audited_nor_logged() {
     }
     let before = fixture.records().len();
     let secret = "zebra-secret-words";
-    let (status, first) = fixture
-        .request(
+    let (status, first) = captured
+        .run(fixture.request(
             Method::GET,
             &fixture.admin,
             &format!("{ADMIN_EVENTS}?service=fake&q={secret}+OR+echo&limit=1"),
             None,
             "audit-quiet-list",
-        )
+        ))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(first["result"]["items"].as_array().unwrap().is_empty());
-    let (status, first) = fixture
-        .request(
+    let (status, first) = captured
+        .run(fixture.request(
             Method::GET,
             &fixture.admin,
             &format!("{ADMIN_EVENTS}?service=fake&q=echo&limit=1"),
             None,
             "audit-quiet-first",
-        )
+        ))
         .await;
     assert_eq!(status, StatusCode::OK);
     let cursor = first["result"]["nextCursor"].as_str().unwrap().to_string();
-    let (status, _) = fixture
-        .request(
+    let (status, _) = captured
+        .run(fixture.request(
             Method::GET,
             &fixture.admin,
             &format!("{ADMIN_EVENTS}?cursor={cursor}"),
             None,
             "audit-quiet-next",
-        )
+        ))
         .await;
     assert_eq!(status, StatusCode::OK);
     for (token, uri, request_id) in [
@@ -919,16 +917,41 @@ async fn successful_queries_are_neither_audited_nor_logged() {
             "audit-quiet-self-timeline",
         ),
     ] {
-        let (status, _) = fixture
-            .request(Method::GET, token, &uri, None, request_id)
+        let (status, _) = captured
+            .run(fixture.request(Method::GET, token, &uri, None, request_id))
             .await;
         assert_eq!(status, StatusCode::OK, "{uri}");
     }
     assert_eq!(fixture.records().len(), before);
+    // A query on the same routes whose stored record cannot be read is
+    // logged, so the capture observes how these routes are handled.
+    let unreadable = uuid::Uuid::new_v4().to_string();
+    fixture
+        .append(synthetic(&unreadable, 40, "alice", "fake", "echo"))
+        .await;
+    let store = rusqlite::Connection::open(fixture.audit_path.as_deref().unwrap()).unwrap();
+    store.busy_timeout(Duration::from_secs(10)).unwrap();
+    store
+        .execute(
+            "UPDATE audit_events SET record_json = 'not json' WHERE broker_request_id = ?1",
+            [&unreadable],
+        )
+        .unwrap();
+    let (status, failed) = captured
+        .run(fixture.request(
+            Method::GET,
+            &fixture.admin,
+            &format!("/v1/admin/audit/requests/{unreadable}"),
+            None,
+            "audit-failed-control",
+        ))
+        .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{failed}");
 
     // No replacement log event either: nothing names these requests, the
     // search text, or the cursor.
-    let events = captured.take();
+    let events = captured.take_events();
+    event_by_name_and_agent(&events, "audit_query_failed", "audit-failed-control");
     let quiet = [
         "audit-quiet-list",
         "audit-quiet-first",
@@ -1163,9 +1186,7 @@ async fn config_status_reports_the_node_and_audit_store_without_its_path() {
 
 #[tokio::test]
 async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
     let config_path = temp_path("audit-cursor-reload.toml");
     let first_db = temp_path("audit-cursor-first.audit.sqlite");
     let second_db = temp_path("audit-cursor-second.audit.sqlite");
@@ -1256,14 +1277,16 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
 
     // A reload of the same database keeps the cursor valid.
     write_config("NEXT", &first_db);
-    let reloaded = reload(&state, "audit-cursor-reload-same").await;
+    let reloaded = captured
+        .run(reload(&state, "audit-cursor-reload-same"))
+        .await;
     assert_eq!(reloaded["result"]["nodeId"], state.node_id());
     assert_eq!(
         reloaded["result"]["audit"],
         json!({"type": "sqlite", "maintenanceFailure": null})
     );
     let completed = event_by_name_and_agent(
-        &captured.take(),
+        &captured.take_events(),
         "config_reload_completed",
         "audit-cursor-reload-same",
     )
@@ -1571,9 +1594,7 @@ async fn canonical_audit_options_never_acquire_an_audit_reader() {
 #[tokio::test(flavor = "current_thread")]
 async fn management_caller_rejections_use_broker_in_response_logs_and_audit_without_widening_visibility()
  {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
     let fixture = audit_fixture_with(Backend::Sqlite, |config, _| {
         config.limits.max_concurrent_requests_per_principal = 1;
     });
@@ -1585,14 +1606,14 @@ async fn management_caller_rejections_use_broker_in_response_logs_and_audit_with
         .shared_ingress
         .try_principal_concurrency("bob", 1)
         .unwrap();
-    let (status, rejected) = fixture
-        .request(
+    let (status, rejected) = captured
+        .run(fixture.request(
             Method::GET,
             &fixture.bob,
             "/v1/admin/policy/grants",
             None,
             "management-caller-rejection",
-        )
+        ))
         .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{rejected}");
     assert_eq!(rejected["service"], "broker");
@@ -1606,7 +1627,7 @@ async fn management_caller_rejections_use_broker_in_response_logs_and_audit_with
     assert_eq!(record["service"], "broker");
     assert_eq!(record["principal"], "bob");
     assert!(record["providerAudit"]["management"]["targetService"].is_null());
-    let events = captured.take();
+    let events = captured.take_events();
     let event = event_by_name_and_agent(&events, "request_limited", "management-caller-rejection");
     assert_eq!(string_field(event, "service"), Some("broker"));
     assert_eq!(

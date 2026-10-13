@@ -958,9 +958,7 @@ impl Provider for ConformanceProvider {
 mod tests {
     use super::*;
     use agent_access_provider::presentation::response_capabilities;
-    use agent_access_provider::test_support::{
-        captured_upstream_requests, start_capturing_events, test_outbound_tls,
-    };
+    use agent_access_provider::test_support::{install_trace_capture, test_outbound_tls};
     use agent_access_provider::{
         ActionIo, CorrelationContext, EgressProxyRuntimeConfig, ExecutionCredential,
         InvocationIdentity, ProviderLimits, with_provider_context,
@@ -1242,9 +1240,11 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
                 .mount(&server)
                 .await;
-            start_capturing_events();
-            let outcome = view(&provider(&server.uri(), limits.clone())).await;
-            let events = captured_upstream_requests();
+            let capture = install_trace_capture().start();
+            let outcome = capture
+                .run(view(&provider(&server.uri(), limits.clone())))
+                .await;
+            let events = capture.take_upstream_requests();
             assert_eq!(events.len(), 1, "{body}: {events:?}");
             assert_eq!(events[0]["http.statusCode"], 200);
             match reason {

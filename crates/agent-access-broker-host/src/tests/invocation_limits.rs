@@ -483,9 +483,7 @@ async fn managed_store_overrides_take_precedence_and_apply_without_reload() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn request_limited_event_includes_limit_detail_and_token_id() {
-    let _capture_guard = event_capture_lock().await;
-    let captured = captured_events_for_test();
-    captured.take();
+    let captured = install_trace_capture().start();
     let fixture = browser_rate_fixture(LimitsConfig {
         invocations: InvocationLimitsConfig {
             services: BTreeMap::from([("fake".to_string(), limit(1, "90s"))]),
@@ -497,7 +495,9 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
     let token = &fixture.agent_tokens[0];
     let first = fixture.token_invoke("event-limit-first", token).await;
     assert_eq!(first.status(), StatusCode::OK);
-    let limited = fixture.token_invoke("event-limit-second", token).await;
+    let limited = captured
+        .run(fixture.token_invoke("event-limit-second", token))
+        .await;
     let retry_after = limited.headers()[RETRY_AFTER]
         .to_str()
         .unwrap()
@@ -511,7 +511,7 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
             .contains(": 1 request per 90s. Retry after ")
     );
 
-    let events = captured.take();
+    let events = captured.take_events();
     let event = event_by_name_and_agent(&events, "request_limited", "event-limit-second");
     assert_eq!(string_field(event, "level"), Some("WARN"));
     assert_eq!(string_field(event, "limitKind"), Some("invocation_rate"));

@@ -639,7 +639,9 @@ async fn trusted_caller_rejection_is_traced_correlated_and_audited_on_all_routes
             }
         }
     }
-    let _capture_guard = event_capture_lock().await;
+    let _capture_guard = crate::observability::tracing_capture_test_lock()
+        .lock()
+        .await;
     let mut f = fixture();
     let audit_path = f._dir.path().join("proxy-audit.jsonl");
     let mut config = f.runtime.config().clone();
