@@ -169,7 +169,7 @@ impl GmailProvider {
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
-                .bearer_auth(&access.token());
+                .bearer_auth(access.token());
             if let Some(body) = &body {
                 request = request.json(body);
             }

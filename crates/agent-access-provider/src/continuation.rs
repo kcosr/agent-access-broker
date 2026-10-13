@@ -378,8 +378,8 @@ impl ContinuationBinding {
     pub fn delegated(self, credential: &DelegatedCredential) -> Self {
         let access = credential.access();
         self.bytes("delegatedBinding", credential.binding_identity().digest())
-            .text("delegatedTarget", &access.target())
-            .text("delegatedAudience", &access.audience())
+            .text("delegatedTarget", access.target())
+            .text("delegatedAudience", access.audience())
     }
 
     fn absent(mut self, label: &'static str) -> Self {

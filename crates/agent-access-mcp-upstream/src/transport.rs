@@ -329,7 +329,7 @@ impl OperationContext {
             if access.target() != *resource
                 || access.audience() != *resource
                 || access.version().is_empty()
-                || !crate::valid_token(&access.token())
+                || !crate::valid_token(access.token())
             {
                 return Err(crate::credential_error());
             }
