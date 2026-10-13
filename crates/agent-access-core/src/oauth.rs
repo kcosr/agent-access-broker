@@ -4550,10 +4550,12 @@ pub(crate) mod tests {
         let (_dir, _store, _ring, mut manager, server) = fixture().await;
         connected(&manager, &server).await;
         expire(&manager);
-        // Point this test's private transport at a closed listener; exercise reqwest's real is_connect classification.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let unavailable = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        // Point this test's private transport at a port bound without a
+        // listener, which refuses connections and which no other socket can
+        // take meanwhile; exercise reqwest's real is_connect classification.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let unavailable = format!("http://{}", reserved.local_addr().unwrap());
         Arc::get_mut(&mut manager.inner)
             .unwrap()
             .registrations
