@@ -155,7 +155,7 @@ fn fixture_resources(contexts: &[&str]) -> Vec<ResourceDefinition> {
 fn backend_presentation(
     service: &str,
     action: &str,
-) -> Option<agent_access_provider::ActionPresentation> {
+) -> Option<agent_access_provider::presentation::ActionPresentation> {
     static CONFIG: std::sync::OnceLock<agent_access_core::BrokerConfig> =
         std::sync::OnceLock::new();
     let config = CONFIG.get_or_init(|| {

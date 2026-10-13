@@ -1,4 +1,6 @@
-use agent_access_provider::{ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderedBody};
+use agent_access_provider::presentation::{
+    ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderedBody,
+};
 use html5ever::{QualName, local_name, ns, parse_fragment, tendril::TendrilSink};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html::write_html_io};

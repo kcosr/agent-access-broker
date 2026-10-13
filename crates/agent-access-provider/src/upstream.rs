@@ -6,11 +6,12 @@
 //!
 //! Backends own their protocol (URLs, authentication scheme, status and body
 //! handling); they build clients and send requests through this module.
+use crate::correlation::apply_current_correlation_headers;
 use crate::host::{ClientTransportSpec, UpstreamClientFactory};
+use crate::trace::{checked_trace_reason, emit_upstream_request_completed_for};
 use crate::{
     EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode, UpstreamTrace,
-    apply_current_correlation_headers, checked_trace_reason, current_provider_action,
-    emit_upstream_request_completed_for, same_origin, url_allowed_by_patterns,
+    current_provider_action, same_origin, url_allowed_by_patterns,
 };
 use futures_util::TryStreamExt;
 use reqwest::{Method, RequestBuilder, Response};
@@ -386,7 +387,7 @@ impl UpstreamClient {
             status_reasons: self.status_reasons,
             service,
             action,
-            hook: crate::current_hook_context(),
+            hook: crate::correlation::current_hook_context(),
             span: tracing::Span::current(),
             provider: self.provider,
             operation: call.operation.to_string(),
@@ -441,7 +442,7 @@ struct TraceEvent {
     status_reasons: &'static [(u16, ReasonCode)],
     service: String,
     action: String,
-    hook: Option<crate::HookContext>,
+    hook: Option<crate::contract::HookContext>,
     span: tracing::Span,
     provider: &'static str,
     operation: String,
@@ -1102,7 +1103,11 @@ mod tests {
                 UpstreamCall::new("item.view"),
             )
         };
-        let cases: Vec<(Option<crate::HookContext>, Option<ProviderReason>, &str)> = vec![
+        let cases: Vec<(
+            Option<crate::contract::HookContext>,
+            Option<ProviderReason>,
+            &str,
+        )> = vec![
             (
                 Some(hook_context(
                     "example",

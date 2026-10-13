@@ -3,7 +3,7 @@ use agent_access_core::mcp::{
     McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry, ToolTarget,
 };
 use agent_access_core::{ApiActionSpec, ApiCatalog, InvokeRequest};
-use agent_access_provider::{ActionIo, ResponseOptions};
+use agent_access_provider::{ActionIo, presentation::ResponseOptions};
 use anyhow::{Context, Result, bail};
 use rmcp::model::{CallToolResult, Tool};
 use serde::Deserialize;
@@ -68,8 +68,8 @@ struct Arguments {
     output_path: Option<PathBuf>,
     #[serde(default)]
     secret_sources: Vec<crate::SecretSourceBinding>,
-    read_content_format: Option<agent_access_provider::ReadContentFormat>,
-    response_format: Option<agent_access_provider::ResponseFormat>,
+    read_content_format: Option<agent_access_provider::presentation::ReadContentFormat>,
+    response_format: Option<agent_access_provider::presentation::ResponseFormat>,
 }
 
 #[derive(Debug)]
@@ -289,7 +289,8 @@ pub(super) async fn call_tool(
             &action.rendered_body_owners,
         )
         .map_err(|_| anyhow::anyhow!("broker response has an invalid rendered body"))?;
-        if options.response_format == agent_access_provider::ResponseFormat::Markdown {
+        if options.response_format == agent_access_provider::presentation::ResponseFormat::Markdown
+        {
             crate::markdown_result_value(&value)
                 .map_err(|_| anyhow::anyhow!("broker response has an invalid Markdown result"))?;
         }
@@ -342,13 +343,21 @@ fn response_options(
     action: &ApiActionSpec,
 ) -> Result<ResponseOptions> {
     let explicit_read = args.read_content_format.map(|format| match format {
-        agent_access_provider::ReadContentFormat::Native => crate::ReadContentFormatArg::Native,
-        agent_access_provider::ReadContentFormat::Markdown => crate::ReadContentFormatArg::Markdown,
-        agent_access_provider::ReadContentFormat::Text => crate::ReadContentFormatArg::Text,
+        agent_access_provider::presentation::ReadContentFormat::Native => {
+            crate::ReadContentFormatArg::Native
+        }
+        agent_access_provider::presentation::ReadContentFormat::Markdown => {
+            crate::ReadContentFormatArg::Markdown
+        }
+        agent_access_provider::presentation::ReadContentFormat::Text => {
+            crate::ReadContentFormatArg::Text
+        }
     });
     let explicit_output = args.response_format.map(|format| match format {
-        agent_access_provider::ResponseFormat::Json => crate::OutputFormatArg::Json,
-        agent_access_provider::ResponseFormat::Markdown => crate::OutputFormatArg::Markdown,
+        agent_access_provider::presentation::ResponseFormat::Json => crate::OutputFormatArg::Json,
+        agent_access_provider::presentation::ResponseFormat::Markdown => {
+            crate::OutputFormatArg::Markdown
+        }
     });
     let options = crate::resolve_response_options(
         settings,
@@ -370,7 +379,7 @@ fn response_options(
                 .replace("read-content default", "readContentFormat default"),
         )
     })?;
-    if options.read_content_format != agent_access_provider::ReadContentFormat::Native
+    if options.read_content_format != agent_access_provider::presentation::ReadContentFormat::Native
         && !action
             .read_content_formats
             .iter()
@@ -378,7 +387,7 @@ fn response_options(
     {
         bail!("readContentFormat is unsupported for this action");
     }
-    if options.response_format != agent_access_provider::ResponseFormat::Json
+    if options.response_format != agent_access_provider::presentation::ResponseFormat::Json
         && !action
             .response_formats
             .iter()
@@ -697,7 +706,7 @@ mod tests {
     async fn presentation_options_preserve_cli_default_and_conflict_rules() {
         let server = MockServer::start().await;
         let mut settings = settings(&server);
-        settings.read_content_format = agent_access_provider::ReadContentFormat::Text;
+        settings.read_content_format = agent_access_provider::presentation::ReadContentFormat::Text;
         let mut action = action();
         action.read_content_formats = vec!["native".into(), "markdown".into(), "text".into()];
         action.response_formats = vec!["json".into(), "markdown".into()];
@@ -709,11 +718,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             selected.read_content_format,
-            agent_access_provider::ReadContentFormat::Native
+            agent_access_provider::presentation::ReadContentFormat::Native
         );
         assert_eq!(
             selected.response_format,
-            agent_access_provider::ResponseFormat::Markdown
+            agent_access_provider::presentation::ResponseFormat::Markdown
         );
         let explicit_error = response_options(
             &settings,
@@ -725,7 +734,7 @@ mod tests {
         assert!(explicit_error.contains("responseFormat"));
         assert!(explicit_error.contains("readContentFormat"));
         assert!(!explicit_error.contains("--"), "{explicit_error}");
-        settings.output_format = agent_access_provider::ResponseFormat::Markdown;
+        settings.output_format = agent_access_provider::presentation::ResponseFormat::Markdown;
         let ambient_error = response_options(&settings, &args(json!({"inputs":{}})), &action)
             .unwrap_err()
             .to_string();

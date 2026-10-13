@@ -48,7 +48,7 @@ impl<'de> Deserialize<'de> for ResourceType {
     }
 }
 
-pub fn is_resource_type_id(value: &str) -> bool {
+fn is_resource_type_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 64
@@ -483,7 +483,7 @@ pub fn is_repository_selector_path(value: &str) -> bool {
         && !value.contains("//")
 }
 
-pub fn is_repository_selector_segment(segment: &str) -> bool {
+fn is_repository_selector_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
         && segment != ".."

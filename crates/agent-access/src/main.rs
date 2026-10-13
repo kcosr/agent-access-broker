@@ -13,8 +13,9 @@ use agent_access_core::{
     load_cli_tls_certificates, split_service_action, validate_cli_config, validate_cli_config_file,
 };
 use agent_access_provider::{
-    ActionIo, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ReadContentFormat,
-    ResponseFormat, ResponseOptions, is_loopback_or_localhost, is_service_name,
+    ActionIo, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
+    is_loopback_or_localhost, is_service_name,
+    presentation::{ReadContentFormat, ResponseFormat, ResponseOptions},
 };
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -18464,7 +18465,7 @@ mod tests {
     fn response_capabilities(
         service: &str,
         action: &str,
-    ) -> agent_access_provider::ResponseCapabilities {
+    ) -> agent_access_provider::presentation::ResponseCapabilities {
         static DESCRIPTORS: std::sync::OnceLock<Vec<agent_access_provider::ServiceDescriptor>> =
             std::sync::OnceLock::new();
         let descriptors = DESCRIPTORS.get_or_init(|| {

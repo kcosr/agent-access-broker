@@ -110,7 +110,9 @@ also includes a same-origin browser portal frontend:
   (`upstream.rs`), egress declarations and sanitized routes
   (`egress_config.rs`), upstream allowlists, correlation headers, upstream
   trace events (`trace.rs`), and opaque token signing (`signing.rs`). Its
-  public `host` module (`host.rs`) is the construction interface the host
+  crate root exports every supported item explicitly, with presentation items
+  only under `presentation`. Its public `host` module (`host.rs`) is the
+  construction interface the host
   implements: the build context and the upstream client factory port, plus the
   values only the host constructs for providers (scope requests, static
   execution credentials, delegated binding identities, admitted requests and

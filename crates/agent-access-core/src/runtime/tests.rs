@@ -45,11 +45,11 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
     .unwrap();
     assert_eq!(
         request.read_content_format,
-        agent_access_provider::ReadContentFormat::Native
+        agent_access_provider::presentation::ReadContentFormat::Native
     );
     assert_eq!(
         request.response_format,
-        agent_access_provider::ResponseFormat::Json
+        agent_access_provider::presentation::ResponseFormat::Json
     );
 
     let explicit: InvokeRequest = serde_json::from_value(json!({
@@ -60,11 +60,11 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
     .unwrap();
     assert_eq!(
         explicit.read_content_format,
-        agent_access_provider::ReadContentFormat::Text
+        agent_access_provider::presentation::ReadContentFormat::Text
     );
     assert_eq!(
         explicit.response_format,
-        agent_access_provider::ResponseFormat::Markdown
+        agent_access_provider::presentation::ResponseFormat::Markdown
     );
 
     assert!(
@@ -94,7 +94,7 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
             }),
             InvokeRequest {
                 inputs: json!({"project": "TEST", "message": "hello"}),
-                response_format: agent_access_provider::ResponseFormat::Markdown,
+                response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                 ..InvokeRequest::new(json!({}))
             },
         )
@@ -158,7 +158,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: agent_access_provider::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -194,7 +194,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: agent_access_provider::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )

@@ -54,6 +54,7 @@ use crate::{
     normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
+use agent_access_provider::presentation::ActionPresentation;
 use agent_access_provider::*;
 use agent_access_provider::{
     ActionDescriptor, CredentialDescriptor, Decision, LookupRequirement, ReasonCode,
@@ -566,9 +567,9 @@ pub struct InvokeRequest {
     #[serde(default = "empty_json_object")]
     pub inputs: Value,
     #[serde(default)]
-    pub read_content_format: agent_access_provider::ReadContentFormat,
+    pub read_content_format: agent_access_provider::presentation::ReadContentFormat,
     #[serde(default)]
-    pub response_format: agent_access_provider::ResponseFormat,
+    pub response_format: agent_access_provider::presentation::ResponseFormat,
     #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
 }
@@ -577,14 +578,14 @@ impl InvokeRequest {
     pub fn new(inputs: Value) -> Self {
         Self {
             inputs,
-            read_content_format: agent_access_provider::ReadContentFormat::Native,
-            response_format: agent_access_provider::ResponseFormat::Json,
+            read_content_format: agent_access_provider::presentation::ReadContentFormat::Native,
+            response_format: agent_access_provider::presentation::ResponseFormat::Json,
             body_parts: Vec::new(),
         }
     }
 
-    fn response_options(&self) -> agent_access_provider::ResponseOptions {
-        agent_access_provider::ResponseOptions {
+    fn response_options(&self) -> agent_access_provider::presentation::ResponseOptions {
+        agent_access_provider::presentation::ResponseOptions {
             read_content_format: self.read_content_format,
             response_format: self.response_format,
         }
@@ -1357,7 +1358,7 @@ fn preserve_result_metadata_on_error(
 
 fn present_provider_outcome(
     presentation: Option<&ActionPresentation>,
-    options: agent_access_provider::ResponseOptions,
+    options: agent_access_provider::presentation::ResponseOptions,
     max_body_bytes: u64,
     max_result_bytes: u64,
     outcome: Result<ProviderResult, ProviderError>,
@@ -1664,7 +1665,7 @@ pub struct PreparedInvocation {
     /// are consumed separately after admission.
     body_parts: Vec<BrokerBodyPart>,
     state: Option<ProviderState>,
-    response_options: agent_access_provider::ResponseOptions,
+    response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -4472,7 +4473,7 @@ impl BrokerRuntime {
             )));
         };
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != agent_access_provider::ResponseOptions::default()
+        if response_options != agent_access_provider::presentation::ResponseOptions::default()
             && let Err(error) = agent_access_provider::presentation::validate_response_options(
                 action_descriptor.presentation.as_ref(),
                 response_options,

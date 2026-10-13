@@ -3,7 +3,8 @@
 //!
 //! Backends attach an [`ActionPresentation`] to each action descriptor; the
 //! broker runs [`present_result`] on provider results. The helpers here are
-//! the building blocks backend renderers use.
+//! the building blocks backend renderers use. Every presentation item is
+//! reachable only through this module.
 use crate::{ProviderError, ReasonCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

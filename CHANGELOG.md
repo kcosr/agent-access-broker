@@ -118,6 +118,21 @@ All notable changes to this project are documented in this file.
 - Core's `StateLockSet::acquire_for_config`, `acquire_for_config_reusing` and
   `acquire_audit_for_config` take a `StateLockHolder` (program name, program
   version and node ID) in place of the node ID.
+- The provider SDK lists its exports explicitly, and each supported item has
+  one path. Presentation types and traits (`ActionPresentation`,
+  `ReadContentFormat`, `ResponseFormat`, `ResponseOptions`,
+  `ResponseCapabilities`, `EmbeddedBody`, `BodyPathSegment`,
+  `EmbeddedBodyCodec`, `WholeResultRenderer`, `RenderContext`, `RenderError`,
+  `RenderBudget`, `RenderBudgetExhausted`, `RenderedBody` and
+  `PresentationBudget`) are no longer re-exported at the crate root; import
+  them from `agent_access_provider::presentation`. The
+  `DEFAULT_MAX_HTTP_BODY_BYTES`, `DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES`,
+  `DEFAULT_REQUEST_TIMEOUT_MS` and `DEFAULT_STREAMING_IDLE_TIMEOUT_MS`
+  constants (use `ProviderLimits::default()`), `default_search_max_results`
+  (use `SearchLimitsConfig::default()`), `current_hook_context`,
+  `apply_current_correlation_headers`, `is_reason_code_id`,
+  `is_resource_type_id`, `is_repository_selector_segment` and
+  `url_matches_allowed_pattern` are no longer public.
 
 ### Added
 

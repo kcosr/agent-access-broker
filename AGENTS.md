@@ -218,8 +218,11 @@ and audit checks through the real `agent-access` binary.
   delegated-credential contracts, and the host services backends use
   (upstream HTTP clients built through the host's client factory, egress
   declarations and sanitized routes, upstream allowlists, correlation,
-  upstream trace events, token signing and continuation envelopes). Its
-  `host` module is the construction interface core implements (`BuildContext`,
+  upstream trace events, token signing and continuation envelopes). `lib.rs`
+  lists every supported export explicitly, one path per item; never add a
+  wildcard re-export. Presentation items are reachable only through
+  `presentation`. Its `host` module is the construction interface core
+  implements (`BuildContext`,
   `UpstreamClientFactory`) and the only constructor of host-owned values
   (scope requests, static execution credentials, delegated binding
   identities, admitted requests, final invocations, hook contexts); it

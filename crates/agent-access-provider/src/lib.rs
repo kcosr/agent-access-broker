@@ -46,44 +46,103 @@ mod upstream_allowlist;
 mod upstream_rate_limit;
 mod upstream_validation;
 
-pub use admitted::*;
-pub use attribution::*;
-pub use backend::*;
-pub use capabilities::*;
-pub use config::*;
+pub use admitted::{
+    AdmittedContext, AdmittedRequest, AuthorityMismatch, InvocationAuthority, ProviderInvocation,
+};
+pub use attribution::{
+    AttributionCapability, AttributionMutation, AttributionRepresentation, AttributionVerb,
+    ProviderAttributionConfig, attribution_audit_applied, attribution_skip_target_absent_audit,
+    matching_attribution_capabilities, merge_attribution_audit, validate_attribution_pattern,
+};
+pub use backend::{
+    BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, ServiceCredentialKinds,
+    ValidationContext, parse_backend_config,
+};
+pub use capabilities::{
+    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
+};
+pub use config::{
+    AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, default_attachment_max_bytes,
+    default_attachment_max_total_bytes, default_download_max_bytes, is_env_name,
+    is_literal_loopback, is_loopback_or_localhost, is_secret_ref, validate_attachment_limits,
+    validate_egress_proxy_config, validate_formats_allow_empty,
+    validate_non_empty_control_free_string, validate_provider_limit_relation,
+    validate_provider_upload_limit_relation, validate_tenant_host, validate_upload_limits,
+    validate_upstream_allowlist, validate_upstream_base_url,
+};
 pub use continuation::{
     ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
     ContinuationOwner, ContinuationSigner,
 };
-pub use contract::*;
-pub use correlation::*;
-pub use credential::*;
-pub use delegated::*;
-pub use descriptor::*;
+pub use contract::{ContractViolation, HookContext};
+pub use correlation::{
+    BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,
+    current_correlation_context, current_provider_action, with_correlation_context,
+    with_provider_context,
+};
+pub use credential::{
+    CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
+    UnsupportedCredentialMode,
+};
+pub use delegated::{DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease};
+pub use descriptor::{
+    ActionDescriptor, ActionIo, CredentialDescriptor, CredentialProfile, DelegatedConnection,
+    HeaderEncoding, LookupRequirement, MultipartUploadSpec, RESULT_METADATA_HEADER,
+    ScopedMcpNameSource, ServiceDescriptor, ServiceSurface, attachment_upload_plan,
+    raw_download_io,
+};
 pub use domain_reason::{
     ProviderFailureStatus, ProviderReason, ProviderReasonDefinition, domain_reason_prefix,
 };
-pub use egress_config::*;
-pub use error::*;
-pub use finalization::*;
-pub use identifiers::*;
-pub use invocation::*;
-pub use module::{ModuleMetadata, SDK_PACKAGE};
-pub use oauth_dialect::*;
-pub use presentation::{
-    ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, PresentationBudget,
-    ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderContext, RenderError,
-    RenderedBody, ResponseCapabilities, ResponseFormat, ResponseOptions, WholeResultRenderer,
+pub use egress_config::{EgressDeclaration, EgressProxyConfig, EgressProxySource, EgressRoute};
+pub use error::ProviderBuildError;
+pub use finalization::{
+    ProviderFinalizationContext, ProviderFinalizationGuard, current_provider_finalization,
+    with_provider_finalization,
 };
-pub use provider::*;
-pub use reason::*;
-pub use resource::*;
-pub use result::*;
-pub use scope::*;
-pub use signing::*;
-pub use state::*;
-pub use trace::*;
-pub use upstream::*;
-pub use upstream_allowlist::*;
-pub use upstream_rate_limit::*;
-pub use upstream_validation::*;
+pub use identifiers::{ResourceScopes, is_action_name, is_service_name};
+pub use invocation::{
+    BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity,
+    SearchAuthorization, SearchAuthorizationScope,
+};
+pub use module::{ModuleMetadata, SDK_PACKAGE};
+pub use oauth_dialect::{
+    AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken,
+    OAUTH_MAX_RESPONSE_BYTES, OAuthAdapter, OAuthCallbackIssuer, OAuthClient, OAuthClientAuth,
+    OAuthDialect, OAuthDialectError, OAuthDialectRegistration, OAuthHttp, OAuthPermissionProfile,
+    OAuthRegistrationConfig, OAuthResponse, OAuthRotation, OAuthScopeMode, OAuthTarget,
+    OAuthTokenEncoding, PreparedAuthorization, RefreshReplay, TokenGrant,
+};
+pub use provider::{Provider, ServiceProvider};
+pub use reason::{Decision, HookPhase, InvalidReasonCodeId, ReasonCode, ReasonCodeId};
+pub use resource::{
+    GIT_REPOSITORY_RESOURCE, NamespaceSelectorDescriptor, NamespaceSelectorMetadata,
+    ResourceActionInputs, ResourceAttributeDescriptor, ResourceAttributeMetadata,
+    ResourceAttributes, ResourceSelector, ResourceType, ResourceTypeDescriptor,
+    ResourceTypeMetadata, ResourceTypeRegistry, is_canonical_repository_path,
+    is_repository_selector_path,
+};
+pub use result::{
+    ProviderByteStream, ProviderCredentialVerification, ProviderError, ProviderResult,
+    ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
+};
+pub use scope::{ScopeRequest, ScopeResolution};
+pub use signing::{OpaqueTokenSigner, SigningError, StableSigningKey, service_signing_key};
+pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
+pub use trace::{UpstreamTrace, emit_upstream_request_completed};
+pub use upstream::{
+    ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace, file_upload_body,
+    take_upstream_trace,
+};
+pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
+pub use upstream_rate_limit::{
+    UPSTREAM_RETRY_AFTER_MAX_SECONDS, UpstreamRetryAfter, mutation_unverified_after_throttling,
+    mutation_unverified_after_throttling_message, upstream_rate_limited,
+    upstream_rate_limited_message, upstream_retry_hint,
+};
+pub use upstream_validation::{
+    VALIDATION_FIELD_MAX_BYTES, VALIDATION_FRAGMENT_MAX_BYTES, VALIDATION_MESSAGE_MAX_BYTES,
+    VALIDATION_MESSAGE_MAX_PARTS, join_message_parts, push_message_part, read_validation_json,
+    response_has_json_content_type, sanitize_field, sanitize_fragment,
+};

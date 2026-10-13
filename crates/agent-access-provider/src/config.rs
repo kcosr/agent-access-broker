@@ -18,19 +18,15 @@ pub struct ProviderLimits {
     pub streaming_idle_timeout_ms: u64,
 }
 
-pub const DEFAULT_MAX_HTTP_BODY_BYTES: u64 = 512 * 1024 * 1024;
-pub const DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES: u64 = 512 * 1024 * 1024;
-pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
-pub const DEFAULT_STREAMING_IDLE_TIMEOUT_MS: u64 = 30_000;
-
+/// The Broker's default limits, which its `[limits]` section overrides.
 impl Default for ProviderLimits {
     fn default() -> Self {
         Self {
-            max_http_body_bytes: DEFAULT_MAX_HTTP_BODY_BYTES,
+            max_http_body_bytes: 512 * 1024 * 1024,
             max_download_bytes: default_download_max_bytes(),
-            max_upstream_response_bytes: DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES,
-            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
-            streaming_idle_timeout_ms: DEFAULT_STREAMING_IDLE_TIMEOUT_MS,
+            max_upstream_response_bytes: 512 * 1024 * 1024,
+            request_timeout_ms: 30_000,
+            streaming_idle_timeout_ms: 30_000,
         }
     }
 }
@@ -86,7 +82,7 @@ impl Default for SearchLimitsConfig {
     }
 }
 
-pub fn default_search_max_results() -> u32 {
+fn default_search_max_results() -> u32 {
     50
 }
 

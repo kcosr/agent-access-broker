@@ -718,7 +718,7 @@ impl ReasonCodeId {
 }
 
 /// Whether `value` has reason identifier syntax: `^[a-z][a-z0-9_]{0,63}$`.
-pub const fn is_reason_code_id(value: &str) -> bool {
+pub(crate) const fn is_reason_code_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes.len() > ReasonCodeId::MAX_LEN || !bytes[0].is_ascii_lowercase() {
         return false;

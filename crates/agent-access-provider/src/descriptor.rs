@@ -5,8 +5,8 @@
 //! projection, and credential management all read this one definition instead
 //! of keeping parallel per-service tables.
 
-use crate::ActionPresentation;
 use crate::attribution::AttributionCapability;
+use crate::presentation::ActionPresentation;
 use crate::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
 };
@@ -781,13 +781,12 @@ mod tests {
     fn impossible_combinations_are_rejected() {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
         unscoped_lookup.resource_scope = None;
-        let presented_download =
-            action("item.download")
-                .raw_download()
-                .presentation(Some(crate::ActionPresentation {
-                    embedded_bodies: &[],
-                    whole: None,
-                }));
+        let presented_download = action("item.download").raw_download().presentation(Some(
+            crate::presentation::ActionPresentation {
+                embedded_bodies: &[],
+                whole: None,
+            },
+        ));
         let malformed_pointer = action("item.token").sensitive_output("/result/~2");
         assert_eq!(
             errors(vec![unscoped_lookup, presented_download, malformed_pointer,]),

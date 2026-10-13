@@ -1,7 +1,7 @@
 //! Upstream request trace events.
-use crate::{
-    HookContext, ProviderReason, ReasonCode, current_hook_context, current_provider_action,
-};
+use crate::contract::{ContractViolation, HookContext};
+use crate::correlation::current_hook_context;
+use crate::{ProviderReason, ReasonCode, current_provider_action};
 
 /// One completed upstream HTTP request, reported by a backend.
 pub struct UpstreamTrace<'a> {
@@ -45,10 +45,8 @@ pub(crate) fn checked_trace_reason(
     hook: Option<&HookContext>,
 ) -> ProviderReason {
     let checked = match hook {
-        None => Err(crate::ContractViolation::MissingHookContext),
-        Some(hook) if hook.service() != service => {
-            Err(crate::ContractViolation::InconsistentHookContext)
-        }
+        None => Err(ContractViolation::MissingHookContext),
+        Some(hook) if hook.service() != service => Err(ContractViolation::InconsistentHookContext),
         Some(hook) => hook.check_trace(reason),
     };
     match checked {

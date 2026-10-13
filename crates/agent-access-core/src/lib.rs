@@ -1,11 +1,10 @@
 use agent_access_provider::{
-    BackendConfig, CredentialDescriptor, DEFAULT_MAX_HTTP_BODY_BYTES,
-    DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES, DEFAULT_REQUEST_TIMEOUT_MS,
-    DEFAULT_STREAMING_IDLE_TIMEOUT_MS, Decision, EgressProxyConfig, OAuthScopeMode, ProviderLimits,
-    ReadContentFormat, ReasonCodeId, ResourceScopes, ResourceSelector, ResourceTypeRegistry,
-    ResponseFormat, ServiceCredentialKinds, ServiceDescriptor, ValidationContext,
-    default_download_max_bytes, is_action_name, is_env_name, is_loopback_or_localhost,
-    is_secret_ref, is_service_name, validate_egress_proxy_config, validate_upstream_allowlist,
+    BackendConfig, CredentialDescriptor, Decision, EgressProxyConfig, OAuthScopeMode,
+    ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector, ResourceTypeRegistry,
+    ServiceCredentialKinds, ServiceDescriptor, ValidationContext, default_download_max_bytes,
+    is_action_name, is_env_name, is_loopback_or_localhost, is_secret_ref, is_service_name,
+    presentation::{ReadContentFormat, ResponseFormat},
+    validate_egress_proxy_config, validate_upstream_allowlist,
 };
 use attribution::validate_attribution_config;
 use regex::Regex;
@@ -1261,19 +1260,19 @@ fn default_max_concurrent_per_principal() -> u32 {
     10
 }
 fn default_max_http_body_bytes() -> u64 {
-    DEFAULT_MAX_HTTP_BODY_BYTES
+    ProviderLimits::default().max_http_body_bytes
 }
 fn default_max_upstream_response_bytes() -> u64 {
-    DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES
+    ProviderLimits::default().max_upstream_response_bytes
 }
 fn default_request_body_timeout_ms() -> u64 {
     300_000
 }
 fn default_request_timeout_ms() -> u64 {
-    DEFAULT_REQUEST_TIMEOUT_MS
+    ProviderLimits::default().request_timeout_ms
 }
 fn default_streaming_idle_timeout_ms() -> u64 {
-    DEFAULT_STREAMING_IDLE_TIMEOUT_MS
+    ProviderLimits::default().streaming_idle_timeout_ms
 }
 fn default_upload_spool_dir() -> String {
     std::env::current_dir()

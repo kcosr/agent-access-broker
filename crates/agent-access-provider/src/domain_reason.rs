@@ -1,7 +1,8 @@
 //! Provider-owned domain reasons and the reason handles provider failures,
 //! streams and traces carry.
 use crate::host::HostPort;
-use crate::{Decision, ReasonCode, ReasonCodeId, is_reason_code_id};
+use crate::reason::is_reason_code_id;
+use crate::{Decision, ReasonCode, ReasonCodeId};
 use std::borrow::Cow;
 use std::fmt;
 
