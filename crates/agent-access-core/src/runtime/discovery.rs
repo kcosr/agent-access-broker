@@ -354,7 +354,11 @@ impl ServiceDiscovery<'_> {
                         ResourceSelector::Exact { .. } => Vec::new(),
                         // Roots enumerate the type's top-level namespaces.
                         ResourceSelector::All if !roots.is_empty() => roots.clone(),
-                        _ => vec![selector.clone()],
+                        ResourceSelector::All | ResourceSelector::Namespace { .. } => {
+                            vec![selector.clone()]
+                        }
+                        // A selector form this build does not know is never reported.
+                        _ => Vec::new(),
                     })
                     .filter(|entry| {
                         let only = ResourceBoundary {

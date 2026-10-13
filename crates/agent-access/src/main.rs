@@ -10494,6 +10494,11 @@ async fn run_send_invoke(
     let service = request.service.clone();
     let action = request.action.clone();
     let action_spec = catalog_action(catalog, &service, &action)?.clone();
+    if !action_spec.supports_io() {
+        exit_cli_input_error(anyhow::anyhow!(
+            "this client does not support the action's input and output kind"
+        ));
+    }
     if (request.output.is_some() || request.metadata_output.is_some())
         && !action_spec.supports_file_output()
     {

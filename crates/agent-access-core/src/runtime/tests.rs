@@ -9229,3 +9229,36 @@ fn unrelated_authorization_still_cannot_fall_back_to_forwarded_identity() {
         IdentityFailure::Invalid
     );
 }
+
+#[test]
+fn search_boundaries_under_all_admit_only_exact_exclusions() {
+    let exact = |value: &str| ResourceSelector::Exact {
+        value: value.to_string(),
+    };
+    let all_except = |excluded: Vec<ResourceSelector>| {
+        search_scope_from_boundary(&ResourceBoundary {
+            included: vec![ResourceSelector::All],
+            excluded,
+        })
+    };
+    assert_eq!(
+        all_except(vec![exact("b"), exact("a"), exact("b")]),
+        SearchAuthorizationScope::AllExcept {
+            excluded_values: vec!["a".to_string(), "b".to_string()],
+        }
+    );
+    // A non-exact exclusion, the closest constructible stand-in for a selector
+    // form this build does not know, never widens to an all-except boundary:
+    // the whole boundary is empty, for grants and token restrictions alike.
+    for unsupported in [
+        ResourceSelector::Namespace {
+            value: "team".to_string(),
+        },
+        ResourceSelector::All,
+    ] {
+        assert_eq!(
+            all_except(vec![exact("a"), unsupported]),
+            SearchAuthorizationScope::Finite { values: Vec::new() }
+        );
+    }
+}

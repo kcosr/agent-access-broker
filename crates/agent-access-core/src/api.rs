@@ -106,7 +106,22 @@ where
     Option::<String>::deserialize(deserializer)
 }
 
+/// Whether this host serves `io`: JSON, multipart uploads and raw downloads.
+/// An action with any other I/O kind is never published or admitted.
+pub(crate) fn supported_action_io(io: &ActionIo) -> bool {
+    matches!(
+        io,
+        ActionIo::Json | ActionIo::MultipartUpload { .. } | ActionIo::RawDownload { .. }
+    )
+}
+
 impl ApiActionSpec {
+    /// Whether this build serves the action's I/O kind; see
+    /// [`supported_action_io`]. Clients refuse any other kind.
+    pub fn supports_io(&self) -> bool {
+        supported_action_io(&self.io)
+    }
+
     /// JSON responses can be saved locally without changing execution permissions or bounds.
     pub fn supports_json_file_output(&self) -> bool {
         matches!(self.io, ActionIo::Json | ActionIo::MultipartUpload { .. })
@@ -274,15 +289,15 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         return None;
     }
     let io = action.io.clone();
+    let (response_kind, exit_policy) = match io {
+        ActionIo::Json | ActionIo::MultipartUpload { .. } => {
+            (ResponseKind::ResponseEnvelope, ExitPolicy::InvokeDecision)
+        }
+        ActionIo::RawDownload { .. } => (ResponseKind::RawStream, ExitPolicy::RawStream),
+        // An I/O kind this host does not serve is never published.
+        _ => return None,
+    };
     let sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
-    let response_kind = match io {
-        ActionIo::RawDownload { .. } => ResponseKind::RawStream,
-        _ => ResponseKind::ResponseEnvelope,
-    };
-    let exit_policy = match io {
-        ActionIo::RawDownload { .. } => ExitPolicy::RawStream,
-        _ => ExitPolicy::InvokeDecision,
-    };
     let response_capabilities =
         agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
     let mut rendered_body_owners = Vec::new();
@@ -430,14 +445,18 @@ pub fn openapi_from_catalog(
     for service in &catalog.services {
         for action in &service.actions {
             let path = format!("/v1/invoke/{}/{}", service.service, action.action);
-            let mut request_content = action_request_body_content(action);
             let (media, schema_path) = match &action.io {
                 ActionIo::MultipartUpload { .. } => (
                     "multipart/form-data",
                     "/schema/properties/request/contentSchema/properties/inputs",
                 ),
-                _ => ("application/json", "/schema/properties/inputs"),
+                ActionIo::Json | ActionIo::RawDownload { .. } => {
+                    ("application/json", "/schema/properties/inputs")
+                }
+                // An I/O kind this host does not serve gets no operation.
+                _ => continue,
             };
+            let mut request_content = action_request_body_content(action);
             if let Some(inputs) = request_content
                 .get_mut(media)
                 .and_then(|content| content.pointer_mut(schema_path))
@@ -674,11 +693,13 @@ fn action_request_body_content(action: &ApiActionSpec) -> Value {
                 "x-agent-access-upload-plan": plan
             }
         }),
-        _ => json!({
+        ActionIo::Json | ActionIo::RawDownload { .. } => json!({
             "application/json": {
                 "schema": invoke_request_schema(action)
             }
         }),
+        // Never projected: see `supported_action_io`.
+        _ => json!({}),
     }
 }
 
@@ -732,7 +753,11 @@ fn route_parameters(route: &HttpRouteSpec) -> Value {
 pub fn send_schema_from_catalog(catalog: &ApiCatalog) -> Value {
     let mut variants = Vec::new();
     for service in &catalog.services {
-        for action in &service.actions {
+        for action in service
+            .actions
+            .iter()
+            .filter(|action| supported_action_io(&action.io))
+        {
             let mut variant = invoke_send_variant(&service.service, action);
             if let Some(inputs) = variant.pointer_mut("/properties/inputs") {
                 relocate_local_schema_refs(

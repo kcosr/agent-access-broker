@@ -2735,3 +2735,32 @@ fn principal_access_contract_rejects_legacy_empty_null_and_unknown_shapes() {
         .unwrap();
     assert_eq!(reveal.access, RouteAccess::AdminWrite);
 }
+
+#[test]
+fn every_supported_io_kind_is_published_with_its_response_shape() {
+    let action = ActionDescriptor::new("item.view", "View", json!({"type":"object"}));
+    for (descriptor, response_kind, exit_policy) in [
+        (
+            action.clone(),
+            ResponseKind::ResponseEnvelope,
+            ExitPolicy::InvokeDecision,
+        ),
+        (
+            action
+                .clone()
+                .multipart_upload(agent_access_provider::attachment_upload_plan(&[], None)),
+            ResponseKind::ResponseEnvelope,
+            ExitPolicy::InvokeDecision,
+        ),
+        (
+            action.clone().raw_download(),
+            ResponseKind::RawStream,
+            ExitPolicy::RawStream,
+        ),
+    ] {
+        assert!(supported_action_io(&descriptor.io));
+        let spec = api_action_spec("example", &descriptor).expect("supported I/O is published");
+        assert_eq!(spec.response_kind, response_kind);
+        assert_eq!(spec.exit_policy, exit_policy);
+    }
+}

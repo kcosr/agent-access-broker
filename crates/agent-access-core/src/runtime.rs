@@ -337,26 +337,18 @@ fn search_scope_from_boundary(boundary: &ResourceBoundary) -> SearchAuthorizatio
         .iter()
         .any(|selector| matches!(selector, ResourceSelector::All))
     {
-        if boundary.excluded.iter().any(|selector| {
-            matches!(
-                selector,
-                ResourceSelector::All | ResourceSelector::Namespace { .. }
-            )
-        }) {
-            // Search containment types support exact/all only. Invalid data is never broadened.
-            return SearchAuthorizationScope::Finite { values: Vec::new() };
+        // Search containment types support exact/all only. Any other exclusion,
+        // including a selector form this build does not know, yields an empty
+        // boundary: invalid data is never broadened.
+        let mut excluded_values = BTreeSet::new();
+        for selector in &boundary.excluded {
+            let ResourceSelector::Exact { value } = selector else {
+                return SearchAuthorizationScope::Finite { values: Vec::new() };
+            };
+            excluded_values.insert(value.clone());
         }
         return SearchAuthorizationScope::AllExcept {
-            excluded_values: boundary
-                .excluded
-                .iter()
-                .filter_map(|selector| match selector {
-                    ResourceSelector::Exact { value } => Some(value.clone()),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
+            excluded_values: excluded_values.into_iter().collect(),
         };
     }
     SearchAuthorizationScope::Finite {
@@ -4551,6 +4543,8 @@ impl BrokerRuntime {
         let Some(action_descriptor) = service_descriptor
             .as_ref()
             .and_then(|descriptor| descriptor.action(&action))
+            // An action whose I/O kind this host does not serve is not admitted.
+            .filter(|action| crate::api::supported_action_io(&action.io))
             .cloned()
         else {
             return Err(Box::new(owned::PreparationFailure::new(
