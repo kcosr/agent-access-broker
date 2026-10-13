@@ -175,6 +175,7 @@ fn audit_fixture_with(
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "sha256:static".to_string(),

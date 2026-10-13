@@ -227,7 +227,7 @@ pub(super) fn fixture() -> Fixture {
 }
 async fn invoke(runtime: &BrokerRuntime, token: &str, id: &str) -> (StatusCode, Value) {
     let response = authed_json_request(
-        build_router(runtime.clone()),
+        build_router(runtime.clone(), broker_build_status()),
         Method::POST,
         "/v1/invoke/observability/inspect",
         id,
@@ -265,7 +265,7 @@ async fn imported_foundation_reconstructs_service_and_per_user_authority_on_rest
         "missing user credential must never fall back to service authority: {body}"
     );
     let response = authed_json_request(
-        build_router(fixture.runtime.clone()),
+        build_router(fixture.runtime.clone(), broker_build_status()),
         Method::GET,
         "/v1/spec/catalog",
         "import-catalog",
@@ -402,6 +402,7 @@ async fn imported_foundation_cancelled_waiter_does_not_abandon_commit_or_publica
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(super::conformance_import::registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "import-fixture".into(),
@@ -535,6 +536,7 @@ async fn ordinary_policy_edits_preserve_token_store_snapshot_identity() {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(super::conformance_import::registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "policy-identity".into(),

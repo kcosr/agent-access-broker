@@ -43,7 +43,7 @@ async fn fixture_http() -> Fixture {
     config.mcp.enabled = true;
     config.mcp.public_url = Some("https://broker.example.test/mcp".into());
     let runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
-    fixture.app = build_router(runtime.clone());
+    fixture.app = build_router(runtime.clone(), broker_build_status());
     fixture.runtime = runtime;
     fixture
 }
@@ -422,6 +422,7 @@ async fn scoped_imports_operator_reload_blocks_existing_sessions_and_preserves_g
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "operator-gate-fixture".into(),

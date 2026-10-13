@@ -1,4 +1,3 @@
-use crate::broker_build_status;
 use crate::handlers::auth::resolve_browser_cookie_identity_blocking;
 use crate::handlers::common::{
     CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
@@ -266,7 +265,8 @@ pub(crate) async fn broker_status(
     .await
     {
         Ok(_) => {
-            let mut response = (StatusCode::OK, Json(broker_build_status())).into_response();
+            let mut response =
+                (StatusCode::OK, Json(state.reloadable.build_status)).into_response();
             response
                 .headers_mut()
                 .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

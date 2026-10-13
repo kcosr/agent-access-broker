@@ -1,7 +1,8 @@
 mod common;
 use common::{resource_catalog, resource_selection};
 
-use agent_access_broker::build_router;
+use agent_access_broker::broker_build_status;
+use agent_access_broker_host::build_router;
 use agent_access_core::{
     BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, IdentityConfig,
     IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig, REQUEST_ID_HEADER,
@@ -3384,7 +3385,8 @@ async fn start_broker(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();

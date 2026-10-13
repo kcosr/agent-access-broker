@@ -1,5 +1,6 @@
 //! Managed endpoint, real CLI and stdio MCP against an offline Teams transport.
-use agent_access_broker::{backend_registry, build_router};
+use agent_access_broker::{backend_registry, broker_build_status};
+use agent_access_broker_host::build_router;
 use agent_access_core::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
@@ -271,7 +272,7 @@ allowed_upstream_hosts = ["https://synthetic.environment.api.powerplatform.com/*
             created_by: "test".into(),
         })
         .unwrap();
-    let app = build_router(runtime.clone());
+    let app = build_router(runtime.clone(), broker_build_status());
     let server = Server(tokio::spawn(async move {
         axum::serve(
             listener,

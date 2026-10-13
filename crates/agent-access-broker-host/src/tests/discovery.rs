@@ -75,7 +75,7 @@ async fn cloudbees_ci_catalog_and_discovery_follow_job_grant_and_context() {
         credential_mode: "service".into(),
         priority: None,
     });
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let internal = &[
         (CONTEXT_CALLER_HEADER, CONTEXT_CALLER_AUTH),
         (EXECUTION_CONTEXT_HEADER, "internal"),
@@ -253,7 +253,7 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
             priority: None,
         });
     }
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let response = governed_get(
         app,
         "/v1/services/cloudbees_ci/resources",
@@ -286,7 +286,10 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
 
 #[tokio::test]
 async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
-    let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config("")).unwrap(),
+        broker_build_status(),
+    );
     let resources = governed_get(
         app.clone(),
         "/v1/services/fake/resources",
@@ -368,7 +371,10 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
 
 #[tokio::test]
 async fn discovery_resource_type_must_name_a_type_the_service_uses() {
-    let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config("")).unwrap(),
+        broker_build_status(),
+    );
     for (path, key, expected) in [
         (
             "/v1/services/fake/resources?resourceType=fake_project",
@@ -421,7 +427,7 @@ async fn discovery_resource_type_must_name_a_type_the_service_uses() {
 async fn discovery_visibility_precedes_all_query_semantics() {
     let mut config = fake_config("");
     config.policy.grants.clear();
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     for service in ["fake", "missing"] {
         for tail in [
             "resources?limit=invalid&unknown=x",
@@ -488,7 +494,10 @@ async fn discovery_agent_caveats_filter_resources_without_catalog_gating() {
 
 #[tokio::test]
 async fn discovery_http_context_and_admission_match_existing_service_discovery() {
-    let app = build_router(BrokerRuntime::new(context_aware_fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(context_aware_fake_config("")).unwrap(),
+        broker_build_status(),
+    );
     for suffix in ["resources", "actions?resource=TEST"] {
         let route = format!("/v1/services/fake/{suffix}");
         let missing = governed_get(app.clone(), &route, "discovery-context-missing", &[]).await;
@@ -526,7 +535,7 @@ async fn discovery_http_context_and_admission_match_existing_service_discovery()
     }
     let mut config = fake_config("");
     config.limits.auth_requests_per_principal_per_minute = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let hidden = governed_get(
         app.clone(),
         "/v1/services/missing/resources?limit=bad",

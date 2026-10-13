@@ -1,6 +1,7 @@
 mod common;
 
-use agent_access_broker::build_router;
+use agent_access_broker::broker_build_status;
+use agent_access_broker_host::build_router;
 use agent_access_cloudbees_ci::{
     CLOUDBEES_CI_JOB_RESOURCE, CloudbeesCiControllerConfig, CloudbeesCiProviderConfig,
 };
@@ -1432,7 +1433,8 @@ async fn large_log_reads_work_through_http_and_stdio_mcp_with_bounded_wire_outpu
     let broker = tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();
@@ -1725,7 +1727,8 @@ async fn start_runtime(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();

@@ -40,6 +40,7 @@ agent-access-jira = { path = "../agent-access-jira" }
 jsonschema.workspace = true
 wiremock.workspace = true
 agent-access-broker = { path = "../agent-access-broker" }
+agent-access-broker-host = { path = "../agent-access-broker-host" }
 async-trait.workspace = true
 axum.workspace = true
 rustls.workspace = true

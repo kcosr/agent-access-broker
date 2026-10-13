@@ -23,7 +23,7 @@ async fn body_admission_limits_login_json_and_management_bytes_before_polling() 
     ] {
         let mut config = fake_config("");
         config.limits.max_concurrent_requests = 1;
-        let app = build_router(BrokerRuntime::new(config).unwrap());
+        let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
         let polled = Arc::new(tokio::sync::Notify::new());
         let signal = polled.clone();
         let first = app.clone().oneshot(body_request(
@@ -67,7 +67,10 @@ async fn body_admission_uses_small_route_caps() {
         ("/v1/admin/principals", 1024 * 1024 + 1),
         ("/v1/admin/config/reload", 1024 * 1024 + 1),
     ] {
-        let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+        let app = build_router(
+            BrokerRuntime::new(fake_config("")).unwrap(),
+            broker_build_status(),
+        );
         let response = app
             .oneshot(body_request(path, Body::from(vec![b' '; size])))
             .await
@@ -82,7 +85,7 @@ async fn body_admission_idle_and_total_deadlines_release_requests() {
         let mut config = fake_config("");
         config.limits.request_body_timeout_ms = 100;
         config.limits.streaming_idle_timeout_ms = 40;
-        let app = build_router(BrokerRuntime::new(config).unwrap());
+        let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
         let body = Body::from_stream(stream::unfold((), move |()| async move {
             if progress {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -123,7 +126,7 @@ async fn body_admission_charges_sources_before_json_and_bytes_extraction() {
     ] {
         let mut config = fake_config("");
         config.limits.auth_requests_per_source_per_minute = 1;
-        let app = build_router(BrokerRuntime::new(config).unwrap());
+        let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
         let first = app
             .clone()
             .oneshot(body_request(path, Body::from("{")))
@@ -155,6 +158,7 @@ fn body_test_state(config: BrokerConfig) -> Arc<ReloadableState> {
     Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "sha256:body-test".into(),
@@ -218,7 +222,7 @@ async fn body_admission_source_concurrency_rejects_without_polling_and_isolates_
     let mut config = fake_config("");
     config.limits.max_concurrent_requests = 8;
     config.limits.max_concurrent_requests_per_principal = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let polled = Arc::new(tokio::sync::Notify::new());
     let signal = polled.clone();
     let first = tokio::spawn(app.clone().oneshot(body_request(
@@ -378,6 +382,7 @@ async fn body_admission_default_hard_cap_matches_startup_limit() {
     let state = build_reloadable_state(
         config_path,
         Arc::new(crate::backend_registry()),
+        broker_build_status(),
         None,
         Duration::from_secs(30),
         Duration::from_secs(30),
@@ -450,7 +455,7 @@ async fn body_admission_memory_child() {
     config.limits.max_concurrent_requests = 16;
     config.limits.max_concurrent_requests_per_principal = 4;
     config.limits.request_body_timeout_ms = 30_000;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     // Measure incremental attack memory after broker initialization and one
     // ordinary extraction, not lazy executable pages or TLS/store startup.
     let warmup = app
@@ -553,7 +558,7 @@ async fn body_admission_invoke_json_uses_configured_transfer_cap() {
 
 #[tokio::test]
 async fn body_admission_caps_unfinished_multipart_metadata_incrementally() {
-    let app = build_router(test_multipart_runtime());
+    let app = build_router(test_multipart_runtime(), broker_build_status());
     let chunks_read = Arc::new(AtomicUsize::new(0));
     let counter = chunks_read.clone();
     let body = Body::from_stream(stream::unfold(0_usize, move |index| {
@@ -596,7 +601,7 @@ async fn body_admission_caps_unfinished_multipart_metadata_incrementally() {
 #[tokio::test]
 async fn body_admission_metadata_cap_still_allows_large_spooled_files() {
     use sha2::{Digest, Sha256};
-    let app = build_router(test_multipart_runtime());
+    let app = build_router(test_multipart_runtime(), broker_build_status());
     let payload = "x".repeat(1024 * 1024 + 8);
     let mut metadata = json!({"inputs": {"project":"TEST", "attachments": [{
         "field":"file", "filename":"large.txt", "contentType":"text/plain",
@@ -809,7 +814,7 @@ async fn body_admission_anonymous_pool_preserves_authenticated_capacity_and_same
 async fn body_admission_login_deadline_is_short_even_with_long_upload_deadline() {
     let mut config = fake_config("");
     config.limits.request_body_timeout_ms = 300_000;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let body = Body::from_stream(stream::unfold((), |_| async {
         tokio::time::sleep(Duration::from_millis(100)).await;
         Some((Ok::<Bytes, std::io::Error>(Bytes::from_static(b" ")), ()))
@@ -831,7 +836,7 @@ async fn body_admission_invoke_deadline_errors_remain_distinct_through_json_and_
     for multipart in [false, true] {
         let mut config = fake_config("");
         config.limits.request_body_timeout_ms = 80;
-        let app = build_router(BrokerRuntime::new(config).unwrap());
+        let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
         let body = Body::from_stream(stream::pending::<Result<Bytes, std::io::Error>>());
         let mut request = body_request("/v1/invoke/fake/echo", body);
         if multipart {

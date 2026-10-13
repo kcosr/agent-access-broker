@@ -409,7 +409,7 @@ fn presentation_fixture(audit_file: &str) -> PresentationFixture {
     ];
     let runtime = BrokerRuntime::with_providers(config, vec![Arc::new(provider)]).unwrap();
     PresentationFixture {
-        app: build_router(runtime),
+        app: build_router(runtime, broker_build_status()),
         scope_resolutions,
         invocations,
     }

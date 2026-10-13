@@ -10,7 +10,7 @@ use agent_access_core::{
 
 async fn invoke(runtime: &BrokerRuntime, token: &str, service: &str) -> (StatusCode, Value) {
     let response = authed_json_request(
-        build_router(runtime.clone()),
+        build_router(runtime.clone(), broker_build_status()),
         Method::POST,
         &format!("/v1/invoke/{service}/inspect"),
         &format!("import-publication-{service}"),

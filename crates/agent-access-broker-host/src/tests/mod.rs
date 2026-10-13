@@ -5,10 +5,11 @@ use crate::handlers::gateway::{
 use crate::ingress::guards::IngressGuards;
 use crate::ingress::source::TrustedProxy;
 use crate::reload::ReloadTrigger;
+use crate::reload::validate_reload_timeout;
 use crate::state::{ReloadableState, RuntimeSnapshot};
 use crate::{
     broker_build_status, build_gateway_router, build_public_router, build_reloadable_state,
-    build_router, validate_reload_timeout, validate_shutdown_timeout,
+    build_router, validate_shutdown_timeout,
 };
 use agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE;
 use agent_access_confluence::CONFLUENCE_SPACE_RESOURCE;
@@ -234,7 +235,7 @@ fn seeded_resource_generation() -> usize {
 async fn fake_provider_smoke_exercises_discovery_invoke_and_audit() {
     let audit_path = temp_path("broker-smoke.audit.sqlite");
     let runtime = BrokerRuntime::new(fake_config(audit_path.to_str().unwrap())).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let services = app
         .clone()
@@ -301,7 +302,7 @@ async fn broker_status_does_not_append_to_configured_audit_sink() {
     let initial_audit = b"{\"sentinel\":\"preexisting\"}\n";
     std::fs::write(&audit_path, initial_audit).unwrap();
     let runtime = BrokerRuntime::new(fake_config(audit_path.to_str().unwrap())).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let response = governed_get(app, "/v1/broker/status", "broker-status-no-audit", &[]).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -328,7 +329,7 @@ async fn resource_types_route_requires_an_authenticated_caller_in_every_identity
                 }],
             }];
         }
-        let app = build_router(BrokerRuntime::new(config).unwrap());
+        let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
         if mode == "optional" {
             let authenticated = governed_get(
                 app.clone(),
@@ -380,7 +381,7 @@ async fn execution_context_http_routes_fail_closed_and_filter_all_governed_surfa
     };
     install_context_caller(&mut config);
     config.policy.grants[0].subjects = vec!["user:context-user".to_string()];
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let missing = governed_get(app.clone(), "/v1/capabilities", "context-missing", &[]).await;
     assert_eq!(missing.status(), StatusCode::FORBIDDEN);
@@ -663,7 +664,10 @@ async fn execution_context_http_routes_fail_closed_and_filter_all_governed_surfa
 
 #[tokio::test]
 async fn unattested_context_is_rejected_without_trusted_callers() {
-    let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config("")).unwrap(),
+        broker_build_status(),
+    );
     let response = governed_get(
         app,
         "/v1/services",
@@ -1341,7 +1345,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
     let runtime =
         BrokerRuntime::with_providers(config, vec![Arc::new(TestJiraParentInvokeProvider)])
             .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let response = app
         .oneshot(
@@ -1449,7 +1453,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
     let runtime =
         BrokerRuntime::with_providers(config, vec![Arc::new(TestJiraParentInvokeProvider)])
             .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let response = app
         .oneshot(
@@ -2636,7 +2640,7 @@ async fn disabled_toml_group_does_not_authorize_invoke() {
     config.policy.grants[0].subjects = vec!["group:agents".to_string()];
 
     let runtime = BrokerRuntime::new(config).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let response = authed_json_request(
         app,
         Method::POST,
@@ -4174,6 +4178,7 @@ async fn admin_status_requires_request_id_and_bearer_token() {
     let state = build_reloadable_state(
         config_path.clone(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
@@ -4265,6 +4270,7 @@ async fn storeless_classless_admin_store_routes_fail_closed() {
     let state = build_reloadable_state(
         config_path.clone(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
@@ -4306,6 +4312,7 @@ async fn reload_startup_validates_body_hard_cap_and_timeout() {
     let hard_cap_error = match build_reloadable_state(
         config_path,
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         Some(1024),
         Duration::from_secs(1),
         Duration::from_secs(1),
@@ -4338,7 +4345,7 @@ async fn invoke_download_can_return_raw_stream_with_metadata_header() {
         })],
     )
     .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let raw = app
         .clone()
@@ -4415,7 +4422,7 @@ async fn invoke_download_can_return_raw_stream_with_metadata_header() {
         })],
     )
     .unwrap();
-    let live_app = build_router(live_raw);
+    let live_app = build_router(live_raw, broker_build_status());
     let live_response = live_app
         .oneshot(
             Request::builder()
@@ -4526,7 +4533,7 @@ async fn raw_live_download_holds_concurrency_permits_until_body_drops() {
         })],
     )
     .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let first = app
         .clone()
@@ -4606,7 +4613,7 @@ async fn missing_required_download_stream_is_audited_as_error() {
         })],
     )
     .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let response = app
         .oneshot(
@@ -4642,7 +4649,7 @@ async fn missing_required_download_stream_is_audited_as_error() {
 #[tokio::test]
 async fn non_health_routes_require_valid_agent_request_id() {
     let runtime = BrokerRuntime::new(fake_config("")).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let response = app
         .clone()
         .oneshot(
@@ -4735,7 +4742,7 @@ async fn non_health_routes_require_valid_agent_request_id() {
 #[tokio::test]
 async fn service_and_action_path_segments_are_validated_at_ingress() {
     let runtime = BrokerRuntime::new(fake_config("")).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let response = app
         .clone()
@@ -4788,7 +4795,7 @@ async fn service_and_action_path_segments_are_validated_at_ingress() {
 async fn malformed_invoke_body_returns_envelope_and_audit() {
     let audit_path = temp_path("malformed-body.audit.jsonl");
     let runtime = BrokerRuntime::new(fake_config(audit_path.to_str().unwrap())).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let response = app
         .oneshot(
             Request::builder()
@@ -4853,7 +4860,7 @@ async fn admin_principals_patch_distinguishes_null_from_omitted_fields() {
         allow_classless_user_management: false,
         initial_admin: agent_access_core::InitialAdminConfig::default(),
     };
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let create = authed_json_request(
         app.clone(),
@@ -6223,6 +6230,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             ],
         )
         .unwrap(),
+        broker_build_status(),
     );
 
     let admin_login = app
@@ -11591,7 +11599,7 @@ async fn admin_policy_toml_grants_are_read_only() {
         .resources
         .resource_group_ids
         .push("toml-resources".to_string());
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let malformed_unauthenticated = app
         .clone()
@@ -11751,7 +11759,10 @@ async fn admin_policy_toml_grants_are_read_only() {
 
 #[tokio::test]
 async fn auth_logout_is_disabled_when_browser_auth_is_disabled() {
-    let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config("")).unwrap(),
+        broker_build_status(),
+    );
 
     let logout = app
         .oneshot(
@@ -11863,7 +11874,7 @@ async fn browser_login_audit_failure_does_not_issue_cookie() {
             },
         )
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let login = app
         .oneshot(
@@ -11980,7 +11991,7 @@ async fn browser_login_enforces_origin_and_sets_session_cookie() {
             },
         )
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let cross_site = app
         .clone()
@@ -12260,6 +12271,7 @@ async fn browser_rate_fixture_with(
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot,
         body_hard_cap,
         crate::reload::DEFAULT_RELOAD_TIMEOUT,
@@ -12709,7 +12721,7 @@ async fn managed_jira_verify_marks_upstream_verified_after_provider_probe() {
             agent_access_core::CredentialManagementPurpose::Administrative,
         )
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let verify = app
         .oneshot(
@@ -12804,7 +12816,7 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
             agent_access_core::CredentialManagementPurpose::Administrative,
         )
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let verify = admin_request(
         app,
@@ -12880,7 +12892,7 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
             agent_access_core::CredentialManagementPurpose::Administrative,
         )
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let verify = authed_json_request(
         app,
@@ -12961,7 +12973,7 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
             status: Some("disabled".to_string()),
         })
         .unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
 
     let verify = admin_request(
         app,
@@ -12988,7 +13000,7 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
 #[tokio::test]
 async fn multipart_authorizes_metadata_before_reading_file_parts() {
     let runtime = BrokerRuntime::new(fake_config("")).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13031,7 +13043,7 @@ async fn multipart_authorizes_metadata_before_reading_file_parts() {
 #[tokio::test]
 async fn multipart_is_rejected_for_actions_without_body_parts() {
     let runtime = BrokerRuntime::new(fake_config("")).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13089,7 +13101,7 @@ async fn multipart_file_parts_are_temp_file_backed_not_memory_backed() {
     });
     let runtime =
         BrokerRuntime::with_providers(config, vec![Arc::new(TestMultipartProvider)]).unwrap();
-    let app = build_router(runtime);
+    let app = build_router(runtime, broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13137,7 +13149,7 @@ async fn multipart_file_parts_are_temp_file_backed_not_memory_backed() {
 
 #[tokio::test]
 async fn multipart_rejects_header_mismatch_before_spooling() {
-    let app = build_router(test_multipart_runtime());
+    let app = build_router(test_multipart_runtime(), broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13170,7 +13182,7 @@ async fn multipart_rejects_header_mismatch_before_spooling() {
 
 #[tokio::test]
 async fn multipart_rejects_actual_size_over_metadata_as_413() {
-    let app = build_router(test_multipart_runtime());
+    let app = build_router(test_multipart_runtime(), broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13203,6 +13215,7 @@ async fn multipart_reserves_aggregate_spool_capacity_before_file_read() {
     config.limits.upload_spool_max_bytes = 20;
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(TestMultipartProvider)]).unwrap(),
+        broker_build_status(),
     );
     let boundary = "agent-access-boundary";
     let body = format!(
@@ -13237,6 +13250,7 @@ async fn multipart_idle_timeout_errors_before_metadata_read_completes() {
     config.limits.streaming_idle_timeout_ms = 1;
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(TestMultipartProvider)]).unwrap(),
+        broker_build_status(),
     );
     let boundary = "agent-access-boundary";
     let body = format!(
@@ -13278,7 +13292,7 @@ async fn multipart_idle_timeout_errors_before_metadata_read_completes() {
 async fn json_body_limit_errors_return_413() {
     let mut config = fake_config("");
     config.limits.max_http_body_bytes = 8;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let response = app
         .oneshot(
@@ -13306,7 +13320,7 @@ async fn json_body_limit_errors_return_413() {
 async fn multipart_body_limit_errors_return_413() {
     let mut config = fake_config("");
     config.limits.max_http_body_bytes = 64;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let boundary = "agent-access-boundary";
     let body = format!(
         "--{boundary}\r\n\
@@ -13344,7 +13358,7 @@ async fn trusted_proxy_source_derivation_audits_forwarded_chain() {
     let audit_path = temp_path("trusted-proxy.audit.jsonl");
     let mut config = fake_config(audit_path.to_str().unwrap());
     config.network.trusted_proxies = vec!["127.0.0.1".to_string(), "127.0.0.2".to_string()];
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let response = invoke_fake(
         app,
@@ -13375,7 +13389,10 @@ fn trusted_proxy_parser_rejects_trust_all_shapes() {
 #[tokio::test]
 async fn untrusted_peer_forwarded_headers_are_ignored() {
     let audit_path = temp_path("untrusted-proxy.audit.jsonl");
-    let app = build_router(BrokerRuntime::new(fake_config(audit_path.to_str().unwrap())).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config(audit_path.to_str().unwrap())).unwrap(),
+        broker_build_status(),
+    );
 
     let response = invoke_fake(
         app,
@@ -13395,7 +13412,7 @@ async fn untrusted_peer_forwarded_headers_are_ignored() {
 async fn anonymous_source_rate_limit_applies_by_ip() {
     let mut config = fake_config("");
     config.limits.auth_requests_per_source_per_minute = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let first = invoke_fake(app.clone(), "127.0.0.1:41002", "agent-req-rate-1", &[]).await;
     assert_eq!(first.status(), StatusCode::OK);
@@ -13413,7 +13430,7 @@ async fn source_rate_limit_event_includes_request_correlation_fields() {
 
     let mut config = fake_config("");
     config.limits.auth_requests_per_source_per_minute = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let first = invoke_fake(
         app.clone(),
@@ -13662,6 +13679,7 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(TestJiraNormalizedWriteProvider)])
             .unwrap(),
+        broker_build_status(),
     );
 
     let successful = app
@@ -13822,6 +13840,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             vec![Arc::new(TestConfluenceNormalizedWriteProvider)],
         )
         .unwrap(),
+        broker_build_status(),
     );
 
     let successful = app
@@ -13981,6 +14000,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(TestGitlabNormalizedWriteProvider)])
             .unwrap(),
+        broker_build_status(),
     );
 
     let successful = app
@@ -14051,7 +14071,10 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
 #[tokio::test]
 async fn gitlab_review_failures_preserve_exact_http_contract_without_echoing_content() {
     let audit_path = temp_path("gitlab-review-failure-contract.audit.jsonl");
-    let app = build_router(gitlab_review_failure_contract_runtime(&audit_path));
+    let app = build_router(
+        gitlab_review_failure_contract_runtime(&audit_path),
+        broker_build_status(),
+    );
 
     let mutation = app
         .clone()
@@ -14186,6 +14209,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(TestGitlabSuggestionApplyProvider)])
             .unwrap(),
+        broker_build_status(),
     );
 
     let response = app
@@ -14354,7 +14378,7 @@ fn gitlab_normalized_write_request(request_id: &str, remote: &str, content: &str
 async fn discovery_routes_share_source_rate_limits() {
     let mut config = fake_config("");
     config.limits.auth_requests_per_source_per_minute = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let first = services_request(app.clone(), "127.0.0.1:41010", "agent-req-services-1").await;
     assert_eq!(first.status(), StatusCode::OK);
@@ -14368,7 +14392,7 @@ async fn discovery_routes_share_source_rate_limits() {
 async fn unknown_service_discovery_uses_principal_rate_limits() {
     let mut config = fake_config("");
     config.limits.auth_requests_per_principal_per_minute = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let first = app
         .clone()
@@ -14411,7 +14435,7 @@ async fn duplicate_forwarded_headers_are_not_trusted() {
     let audit_path = temp_path("duplicate-forwarded.audit.jsonl");
     let mut config = fake_config(audit_path.to_str().unwrap());
     config.network.trusted_proxies = vec!["127.0.0.1".to_string()];
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let response = app
         .oneshot(
@@ -14450,7 +14474,7 @@ async fn readiness_fails_when_credential_material_is_unavailable() {
         .get_mut("fake")
         .unwrap()
         .token_ref = Some(format!("file:{}", missing_token.display()));
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let ready = app
         .oneshot(
@@ -14530,7 +14554,7 @@ async fn health_and_readiness_report_liveness_and_audit_failures() {
         agent_access_core::AuditStoreType::Jsonl,
         audit_path.display().to_string(),
     ));
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let health = app
         .clone()
@@ -14562,7 +14586,10 @@ async fn health_and_readiness_report_liveness_and_audit_failures() {
 
 #[tokio::test]
 async fn metrics_endpoint_is_not_exposed() {
-    let app = build_router(BrokerRuntime::new(fake_config("")).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fake_config("")).unwrap(),
+        broker_build_status(),
+    );
 
     let response = app
         .oneshot(
@@ -14598,7 +14625,7 @@ async fn audit_sink_rotates_and_prunes_retained_files() {
     let audit = config.audit.as_mut().unwrap();
     audit.rotate_bytes = Some(1);
     audit.retention_days = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let first = invoke_fake(app.clone(), "127.0.0.1:41004", "agent-req-audit-1", &[]).await;
     assert_eq!(first.status(), StatusCode::OK);
@@ -14634,7 +14661,7 @@ async fn audit_sink_prunes_retained_files_without_rotation() {
 
     let mut config = fake_config(audit_path.to_str().unwrap());
     config.audit.as_mut().unwrap().retention_days = 1;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
 
     let response = invoke_fake(app, "127.0.0.1:41015", "agent-req-audit-prune", &[]).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -16365,7 +16392,7 @@ fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentationFixtu
     });
     let runtime = BrokerRuntime::with_providers(config, vec![Arc::new(provider)]).unwrap();
     JiraReadPresentationFixture {
-        app: build_router(runtime),
+        app: build_router(runtime, broker_build_status()),
         scope_resolutions,
         invocations,
     }
@@ -16854,7 +16881,7 @@ fn spec_token_fixture_with_restrictions(
     drop(store);
 
     SpecAgentFixture {
-        app: build_router(BrokerRuntime::new(config).unwrap()),
+        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
         agent_token: issued.token,
     }
 }
@@ -17130,6 +17157,7 @@ fn token_context_fixture() -> TokenContextFixture {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot,
         body_hard_cap,
         Duration::from_secs(30),
@@ -17262,7 +17290,7 @@ fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
     drop(store);
 
     ManagedPolicyAdminFixture {
-        app: build_router(BrokerRuntime::new(config).unwrap()),
+        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
         admin_token: issued.token,
         audit_path,
     }
@@ -17439,7 +17467,7 @@ fn service_policy_management_fixture_with_policy_authority(
     drop(store);
 
     ServicePolicyManagementFixture {
-        app: build_router(BrokerRuntime::new(config).unwrap()),
+        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
         admin_token,
         alice_user_token,
         bob_user_token,
@@ -17600,6 +17628,7 @@ where
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot,
         body_hard_cap,
         Duration::from_secs(30),
@@ -18705,6 +18734,7 @@ async fn build_reload_test_state(
     build_reloadable_state(
         config_path,
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         body_hard_cap,
         crate::reload::DEFAULT_RELOAD_TIMEOUT,
         crate::reload::DEFAULT_SHUTDOWN_TIMEOUT,

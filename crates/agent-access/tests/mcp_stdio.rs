@@ -8,7 +8,8 @@ mod imports;
 #[path = "mcp_stdio/names.rs"]
 mod names;
 
-use agent_access_broker::build_router;
+use agent_access_broker::broker_build_status;
+use agent_access_broker_host::build_router;
 use agent_access_core::{
     BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, IdentityConfig,
     IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig, ResourceSelector,
@@ -202,7 +203,8 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
     let _broker = BrokerTask(tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();
@@ -864,7 +866,8 @@ async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_
     let _broker = BrokerTask(tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();

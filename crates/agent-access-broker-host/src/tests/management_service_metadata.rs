@@ -163,7 +163,7 @@ fn metadata_fixture() -> MetadataFixture {
     drop(store);
 
     MetadataFixture {
-        app: build_router(BrokerRuntime::new(config).unwrap()),
+        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
         alice_user_token,
         admin_token,
     }

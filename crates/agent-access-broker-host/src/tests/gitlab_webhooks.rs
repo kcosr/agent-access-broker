@@ -372,6 +372,7 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
     let app = build_router(
         BrokerRuntime::with_providers(config, vec![Arc::new(BrokerWebhookContractProvider)])
             .unwrap(),
+        broker_build_status(),
     );
 
     let create = webhook_invoke_request(
@@ -576,6 +577,7 @@ async fn webhook_destination_reload_denies_introduction_but_preserves_existing_m
     let state = build_reloadable_state(
         config_path.clone(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         Some(10_485_760),
         // This tests policy after reload, not reload latency. Candidate
         // admission uses real filesystem and worker threads on a shared host.

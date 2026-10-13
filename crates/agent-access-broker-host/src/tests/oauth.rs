@@ -242,7 +242,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         )
         .unwrap()
         .token;
-    let app = build_router(runtime.clone());
+    let app = build_router(runtime.clone(), broker_build_status());
     let login = app
         .clone()
         .oneshot(

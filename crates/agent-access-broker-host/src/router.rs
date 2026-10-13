@@ -1,3 +1,4 @@
+use crate::BrokerBuildStatus;
 use crate::handlers::auth::{auth_local_login, auth_logout, auth_password_change, auth_session};
 use crate::handlers::data::{
     broker_status, capabilities, healthz, invoke, me, readyz, resource_types, service,
@@ -59,7 +60,7 @@ use axum::routing::{delete, get, patch, post, put};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub fn build_router(runtime: BrokerRuntime) -> Router {
+pub fn build_router(runtime: BrokerRuntime, build_status: BrokerBuildStatus) -> Router {
     let body_hard_cap = runtime.max_http_body_bytes();
     let audit_registry = runtime.audit_registry();
     let backends = Arc::clone(runtime.config().providers.registry());
@@ -72,6 +73,7 @@ pub fn build_router(runtime: BrokerRuntime) -> Router {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         backends,
+        build_status,
         snapshot,
         body_hard_cap,
         DEFAULT_RELOAD_TIMEOUT,

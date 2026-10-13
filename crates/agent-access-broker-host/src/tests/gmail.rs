@@ -184,7 +184,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
         )
         .unwrap();
         let response = authed_json_request(
-            build_router(runtime),
+            build_router(runtime, broker_build_status()),
             Method::POST,
             "/v1/invoke/gmail/account.view",
             "bob-read",

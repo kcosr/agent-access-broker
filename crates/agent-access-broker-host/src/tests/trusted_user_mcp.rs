@@ -192,7 +192,7 @@ fn fixture_with(configure: impl FnOnce(&mut BrokerConfig, &Path)) -> Fixture {
     let runtime = BrokerRuntime::new(config).unwrap();
     Fixture {
         _directory: directory,
-        app: build_router(runtime.clone()),
+        app: build_router(runtime.clone(), broker_build_status()),
         runtime,
         store,
         admin_token,
@@ -337,7 +337,7 @@ fn asserted_relay_fixture() -> (Fixture, Arc<ContextProvider>, PathBuf) {
     let provider = Arc::new(ContextProvider::default());
     f.runtime =
         BrokerRuntime::with_providers(f.runtime.config().clone(), vec![provider.clone()]).unwrap();
-    f.app = build_router(f.runtime.clone());
+    f.app = build_router(f.runtime.clone(), broker_build_status());
     let audit_path = f._directory.path().join("audit.jsonl");
     (f, provider, audit_path)
 }
@@ -939,6 +939,7 @@ async fn trusted_user_git_rejection_preserves_gateway_framing() {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "trusted-user-git".into(),

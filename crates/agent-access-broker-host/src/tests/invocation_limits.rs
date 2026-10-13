@@ -65,6 +65,7 @@ pub(super) fn limit_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> LimitF
         ReloadableState::from_snapshot(
             PathBuf::new(),
             std::sync::Arc::new(crate::backend_registry()),
+            broker_build_status(),
             RuntimeSnapshot::new(
                 1,
                 "invocation-limits".into(),

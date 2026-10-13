@@ -1,6 +1,7 @@
-use agent_access_broker::{
-    BuildProvenance, backend_registry, broker_build_status, build_gateway_router,
-    build_public_router, build_reloadable_state, validate_shutdown_timeout,
+use agent_access_broker::{backend_registry, broker_build_status};
+use agent_access_broker_host::{
+    BuildProvenance, ReloadableState, build_gateway_router, build_public_router,
+    build_reloadable_state, validate_shutdown_timeout,
 };
 use agent_access_core::{
     AuditStoreType, AuditVerifyReport, ConfigError, StateLockSet, load_broker_config,
@@ -279,6 +280,7 @@ async fn run_service(
     let state = build_reloadable_state(
         config_path,
         Arc::new(backend_registry()),
+        broker_build_status(),
         max_http_body_hard_cap_bytes,
         reload_timeout,
         shutdown_timeout,
@@ -384,7 +386,7 @@ fn spawn_gateway_server(
 }
 
 async fn drain_lifecycle(
-    state: Arc<agent_access_broker::ReloadableState>,
+    state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
     mut servers: JoinSet<Result<()>>,
     reload_signal_task: JoinHandle<()>,
@@ -704,7 +706,7 @@ async fn wait_for_shutdown_signal() -> ShutdownCause {
 
 #[cfg(unix)]
 fn spawn_reload_signal_task(
-    state: Arc<agent_access_broker::ReloadableState>,
+    state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
     reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
 ) -> JoinHandle<()> {
@@ -724,7 +726,7 @@ fn reload_signal_receiver() -> std::io::Result<tokio::signal::unix::Signal> {
 #[cfg(unix)]
 async fn run_reload_signal_loop(
     mut signal: tokio::signal::unix::Signal,
-    state: Arc<agent_access_broker::ReloadableState>,
+    state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
     reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
 ) {
@@ -757,7 +759,7 @@ fn track_reload_task(reload_tasks: &mut Vec<JoinHandle<()>>, handle: JoinHandle<
 
 #[cfg(not(unix))]
 fn spawn_reload_signal_task(
-    _state: Arc<agent_access_broker::ReloadableState>,
+    _state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
     _reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
 ) -> JoinHandle<()> {
@@ -1217,6 +1219,7 @@ path="{}"
         let state = build_reloadable_state(
             config_path,
             Arc::new(backend_registry()),
+            broker_build_status(),
             None,
             Duration::from_secs(1),
             Duration::from_secs(2),
@@ -1427,7 +1430,7 @@ path="{}"
         }
     }
 
-    async fn test_reloadable_state() -> Arc<agent_access_broker::ReloadableState> {
+    async fn test_reloadable_state() -> Arc<ReloadableState> {
         let config = temp_path("minimal-broker.toml");
         let spool = temp_path("minimal-spool");
         std::fs::write(
@@ -1455,6 +1458,7 @@ upload_spool_dir = "{}"
         build_reloadable_state(
             config,
             Arc::new(backend_registry()),
+            broker_build_status(),
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),

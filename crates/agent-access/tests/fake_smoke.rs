@@ -1,7 +1,8 @@
 mod common;
 use common::{resource_catalog, resource_selection};
 
-use agent_access_broker::build_router;
+use agent_access_broker::broker_build_status;
+use agent_access_broker_host::build_router;
 use agent_access_core::{
     BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, EXECUTION_CONTEXT_HEADER,
     ExecutionContextConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
@@ -3352,7 +3353,8 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();
@@ -3846,7 +3848,8 @@ async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_regis
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
-                build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                build_router(runtime, broker_build_status())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .await
             .unwrap();
@@ -3895,7 +3898,8 @@ async fn cli_invokes_fake_provider_against_stubbed_broker() {
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            build_router(runtime, broker_build_status())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();
@@ -4273,9 +4277,9 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let trusted_ingress = build_router(runtime).layer(axum::middleware::from_fn(
-            inject_trusted_internal_execution_context,
-        ));
+        let trusted_ingress = build_router(runtime, broker_build_status()).layer(
+            axum::middleware::from_fn(inject_trusted_internal_execution_context),
+        );
         axum::serve(
             listener,
             trusted_ingress.into_make_service_with_connect_info::<std::net::SocketAddr>(),

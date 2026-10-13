@@ -42,6 +42,7 @@ fn fixture() -> AuditFixture {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "sha256:static".into(),
@@ -270,7 +271,7 @@ async fn identity_management_binding_cas_ownership_and_namespace_availability() 
     // Removing caller configuration retains the binding but makes it unavailable.
     let mut config = fixture.state.current().runtime.config().clone();
     config.identity.trusted_callers.clear();
-    let unavailable_app = build_router(BrokerRuntime::new(config).unwrap());
+    let unavailable_app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let response = authed_json_request(
         unavailable_app,
         Method::GET,

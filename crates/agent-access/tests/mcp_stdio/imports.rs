@@ -332,8 +332,11 @@ async fn exercise_import(openapi: bool) {
     let _broker = BrokerTask(tokio::spawn(async move {
         axum::serve(
             broker_listener,
-            agent_access_broker::build_router(runtime)
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            agent_access_broker_host::build_router(
+                runtime,
+                agent_access_broker::broker_build_status(),
+            )
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap()
@@ -926,8 +929,11 @@ async fn exercise_import(openapi: bool) {
         let _gated_broker = BrokerTask(tokio::spawn(async move {
             axum::serve(
                 listener,
-                agent_access_broker::build_router(restarted)
-                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                agent_access_broker_host::build_router(
+                    restarted,
+                    agent_access_broker::broker_build_status(),
+                )
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .await
             .unwrap();

@@ -89,7 +89,7 @@ async fn accept_preview(
 async fn admin_import_flow_is_versioned_explicit_and_persistent() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone());
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
     let mut definition = definition();
     definition.service = "toolbox".into();
     let (status, created) = request(
@@ -261,7 +261,10 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
             |_| Ok(()),
         )
         .unwrap();
-    let app = build_router(BrokerRuntime::new(fixture.config.clone()).unwrap());
+    let app = build_router(
+        BrokerRuntime::new(fixture.config.clone()).unwrap(),
+        broker_build_status(),
+    );
     let current = detail(&app, &token, "observability").await;
     let (status, body) = request(
         &app,
@@ -350,7 +353,7 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
 async fn import_restoration_requires_confirmation_and_retired_tools_get_new_identity() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone());
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
     for suffix in ["actions/inspect/status", "status"] {
         let current = detail(&app, &token, "observability").await;
         let path = format!("/v1/admin/imports/observability/{suffix}");
@@ -465,7 +468,7 @@ async fn deleted_grants_do_not_block_restoration_or_appear_in_import_preview() {
             })
             .unwrap();
     }
-    let app = build_router(fixture.runtime.clone());
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
     for suffix in ["actions/inspect/status", "status"] {
         for status in ["disabled", "enabled"] {
             let current = detail(&app, &token, "observability").await;
@@ -513,7 +516,7 @@ async fn import_management_requires_admin_and_gate_off_preserves_cleanup() {
     let token = admin_token(&fixture);
     let mut config = fixture.config.clone();
     config.imports.enabled = false;
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     assert_eq!(
         request(
             &app,
@@ -584,7 +587,7 @@ async fn import_management_requires_admin_and_gate_off_preserves_cleanup() {
 async fn personal_discovery_rotation_invalidates_preview_without_service_edit() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone());
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
     let current = detail(&app, &token, "observability").await;
     let mut definition = definition();
     definition.discovery = ImportedDiscoveryCredential::PerUser {
@@ -713,7 +716,7 @@ async fn imported_service_metadata_follows_the_reviewed_definition() {
         let alice = user_manage_token(&runtime, "alice");
         let bob = user_manage_token(&runtime, "bob");
         async move {
-            let app = build_router(runtime);
+            let app = build_router(runtime, broker_build_status());
             let (status, options) =
                 request(&app, &alice, Method::GET, "/v1/tokens/options", None).await;
             assert_eq!(status, StatusCode::OK, "{options}");

@@ -66,7 +66,7 @@ repository URL forms, with and without `.git`, must reach canonical `.git`
 upstream paths. It also checks upstream credential selection, repository denial
 before forwarding, and disabled redirect following. Git configuration, tokens,
 repositories, and certificate trust are isolated from the user's environment.
-Run it with `cargo test --locked -p agent-access-broker --test git_http_gateway`;
+Run it with `cargo test --locked -p agent-access-broker-host --test git_http_gateway`;
 the ordinary locked Rust suite includes it. Its ignored `git_http_gateway_child`
 test is invoked by the parent with isolated proxy settings, as with the outbound
 TLS child fixture below. This fixture uses real Git smart HTTP, not a live GitLab
@@ -275,7 +275,7 @@ bindings, accepted action definitions and hashes, and discovery previews keep th
 exact JSON. A failure means stored credentials or imports would need reentry or
 change identity; fix the change rather than regenerating the vectors.
 
-The backend-contract acceptance suite (`cargo test -p agent-access-broker
+The backend-contract acceptance suite (`cargo test -p agent-access-broker-host
 conformance`) registers the test-only `agent-access-conformance` backend beside
 the linked backends and exercises it through TOML configuration and
 validation, discovery, the catalog/OpenAPI/send-schema projections, JSON,
@@ -289,7 +289,7 @@ only for an authorized invocation of its endpoint. It also checks
 namespace coverage, grant choices, and private attribute fields for a backend
 the portal was not written for. After changing the conformance backend or the
 policy catalog shape, regenerate the fixture with
-`UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker conformance_portal_fixture`.
+`UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker-host conformance_portal_fixture`.
 CloudBees CI coverage includes deterministic provider, policy/config,
 managed-store migration, typed CLI parser/lowering, and an in-process Broker
 smoke with a stubbed controller and the real CLI. The smoke drives artifact,
@@ -554,16 +554,16 @@ databases and files:
   pool: deadlines while waiting and executing, admission overflow, disconnect
   interrupts that cannot reach the next query, generation drain, and no read
   transaction left open.
-- The broker suite `crates/agent-access-broker/src/tests/audit_query.rs`
-  (`cargo test -p agent-access-broker audit_query`) covers route availability
+- The broker suite `crates/agent-access-broker-host/src/tests/audit_query.rs`
+  (`cargo test -p agent-access-broker-host audit_query`) covers route availability
   with SQLite, JSONL, and disabled audit or management across the catalog,
   OpenAPI, and send schema; `auditQueryable`; CSRF-free browser reads; the
   admin, service-manager, and self visibility tiers; timelines; cursor
   continuation and binding, including a path-changing reload; successes that
   are neither audited nor logged; audited denials; busy and slow queries; and
   queries while audit writes fail.
-  `crates/agent-access-broker/src/tests/management_read_audit.rs`
-  (`cargo test -p agent-access-broker management_read_audit`) calls every
+  `crates/agent-access-broker-host/src/tests/management_read_audit.rs`
+  (`cargo test -p agent-access-broker-host management_read_audit`) calls every
   read route in the runtime catalog and checks that it answers with its
   classified operation and leaves an audit record exactly when it is an
   audited read, denied, or failed; that the portal page-load reads and
@@ -1510,7 +1510,7 @@ temporary tokens/configuration and stop the local broker after the run.
 
 ## Downstream HTTP MCP
 
-`cargo test -p agent-access-broker --lib tests::mcp::` exercises the real public
+`cargo test -p agent-access-broker-host --lib tests::mcp::` exercises the real public
 router and SDK transport: initialization, helpers, native JSON calls, resource
 denials, current bearer authentication, session ownership, reload/expiry,
 protocol errors, and request/response bounds. Core ownership tests and Broker
@@ -1542,7 +1542,7 @@ external proxy executable or another repository. These commands run a focused
 subset of HTTP/MCP/Git admission and shared-runtime caller tests:
 
 ```sh
-cargo test --locked -p agent-access-broker --lib tests::managed_identity
+cargo test --locked -p agent-access-broker-host --lib tests::managed_identity
 cargo test --locked -p agent-access-core --lib trusted_caller
 ```
 
@@ -1598,9 +1598,10 @@ import contract, `agent-access-core` tests store/key lifecycle and stable naming
 and broker `imports_foundation`, `imports_mcp`, and `imports_management` suites
 exercise restart, publication cancellation, normal authorization/limits/audit,
 credential isolation, and the administrator lifecycle. The foundation suites load
-a development-only synthetic import adapter from the broker's test tree; only test
-registries select it, and the broker binary never links it. `agent-access-mcp-upstream`
-uses the pinned SDK's real HTTP server plus raw protocol fixtures. Two-version
+a development-only synthetic import adapter from the broker host's test tree;
+only test registries select it, and the broker binary never links it.
+`agent-access-mcp-upstream` uses the pinned SDK's real HTTP server plus raw
+protocol fixtures. Two-version
 regression coverage must include:
 
 - `2026-07-28`, `2025-11-25` and dual-version servers, current-version preference,

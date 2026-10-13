@@ -17,6 +17,12 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Broker HTTP, MCP, management, gateway, and reload events now log under
+  `agent_access_broker_host::…` targets instead of `agent_access_broker::…`;
+  update module-level `RUST_LOG` directives accordingly. The default filter
+  still covers them, and the `agent_access_broker::handlers::oidc` diagnostic
+  target is unchanged.
+
 ### Fixed
 
 ### Removed

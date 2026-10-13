@@ -287,6 +287,7 @@ credential_mode="service"
             reloadable: Arc::new(crate::state::ReloadableState::from_snapshot(
                 std::path::PathBuf::new(),
                 Arc::new(crate::backend_registry()),
+                crate::broker_build_status(),
                 snapshot.clone(),
                 16 * 1024 * 1024,
                 Duration::from_secs(1),

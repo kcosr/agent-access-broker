@@ -144,7 +144,7 @@ fn fixture_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Fixture {
         .token;
     Fixture {
         _dir: dir,
-        app: build_router(runtime.clone()),
+        app: build_router(runtime.clone(), broker_build_status()),
         runtime,
         store,
         hash,
@@ -358,7 +358,7 @@ async fn managed_identity_admin_inventory_reveal_is_explicit_and_no_store() {
         agent_access_core::AuditStoreType::Jsonl,
         audit_path.display().to_string(),
     ));
-    f.app = build_router(BrokerRuntime::new(config).unwrap());
+    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let auth = format!("Bearer {}", f.admin_token);
     let path = "/v1/admin/principals/alice/identity-token";
     let metadata = request(&f, path, Method::GET, Some(PROXY), None, Some(&auth), None).await;
@@ -523,6 +523,7 @@ async fn managed_identity_queued_rotation_rejects_retired_runtime_generation() {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot.clone(),
         f.runtime.max_http_body_bytes(),
         Duration::from_secs(1),
@@ -576,6 +577,7 @@ async fn managed_identity_cancelled_waiter_keeps_reload_fence_until_write_finish
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot.clone(),
         f.runtime.max_http_body_bytes(),
         Duration::from_secs(1),
@@ -645,7 +647,7 @@ async fn trusted_caller_rejection_is_traced_correlated_and_audited_on_all_routes
         agent_access_core::AuditStoreType::Jsonl,
         audit_path.display().to_string(),
     ));
-    f.app = build_router(BrokerRuntime::new(config).unwrap());
+    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let traced = Arc::new(AtomicBool::new(false));
     let subscriber = tracing_subscriber::registry().with(RequestSpan(traced.clone()));
     let _registration_guard = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
@@ -695,7 +697,7 @@ async fn trusted_caller_rejection_uses_existing_source_rate_guard() {
     let mut f = fixture();
     let mut config = f.runtime.config().clone();
     config.limits.auth_requests_per_source_per_minute = 1;
-    f.app = build_router(BrokerRuntime::new(config).unwrap());
+    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let first = request(
         &f,
         "/v1/healthz",
@@ -1022,7 +1024,7 @@ async fn trusted_caller_direct_default_is_conservative_and_absent_default_fails_
     }
     let mut config = f.runtime.config().clone();
     config.execution_context.as_mut().unwrap().default_context = None;
-    f.app = build_router(BrokerRuntime::new(config).unwrap());
+    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     for (path, status) in [
         ("/v1/capabilities", StatusCode::FORBIDDEN),
         ("/mcp", StatusCode::BAD_REQUEST),
@@ -1160,6 +1162,7 @@ fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "managed-git-handoff".into(),
@@ -1428,6 +1431,7 @@ async fn trusted_caller_git_capabilities_apply_even_with_valid_basic_identity() 
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         Arc::new(crate::backend_registry()),
+        broker_build_status(),
         RuntimeSnapshot::new(
             1,
             "git-caller-capabilities".into(),

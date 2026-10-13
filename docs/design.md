@@ -129,17 +129,20 @@ also includes a same-origin browser portal frontend:
   host changes. See [Adding a backend](#adding-a-backend).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules and request authorization.
-- **`agent-access-broker`** — the service binary: HTTP listeners, request
-  decoding, host-matched gateway dispatch, source/proxy-chain derivation,
-  dynamic config reload, and management routing (`main.rs` plus broker modules
-  under `src/`).
+- **`agent-access-broker-host`** — the broker host library: HTTP routers,
+  request decoding, host-matched gateway dispatch, source/proxy-chain
+  derivation, dynamic config reload, management routing, and HTTP MCP serving.
+  It depends on core and never on a backend or import adapter.
+- **`agent-access-broker`** — the service binary: process lifecycle, listeners,
+  command dispatch, build stamping, and the backends it links (`main.rs`,
+  `backends.rs`, and `build_info.rs`).
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static
   assets and served from the broker public listener when `[portal]` is enabled.
 
-Core owns the engine and the conceptual contract. The broker binary owns the
-network surface and process lifecycle. The CLI never sees broker-held execution
+Core owns the engine and the conceptual contract. The host owns the network
+surface; the broker binary owns process lifecycle and backend selection. The CLI never sees broker-held execution
 credentials and never makes authorization decisions; it is a thin client over the broker's HTTP API.
 
 ```mermaid
@@ -267,7 +270,7 @@ only host change. The crate supplies:
 namespace-capable resource type, typed configuration, a managed profile, JSON,
 raw-download, and upload actions, a presenter, and (with `endpoints = true`)
 an endpoint type whose private key a single-attempt action consumes. The
-broker's `tests::conformance` suite registers it beside the linked backends and
+host's `tests::conformance` suite registers it beside the linked backends and
 drives configuration and validation, discovery, runtime specs, every invocation
 shape, MCP, and the private-attribute lifecycle under managed policy (create,
 encrypted storage, admin reveal, replacement, and resolution only for the

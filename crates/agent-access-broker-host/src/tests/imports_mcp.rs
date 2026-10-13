@@ -307,7 +307,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     Fixture {
         _directory: directory,
         audit_path,
-        app: build_router(runtime.clone()),
+        app: build_router(runtime.clone(), broker_build_status()),
         runtime,
         tokens,
         upstream: upstream_state,

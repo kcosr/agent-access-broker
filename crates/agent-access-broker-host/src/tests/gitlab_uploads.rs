@@ -251,7 +251,7 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
         expires_at: None, created_by: "test".to_string(),
     }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
     drop(store);
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     let response = denied_upload(app.clone(), &issued.token, "sip/service").await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let response = response_json(response).await;

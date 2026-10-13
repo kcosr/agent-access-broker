@@ -42,6 +42,7 @@ name = "agent-access"
 version = "0.1.0"
 dependencies = [
  "agent-access-broker",
+ "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
  "agent-access-core",
@@ -93,6 +94,38 @@ dependencies = [
 name = "agent-access-broker"
 version = "0.1.0"
 dependencies = [
+ "agent-access-broker-host",
+ "agent-access-cloudbees-ci",
+ "agent-access-confluence",
+ "agent-access-core",
+ "agent-access-fake",
+ "agent-access-gitlab",
+ "agent-access-gmail",
+ "agent-access-jira",
+ "agent-access-mcp-upstream",
+ "agent-access-openapi-upstream",
+ "agent-access-teams",
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "futures-util",
+ "http-body-util",
+ "libc",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "agent-access-broker-host"
+version = "0.1.0"
+dependencies = [
  "aes-gcm",
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
@@ -113,7 +146,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
- "clap",
  "filetime",
  "futures-util",
  "hmac",

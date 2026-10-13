@@ -1,3 +1,4 @@
+use crate::BrokerBuildStatus;
 use crate::ingress::guards::{IngressGuards, IngressPermit};
 use crate::ingress::invocation_limits::InvocationLimiter;
 use crate::ingress::source::SourceResolver;
@@ -37,6 +38,8 @@ pub struct ReloadableState {
     pub(crate) config_path: PathBuf,
     /// Backends this process links; every reload parses with them.
     pub(crate) backends: Arc<BackendRegistry>,
+    /// The linking assembly's build status, served at `/v1/broker/status`.
+    pub(crate) build_status: BrokerBuildStatus,
     pub(crate) active: ArcSwap<RuntimeSnapshot>,
     /// Serializes caller-security publication against final attested admission.
     /// Never hold this synchronous lock across an await.
@@ -630,9 +633,11 @@ impl RuntimeSnapshot {
 }
 
 impl ReloadableState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot(
         config_path: PathBuf,
         backends: Arc<BackendRegistry>,
+        build_status: BrokerBuildStatus,
         snapshot: Arc<RuntimeSnapshot>,
         body_hard_cap: usize,
         reload_timeout: Duration,
@@ -642,6 +647,7 @@ impl ReloadableState {
         Self {
             config_path,
             backends,
+            build_status,
             active: ArcSwap::from(Arc::clone(&snapshot)),
             caller_security_publication: StdRwLock::new(()),
             active_lock_set: ArcSwap::from(Arc::clone(&snapshot.state_locks)),

@@ -64,6 +64,7 @@ impl Fixture {
         let state = Arc::new(ReloadableState::from_snapshot(
             PathBuf::new(),
             std::sync::Arc::new(crate::backend_registry()),
+            broker_build_status(),
             RuntimeSnapshot::new(
                 1,
                 "mcp-wire-fixture".into(),

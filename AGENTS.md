@@ -219,11 +219,18 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-fake`: the development `fake` backend used by smoke
   tests and fixtures.
 - `crates/agent-access-conformance`: a test-only backend using every backend
-  contract extension point; the broker's `tests::conformance` acceptance suite
+  contract extension point; the host's `tests::conformance` acceptance suite
   registers it and generates `apps/portal/unit/conformance.fixture.json`
   (regenerate with `UPDATE_PORTAL_FIXTURES=1`).
-- `crates/agent-access-broker`: HTTP service binary and broker runtime wiring;
-  `src/backends.rs` lists the backends the binary registers.
+- `crates/agent-access-broker-host`: the broker host library: HTTP routers and
+  handlers, management, HTTP MCP serving, portal serving, the Git smart HTTP
+  gateway, reload, and runtime state, plus the broker unit-test tree
+  (`src/tests/`). Its production code depends on no backend or import adapter;
+  tests link the real backends through `src/test_composition.rs`.
+- `crates/agent-access-broker`: the `agent-access-broker` binary: process
+  lifecycle, command dispatch, and build stamping; `src/backends.rs` lists the
+  backends the binary registers and `src/build_info.rs` supplies the status
+  the host serves.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.

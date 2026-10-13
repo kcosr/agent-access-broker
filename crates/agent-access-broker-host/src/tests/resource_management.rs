@@ -723,7 +723,7 @@ fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
         })
         .unwrap();
     ResourceAttributeFixture {
-        app: build_router(runtime),
+        app: build_router(runtime, broker_build_status()),
         admin_token,
         user_token,
         store,

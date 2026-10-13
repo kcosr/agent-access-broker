@@ -627,7 +627,9 @@ agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=
 
 Override it with `RUST_LOG` using standard `tracing_subscriber::EnvFilter`
 syntax. An invalid `RUST_LOG` does not prevent startup; the broker falls back to
-the default and emits one `logging_filter_invalid` warning event.
+the default and emits one `logging_filter_invalid` warning event. HTTP, MCP,
+management, gateway, and reload events use `agent_access_broker_host::…`
+targets, which the `agent_access_broker` directive matches by prefix.
 
 Microsoft OIDC exposes a permanent, opt-in identity diagnostic at the narrow
 `agent_access_broker::handlers::oidc=debug` target. Enable it without enabling

@@ -115,7 +115,7 @@ async fn conformance() -> Conformance {
     .unwrap();
     config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
     validate_broker_config(&config).unwrap();
-    let app = build_router(BrokerRuntime::new(config).unwrap());
+    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
     Conformance {
         _dir: dir,
         server,
@@ -972,7 +972,7 @@ async fn managed_conformance() -> ManagedConformance {
     ManagedConformance {
         dir,
         server,
-        app: build_router(runtime),
+        app: build_router(runtime, broker_build_status()),
         admin_token,
         agent_token,
     }

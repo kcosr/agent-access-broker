@@ -1,6 +1,8 @@
 //! Real Git smart-HTTP regression coverage. Requires `git` (including http-backend).
 //! All repositories, credentials, configuration, listeners, and TLS trust are test-owned.
-use agent_access_broker::{backend_registry, build_gateway_router, build_reloadable_state};
+use agent_access_broker_host::{
+    BrokerBuildStatus, BuildProvenance, build_gateway_router, build_reloadable_state,
+};
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, ManagedStore,
     ManagedStoreOpenMode, PrincipalRole, PrincipalWriteRequest, load_broker_config,
@@ -26,6 +28,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
+use test_composition::{backend_registry, broker_build_status};
+
+#[path = "../src/test_composition.rs"]
+mod test_composition;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UPSTREAM_TOKEN: &str = "isolated-git-gateway-test-upstream-token";
@@ -104,6 +110,7 @@ async fn git_http_gateway_child() {
     let state = build_reloadable_state(
         config_path,
         Arc::new(backend_registry()),
+        broker_build_status(),
         None,
         Duration::from_secs(30),
         Duration::from_secs(30),

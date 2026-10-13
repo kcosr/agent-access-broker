@@ -1,5 +1,5 @@
 //! Shared managed Google/Gmail wire fixture for broker and real CLI tests.
-use super::{backend_registry, build_router};
+use super::{backend_registry, broker_build_status, build_router};
 use agent_access_core::*;
 use axum::{
     Router,
@@ -256,7 +256,7 @@ default_decision = "deny"
         )
         .unwrap()
         .token;
-    let app = build_router(runtime.clone());
+    let app = build_router(runtime.clone(), broker_build_status());
     let login = app
         .clone()
         .oneshot(

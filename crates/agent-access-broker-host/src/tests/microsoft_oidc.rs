@@ -1,8 +1,8 @@
 use super::{fake_config, response_json, temp_path};
-use crate::build_public_router;
 use crate::state::{
     MicrosoftOidcTransport, MicrosoftOidcTransportError, ReloadableState, RuntimeSnapshot,
 };
+use crate::{broker_build_status, build_public_router};
 use agent_access_core::microsoft_oidc::{
     MICROSOFT_OIDC_CALLBACK_PATH, MICROSOFT_OIDC_HOST, MicrosoftOidcClock,
     MicrosoftOidcProviderMetadata,
@@ -778,6 +778,7 @@ async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
         std::sync::Arc::new(crate::backend_registry()),
+        broker_build_status(),
         snapshot,
         body_hard_cap,
         Duration::from_secs(30),

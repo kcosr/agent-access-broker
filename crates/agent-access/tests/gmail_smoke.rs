@@ -1,5 +1,6 @@
 //! Real CLI, stdio MCP, HTTP MCP and HTTP against the managed Gmail fixture.
-use agent_access_broker::{backend_registry, build_router};
+use agent_access_broker::{backend_registry, broker_build_status};
+use agent_access_broker_host::build_router;
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -13,7 +14,7 @@ use wiremock::{
     Mock, ResponseTemplate,
     matchers::{method, path},
 };
-#[path = "../../agent-access-broker/tests/support/gmail.rs"]
+#[path = "../../agent-access-broker-host/tests/support/gmail.rs"]
 mod fixture;
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 struct McpProcess {

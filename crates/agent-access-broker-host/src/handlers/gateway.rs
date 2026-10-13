@@ -3622,6 +3622,7 @@ mod tests {
         let state = Arc::new(ReloadableState::from_snapshot(
             std::path::PathBuf::new(),
             std::sync::Arc::new(crate::backend_registry()),
+            crate::broker_build_status(),
             snapshot,
             body_hard_cap,
             Duration::from_secs(30),
@@ -3947,6 +3948,7 @@ mod tests {
         let state = Arc::new(ReloadableState::from_snapshot(
             std::path::PathBuf::new(),
             std::sync::Arc::new(crate::backend_registry()),
+            crate::broker_build_status(),
             snapshot,
             body_hard_cap,
             Duration::from_secs(30),
@@ -4819,6 +4821,7 @@ mod tests {
         let state = Arc::new(ReloadableState::from_snapshot(
             std::path::PathBuf::new(),
             Arc::new(crate::backend_registry()),
+            crate::broker_build_status(),
             snapshot,
             body_hard_cap,
             Duration::from_secs(30),

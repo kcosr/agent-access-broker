@@ -1,3 +1,4 @@
+use crate::BrokerBuildStatus;
 use crate::handlers::management::common::{
     ManagementAccess, management_context, management_context_error_response,
     management_failure_envelope, management_response, management_success_envelope,
@@ -44,6 +45,7 @@ pub(crate) struct ReloadAttemptSummary {
 pub async fn build_reloadable_state(
     config_path: PathBuf,
     backends: Arc<BackendRegistry>,
+    build_status: BrokerBuildStatus,
     body_hard_cap: Option<u64>,
     reload_timeout: Duration,
     shutdown_timeout: Duration,
@@ -87,6 +89,7 @@ pub async fn build_reloadable_state(
     Ok(Arc::new(ReloadableState::from_snapshot(
         config_path,
         backends,
+        build_status,
         snapshot,
         hard_cap,
         reload_timeout,
