@@ -103,9 +103,12 @@ file may exist in `.cargo` directories above it.
    its resolved graph, including development dependencies, contains no core,
    host, assembly, CLI or import-adapter crate.
 8. The assembly passes `rustfmt --check` and `cargo test`, then `cargo build`
-   builds the executable last, so it carries no development features; `cargo
-   tree -e normal,build,features` shows no `test-support` feature in its release
-   graph although its tests enable the host's.
+   builds the executable last, so it carries no development features. For the
+   host target, `cargo tree -e normal,build --format '{p}\t{f}'` lists every
+   unit of the release graph with its resolved feature set, including features
+   the assembly's own defaults enable; no package may resolve `test-support`,
+   although the assembly's tests enable the host's through a development
+   dependency.
 9. Process acceptance starts the built assembly executable with a generated
    development configuration: CloudBees CI pointed at a synthetic loopback
    controller, the conformance provider configured, a synthetic static

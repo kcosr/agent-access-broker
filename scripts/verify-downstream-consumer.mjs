@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, qualificationOutputDirectory } from "./verify-release.mjs";
-import { cargoConfigInventory, inspectLocalToolchain } from "./verify-release-provenance.mjs";
+import { cargoConfigInventory, inspectLocalToolchain, parseCargoTree } from "./verify-release-provenance.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
@@ -353,8 +353,24 @@ export function reviewLockfiles({ candidate, staged, upstreamSource, providerSou
   return { errors, summary, sdkPackageIds: [...sdkIds] };
 }
 
-export function featureViolations(tree) {
-  return tree.split("\n").filter((line) => /feature "test-support"/.test(line)).map((line) => line.trim());
+// Resolves features for the normal and build units of the assembly built for
+// `target`: without dev edges Cargo resolves no dev units. `{f}` is each
+// unit's resolved feature set, including features a root's defaults enable
+// that a feature-edge traversal does not display.
+export function assemblyFeatureTreeArgs(target) {
+  return ["tree", "--locked", "--offline", "--target", target, "-p", ASSEMBLY_PACKAGE,
+    "-e", "normal,build", "--prefix", "none", "--format", "{p}\t{f}"];
+}
+
+// Packages whose resolved release feature set includes test support, from
+// `assemblyFeatureTreeArgs` output parsed as the upstream release verifier does.
+export function assemblyFeatureViolations(output) {
+  const packages = parseCargoTree(output);
+  if (!packages.some((entry) => entry.name === ASSEMBLY_PACKAGE)) {
+    throw new Error(`cargo tree output omits the assembly package ${ASSEMBLY_PACKAGE}`);
+  }
+  return packages.filter((entry) => entry.features.includes("test-support"))
+    .map((entry) => `${entry.name} ${entry.version}${entry.source ? ` (${entry.source})` : ""} enables test-support`);
 }
 
 export function providerBoundaryViolations(metadata) {
@@ -1266,11 +1282,11 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     });
 
     await step("assembly-features", async (record) => {
-      const tree = (await cargo("assembly-tree", paths.assembly, ["tree", "--locked", "--offline", "-e", "normal,build,features",
-        "--target", "all", "-p", ASSEMBLY_PACKAGE], { capture: true })).toString("utf8");
-      writeFileSync(join(evidence, "cargo-tree-assembly.txt"), tree);
-      const violations = featureViolations(tree);
-      record.detail = { lines: tree.split("\n").length };
+      const tree = (await cargo("assembly-tree", paths.assembly, assemblyFeatureTreeArgs(toolchain.host),
+        { capture: true })).toString("utf8");
+      writeFileSync(join(evidence, "cargo-tree-assembly-features.txt"), tree);
+      const violations = assemblyFeatureViolations(tree);
+      record.detail = { target: toolchain.host, packages: parseCargoTree(tree).length };
       if (violations.length) throw new Error(`The assembly release graph enables test support:\n${violations.join("\n")}`);
     });
 

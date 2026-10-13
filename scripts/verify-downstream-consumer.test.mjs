@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
   ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION, PROVIDER_PACKAGE,
-  ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, expectedAssemblyStatus, featureViolations, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
+  ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, assemblyFeatureTreeArgs, assemblyFeatureViolations, expectedAssemblyStatus, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
   inventoryFingerprint, isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
   processGroupAlive,
   parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment,
@@ -231,10 +231,17 @@ test("lockfile review requires exact sources, one SDK identity and candidate thi
   for (const [result, pattern] of failures) assert.ok(result.errors.some((error) => pattern.test(error)), `${pattern}: ${result.errors.join("; ")}`);
 });
 
-test("graph checks reject release test support and forbidden provider edges", () => {
-  const tree = `downstream-broker v0.3.0 (/stage/assembly)\n├── agent-access-provider feature "default"\n│   └── agent-access-provider feature "test-support"\n`;
-  assert.deepEqual(featureViolations(tree), ['│   └── agent-access-provider feature "test-support"']);
-  assert.deepEqual(featureViolations(tree.replace(/test-support/g, "rustls")), []);
+test("graph checks reject resolved release test support and forbidden provider edges", () => {
+  const tree = "downstream-broker v0.3.0 (/stage/assembly)\t\n"
+    + "agent-access-broker-host v0.1.0 (file:///stage/upstream?rev=abc#abc)\tdefault\n"
+    + "agent-access-provider v0.1.0 (file:///stage/upstream?rev=abc#abc)\ttest-support (*)\n"
+    + "tokio v1.48.0\tdefault,macros,test-support-extra\n";
+  assert.deepEqual(assemblyFeatureViolations(tree),
+    ["agent-access-provider 0.1.0 (file:///stage/upstream?rev=abc#abc) enables test-support"]);
+  assert.deepEqual(assemblyFeatureViolations(tree.replace("\ttest-support (*)", "\tdefault")), []);
+  assert.throws(() => assemblyFeatureViolations("tokio v1.48.0\tdefault\n"), /omits the assembly package downstream-broker/);
+  assert.deepEqual(assemblyFeatureTreeArgs("x86_64-unknown-linux-gnu"), ["tree", "--locked", "--offline", "--target", "x86_64-unknown-linux-gnu",
+    "-p", ASSEMBLY_PACKAGE, "-e", "normal,build", "--prefix", "none", "--format", "{p}\t{f}"]);
   const role = (name, value) => ({ name, version: "0.1.0", metadata: value ? { "agent-access": { role: value } } : null });
   assert.deepEqual(providerBoundaryViolations({ packages: [role(PROVIDER_PACKAGE, "reference"), role(SDK_PACKAGE, "sdk"), role("serde")] }), []);
   assert.deepEqual(providerBoundaryViolations({ packages: [role("agent-access-core", "core"), role("agent-access-broker-host", "host"),
@@ -580,4 +587,39 @@ test("an interruption stops descendants of a started process whose leader alread
   await supervisor.interrupt("SIGTERM");
   assert.ok(processGone(descendant));
   await supervisor.stopAll();
+});
+
+// A minimal real assembly: the host stand-in's test-support feature reaches the
+// assembly either through the assembly's own default features or only
+// through a dev-dependency, as in the fixture template.
+function assemblyFeatureFixture(t, { rootDefault }) {
+  const directory = temporary(t);
+  const write = (file, contents) => {
+    mkdirSync(join(directory, file, ".."), { recursive: true });
+    writeFileSync(join(directory, file), contents);
+  };
+  const host = 'agent-access-broker-host = { path = "host" }';
+  write("Cargo.toml", `[package]\nname = "${ASSEMBLY_PACKAGE}"\nversion = "0.3.0"\nedition = "2024"\n\n[dependencies]\n${host}\n\n`
+    + '[dev-dependencies]\nagent-access-broker-host = { path = "host", features = ["test-support"] }\n'
+    + (rootDefault ? '\n[features]\ndefault = ["agent-access-broker-host/test-support"]\n' : "") + "\n[workspace]\n");
+  write("src/lib.rs", "");
+  write("host/Cargo.toml", '[package]\nname = "agent-access-broker-host"\nversion = "0.1.0"\nedition = "2024"\n\n[features]\ntest-support = []\n');
+  write("host/src/lib.rs", "");
+  const toolchain = inspectLocalToolchain(root, { env: sanitizedEnvironment(process.env).env });
+  const env = { ...sanitizedEnvironment(process.env).env, CARGO_HOME: join(directory, "cargo-home"), RUSTC: toolchain.rustcPath };
+  const cargo = (args) => execFileSync(toolchain.cargoPath, args, { cwd: directory, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  cargo(["generate-lockfile", "--offline"]);
+  return cargo(assemblyFeatureTreeArgs(toolchain.host));
+}
+
+test("real cargo tree: test support enabled by the assembly's default features is rejected", (t) => {
+  const violations = assemblyFeatureViolations(assemblyFeatureFixture(t, { rootDefault: true }));
+  assert.equal(violations.length, 1, violations.join("; "));
+  assert.match(violations[0], /^agent-access-broker-host 0\.1\.0 \(.*\/host\) enables test-support$/);
+});
+
+test("real cargo tree: test support enabled only through a dev-dependency stays allowed", (t) => {
+  const output = assemblyFeatureFixture(t, { rootDefault: false });
+  assert.deepEqual(assemblyFeatureViolations(output), []);
+  assert.match(output, /^agent-access-broker-host v0\.1\.0 \(.*\/host\)\t/m);
 });
