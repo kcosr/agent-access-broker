@@ -125,7 +125,14 @@ All notable changes to this project are documented in this file.
   `EmbeddedBodyCodec`, `WholeResultRenderer`, `RenderContext`, `RenderError`,
   `RenderBudget`, `RenderBudgetExhausted`, `RenderedBody` and
   `PresentationBudget`) are no longer re-exported at the crate root; import
-  them from `agent_access_provider::presentation`. The
+  them from `agent_access_provider::presentation`. Host-only constructors and
+  scopes moved into the `host` module: `with_correlation_context`,
+  `with_provider_context`, `with_provider_finalization`, `service_signing_key`,
+  `HookContext` and `ContractViolation` keep their names there, while
+  `DelegatedCredential::new`, `ProviderFinalizationContext::new`,
+  `BrokerBodyPart::from_temp_file` and `BrokerBodyPartFile::new` are replaced by
+  `host::delegated_credential`, `host::provider_finalization_context`,
+  `host::spooled_body_part` and `host::spooled_body_file`. The
   `DEFAULT_MAX_HTTP_BODY_BYTES`, `DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES`,
   `DEFAULT_REQUEST_TIMEOUT_MS` and `DEFAULT_STREAMING_IDLE_TIMEOUT_MS`
   constants (use `ProviderLimits::default()`), `default_search_max_results`

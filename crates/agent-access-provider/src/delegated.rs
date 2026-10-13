@@ -87,7 +87,8 @@ pub trait DelegatedLease: Send + Sync + 'static {
 pub struct DelegatedCredential(Arc<dyn DelegatedLease>);
 
 impl DelegatedCredential {
-    pub fn new(lease: Arc<dyn DelegatedLease>) -> Self {
+    /// The host lends a lease with [`crate::host::delegated_credential`].
+    pub(crate) fn new(lease: Arc<dyn DelegatedLease>) -> Self {
         Self(lease)
     }
 

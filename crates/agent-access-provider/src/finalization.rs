@@ -15,13 +15,16 @@ pub struct ProviderFinalizationContext {
 }
 
 impl ProviderFinalizationContext {
-    pub fn new(deadline: Option<Instant>) -> Self {
+    /// The host constructs it with
+    /// [`crate::host::provider_finalization_context`].
+    pub(crate) fn new(deadline: Option<Instant>) -> Self {
         Self {
             deadline,
             active: Arc::new(AtomicUsize::new(0)),
         }
     }
 
+    /// The host's deadline for the execution, if it has one.
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
@@ -38,6 +41,7 @@ impl ProviderFinalizationContext {
         }
     }
 
+    /// Whether any guard from [`Self::enter_finalization`] is still held.
     pub fn is_finalizing(&self) -> bool {
         self.active.load(Ordering::Acquire) != 0
     }
@@ -59,10 +63,14 @@ tokio::task_local! {
     static CURRENT_PROVIDER_FINALIZATION: ProviderFinalizationContext;
 }
 
+/// The current execution's finalization control, if the host set one.
 pub fn current_provider_finalization() -> Option<ProviderFinalizationContext> {
     CURRENT_PROVIDER_FINALIZATION.try_with(Clone::clone).ok()
 }
 
+/// Runs `future` as the provider execution `context` controls. The host sets
+/// it around each execution, with a context from
+/// [`crate::host::provider_finalization_context`].
 pub async fn with_provider_finalization<F: std::future::Future>(
     context: ProviderFinalizationContext,
     future: F,

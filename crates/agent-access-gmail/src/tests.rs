@@ -66,7 +66,9 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
         .mount(&server)
         .await;
     let request = InvocationBuilder::from(invocation("account.view", json!({})))
-        .delegated(DelegatedCredential::new(Arc::new(BusyLease)))
+        .delegated(agent_access_provider::host::delegated_credential(Arc::new(
+            BusyLease,
+        )))
         .build();
     let error = provider(&server).invoke(request).await.unwrap_err();
     assert_eq!(error.decision(), agent_access_provider::Decision::Error);
@@ -95,7 +97,9 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
             "gmail-broker-test".into(),
         ))
         .credential_mode(CredentialMode::PerUser)
-        .delegated(DelegatedCredential::new(Arc::new(Lease)))
+        .delegated(agent_access_provider::host::delegated_credential(Arc::new(
+            Lease,
+        )))
         .build()
 }
 fn provider(server: &MockServer) -> GmailProvider {

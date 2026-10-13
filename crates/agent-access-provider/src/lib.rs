@@ -8,7 +8,8 @@
 //! signed continuation envelopes.
 //! The broker owns identity, policy, credentials, audit, limits and network
 //! construction; backends see only the narrow views in this crate. The
-//! [`host`] module is the construction interface the broker host implements.
+//! [`host`] module holds the cooperation ports the broker host implements and
+//! calls.
 
 mod admitted;
 mod attribution;
@@ -74,11 +75,9 @@ pub use continuation::{
     ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
     ContinuationOwner, ContinuationSigner,
 };
-pub use contract::{ContractViolation, HookContext};
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,
-    current_correlation_context, current_provider_action, with_correlation_context,
-    with_provider_context,
+    current_correlation_context, current_provider_action,
 };
 pub use credential::{
     CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
@@ -98,7 +97,6 @@ pub use egress_config::{EgressDeclaration, EgressProxyConfig, EgressProxySource,
 pub use error::ProviderBuildError;
 pub use finalization::{
     ProviderFinalizationContext, ProviderFinalizationGuard, current_provider_finalization,
-    with_provider_finalization,
 };
 pub use identifiers::{ResourceScopes, is_action_name, is_service_name};
 pub use invocation::{
@@ -127,7 +125,7 @@ pub use result::{
     ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
-pub use signing::{OpaqueTokenSigner, SigningError, StableSigningKey, service_signing_key};
+pub use signing::{OpaqueTokenSigner, SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{

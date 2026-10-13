@@ -7102,7 +7102,7 @@ async fn http_backend_search_requests_bounded_output_fields() {
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
-    let response = crate::with_correlation_context(
+    let response = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.search(
             JiraSearchRequest {
@@ -7990,7 +7990,7 @@ async fn http_backend_streams_jira_attachment_upload_from_file() {
                 content_type: "text/plain".to_string(),
                 size: bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     bytes.len() as u64,
                     sha256_hex(bytes),
@@ -8102,7 +8102,7 @@ async fn attachment_content_redirects_are_allowlisted_and_strip_cross_origin_cre
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
-    let response = crate::with_correlation_context(
+    let response = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.attachment_content_response(
             Url::parse(&format!("{}/redirect", api.uri())).unwrap(),
@@ -9041,7 +9041,7 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     );
     let capture = agent_access_provider::test_support::install_trace_capture().start();
     let error = capture
-        .run(with_provider_context(
+        .run(agent_access_provider::host::with_provider_context(
             CorrelationContext::for_tests(),
             "jira".to_string(),
             "attachment.add".to_string(),

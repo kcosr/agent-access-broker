@@ -165,12 +165,15 @@ impl BrokerRuntime {
                     )
                 } else {
                     let body_parts = std::mem::take(&mut prepared.body_parts);
-                    let finalization = ProviderFinalizationContext::new(control.inner.deadline);
-                    let execution = AssertUnwindSafe(with_provider_finalization(
-                        finalization.clone(),
-                        self.execute_prepared_invoke(prepared, body_parts, false),
-                    ))
-                    .catch_unwind();
+                    let finalization = agent_access_provider::host::provider_finalization_context(
+                        control.inner.deadline,
+                    );
+                    let execution =
+                        AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
+                            finalization.clone(),
+                            self.execute_prepared_invoke(prepared, body_parts, false),
+                        ))
+                        .catch_unwind();
                     tokio::pin!(execution);
                     let result = tokio::select! {
                         biased;

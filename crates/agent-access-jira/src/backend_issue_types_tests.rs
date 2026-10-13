@@ -296,7 +296,7 @@ async fn issue_types_traces_semantic_protocol_failure_without_response_text() {
     let capture = agent_access_provider::test_support::install_trace_capture().start();
     let credential = credential();
     let error = capture
-        .run(with_provider_context(
+        .run(agent_access_provider::host::with_provider_context(
             CorrelationContext::for_tests(),
             "jira".to_string(),
             "issue_type.list".to_string(),

@@ -54,6 +54,7 @@ use crate::{
     normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
+use agent_access_provider::host::{ContractViolation, HookContext, with_provider_context};
 use agent_access_provider::presentation::ActionPresentation;
 use agent_access_provider::*;
 use agent_access_provider::{
@@ -1816,7 +1817,7 @@ impl BrokerRuntime {
                 &clients,
                 config.attribution.for_service(&descriptor),
                 stable_signing_key.clone().map(|key| {
-                    agent_access_provider::service_signing_key(key, &descriptor.service)
+                    agent_access_provider::host::service_signing_key(key, &descriptor.service)
                 }),
             );
             providers.push(ServiceProvider::new(descriptor, backend.build(&host)?));

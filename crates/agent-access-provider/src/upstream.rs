@@ -574,7 +574,8 @@ impl Drop for PendingTraceState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CorrelationContext, REQUEST_ID_HEADER, with_correlation_context};
+    use crate::host::with_correlation_context;
+    use crate::{CorrelationContext, REQUEST_ID_HEADER};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -965,7 +966,7 @@ mod tests {
                 .unwrap()
         };
         let in_scope = |action: &'static str| {
-            crate::with_provider_context(
+            crate::host::with_provider_context(
                 crate::CorrelationContext::for_tests(),
                 "example".to_string(),
                 action.to_string(),
@@ -979,7 +980,7 @@ mod tests {
                 drop(outlived);
                 let retained = in_scope("item.view").await;
                 let extensions = retained.extensions().clone();
-                crate::with_provider_context(
+                crate::host::with_provider_context(
                     crate::CorrelationContext::for_tests(),
                     "other".to_string(),
                     "other.action".to_string(),
@@ -1184,7 +1185,7 @@ mod tests {
         let mut response = capture
             .run(with_hook_context(
                 hook_context("example", "item.view", HookPhase::Invocation, &[]),
-                crate::with_provider_context(
+                crate::host::with_provider_context(
                     crate::CorrelationContext::for_tests(),
                     "other".to_owned(),
                     "item.view".to_owned(),

@@ -1145,48 +1145,54 @@ mod tests {
 
     #[tokio::test]
     async fn inherited_deadline_fences_every_dispatch_and_never_extends_local_budget() {
-        use agent_access_provider::with_provider_finalization;
+        use agent_access_provider::host::with_provider_finalization;
         let host = Instant::now();
-        with_provider_finalization(ProviderFinalizationContext::new(Some(host)), async {
-            let operation = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
-            assert_eq!(operation.context.deadline, host);
-            for method in ["server/discover", "initialize", "tools/call"] {
+        with_provider_finalization(
+            agent_access_provider::host::provider_finalization_context(Some(host)),
+            async {
+                let operation = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
+                assert_eq!(operation.context.deadline, host);
+                for method in ["server/discover", "initialize", "tools/call"] {
+                    let error = operation
+                        .context
+                        .post(
+                            json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+                            HeaderMap::new(),
+                            method,
+                            None,
+                        )
+                        .await
+                        .err()
+                        .unwrap();
+                    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout, "{method}");
+                }
                 let error = operation
                     .context
-                    .post(
-                        json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
-                        HeaderMap::new(),
-                        method,
-                        None,
-                    )
+                    .delete_session(HeaderValue::from_static("private-session"))
                     .await
-                    .err()
-                    .unwrap();
-                assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout, "{method}");
-            }
-            let error = operation
-                .context
-                .delete_session(HeaderValue::from_static("private-session"))
-                .await
-                .unwrap_err();
-            assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
-            assert!(operation.begin_legacy().is_err());
-            let state = operation.state.lock().unwrap();
-            assert!(state.closed);
-            assert!(!state.call_dispatched);
-        })
+                    .unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+                assert!(operation.begin_legacy().is_err());
+                let state = operation.state.lock().unwrap();
+                assert!(state.closed);
+                assert!(!state.call_dispatched);
+            },
+        )
         .await;
         let host = Instant::now() + Duration::from_secs(60);
-        with_provider_finalization(ProviderFinalizationContext::new(Some(host)), async {
-            let operation = operation("http://127.0.0.1:9/mcp", Duration::ZERO);
-            assert!(operation.context.deadline < host);
-            assert!(
-                operation
-                    .context
-                    .admit(&mut operation.state.lock().unwrap(), false)
-                    .is_err()
-            );
-        })
+        with_provider_finalization(
+            agent_access_provider::host::provider_finalization_context(Some(host)),
+            async {
+                let operation = operation("http://127.0.0.1:9/mcp", Duration::ZERO);
+                assert!(operation.context.deadline < host);
+                assert!(
+                    operation
+                        .context
+                        .admit(&mut operation.state.lock().unwrap(), false)
+                        .is_err()
+                );
+            },
+        )
         .await;
     }
 
@@ -1206,7 +1212,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_deadline_preserves_the_known_operation_outcome() {
-        use agent_access_provider::with_provider_finalization;
+        use agent_access_provider::host::with_provider_finalization;
         let received = Arc::new(AtomicUsize::new(0));
         let counter = received.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1223,8 +1229,9 @@ mod tests {
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let finalization =
-            ProviderFinalizationContext::new(Some(Instant::now() + Duration::from_millis(250)));
+        let finalization = agent_access_provider::host::provider_finalization_context(Some(
+            Instant::now() + Duration::from_millis(250),
+        ));
         let operation = with_provider_finalization(finalization.clone(), async {
             operation(&endpoint, Duration::from_secs(60))
         })

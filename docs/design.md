@@ -111,13 +111,14 @@ also includes a same-origin browser portal frontend:
   (`egress_config.rs`), upstream allowlists, correlation headers, upstream
   trace events (`trace.rs`), and opaque token signing (`signing.rs`). Its
   crate root exports every supported item explicitly, with presentation items
-  only under `presentation`. Its public `host` module (`host.rs`) is the
-  construction interface the host
-  implements: the build context and the upstream client factory port, plus the
-  values only the host constructs for providers (scope requests, static
-  execution credentials, delegated binding identities, admitted requests and
-  the final invocation). The SDK resolves no secret references, loads no TLS
-  files and reads no process environment.
+  only under `presentation`. Its public `host` module (`host.rs`) holds the
+  host cooperation ports: the upstream client factory contract and the build
+  context, the values only the host constructs for providers (scope requests,
+  static execution credentials, admitted requests, spooled body parts and the
+  final invocation), the initial correlation, hook and deadline scopes,
+  service-scoped signer wrapping, delegated-lease wrapping and the host-origin
+  failure port. The SDK resolves no secret references, loads no TLS files and
+  reads no process environment.
 - **`agent-access-core`** — the library: the request runtime
   (`runtime.rs`), the audit writer and its storage backends
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries

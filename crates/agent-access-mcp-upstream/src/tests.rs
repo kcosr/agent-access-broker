@@ -277,7 +277,7 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
             &host.context(),
         )
         .unwrap();
-    let result = with_provider_context(
+    let result = agent_access_provider::host::with_provider_context(
         CorrelationContext::for_tests(),
         "example".into(),
         "item.update".into(),
@@ -568,7 +568,7 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
         .unwrap();
     let capture = test_support::install_trace_capture().start();
     let result = capture
-        .run(with_provider_context(
+        .run(agent_access_provider::host::with_provider_context(
             CorrelationContext::for_tests(),
             "example".into(),
             "item.update".into(),
@@ -834,9 +834,9 @@ fn leased_invocation(
         .credential_mode(CredentialMode::PerUser)
         .build();
     request = InvocationBuilder::from(request)
-        .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
-            lease.clone(),
-        )))
+        .execution(ExecutionAccess::Delegated(
+            agent_access_provider::host::delegated_credential(lease.clone()),
+        ))
         .build();
     (request, lease)
 }
@@ -927,15 +927,17 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
         .unwrap();
     let (request, _) = leased_invocation(&fixture.endpoint, false);
     let request = InvocationBuilder::from(request)
-        .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
-            Arc::new(BusyLease(DelegatedAccess {
-                token: "busy-delegated-token".into(),
-                target: fixture.endpoint.clone(),
-                audience: fixture.endpoint.clone(),
-                version: "version-one".into(),
-                expires_at: i64::MAX,
-            })),
-        )))
+        .execution(ExecutionAccess::Delegated(
+            agent_access_provider::host::delegated_credential(Arc::new(BusyLease(
+                DelegatedAccess {
+                    token: "busy-delegated-token".into(),
+                    target: fixture.endpoint.clone(),
+                    audience: fixture.endpoint.clone(),
+                    version: "version-one".into(),
+                    expires_at: i64::MAX,
+                },
+            ))),
+        ))
         .build();
     let action = request.action().to_owned();
     let error = provider.invoke(request).await.unwrap_err();

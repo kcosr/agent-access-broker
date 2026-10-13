@@ -4901,7 +4901,7 @@ async fn http_backend_search_requests_bounded_page_metadata() {
         .await;
 
     let backend = http_confluence_backend_for_server(&server);
-    let page = crate::with_correlation_context(
+    let page = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.search(
             ConfluenceSearchRequest {
@@ -5536,7 +5536,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
                 content_type: "text/plain".to_string(),
                 size: upload_bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     upload_bytes.len() as u64,
                     sha256_hex(upload_bytes),
@@ -5557,7 +5557,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
     assert_eq!(attachments.value.len(), 1);
     assert_eq!(attachments.value[0].id, "att123");
 
-    let downloaded = crate::with_correlation_context(
+    let downloaded = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.attachment_content("123456", "att123", &credential()),
     )
@@ -5695,7 +5695,7 @@ async fn http_backend_streams_confluence_attachment_upload_from_file() {
                 content_type: "text/plain".to_string(),
                 size: upload_bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     upload_bytes.len() as u64,
                     sha256_hex(upload_bytes),

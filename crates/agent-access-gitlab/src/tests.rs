@@ -421,7 +421,7 @@ async fn project_upload_streams_html_with_selected_credential_and_sanitizes_audi
         "session"
     );
     request = InvocationBuilder::from(request)
-        .body_part(BrokerBodyPart::from_temp_file(
+        .body_part(agent_access_provider::host::spooled_body_part(
             part.name.clone(),
             part.file_name.clone(),
             part.content_type.clone(),

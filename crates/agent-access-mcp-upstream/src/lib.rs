@@ -268,7 +268,7 @@ impl Provider for McpProvider {
             credential,
             self.transport_credential.as_ref(),
         )?;
-        with_correlation_context(correlation.clone(), async {
+        agent_access_provider::host::with_correlation_context(correlation.clone(), async {
             let discovered = discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
             Ok(Some(ProviderCredentialVerification {
                 upstream_status: 200,

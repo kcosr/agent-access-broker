@@ -221,12 +221,13 @@ and audit checks through the real `agent-access` binary.
   upstream trace events, token signing and continuation envelopes). `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through
-  `presentation`. Its `host` module is the construction interface core
-  implements (`BuildContext`,
-  `UpstreamClientFactory`) and the only constructor of host-owned values
-  (scope requests, static execution credentials, delegated binding
-  identities, admitted requests, final invocations, hook contexts); it
-  resolves no secrets, loads no TLS files and reads no process environment.
+  `presentation`. The supported `host` module holds the host cooperation ports:
+  the client factory contract and `build_context`, the constructors of
+  host-owned request values (scope requests, static credentials, admitted
+  requests, spooled body parts, final invocations), the initial correlation,
+  hook (`HookContext`) and deadline scopes, service-scoped signer wrapping,
+  delegated-lease wrapping and the host-origin failure port. The SDK resolves
+  no secrets, loads no TLS files and reads no process environment.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller

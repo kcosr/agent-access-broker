@@ -1,7 +1,7 @@
 //! An OAuth connection's access lent to one invocation as a delegated
 //! credential.
 use super::{OAuthBinding, OAuthError, OAuthLease, OAuthManager};
-use agent_access_provider::host::{HostPort, port_failure};
+use agent_access_provider::host::{HostPort, delegated_credential, port_failure};
 use agent_access_provider::{
     DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease, ProviderError,
     ReasonCode, UpstreamRetryAfter, upstream_retry_hint,
@@ -40,7 +40,7 @@ impl ManagedOAuthLease {
         manager
             .validate_lease(&lease)
             .map_err(|error| oauth_provider_error(&service, error))?;
-        Ok(DelegatedCredential::new(Arc::new(Self {
+        Ok(delegated_credential(Arc::new(Self {
             manager,
             binding: delegated_binding_identity(&service, &lease),
             service,

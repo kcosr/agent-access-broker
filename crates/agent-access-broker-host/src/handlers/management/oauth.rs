@@ -7,7 +7,7 @@ use crate::state::AppState;
 use agent_access_core::{
     OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission, OAuthReturnPath,
 };
-use agent_access_provider::{CorrelationContext, ReasonCode, with_correlation_context};
+use agent_access_provider::{CorrelationContext, ReasonCode, host::with_correlation_context};
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};

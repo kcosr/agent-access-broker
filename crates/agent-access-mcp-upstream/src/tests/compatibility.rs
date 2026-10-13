@@ -1170,7 +1170,7 @@ async fn legacy_trace_projection_keeps_sessions_errors_payloads_and_instructions
     .await;
     let capture = test_support::install_trace_capture().start();
     let result = capture
-        .run(with_provider_context(
+        .run(agent_access_provider::host::with_provider_context(
             CorrelationContext::for_tests(),
             "example".into(),
             "item.update".into(),
@@ -1592,13 +1592,15 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
             let fixture = CompatFixture::new(Plan::default()).await;
             let (mut request, lease) = leased_invocation(&fixture.endpoint, false);
             request = InvocationBuilder::from(request)
-                .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
-                    Arc::new(ChangingBindingLease {
-                        inner: lease.clone(),
-                        after,
-                        change_audience,
-                    }),
-                )))
+                .execution(ExecutionAccess::Delegated(
+                    agent_access_provider::host::delegated_credential(Arc::new(
+                        ChangingBindingLease {
+                            inner: lease.clone(),
+                            after,
+                            change_audience,
+                        },
+                    )),
+                ))
                 .build();
             let provider = McpAdapter
                 .build(

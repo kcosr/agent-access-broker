@@ -977,7 +977,7 @@ mod tests {
         InvocationBuilder, TestHost, bearer_credential, install_trace_capture,
     };
     use agent_access_provider::{
-        ActionIo, CorrelationContext, ProviderLimits, with_provider_context,
+        ActionIo, CorrelationContext, ProviderLimits, host::with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};

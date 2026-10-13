@@ -1,34 +1,68 @@
-//! The host-implementation interface: construction ports the broker host
-//! implements and calls while it builds providers for a runtime generation.
+//! The host cooperation ports: what the Broker host implements and calls to
+//! build providers and run their hooks.
 //!
-//! Provider code consumes the resulting capabilities ([`BuildContext`] and the
-//! [`UpstreamClient`](crate::UpstreamClient)s built through it). Provider tests
-//! may implement these ports with deterministic doubles; `test_support::TestHost`
-//! is one. Nothing here resolves secret references, loads TLS files, reads the
+//! This module is public and supported, and it is a cooperation contract, not
+//! a sandbox. Every module a distribution links is trusted with the whole
+//! process; these ports keep cooperating modules on the documented path and
+//! catch mistakes, but nothing here can prove which component called them.
+//! Rust visibility cannot make the host a friend of SDK internals, so the
+//! host-only constructors and scopes are public here, in one documented place,
+//! instead of on the types they produce. A provider only consumes what they
+//! produce; provider tests may implement or call them (`test_support` builds
+//! on them).
+//!
+//! The ports are:
+//!
+//! - **The network factory contract**: [`UpstreamClientFactory`] builds each
+//!   upstream client from a [`ClientTransportSpec`] and returns a
+//!   [`TransportClient`] with its sanitized route, applying
+//!   [`configure_client_profile`]. [`build_context`] lends the factory, the
+//!   generation's limits, the active attribution and the optional
+//!   service-scoped signing key to a backend's build.
+//! - **Admitted request values**: [`scope_request`] for scope resolution,
+//!   [`basic_credential`] and [`bearer_credential`] for static material,
+//!   [`admitted_request`] for the admission decision, [`spooled_body_part`] and
+//!   [`spooled_body_file`] for body parts the host spooled to disk, and
+//!   [`invocation`] for the final invocation built after staging.
+//! - **Initial scopes**: [`with_correlation_context`] and
+//!   [`with_provider_context`] set the correlation and provider action that
+//!   upstream requests carry; [`hook_context`] and [`with_hook_context`] run a
+//!   provider hook whose outcomes the host then checks with its
+//!   [`HookContext`] ([`ContractViolation`]); [`provider_finalization_context`]
+//!   and [`with_provider_finalization`] set the operation deadline and its
+//!   bounded finalization marker. [`InvocationScope`](crate::InvocationScope)
+//!   carries all of them onto spawned work.
+//! - **Signer wrapping**: [`service_signing_key`] scopes the host's stable key
+//!   to one service.
+//! - **Delegated-lease wrapping**: [`delegated_credential`] lends a host
+//!   [`DelegatedLease`] to one invocation, under the
+//!   [`delegated_binding_id`] the host derived for it.
+//! - **The host-origin failure port**: [`port_failure`] marks a failure one of
+//!   the [`HostPort`]s produced, which providers pass on unchanged.
+//!
+//! Nothing here resolves secret references, loads keys or TLS files, reads the
 //! process environment or touches a store: those stay inside the host.
-//!
-//! It also holds the host's construction port for the values the host hands
-//! providers per request: [`ScopeRequest`]s, static credentials, delegated
-//! binding identities, [`AdmittedRequest`]s and the final
-//! [`ProviderInvocation`].
-//!
-//! Host cooperation ports that return [`ProviderError`]s to providers mark
-//! them with [`port_failure`], so a provider passes the host's failure on
-//! unchanged instead of authoring a host-only reason itself.
 use crate::{
-    AdmittedContext, AdmittedRequest, BrokerBodyPart, BuildContext, ClientProfile,
-    CorrelationContext, CredentialMode, Decision, DelegatedBindingId, EgressDeclaration,
-    EgressRoute, ExecutionAccess, ExecutionCredential, HookContext, HookPhase, InvocationAuthority,
-    InvocationIdentity, ProviderAttributionConfig, ProviderError, ProviderInvocation,
+    AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
+    ClientProfile, CorrelationContext, CredentialMode, Decision, DelegatedBindingId,
+    DelegatedCredential, DelegatedLease, EgressDeclaration, EgressRoute, ExecutionAccess,
+    ExecutionCredential, HookPhase, InvocationAuthority, InvocationIdentity,
+    ProviderAttributionConfig, ProviderError, ProviderFinalizationContext, ProviderInvocation,
     ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode, ResourceAttributes,
     ScopeRequest, StableSigningKey,
 };
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
+
+pub use crate::contract::{ContractViolation, HookContext};
+pub use crate::correlation::{with_correlation_context, with_provider_context};
+pub use crate::finalization::with_provider_finalization;
+pub use crate::signing::service_signing_key;
 
 /// Constructs configured upstream HTTP clients for one runtime generation.
 ///
@@ -43,13 +77,17 @@ use url::Url;
 /// routed as its [`EgressDeclaration`] asks. A route the host does not grant to
 /// this caller fails construction instead of silently routing elsewhere.
 pub trait UpstreamClientFactory: Send + Sync {
+    /// Builds the client `spec` describes, or explains why the host refuses
+    /// or cannot build it.
     fn build_client(
         &self,
         spec: &ClientTransportSpec<'_>,
     ) -> Result<TransportClient, UpstreamClientFactoryError>;
 }
 
-/// What one upstream client needs from the host transport.
+/// What one upstream client needs from the host transport. The SDK builds it
+/// from an [`UpstreamClientSpec`](crate::UpstreamClientSpec); a factory only
+/// reads it.
 #[derive(Debug, Clone, Copy)]
 pub struct ClientTransportSpec<'a> {
     label: &'a str,
@@ -92,10 +130,13 @@ impl<'a> ClientTransportSpec<'a> {
         self.base
     }
 
+    /// The route the provider asks for; the factory decides whether this
+    /// caller may have it.
     pub fn egress(&self) -> EgressDeclaration<'a> {
         self.egress
     }
 
+    /// The time and retry profile the client must apply.
     pub fn profile(&self) -> ClientProfile {
         self.profile
     }
@@ -109,10 +150,12 @@ pub struct TransportClient {
 }
 
 impl TransportClient {
+    /// A client the factory configured, with the route its traffic takes.
     pub fn new(client: reqwest::Client, route: EgressRoute) -> Self {
         Self { client, route }
     }
 
+    /// The client and its route, for the SDK's upstream client wrapper.
     pub fn into_parts(self) -> (reqwest::Client, EgressRoute) {
         (self.client, self.route)
     }
@@ -123,10 +166,13 @@ impl TransportClient {
 pub struct UpstreamClientFactoryError(Box<dyn Error + Send + Sync>);
 
 impl UpstreamClientFactoryError {
+    /// Wraps the host's own cause, which travels to the host's diagnostics
+    /// as the source of the provider's build error.
     pub fn new(cause: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self(cause.into())
     }
 
+    /// The host's cause.
     pub fn into_cause(self) -> Box<dyn Error + Send + Sync> {
         self.0
     }
@@ -153,8 +199,11 @@ impl Error for UpstreamClientFactoryError {
     }
 }
 
-/// The context a backend builds its provider from for one runtime generation.
-/// `stable_signing_key` must already be scoped to the backend's service.
+/// The context a backend builds its provider from for one runtime generation:
+/// the generation's limits, the client factory serving this backend, the
+/// attribution its configuration activates and the optional stable signing
+/// key, which must already be scoped to the backend's service with
+/// [`service_signing_key`].
 pub fn build_context<'a>(
     limits: &'a ProviderLimits,
     clients: &'a dyn UpstreamClientFactory,
@@ -191,7 +240,9 @@ pub fn configure_client_profile(
     }
 }
 
-/// The host's inputs for one scope-resolution request.
+/// The host's inputs for one scope-resolution request: validated inputs, the
+/// host-selected execution context, minimal identity, correlation and the
+/// lookup credential the host selected, if any.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopeRequestParts<'a> {
     pub service: &'a str,
@@ -203,6 +254,8 @@ pub struct ScopeRequestParts<'a> {
     pub lookup_credential: Option<&'a ExecutionCredential>,
 }
 
+/// The request a provider's scope resolution receives. It carries no admitted
+/// authority and no execution credential.
 pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
     let ScopeRequestParts {
         service,
@@ -234,7 +287,8 @@ pub fn bearer_credential(token: String) -> ExecutionCredential {
     ExecutionCredential::bearer(token)
 }
 
-/// The host's admission decision for one operation.
+/// The host's admission decision for one operation: the admitted context, the
+/// validated inputs and the execution and lookup material it selected.
 #[derive(Debug)]
 pub struct AdmittedRequestParts {
     pub service: String,
@@ -251,6 +305,8 @@ pub struct AdmittedRequestParts {
     pub lookup_credential: Option<ExecutionCredential>,
 }
 
+/// The read-only admitted request that multipart admission receives and the
+/// final invocation is built from.
 pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
     let AdmittedRequestParts {
         service,
@@ -280,6 +336,26 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
     )
 }
 
+/// A body part the host spooled to `path` while consuming the request body,
+/// with its measured size and SHA-256. The part owns the file: dropping the
+/// last handle deletes it.
+pub fn spooled_body_part(
+    name: String,
+    file_name: Option<String>,
+    content_type: Option<String>,
+    path: PathBuf,
+    size: u64,
+    sha256: String,
+) -> BrokerBodyPart {
+    BrokerBodyPart::from_temp_file(name, file_name, content_type, path, size, sha256)
+}
+
+/// The owning handle of a file the host spooled to `path`, with its measured
+/// size and SHA-256. Dropping it deletes the file.
+pub fn spooled_body_file(path: PathBuf, size: u64, sha256: String) -> BrokerBodyPartFile {
+    BrokerBodyPartFile::new(path, size, sha256)
+}
+
 /// The final invocation, built only after staging: body consumption, the
 /// revision fences, and decryption of only the admitted resource's
 /// attributes.
@@ -290,6 +366,13 @@ pub fn invocation(
     state: Option<ProviderState>,
 ) -> ProviderInvocation {
     ProviderInvocation::new(request, body_parts, resource_attributes, state)
+}
+
+/// A delegated credential lending `lease` to one invocation. The host has
+/// already acquired the lease under its binding identity and revalidates it
+/// immediately before dispatch.
+pub fn delegated_credential(lease: Arc<dyn DelegatedLease>) -> DelegatedCredential {
+    DelegatedCredential::new(lease)
 }
 
 /// A delegated binding identity from the host's domain-separated digest of
@@ -303,7 +386,7 @@ pub fn delegated_binding_id(digest: [u8; 32]) -> DelegatedBindingId {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HostPort {
-    /// [`DelegatedLease`](crate::DelegatedLease): acquiring, revalidating,
+    /// [`DelegatedLease`]: acquiring, revalidating,
     /// rejecting and recovering a delegated credential.
     DelegatedLease,
     /// The admitted operation the host hands a provider: its authority
@@ -351,6 +434,16 @@ pub fn hook_context(
     domain_reasons: &'static [&'static ProviderReasonDefinition],
 ) -> HookContext {
     HookContext::new(service.into(), action.into(), phase, domain_reasons)
+}
+
+/// The deadline and bounded finalization marker of one provider execution.
+/// Run the execution inside it with [`with_provider_finalization`]; the
+/// provider reads it with
+/// [`current_provider_finalization`](crate::current_provider_finalization).
+pub fn provider_finalization_context(
+    deadline: Option<tokio::time::Instant>,
+) -> ProviderFinalizationContext {
+    ProviderFinalizationContext::new(deadline)
 }
 
 /// Runs `future` as the provider hook `context` describes. Its service and

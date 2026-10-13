@@ -206,7 +206,8 @@ impl Visit for Fields {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CorrelationContext, InvocationScope, with_provider_context};
+    use crate::host::with_provider_context;
+    use crate::{CorrelationContext, InvocationScope};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn captures_follow_their_own_work_only() {

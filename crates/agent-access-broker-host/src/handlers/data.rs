@@ -1439,7 +1439,7 @@ async fn parse_multipart_body_parts(
                 "temporary upload storage is unavailable",
             )
         })?;
-        body_parts.push(BrokerBodyPart::from_temp_file(
+        body_parts.push(agent_access_provider::host::spooled_body_part(
             name,
             file_name,
             content_type,

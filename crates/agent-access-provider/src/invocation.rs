@@ -22,7 +22,8 @@ pub struct BrokerBodyPartFile {
 }
 
 impl BrokerBodyPartFile {
-    pub fn new(path: PathBuf, size: u64, sha256: String) -> Self {
+    /// The host spools files with [`crate::host::spooled_body_file`].
+    pub(crate) fn new(path: PathBuf, size: u64, sha256: String) -> Self {
         Self { path, size, sha256 }
     }
 
@@ -46,7 +47,8 @@ impl Drop for BrokerBodyPartFile {
 }
 
 impl BrokerBodyPart {
-    pub fn from_temp_file(
+    /// The host spools parts with [`crate::host::spooled_body_part`].
+    pub(crate) fn from_temp_file(
         name: String,
         file_name: Option<String>,
         content_type: Option<String>,

@@ -2271,7 +2271,7 @@ mod tests {
         let capture = agent_access_provider::test_support::install_trace_capture().start();
         let ci = provider(&server);
         capture
-            .run(agent_access_provider::with_provider_context(
+            .run(agent_access_provider::host::with_provider_context(
                 agent_access_provider::CorrelationContext::for_tests(),
                 "cloudbees_ci".into(),
                 "build.artifact.download".into(),
