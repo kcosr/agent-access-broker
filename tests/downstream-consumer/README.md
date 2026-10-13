@@ -23,12 +23,29 @@ root.
   driver appends the third-party `[workspace.dependencies]` entries the crate
   inherits, copied verbatim from the candidate root manifest. The provider
   repository versions its crate independently (`0.7.0`).
-- `assembly-repo/` is a downstream distribution, `downstream-broker`. It links
-  `agent-access-broker-host` and production `agent-access-cloudbees-ci` from
-  upstream and `agent-access-conformance` from the provider repository. Its
-  `composition()` selects CloudBees CI and the development-only conformance
-  provider, and `main.rs` runs the host's `BrokerApplication` under the
-  assembly's own identity (`downstream-broker` `0.3.0`).
+- `assembly-repo/` is a downstream distribution, `downstream-broker` `0.3.0`,
+  following the [downstream assembly guide](../../docs/downstream-assembly.md).
+  It links `agent-access-broker-host` and production `agent-access-cloudbees-ci`
+  from upstream and `agent-access-conformance` from the provider repository.
+  Its library exports `composition()`, which selects CloudBees CI and the
+  development-only conformance provider, and `build_identity()`; `main.rs`
+  runs the host's `BrokerApplication` with both.
+  - `build.rs` reads the assembly's own `Cargo.lock` and emits the locked
+    version and full commit of the upstream and provider repositories. The
+    identity reports them as evidence-backed revisions: the upstream commit for
+    the host, the SDK and CloudBees CI, and the provider commit for the
+    conformance module, in a module provenance map keyed by crate name and
+    version.
+  - The assembly's own revision and qualification label come from
+    `DOWNSTREAM_BROKER_REVISION` and `DOWNSTREAM_BROKER_QUALIFICATION` at build
+    time, which only the process that builds and qualifies a verified clean
+    checkout sets. The driver sets them to the staged assembly commit and
+    `downstream-consumer`; without them the assembly reports an unavailable
+    revision and `unqualified`.
+  - Its tests check the composition, the reported identity and locked sources,
+    that provenance for an unregistered package is rejected, and, with the
+    host's `test-support` feature as a development dependency only, serve the
+    same status from an `IsolatedBroker`.
 
 Every manifest names upstream crates exactly as a downstream repository must:
 `git = "https://github.com/kcosr/agent-access-broker.git"` with `rev` set to a
@@ -85,16 +102,22 @@ file may exist in `.cargo` directories above it.
 7. The provider repository runs its own unit tests with SDK `test-support`, and
    its resolved graph, including development dependencies, contains no core,
    host, assembly, CLI or import-adapter crate.
-8. The assembly passes `rustfmt --check`, `cargo build`, and `cargo test`, and
-   `cargo tree -e normal,build,features` shows no `test-support` feature in its
-   release graph.
+8. The assembly passes `rustfmt --check` and `cargo test`, then `cargo build`
+   builds the executable last, so it carries no development features; `cargo
+   tree -e normal,build,features` shows no `test-support` feature in its release
+   graph although its tests enable the host's.
 9. Process acceptance starts the built assembly executable with a generated
    development configuration: CloudBees CI pointed at a synthetic loopback
    controller, the conformance provider configured, a synthetic static
    principal and a synthetic `basic_api_token` credential. It checks that the
    same configuration without `enable_fake_service` exits 3, readiness and
-   health, that `/v1/broker/status` needs identity and reports the assembly's
-   version, one granted `cloudbees_ci.build.log.read` through the staged CLI
+   health, and that `/v1/broker/status` needs identity. The status must equal
+   the identity the driver derives independently: the assembly's name, version,
+   label and commit, the host and SDK at the upstream commit, CloudBees CI and
+   conformance with their roles at the upstream and provider commits, all
+   evidence-backed, and the inventory fingerprint recomputed from those fields;
+   the `broker_starting` event must carry the same identity and fingerprint.
+   It then checks one granted `cloudbees_ci.build.log.read` through the staged CLI
    with the controller receiving the expected Basic credential, an ungranted
    job's denial, SIGTERM shutdown with exit 0, and the allow and deny audit
    records.
@@ -142,14 +165,7 @@ it only after the candidate commit is published; the provider repository stays
 local, Git may then also use `https`, and crates.io packages still come only
 from the shared download cache.
 
-## Not yet covered
+## Not covered
 
-- The assembly identity supplies only a name, version and description. TODO:
-  once the host accepts an assembler-declared qualification label and a module
-  provenance map keyed by registered module packages, declare `cloudbees_ci`
-  (upstream commit) and `conformance` (provider repository commit) in
-  `assembly-repo/src/lib.rs`, and check the status inventory, provenance flags
-  and startup fingerprint in the driver.
-- Process acceptance starts the executable directly. When host test support
-  provides an isolated application, the assembly's own tests can drive it too.
-- Portal assets are not served or checked.
+Portal assets are not served or checked; a downstream distribution builds or
+consumes them from the pinned upstream commit.

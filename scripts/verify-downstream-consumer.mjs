@@ -13,6 +13,7 @@ import { createServer as createNetServer } from "node:net";
 import { constants as osConstants, devNull, homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, qualificationOutputDirectory } from "./verify-release.mjs";
 import { cargoConfigInventory, inspectLocalToolchain } from "./verify-release-provenance.mjs";
@@ -34,6 +35,11 @@ const FULL_SHA1 = /^[0-9a-f]{40}$/;
 // Roles a reference provider repository must not reach through any edge.
 const FORBIDDEN_PROVIDER_ROLES = Object.freeze(["core", "host", "assembly", "cli", "adapter"]);
 const ASSEMBLY_EDITION = "2024";
+const HOST_PACKAGE = "agent-access-broker-host";
+const CLOUDBEES_PACKAGE = "agent-access-cloudbees-ci";
+// The label this driver declares for the assembly it builds and qualifies.
+export const FIXTURE_QUALIFICATION = "downstream-consumer";
+const INVENTORY_FINGERPRINT_DOMAIN = "agent-access.broker.inventory.v1";
 const SYNTHETIC_LOG = "downstream consumer log line\n";
 const READY_TIMEOUT_MS = 60_000;
 const PROCESS_TIMEOUT_MS = 60_000;
@@ -356,9 +362,85 @@ export function providerBoundaryViolations(metadata) {
     .map((entry) => `${entry.name} ${entry.version} (${entry.metadata["agent-access"].role}) is in the provider repository graph`);
 }
 
-export function assertAssemblyStatus(status, { version }) {
-  if (status?.brokerVersion !== version || status.buildProvenance !== "unavailable" || (status.buildCommit ?? null) !== null) {
-    throw new Error(`Status must report the assembly's own version ${version} with unavailable provenance; received ${JSON.stringify(status)}`);
+// The host's inventory fingerprint, recomputed: SHA-256 over a
+// length-delimited encoding of the host and SDK packages and the module
+// inventory, each with its source revision and provenance.
+export function inventoryFingerprint({ host, sdk, modules }) {
+  const parts = [];
+  const count = (value) => {
+    const bytes = Buffer.alloc(8);
+    bytes.writeBigUInt64BE(BigInt(value));
+    parts.push(bytes);
+  };
+  const string = (value) => {
+    const bytes = Buffer.from(value, "utf8");
+    count(bytes.length);
+    parts.push(bytes);
+  };
+  const source = ({ provenance, revision }) => {
+    string(provenance);
+    string(revision ?? "");
+  };
+  string(INVENTORY_FINGERPRINT_DOMAIN);
+  for (const [label, entry] of [["host", host], ["sdk", sdk]]) {
+    string(label);
+    string(entry.crate);
+    string(entry.version);
+    source(entry.source);
+  }
+  count(modules.length);
+  for (const module of modules) {
+    string(module.crate);
+    string(module.version);
+    count(module.roles.length);
+    for (const role of module.roles) {
+      string(role.role);
+      string(role.id);
+    }
+    source(module.source);
+  }
+  return `sha256:${sha256(Buffer.concat(parts))}`;
+}
+
+// The identity part of the status an assembly built from the given sources
+// must report: every revision evidence-backed and the modules in canonical
+// order.
+export function expectedAssemblyStatus({ assembly, host, sdk, modules }) {
+  const evidence = (revision) => ({ revision, provenance: "evidence" });
+  const status = {
+    assembly: { name: assembly.name, version: assembly.version, qualification: assembly.qualification,
+      source: evidence(assembly.revision) },
+    host: { crate: HOST_PACKAGE, version: host.version, source: evidence(host.revision) },
+    sdk: { crate: SDK_PACKAGE, version: sdk.version, source: evidence(sdk.revision) },
+    modules: [...modules].sort((left, right) => left.crate.localeCompare(right.crate) || left.version.localeCompare(right.version))
+      .map((module) => ({ crate: module.crate, version: module.version, roles: module.roles, source: evidence(module.revision) })),
+  };
+  status.inventoryFingerprint = inventoryFingerprint(status);
+  return status;
+}
+
+export function assertAssemblyStatus(status, expected) {
+  const { catalogVersion, sendSchemaVersion, ...identity } = status ?? {};
+  if (!isDeepStrictEqual(identity, expected) || typeof catalogVersion !== "string" || typeof sendSchemaVersion !== "string") {
+    throw new Error(`Status must report the assembly's identity, locked sources and inventory fingerprint; expected ${JSON.stringify(expected)}, received ${JSON.stringify(status)}`);
+  }
+}
+
+// The broker_starting event must carry the same assembly identity and
+// inventory fingerprint as the status.
+export function assertStartingEvent(log, status) {
+  const events = log.split("\n").filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  }).filter((event) => event?.event === "broker_starting");
+  const expected = { assemblyName: status.assembly.name, assemblyVersion: status.assembly.version,
+    assemblyRevision: status.assembly.source.revision, assemblyProvenance: status.assembly.source.provenance,
+    qualification: status.assembly.qualification, inventoryFingerprint: status.inventoryFingerprint };
+  if (events.length !== 1 || Object.entries(expected).some(([field, value]) => events[0][field] !== value)) {
+    throw new Error(`Exactly one broker_starting event must carry ${JSON.stringify(expected)}; found ${JSON.stringify(events)}`);
   }
 }
 
@@ -669,6 +751,9 @@ base_url = "${controller}/team-ci/"
 base_url = "${controller}/conformance"
 allowed_upstream_hosts = ["${controller}/conformance/**"]
 
+[limits]
+upload_spool_dir = ${JSON.stringify(join(run, "spool"))}
+
 [audit]
 type = "jsonl"
 path = ${JSON.stringify(join(run, "audit.jsonl"))}
@@ -739,7 +824,7 @@ async function waitForReady(supervisor, url, broker) {
 
 // Starts the built assembly against a synthetic CloudBees controller, checks
 // readiness, status identity and one read through the CLI, then stops it.
-export async function runProcessAcceptance({ supervisor, binary, cli, run, evidence, env, version, platform = process.platform }) {
+export async function runProcessAcceptance({ supervisor, binary, cli, run, evidence, env, expectedStatus, platform = process.platform }) {
   mkdirSync(run, { recursive: true, mode: 0o700 });
   const output = join(evidence, "acceptance");
   mkdirSync(output, { recursive: true, mode: 0o700 });
@@ -794,8 +879,8 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
     const status = await statusResponse.json();
     writeFileSync(join(output, "status.json"), `${JSON.stringify(status, null, 2)}\n`);
     check("status-ok", statusResponse.ok, { status: statusResponse.status });
-    assertAssemblyStatus(status, { version });
-    check("status-assembly-identity", true, { brokerVersion: status.brokerVersion, buildProvenance: status.buildProvenance });
+    assertAssemblyStatus(status, expectedStatus);
+    check("status-assembly-identity", true, { assembly: status.assembly, inventoryFingerprint: status.inventoryFingerprint });
 
     const clientConfig = join(run, "client.toml");
     writeFileSync(clientConfig, `[service]\nurl = ${JSON.stringify(base)}\n\n[identity]\nheader = "X-Agent-Access-Identity-Token"\nscheme = "raw"\ntoken_file = ${JSON.stringify(join(run, "principal-token"))}\n`, { mode: 0o600 });
@@ -834,6 +919,8 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
       await supervisor.release(broker);
       result.shutdown = "SIGTERM, exit 0";
     }
+    assertStartingEvent(readFileSync(join(output, "broker.log"), "utf8"), status);
+    check("starting-event-identity", true);
     const auditPath = join(run, "audit.jsonl");
     const audit = existsSync(auditPath) ? readFileSync(auditPath, "utf8") : "";
     writeFileSync(join(output, "audit.jsonl"), audit);
@@ -855,8 +942,6 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
   const report = { schemaVersion: 1, status: "running", mode: source, commit, startedAt: stamp(), finishedAt: null, steps: [],
     scope: "Independent provider repository and downstream assembly staged from one clean candidate commit; locked offline Cargo against the shared download cache; process acceptance of the assembled broker with the candidate's CLI built in the stage.",
     limitations: [
-      "Host test support is not available yet; process acceptance starts the built assembly executable directly.",
-      "Assembly identity covers name and version only; the qualification label and module provenance map are not checked yet.",
       "Portal assets are not served or checked by this fixture.",
       ...(source === "staged" ? ["Upstream is a staged local clone; the canonical remote pin needs a separate --source canonical run after publication."] : []),
       ...(platform === "win32" ? ["Graceful POSIX-signal shutdown and process-group termination are not exercised on Windows."] : []),
@@ -1163,12 +1248,21 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     });
 
     const binary = join(paths.assembly, "target", "debug", executable(ASSEMBLY_PACKAGE));
-    await step("assembly-build", async () => {
-      await execute("assembly-format", rustfmt, ["--check", "--edition", ASSEMBLY_EDITION, "src/lib.rs", "src/main.rs"],
+    // The build process stamps the assembly's own revision and qualification
+    // label, as a downstream release pipeline does for a verified clean
+    // checkout; its build script reads the module revisions from Cargo.lock.
+    const assemblyEnv = { ...cargoEnv, DOWNSTREAM_BROKER_REVISION: assemblyCommit, DOWNSTREAM_BROKER_QUALIFICATION: FIXTURE_QUALIFICATION };
+    await step("assembly-build", async (record) => {
+      await execute("assembly-format", rustfmt, ["--check", "--edition", ASSEMBLY_EDITION, "build.rs", "src/lib.rs", "src/main.rs"],
         { cwd: paths.assembly, env: cargoEnv });
-      await cargo("assembly-build", paths.assembly, ["build", "--locked", "--offline", ...targetDirectory(paths.assembly)]);
-      await cargo("assembly-test", paths.assembly, ["test", "--locked", "--offline", ...targetDirectory(paths.assembly)]);
+      await execute("assembly-test", toolchain.cargoPath, ["test", "--locked", "--offline", ...targetDirectory(paths.assembly)],
+        { cwd: paths.assembly, env: assemblyEnv });
+      // Built last, so the executable is the release graph's, without the
+      // development features its tests unify.
+      await execute("assembly-build", toolchain.cargoPath, ["build", "--locked", "--offline", ...targetDirectory(paths.assembly)],
+        { cwd: paths.assembly, env: assemblyEnv });
       accessSync(binary, constants.X_OK);
+      record.detail = { revision: assemblyCommit, qualification: FIXTURE_QUALIFICATION };
     });
 
     await step("assembly-features", async (record) => {
@@ -1181,9 +1275,26 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     });
 
     await step("process-acceptance", async (record) => {
+      const assemblyLock = parseLockfile(readFileSync(join(paths.assembly, "Cargo.lock"), "utf8"));
+      const locked = (name, source) => {
+        const entries = assemblyLock.packages.filter((entry) => entry.name === name && entry.source === source);
+        if (entries.length !== 1) throw new Error(`The assembly lock must hold exactly one ${name} from ${source}`);
+        return entries[0].version;
+      };
+      const upstreamLock = gitSourceId(upstreamSourceUrl, commit);
+      const providerLock = gitSourceId(providerSourceUrl, providerCommit);
+      const expectedStatus = expectedAssemblyStatus({
+        assembly: { name: ASSEMBLY_PACKAGE, version: locked(ASSEMBLY_PACKAGE, null), qualification: FIXTURE_QUALIFICATION, revision: assemblyCommit },
+        host: { version: locked(HOST_PACKAGE, upstreamLock), revision: commit },
+        sdk: { version: locked(SDK_PACKAGE, upstreamLock), revision: commit },
+        modules: [
+          { crate: CLOUDBEES_PACKAGE, version: locked(CLOUDBEES_PACKAGE, upstreamLock), roles: [{ role: "native", id: "cloudbees_ci" }], revision: commit },
+          { crate: PROVIDER_PACKAGE, version: locked(PROVIDER_PACKAGE, providerLock), roles: [{ role: "native", id: "conformance" }], revision: providerCommit },
+        ],
+      });
+      writeFileSync(join(evidence, "expected-status.json"), `${JSON.stringify(expectedStatus, null, 2)}\n`);
       report.acceptance = await runProcessAcceptance({ supervisor, binary, cli, run: paths.run, evidence,
-        env: { ...clean, HOME: paths.home }, platform,
-        version: /^version = "([^"]+)"$/m.exec(readFileSync(join(paths.assembly, "Cargo.toml"), "utf8"))[1] });
+        env: { ...clean, HOME: paths.home }, platform, expectedStatus });
       record.detail = { checks: report.acceptance.checks.length, shutdown: report.acceptance.shutdown };
     });
 

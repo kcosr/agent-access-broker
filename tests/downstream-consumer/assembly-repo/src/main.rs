@@ -1,9 +1,11 @@
 use agent_access_broker_host::{BrokerApplication, BrokerExit};
-use downstream_broker::{composition, identity};
+use downstream_broker::{build_identity, composition};
 
 fn main() -> BrokerExit {
-    match composition() {
-        Ok(composition) => BrokerApplication::new(composition, identity()).run_from_env(),
+    match composition()
+        .and_then(|composition| BrokerApplication::new(composition, build_identity()))
+    {
+        Ok(application) => application.run_from_env(),
         Err(error) => error.into(),
     }
 }

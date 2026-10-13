@@ -326,10 +326,12 @@ All notable changes to this project are documented in this file.
   assembly as independent Git repositories pinned to the candidate commit,
   builds and tests them and the candidate's CLI with `--locked --offline` from
   the shared Cargo download cache, reviews their lockfiles for one SDK package
-  identity, and runs the assembled executable against a synthetic CloudBees CI
-  controller through that CLI. Every crate in `Cargo.lock` must already be in
-  the download cache, and Cargo configuration outside the driver's private
-  Cargo home must not apply to its stage.
+  identity, checks that the assembled executable reports its own identity, the
+  locked sources of the host, SDK and modules and their inventory fingerprint,
+  and runs it against a synthetic CloudBees CI controller through that CLI.
+  Every crate in `Cargo.lock` must already be in the download cache, and Cargo
+  configuration outside the driver's private Cargo home must not apply to its
+  stage.
 
 ### Changed
 

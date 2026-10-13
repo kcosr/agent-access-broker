@@ -7,9 +7,9 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
-  ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, PROVIDER_PACKAGE, ProcessSupervisor, SDK_PACKAGE,
-  SENTINEL_REV, assertAssemblyStatus, featureViolations, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
-  isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
+  ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION, PROVIDER_PACKAGE,
+  ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, expectedAssemblyStatus, featureViolations, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
+  inventoryFingerprint, isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
   processGroupAlive,
   parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment,
   stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
@@ -150,7 +150,8 @@ test("the checked-in templates and the maintained provider crate stage cleanly",
   assert.deepEqual(providerRoot.rewrites.map((rewrite) => rewrite.package), [SDK_PACKAGE]);
   assert.equal(rewriteStagedManifest(normalized.text, [upstream]).rewrites.length, 0);
   const assembly = rewriteStagedManifest(assemblyTemplate, [provider, upstream]);
-  assert.deepEqual(assembly.rewrites.map((rewrite) => rewrite.package), ["agent-access-broker-host", "agent-access-cloudbees-ci", PROVIDER_PACKAGE]);
+  assert.deepEqual(assembly.rewrites.map((rewrite) => [rewrite.table, rewrite.package]), [["dependencies", "agent-access-broker-host"],
+    ["dependencies", "agent-access-cloudbees-ci"], ["dependencies", PROVIDER_PACKAGE], ["dev-dependencies", "agent-access-broker-host"]]);
   assert.match(assemblyTemplate, new RegExp(`^name = "${ASSEMBLY_PACKAGE}"$`, "m"));
   const pinned = toolchainChannel(read("rust-toolchain.toml"));
   for (const path of ["tests/downstream-consumer/provider-repo/rust-toolchain.toml", "tests/downstream-consumer/assembly-repo/rust-toolchain.toml"]) {
@@ -240,11 +241,125 @@ test("graph checks reject release test support and forbidden provider edges", ()
     role("agent-access-mcp-upstream", "adapter")] }).length, 3);
 });
 
-test("status identity and environment sanitization", () => {
-  assertAssemblyStatus({ brokerVersion: "0.3.0", buildCommit: null, buildProvenance: "unavailable", catalogVersion: "x" }, { version: "0.3.0" });
-  for (const status of [{ brokerVersion: "0.1.0", buildProvenance: "unavailable" }, { brokerVersion: "0.3.0", buildProvenance: "release", buildCommit: commit }, null]) {
-    assert.throws(() => assertAssemblyStatus(status, { version: "0.3.0" }), /assembly's own version/);
+const upstreamCommit = "c".repeat(40);
+const expectedStatus = () => expectedAssemblyStatus({
+  assembly: { name: ASSEMBLY_PACKAGE, version: "0.3.0", qualification: FIXTURE_QUALIFICATION, revision: commit },
+  host: { version: "0.2.0", revision: upstreamCommit },
+  sdk: { version: "0.2.0", revision: upstreamCommit },
+  modules: [
+    { crate: PROVIDER_PACKAGE, version: "0.7.0", roles: [{ role: "native", id: "conformance" }], revision: providerCommit },
+    { crate: "agent-access-cloudbees-ci", version: "0.2.0", roles: [{ role: "native", id: "cloudbees_ci" }], revision: upstreamCommit },
+  ],
+});
+
+test("the expected status orders modules canonically and carries the recomputed fingerprint", () => {
+  const expected = expectedStatus();
+  assert.deepEqual(expected.modules.map((module) => module.crate), ["agent-access-cloudbees-ci", PROVIDER_PACKAGE]);
+  assert.deepEqual(expected.sdk, { crate: SDK_PACKAGE, version: "0.2.0", source: { revision: upstreamCommit, provenance: "evidence" } });
+  assert.match(expected.inventoryFingerprint, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(expected.inventoryFingerprint, inventoryFingerprint(expected));
+  // The assembly fields are outside the fingerprint; every inventory field is inside it.
+  const relabelled = structuredClone(expected);
+  relabelled.assembly.qualification = "unqualified";
+  assert.equal(inventoryFingerprint(relabelled), expected.inventoryFingerprint);
+  for (const change of [
+    (status) => { status.host.source.revision = "d".repeat(40); },
+    (status) => { status.sdk.version = "0.2.1"; },
+    (status) => { status.modules[1].source = { revision: null, provenance: "unavailable" }; },
+    (status) => { status.modules[0].roles.push({ role: "oauth", id: "example" }); },
+    (status) => { status.modules.pop(); },
+  ]) {
+    const changed = structuredClone(expected);
+    change(changed);
+    assert.notEqual(inventoryFingerprint(changed), expected.inventoryFingerprint);
   }
+});
+
+// A status the Broker host reported for a staged assembly, so the recomputed
+// fingerprint is checked against the host's own encoding.
+const HOST_REPORTED_INVENTORY = {
+  "host": {
+    "crate": "agent-access-broker-host",
+    "version": "0.1.0",
+    "source": {
+      "revision": "e4269217a450b27776e9bc13f9d691e3d68bf15d",
+      "provenance": "evidence"
+    }
+  },
+  "sdk": {
+    "crate": "agent-access-provider",
+    "version": "0.1.0",
+    "source": {
+      "revision": "e4269217a450b27776e9bc13f9d691e3d68bf15d",
+      "provenance": "evidence"
+    }
+  },
+  "modules": [
+    {
+      "crate": "agent-access-cloudbees-ci",
+      "version": "0.1.0",
+      "roles": [
+        {
+          "role": "native",
+          "id": "cloudbees_ci"
+        }
+      ],
+      "source": {
+        "revision": "e4269217a450b27776e9bc13f9d691e3d68bf15d",
+        "provenance": "evidence"
+      }
+    },
+    {
+      "crate": "agent-access-conformance",
+      "version": "0.7.0",
+      "roles": [
+        {
+          "role": "native",
+          "id": "conformance"
+        }
+      ],
+      "source": {
+        "revision": "ef7d15d5b78d0d98e2d4c2ea39fe748980c15823",
+        "provenance": "evidence"
+      }
+    }
+  ],
+  "inventoryFingerprint": "sha256:d1855abfb91ea4be2ed59390310ef5a9bf0f546237c3b0ea27e448d75f00aa1d"
+};
+
+test("the recomputed inventory fingerprint matches the host's", () => {
+  assert.equal(inventoryFingerprint(HOST_REPORTED_INVENTORY), HOST_REPORTED_INVENTORY.inventoryFingerprint);
+});
+
+test("the status must match the assembly's identity, locked sources and fingerprint exactly", () => {
+  const reported = { ...expectedStatus(), catalogVersion: "agent-access.catalog.v2", sendSchemaVersion: "agent-access.send.v1" };
+  assertAssemblyStatus(reported, expectedStatus());
+  for (const corrupt of [
+    (status) => { status.assembly.qualification = "unqualified"; },
+    (status) => { status.assembly.source = { revision: null, provenance: "unavailable" }; },
+    (status) => { status.host.source.provenance = "declared"; },
+    (status) => { status.modules[1].source.revision = upstreamCommit; },
+    (status) => { status.modules.reverse(); },
+    (status) => { status.inventoryFingerprint = `sha256:${"0".repeat(64)}`; },
+    (status) => { delete status.catalogVersion; },
+    (status) => { status.brokerVersion = "0.3.0"; },
+  ]) {
+    const status = structuredClone(reported);
+    corrupt(status);
+    assert.throws(() => assertAssemblyStatus(status, expectedStatus()), /assembly's identity/);
+  }
+  assert.throws(() => assertAssemblyStatus(null, expectedStatus()), /assembly's identity/);
+  const status = expectedStatus();
+  const starting = { event: "broker_starting", assemblyName: ASSEMBLY_PACKAGE, assemblyVersion: "0.3.0", assemblyRevision: commit,
+    assemblyProvenance: "evidence", qualification: FIXTURE_QUALIFICATION, inventoryFingerprint: status.inventoryFingerprint };
+  const log = (event) => `not json\n${JSON.stringify({ event: "broker_listening" })}\n${JSON.stringify(event)}\n`;
+  assertStartingEvent(log(starting), status);
+  assert.throws(() => assertStartingEvent(log({ ...starting, inventoryFingerprint: "sha256:other" }), status), /broker_starting/);
+  assert.throws(() => assertStartingEvent(log({ ...starting, qualification: "unqualified" }), status), /broker_starting/);
+  assert.throws(() => assertStartingEvent(`${log(starting)}${JSON.stringify(starting)}\n`, status), /broker_starting/);
+});
+
+test("environment sanitization keeps only build parallelism of the Cargo settings", () => {
   const { env, removed } = sanitizedEnvironment({ PATH: "/bin", HOME: "/home/x", CARGO_HOME: "/c", CARGO_TARGET_DIR: "/t", CARGO_PROFILE_DEV_DEBUG: "0",
     RUSTFLAGS: "-C x", RUSTC_WRAPPER: "sccache", RUSTUP_TOOLCHAIN: "nightly", CC: "clang", AGENT_ACCESS_BROKER_CONFIG: "/x", RUSTUP_HOME: "/r",
     CARGO_BUILD_JOBS: "4" });
@@ -387,7 +502,7 @@ createServer((request, response) => { response.writeHead(503); response.end(); }
   const evidence = join(directory, "evidence");
   const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
   const acceptance = runProcessAcceptance({ supervisor, binary: broker, cli: join(directory, "unused-cli"), run, evidence,
-    env: sanitizedEnvironment(process.env).env, version: "0.3.0" });
+    env: sanitizedEnvironment(process.env).env, expectedStatus: {} });
   acceptance.catch(() => {});
   await waitUntil(() => existsSync(join(run, "broker.pid")));
   const pid = Number(readFileSync(join(run, "broker.pid"), "utf8"));
