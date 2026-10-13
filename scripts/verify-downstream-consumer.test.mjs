@@ -1,14 +1,47 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
-  ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, PROVIDER_PACKAGE, SDK_PACKAGE, SENTINEL_REV,
-  assertAssemblyStatus, featureViolations, gitSourceId, inheritedWorkspaceDependencies, lastTableHeader, manifestDependencies,
-  normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile, parseTomlValue, providerBoundaryViolations,
-  reviewLockfiles, rewriteStagedManifest, sanitizedEnvironment, thirdPartyLockSeed, toolchainChannel,
+  ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, PROVIDER_PACKAGE, ProcessSupervisor, SDK_PACKAGE,
+  SENTINEL_REV, assertAssemblyStatus, featureViolations, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
+  isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
+  parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment,
+  stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
 } from "./verify-downstream-consumer.mjs";
 
-const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const root = fileURLToPath(new URL("..", import.meta.url));
+const temporary = (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "downstream-consumer-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  return directory;
+};
+const delay = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
+const waitUntil = async (condition, timeoutMs = 15_000) => {
+  for (const deadline = Date.now() + timeoutMs; !condition();) {
+    if (Date.now() > deadline) throw new Error("condition not reached in time");
+    await delay(25);
+  }
+};
+// A process is gone once it no longer exists or is an unreaped zombie.
+const processGone = (pid) => {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+  try {
+    return /^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return false;
+  }
+};
+const posixOnly = { skip: process.platform === "win32" ? "process groups and POSIX signals" : false };
+const read = (path) => readFileSync(join(root, path), "utf8");
 const commit = "a".repeat(40);
 const providerCommit = "b".repeat(40);
 const upstreamUrl = "file:///stage/upstream";
@@ -18,15 +51,13 @@ const upstream = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamUrl, rev: com
 const provider = { canonical: CANONICAL_PROVIDER_URL, url: providerUrl, rev: providerCommit, packages: new Set([PROVIDER_PACKAGE]) };
 const pin = (url = CANONICAL_UPSTREAM_URL, rev = SENTINEL_REV) => `{ git = "${url}", rev = "${rev}" }`;
 
-test("arguments require a full commit, absolute paths and a known source mode", () => {
-  const args = ["--commit", commit, "--evidence-dir", "/evidence/new", "--cli", "/build/agent-access"];
-  assert.deepEqual(parseConsumerArguments(args), { commit, evidenceDir: "/evidence/new", cli: "/build/agent-access", source: "staged" });
+test("arguments require a full commit, an absolute evidence directory and a known source mode", () => {
+  const args = ["--commit", commit, "--evidence-dir", "/evidence/new"];
+  assert.deepEqual(parseConsumerArguments(args), { commit, evidenceDir: "/evidence/new", source: "staged" });
   assert.equal(parseConsumerArguments([...args, "--source", "canonical"]).source, "canonical");
   for (const invalid of [
-    [], ["--commit", "abc1234", "--evidence-dir", "/e", "--cli", "/c"],
-    ["--commit", commit, "--evidence-dir", "relative", "--cli", "/c"],
-    ["--commit", commit, "--evidence-dir", "/e", "--cli", "agent-access"],
-    [...args, "--source", "branch"], [...args, "--commit", commit], [...args, "--keep-stage"],
+    [], ["--commit", "abc1234", "--evidence-dir", "/e"], ["--commit", commit, "--evidence-dir", "relative"],
+    [...args, "--source", "branch"], [...args, "--commit", commit], [...args, "--cli", "/build/agent-access"], [...args, "--keep-stage"],
   ]) assert.throws(() => parseConsumerArguments(invalid), /Usage/);
 });
 
@@ -218,4 +249,152 @@ test("status identity and environment sanitization", () => {
     CARGO_BUILD_JOBS: "4" });
   assert.deepEqual(env, { PATH: "/bin", HOME: "/home/x", RUSTUP_HOME: "/r", CARGO_BUILD_JOBS: "4" });
   assert.deepEqual(removed, ["AGENT_ACCESS_BROKER_CONFIG", "CARGO_HOME", "CARGO_PROFILE_DEV_DEBUG", "CARGO_TARGET_DIR", "CC", "RUSTC_WRAPPER", "RUSTFLAGS", "RUSTUP_TOOLCHAIN"]);
+});
+
+test("the private Cargo home replaces crates.io with the cache directory and fetches Git through the CLI", () => {
+  const config = stagedCargoConfig("/stage/registry");
+  assert.match(config, /^\[source\.crates-io\]\nreplace-with = "shared-download-cache"$/m);
+  assert.match(config, /^\[source\.shared-download-cache\]\ndirectory = "\/stage\/registry"$/m);
+  assert.match(config, /^\[net\]\ngit-fetch-with-cli = true$/m);
+  const env = isolatedGitEnvironment({ PATH: "/bin", HOME: "/home/user" }, { home: "/stage/home", protocols: "file" });
+  assert.deepEqual(env, { PATH: "/bin", HOME: "/stage/home", XDG_CONFIG_HOME: "/stage/home/.config", GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "file" });
+});
+
+test("every Cargo configuration besides the private one is foreign, including ancestors and legacy names", (t) => {
+  const directory = temporary(t);
+  const ancestor = join(directory, "ancestor");
+  const repository = join(ancestor, "stage", "repository");
+  const cargoHome = join(ancestor, "stage", "cargo-home");
+  for (const path of [join(ancestor, ".cargo"), join(repository, ".cargo"), cargoHome]) mkdirSync(path, { recursive: true });
+  writeFileSync(join(cargoHome, "config.toml"), stagedCargoConfig(join(ancestor, "stage", "registry")));
+  assert.ok(!foreignCargoConfigs(repository, cargoHome).some((config) => config.path.startsWith(ancestor)));
+  writeFileSync(join(ancestor, ".cargo", "config.toml"), 'source.crates-io.replace-with = "elsewhere"\ninclude = "more.toml"\n');
+  writeFileSync(join(repository, ".cargo", "config"), '[build]\ntarget-dir = "/elsewhere"\n');
+  const foreign = foreignCargoConfigs(repository, cargoHome).map((config) => config.path);
+  assert.ok(foreign.includes(join(ancestor, ".cargo", "config.toml")));
+  assert.ok(foreign.includes(join(repository, ".cargo", "config")));
+  assert.ok(!foreign.includes(join(cargoHome, "config.toml")));
+});
+
+test("a global Git URL rewrite cannot redirect staged Cargo fetches, and other transports are refused", (t) => {
+  const directory = temporary(t);
+  const quiet = { ...sanitizedEnvironment(process.env).env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+  const git = (cwd, args, env = quiet) => execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const repository = (name, version) => {
+    const path = join(directory, name);
+    mkdirSync(join(path, "src"), { recursive: true });
+    writeFileSync(join(path, "Cargo.toml"), `[package]\nname = "staged-dependency"\nversion = "${version}"\nedition = "2024"\n\n[workspace]\n`);
+    writeFileSync(join(path, "src", "lib.rs"), "");
+    git(path, ["init", "--quiet", "--initial-branch=main"]);
+    git(path, ["add", "--all"]);
+    git(path, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", name]);
+    return { url: pathToFileURL(path).href, commit: git(path, ["rev-parse", "HEAD"]) };
+  };
+  const dependency = repository("dependency", "1.0.0");
+  const decoy = repository("decoy", "2.0.0");
+  const userHome = join(directory, "user-home");
+  mkdirSync(userHome);
+  writeFileSync(join(userHome, ".gitconfig"), `[url "${decoy.url}"]\n\tinsteadOf = ${dependency.url}\n`);
+  const userEnv = { ...sanitizedEnvironment(process.env).env, HOME: userHome, XDG_CONFIG_HOME: join(userHome, ".config") };
+  for (const name of Object.keys(userEnv)) if (name.startsWith("GIT_")) delete userEnv[name];
+  // An ordinary Git client follows the user's rewrite to the decoy.
+  assert.equal(git(directory, ["ls-remote", dependency.url, "HEAD"], userEnv).split("\t")[0], decoy.commit);
+
+  const stageHome = join(directory, "stage-home");
+  const cargoHome = join(directory, "cargo-home");
+  const consumer = join(directory, "consumer");
+  for (const path of [stageHome, cargoHome, join(directory, "registry"), join(consumer, "src")]) mkdirSync(path, { recursive: true });
+  writeFileSync(join(cargoHome, "config.toml"), stagedCargoConfig(join(directory, "registry")));
+  writeFileSync(join(consumer, "Cargo.toml"), `[package]\nname = "staged-consumer"\nversion = "0.1.0"\nedition = "2024"\n\n`
+    + `[dependencies]\nstaged-dependency = { git = "${dependency.url}", rev = "${dependency.commit}" }\n\n[workspace]\n`);
+  writeFileSync(join(consumer, "src", "lib.rs"), "");
+  const toolchain = inspectLocalToolchain(root, { env: sanitizedEnvironment(process.env).env });
+  const env = { ...isolatedGitEnvironment(userEnv, { home: stageHome, protocols: "file" }), CARGO_HOME: cargoHome, RUSTC: toolchain.rustcPath };
+  execFileSync(toolchain.cargoPath, ["fetch"], { cwd: consumer, env, stdio: ["ignore", "pipe", "pipe"] });
+  const fetched = parseLockfile(readFileSync(join(consumer, "Cargo.lock"), "utf8")).packages.find((entry) => entry.name === "staged-dependency");
+  assert.equal(fetched.version, "1.0.0");
+  assert.equal(fetched.source, gitSourceId(dependency.url, dependency.commit));
+  assert.throws(() => git(directory, ["ls-remote", "https://example.invalid/repository.git"], env), /transport 'https' not allowed/);
+});
+
+test("interrupting a supervised build stops its whole process tree and refuses new work", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const pids = join(directory, "pids");
+  const script = join(directory, "build.mjs");
+  writeFileSync(script, `import { spawn } from "node:child_process";
+import { renameSync, writeFileSync } from "node:fs";
+const compiler = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+writeFileSync(process.argv[2] + ".partial", process.pid + " " + compiler.pid);
+renameSync(process.argv[2] + ".partial", process.argv[2]);
+setInterval(() => {}, 1000);
+`);
+  const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
+  const build = supervisor.run(process.execPath, [script, pids]);
+  build.catch(() => {});
+  await waitUntil(() => existsSync(pids));
+  const [leader, compiler] = readFileSync(pids, "utf8").split(" ").map(Number);
+  await supervisor.interrupt("SIGINT");
+  await assert.rejects(build, { name: "InterruptedError", signal: "SIGINT" });
+  await waitUntil(() => processGone(leader) && processGone(compiler));
+  assert.equal(supervisor.interruption, "SIGINT");
+  await assert.rejects(supervisor.run(process.execPath, ["-e", ""]), { name: "InterruptedError" });
+});
+
+test("a process that ignores SIGTERM is killed after the grace period", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const pid = join(directory, "pid");
+  const script = join(directory, "stubborn.mjs");
+  writeFileSync(script, `import { renameSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(process.argv[2] + ".partial", String(process.pid));
+renameSync(process.argv[2] + ".partial", process.argv[2]);
+setInterval(() => {}, 1000);
+`);
+  const supervisor = new ProcessSupervisor({ graceMs: 300 });
+  const running = supervisor.run(process.execPath, [script, pid]);
+  running.catch(() => {});
+  await waitUntil(() => existsSync(pid));
+  await supervisor.interrupt("SIGTERM");
+  await assert.rejects(running, { name: "InterruptedError" });
+  assert.ok(processGone(Number(readFileSync(pid, "utf8"))));
+});
+
+test("interrupting broker acceptance stops the broker and the synthetic controller", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const broker = join(directory, "stand-in-broker.mjs");
+  writeFileSync(broker, `#!/usr/bin/env node
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+const args = process.argv.slice(2);
+const config = readFileSync(args[1], "utf8");
+if (args[2] === "config") {
+  if (config.includes("enable_fake_service = false")) {
+    process.stderr.write("- providers.conformance is a development backend\\n");
+    process.exit(3);
+  }
+  process.exit(0);
+}
+const [host, port] = args[4].split(":");
+createServer((request, response) => { response.writeHead(503); response.end(); }).listen(Number(port), host, () => {
+  writeFileSync("broker.pid.partial", String(process.pid));
+  renameSync("broker.pid.partial", "broker.pid");
+});
+`);
+  chmodSync(broker, 0o755);
+  const run = join(directory, "run");
+  const evidence = join(directory, "evidence");
+  const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
+  const acceptance = runProcessAcceptance({ supervisor, binary: broker, cli: join(directory, "unused-cli"), run, evidence,
+    env: sanitizedEnvironment(process.env).env, version: "0.3.0" });
+  acceptance.catch(() => {});
+  await waitUntil(() => existsSync(join(run, "broker.pid")));
+  const pid = Number(readFileSync(join(run, "broker.pid"), "utf8"));
+  const controller = /base_url = "(http:\/\/127\.0\.0\.1:\d+)\/team-ci\/"/.exec(readFileSync(join(run, "broker.toml"), "utf8"))[1];
+  assert.equal((await fetch(`${controller}/unknown`)).status, 404);
+  await supervisor.interrupt("SIGTERM");
+  await assert.rejects(acceptance, { name: "InterruptedError", signal: "SIGTERM" });
+  await waitUntil(() => processGone(pid));
+  await assert.rejects(fetch(`${controller}/unknown`), /fetch failed/);
+  assert.ok(existsSync(join(evidence, "acceptance", "broker.log")));
 });

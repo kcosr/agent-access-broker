@@ -102,8 +102,7 @@ test("qualification uses required native/browser gates and fresh paths without p
   const downstream = plan.findIndex((entry) => entry.id === "downstream-consumer");
   assert.equal(downstream, plan.findIndex((entry) => entry.id === "rust-build") + 1);
   assert.deepEqual(plan[downstream].command, [process.execPath, "scripts/verify-downstream-consumer.mjs", "--commit", commit,
-    "--evidence-dir", path.join(outputDir, "downstream-consumer"),
-    "--cli", path.join(root, "target", nativeTarget, "debug", "agent-access")]);
+    "--evidence-dir", path.join(outputDir, "downstream-consumer")]);
   assert.equal(plan[downstream].cargo, undefined);
   const browser = plan.find((entry) => entry.id === "portal-browser");
   assert.equal(browser.binaries.brokerBinary, path.join(root, "target", nativeTarget, "debug", "agent-access-broker"));

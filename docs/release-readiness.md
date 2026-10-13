@@ -151,17 +151,17 @@ accounts and approved test resources. Run them only with the individually named
 commands in the testing/provider guides; deterministic tests alone do not prove
 compatibility with every upstream deployment.
 
-The required downstream consumer gate uses the CLI from the same build. It
-stages a separately owned provider repository and a downstream Broker
-distribution from the clean candidate commit, builds and tests them with
-`--locked --offline` against the shared Cargo download cache, reviews their
-lockfiles, and runs the assembled executable against a synthetic CloudBees CI
-controller. Every locked crate must already be in the shared download cache:
+The required downstream consumer gate stages a separately owned provider
+repository and a downstream Broker distribution from the clean candidate commit,
+builds and tests them and the candidate's CLI with `--locked --offline` against
+the shared Cargo download cache, reviews their lockfiles, and runs the
+assembled executable against a synthetic CloudBees CI controller through that
+CLI. Every locked crate must already be in the shared download cache, and no
+Cargo configuration may apply under `$TMPDIR` besides the one the driver writes:
 
 ```bash
 node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
-  --evidence-dir /absolute/external/downstream-consumer \
-  --cli "$PWD/target/$BROKER_BUILD_TARGET/debug/agent-access"
+  --evidence-dir /absolute/external/downstream-consumer
 ```
 
 It pins upstream to a staged local clone. After publication, run it again with

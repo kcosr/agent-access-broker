@@ -271,20 +271,22 @@ rules.
 The independent downstream consumer check stages a separately owned provider
 repository and a downstream Broker distribution from a clean commit and builds
 them as another team would, with their own manifests, lockfiles and
-full-revision Git pins. Run it from a clean checkout with a freshly built CLI
-and a new evidence directory outside the checkout:
+full-revision Git pins. Run it from a clean checkout with a new evidence
+directory outside the checkout:
 
 ```bash
 node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
-  --evidence-dir /absolute/new/evidence/directory \
-  --cli "$PWD/target/debug/agent-access"
+  --evidence-dir /absolute/new/evidence/directory
 ```
 
 It builds with `--locked --offline` from the shared Cargo download cache and
 never downloads crates; populate the cache with `cargo fetch --locked` first.
-The provider repository runs the conformance crate's unit tests, and the
-assembly's executable is started against a synthetic CloudBees CI controller
-and exercised through the CLI. The
+No Cargo configuration may apply to its stage under `$TMPDIR` other than the
+private one it writes. The provider repository runs the conformance crate's
+unit tests, and the assembly's executable is started against a synthetic
+CloudBees CI controller and exercised through the candidate's CLI, which the
+driver builds in the stage. SIGINT or SIGTERM stops its child processes and
+removes the stage. The
 [fixture README](../tests/downstream-consumer/README.md) describes the templates,
 pin rules, lockfile review, offline dependency source and evidence. The pure
 functions of the driver are tested with the other script tests.

@@ -43,19 +43,19 @@ templates pin the repository toolchain and build with `debug = false` and
 
 ## Running
 
-From a clean checkout at the commit under test, with a freshly built CLI:
+From a clean checkout at the commit under test:
 
 ```bash
 node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
-  --evidence-dir /absolute/new/evidence/directory \
-  --cli /absolute/path/to/target/<host-triple>/debug/agent-access
+  --evidence-dir /absolute/new/evidence/directory
 ```
 
 The evidence directory must be new or empty and outside the checkout. Every
 crates.io package in `Cargo.lock` must already be in the shared Cargo download
 cache (`$CARGO_HOME/registry/cache`, by default `~/.cargo`); run
 `cargo fetch --locked` in the checkout first if it is not. The driver never
-downloads crates.
+downloads crates. The stage is created under `$TMPDIR`; no Cargo configuration
+file may exist in `.cargo` directories above it.
 
 ## What the driver checks
 
@@ -64,42 +64,51 @@ downloads crates.
    repository with `git clone --bare --no-local --no-hardlinks`. The clone has no
    alternates file and no remote; it advertises only a detached `HEAD` and
    `refs/heads/candidate` at the candidate commit.
-3. It builds the provider repository and the assembly as two local Git
+3. It builds the candidate's `agent-access` CLI in the stage from `git archive`
+   of the candidate commit, so the CLI used for acceptance is bound to that
+   commit; `status.json` records its digest.
+4. It builds the provider repository and the assembly as two local Git
    repositories from `git archive` of the candidate. Only staged manifests are
    rewritten: the canonical upstream URL becomes the clone's `file://` URL, the
    provider URL becomes the provider repository's `file://` URL, and each
    sentinel becomes the matching full commit. `source-mapping.json` records every
    rewrite.
-4. Each staged `Cargo.lock` is seeded with the candidate's third-party entries.
+5. Each staged `Cargo.lock` is seeded with the candidate's third-party entries.
    A setup `cargo fetch` adds the Git packages; the provider repository is
    committed with its lockfile before the assembly pins it.
-5. The lockfile review requires every upstream package to resolve to
+6. The lockfile review requires every upstream package to resolve to
    `git+file://<stage>/upstream?rev=<sha>#<sha>`, the conformance crate to
    resolve only to the provider repository, exactly one `agent-access-provider`
    package ID across both graphs, no path or registry copies of upstream
    packages, and third-party entries equal to candidate entries, including
    checksums.
-6. The provider repository runs its own unit tests with SDK `test-support`, and
+7. The provider repository runs its own unit tests with SDK `test-support`, and
    its resolved graph, including development dependencies, contains no core,
    host, assembly, CLI or import-adapter crate.
-7. The assembly passes `rustfmt --check`, `cargo build`, and `cargo test`, and
+8. The assembly passes `rustfmt --check`, `cargo build`, and `cargo test`, and
    `cargo tree -e normal,build,features` shows no `test-support` feature in its
    release graph.
-8. Process acceptance starts the built assembly executable with a generated
+9. Process acceptance starts the built assembly executable with a generated
    development configuration: CloudBees CI pointed at a synthetic loopback
    controller, the conformance provider configured, a synthetic static
    principal and a synthetic `basic_api_token` credential. It checks that the
    same configuration without `enable_fake_service` exits 3, readiness and
    health, that `/v1/broker/status` needs identity and reports the assembly's
-   version, one granted `cloudbees_ci.build.log.read` through the supplied CLI
+   version, one granted `cloudbees_ci.build.log.read` through the staged CLI
    with the controller receiving the expected Basic credential, an ungranted
    job's denial, SIGTERM shutdown with exit 0, and the allow and deny audit
    records.
-9. It copies the staged manifests and lockfiles, logs, cargo trees, lock review,
-   acceptance outputs and `status.json` into the evidence directory and deletes
-   the stage.
+10. It copies the staged manifests and lockfiles, logs, cargo trees, lock
+    review, acceptance outputs and `status.json` into the evidence directory and
+    deletes the stage.
 
-All Cargo commands after setup use `--locked --offline`.
+All Cargo commands after setup use `--locked --offline`, and builds name an
+explicit target directory inside each staged repository.
+
+SIGINT or SIGTERM stops every child process tree the driver started (Cargo and
+its compilers, the broker, the CLI), closes the synthetic controller, records
+the interruption in `status.json` with the evidence gathered so far, removes the
+stage, and exits with 128 plus the signal number.
 
 ### Offline dependency source
 
@@ -110,17 +119,28 @@ candidate `Cargo.lock`, it finds the `.crate` archive in
 `$CARGO_HOME/registry/cache`, checks its SHA-256 against the lockfile checksum,
 and extracts it with a `.cargo-checksum.json` carrying that checksum. A missing
 or mismatched archive fails the run before Cargo starts, and Cargo has no
-network registry to fall back on. Git dependencies are fetched by Cargo only
-from the staged `file://` repositories into the private Cargo home, so the
-shared cache is read but never written. Ancestor Cargo configuration that
-replaces sources or adds registries or patches fails the run.
+network registry to fall back on. The shared cache is read but never written.
+
+Cargo fetches Git dependencies into the private Cargo home through the Git CLI
+(`net.git-fetch-with-cli`), and every Git command runs with system and global
+Git configuration disabled, an empty stage-owned home and
+`GIT_ALLOW_PROTOCOL=file`, so user URL rewrites or credential helpers cannot
+redirect the staged `file://` sources and no network transport is available.
+Inherited Cargo, compiler and broker environment variables are removed.
+
+Cargo also reads configuration files from `.cargo` directories above the
+directory it runs in. Before Cargo first runs in a staged repository, any
+configuration file other than the private one that would apply there fails the
+run, whatever it contains, because sources, patches, includes, artifact
+directories and runners could all change what is built.
 
 ## Canonical remote pins
 
 `--source canonical` keeps the canonical upstream URL and pins it to the full
 candidate commit, so Cargo fetches upstream from the published repository. Use
 it only after the candidate commit is published; the provider repository stays
-local and crates.io packages still come only from the shared download cache.
+local, Git may then also use `https`, and crates.io packages still come only
+from the shared download cache.
 
 ## Not yet covered
 

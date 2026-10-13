@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // Stage an independent provider repository and a downstream broker assembly
-// from one clean candidate commit, build and test them with locked offline
-// Cargo against the shared download cache, and run the assembled broker.
-// See tests/downstream-consumer/README.md. This command never publishes.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+// from one clean candidate commit, build them and the candidate's CLI with
+// locked offline Cargo against the shared download cache, and run the
+// assembled broker. See tests/downstream-consumer/README.md. This command
+// never publishes.
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync,
   openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { devNull, homedir, tmpdir } from "node:os";
+import { constants as osConstants, devNull, homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoGitOverrides } from "./release-environment.mjs";
@@ -26,6 +27,7 @@ export const CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io
 export const SDK_PACKAGE = "agent-access-provider";
 export const PROVIDER_PACKAGE = "agent-access-conformance";
 export const ASSEMBLY_PACKAGE = "downstream-broker";
+const CLI_PACKAGE = "agent-access";
 const PROVIDER_CRATE_DIRECTORY = "crates/agent-access-conformance";
 const FIXTURE_DIRECTORY = "tests/downstream-consumer";
 const FULL_SHA1 = /^[0-9a-f]{40}$/;
@@ -38,12 +40,13 @@ const PROCESS_TIMEOUT_MS = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 const stamp = () => new Date().toISOString();
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const delay = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
 
 const USAGE = "Usage: node scripts/verify-downstream-consumer.mjs --commit <full-sha> "
-  + "--evidence-dir /absolute/new/directory --cli /absolute/path/to/agent-access [--source staged|canonical]";
+  + "--evidence-dir /absolute/new/directory [--source staged|canonical]";
 
 export function parseConsumerArguments(args) {
-  const keys = { "--commit": "commit", "--evidence-dir": "evidenceDir", "--cli": "cli", "--source": "source" };
+  const keys = { "--commit": "commit", "--evidence-dir": "evidenceDir", "--source": "source" };
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     const key = keys[args[index]];
@@ -52,7 +55,7 @@ export function parseConsumerArguments(args) {
   }
   options.source ??= "staged";
   if (!FULL_SHA1.test(options.commit ?? "") || !isAbsolute(options.evidenceDir ?? "")
-      || !isAbsolute(options.cli ?? "") || !["staged", "canonical"].includes(options.source)) {
+      || !["staged", "canonical"].includes(options.source)) {
     throw new Error(USAGE);
   }
   return options;
@@ -384,6 +387,156 @@ export function sanitizedEnvironment(env) {
   return { env: result, removed: removed.sort() };
 }
 
+// Isolates Git for the driver's Git commands and for Cargo's Git fetches,
+// which the staged Cargo configuration routes through the Git CLI: no system
+// or global configuration (so no URL rewrites or credential helpers), an empty
+// stage-owned home, and only the listed transports.
+export function isolatedGitEnvironment(env, { home, protocols }) {
+  return { ...env, HOME: home, XDG_CONFIG_HOME: join(home, ".config"), GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: protocols };
+}
+
+export function stagedCargoConfig(registryDirectory) {
+  return `# Private Cargo home for the staged repositories. crates.io packages
+# resolve only from archives copied out of the shared download cache; Git
+# dependencies are fetched by the isolated Git CLI.
+[source.crates-io]
+replace-with = "shared-download-cache"
+
+[source.shared-download-cache]
+directory = ${JSON.stringify(registryDirectory)}
+
+[net]
+git-fetch-with-cli = true
+`;
+}
+
+// Every Cargo configuration file that applies to Cargo run in `directory`
+// besides the private one. Any such file is rejected rather than inspected:
+// directly or through includes it could replace sources, patch dependencies,
+// redirect artifacts or install runners.
+export function foreignCargoConfigs(directory, cargoHome) {
+  const own = join(cargoHome, "config.toml");
+  return cargoConfigInventory(directory, { CARGO_HOME: cargoHome }).filter((config) => config.path !== own);
+}
+
+export class InterruptedError extends Error {
+  constructor(signal) {
+    super(`Interrupted by ${signal}`);
+    this.name = "InterruptedError";
+    this.signal = signal;
+  }
+}
+
+// Owns every process the driver starts. On POSIX each child leads its own
+// process group, so termination reaches whole trees such as Cargo and its
+// compiler processes. Once interrupted, no new process starts.
+export class ProcessSupervisor {
+  #records = new Set();
+  #interruption = null;
+  #platform;
+  #graceMs;
+
+  constructor({ platform = process.platform, graceMs = 5_000 } = {}) {
+    this.#platform = platform;
+    this.#graceMs = graceMs;
+  }
+
+  get interruption() {
+    return this.#interruption?.signal ?? null;
+  }
+
+  assertRunning() {
+    if (this.#interruption) throw new InterruptedError(this.#interruption.signal);
+  }
+
+  start(command, args, { cwd, env, stdio = ["ignore", "ignore", "ignore"] } = {}) {
+    this.assertRunning();
+    const child = spawn(command, args, { cwd, env, stdio, detached: this.#platform !== "win32" });
+    const record = { child, finished: false };
+    record.closed = new Promise((resolvePromise) => {
+      child.once("error", (error) => resolvePromise({ code: null, signal: null, error }));
+      child.once("close", (code, signal) => resolvePromise({ code, signal, error: null }));
+    }).then((result) => {
+      record.finished = true;
+      this.#records.delete(record);
+      return result;
+    });
+    this.#records.add(record);
+    return record;
+  }
+
+  // Runs one command to completion. `stdout`/`stderr` take "ignore", "pipe"
+  // (collected and returned) or an open file descriptor.
+  async run(command, args, { cwd, env, input, stdout = "ignore", stderr = "ignore", timeoutMs } = {}) {
+    const record = this.start(command, args, { cwd, env, stdio: [input === undefined ? "ignore" : "pipe", stdout, stderr] });
+    const output = { stdout: [], stderr: [] };
+    record.child.stdout?.on("data", (chunk) => output.stdout.push(chunk));
+    record.child.stderr?.on("data", (chunk) => output.stderr.push(chunk));
+    if (input !== undefined) {
+      record.child.stdin.on("error", () => {});
+      record.child.stdin.end(input);
+    }
+    let timedOut = false;
+    const timer = timeoutMs ? setTimeout(() => { timedOut = true; this.terminate(record); }, timeoutMs) : null;
+    const result = await record.closed;
+    clearTimeout(timer);
+    this.assertRunning();
+    return { ...result, timedOut, stdout: Buffer.concat(output.stdout), stderr: Buffer.concat(output.stderr) };
+  }
+
+  #signal(record, signal) {
+    const { pid } = record.child;
+    if (pid === undefined) return false;
+    try {
+      if (this.#platform === "win32") return signal === 0 ? !record.finished : record.child.kill(signal);
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if (error.code === "ESRCH") return false;
+      throw error;
+    }
+  }
+
+  // Stops a process tree: SIGTERM to its group, SIGKILL after the grace
+  // period, then waits for the leader and any remaining group members.
+  async terminate(record) {
+    this.#signal(record, "SIGTERM");
+    const stopped = await Promise.race([record.closed.then(() => true), delay(this.#graceMs).then(() => false)]);
+    if (!stopped) this.#signal(record, "SIGKILL");
+    await record.closed;
+    const deadline = Date.now() + this.#graceMs;
+    let remaining = this.#signal(record, 0);
+    while (remaining && Date.now() < deadline) {
+      await delay(50);
+      remaining = this.#signal(record, 0);
+    }
+    if (remaining) this.#signal(record, "SIGKILL");
+  }
+
+  interrupt(signal) {
+    if (!this.#interruption) {
+      this.#interruption = { signal, done: Promise.all([...this.#records].map((record) => this.terminate(record))) };
+    }
+    return this.#interruption.done;
+  }
+
+  async stopAll() {
+    await Promise.all([this.#interruption?.done, ...[...this.#records].map((record) => this.terminate(record))]);
+  }
+}
+
+export function installInterruptHandlers(supervisor, signals = ["SIGINT", "SIGTERM"]) {
+  const handler = (signal) => {
+    console.error(`Downstream consumer: ${signal} received; stopping child processes and removing the stage`);
+    supervisor.interrupt(signal);
+  };
+  for (const signal of signals) process.on(signal, handler);
+  return () => {
+    for (const signal of signals) process.off(signal, handler);
+  };
+}
+
 function isInside(parent, child) {
   const path = relative(parent, child);
   return !path || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
@@ -449,7 +602,7 @@ path = ${JSON.stringify(join(run, "audit.jsonl"))}
 `;
 }
 
-function startSyntheticController() {
+export function startSyntheticController() {
   const requests = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url, "http://controller.invalid");
@@ -483,28 +636,21 @@ function freeLoopbackPort() {
   });
 }
 
-function runProcess(command, args, { env, cwd, timeoutMs = PROCESS_TIMEOUT_MS }) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { env, cwd, stdio: ["ignore", "pipe", "pipe"] });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.once("error", (error) => { clearTimeout(timer); reject(error); });
-    child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      resolvePromise({ code, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
-    });
-  });
+async function runCaptured(supervisor, command, args, { env, cwd }) {
+  const result = await supervisor.run(command, args, { env, cwd, stdout: "pipe", stderr: "pipe", timeoutMs: PROCESS_TIMEOUT_MS });
+  if (result.error) throw result.error;
+  return { code: result.code, signal: result.signal, timedOut: result.timedOut,
+    stdout: result.stdout.toString("utf8"), stderr: result.stderr.toString("utf8") };
 }
 
-async function waitForReady(url, child) {
+async function waitForReady(supervisor, url, broker) {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   let last = "no response";
   while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`The assembled broker exited before readiness with ${child.exitCode ?? child.signalCode}`);
+    supervisor.assertRunning();
+    if (broker.finished) {
+      const exit = await broker.closed;
+      throw new Error(`The assembled broker exited before readiness with ${exit.code ?? exit.signal ?? exit.error?.message}`);
     }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
@@ -513,22 +659,14 @@ async function waitForReady(url, child) {
     } catch (error) {
       last = error.message;
     }
-    await new Promise((done) => setTimeout(done, 200));
+    await delay(200);
   }
   throw new Error(`The assembled broker was not ready: ${last}`);
 }
 
-function waitForExit(child, timeoutMs) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
-  return Promise.race([
-    new Promise((done) => child.once("exit", () => done(true))),
-    new Promise((done) => setTimeout(() => done(false), timeoutMs)),
-  ]);
-}
-
 // Starts the built assembly against a synthetic CloudBees controller, checks
 // readiness, status identity and one read through the CLI, then stops it.
-async function processAcceptance({ binary, cli, run, evidence, env, version, platform }) {
+export async function runProcessAcceptance({ supervisor, binary, cli, run, evidence, env, version, platform = process.platform }) {
   mkdirSync(run, { recursive: true, mode: 0o700 });
   const output = join(evidence, "acceptance");
   mkdirSync(output, { recursive: true, mode: 0o700 });
@@ -544,86 +682,83 @@ async function processAcceptance({ binary, cli, run, evidence, env, version, pla
     if (!passed) throw new Error(`Process acceptance failed: ${id}${detail === undefined ? "" : ` (${typeof detail === "string" ? detail : JSON.stringify(detail)})`}`);
   };
   const controller = await startSyntheticController();
+  let broker = null;
   try {
-    const port = await freeLoopbackPort();
     const configPath = join(run, "broker.toml");
     const gatedPath = join(run, "broker-without-development.toml");
     writeFileSync(configPath, brokerConfiguration({ run, port: controller.port, development: true }), { mode: 0o600 });
     writeFileSync(gatedPath, brokerConfiguration({ run, port: controller.port, development: false }), { mode: 0o600 });
     copyFileSync(configPath, join(output, "broker.toml"));
 
-    const gated = await runProcess(binary, ["--config", gatedPath, "config", "validate"], { env, cwd: run });
+    const gated = await runCaptured(supervisor, binary, ["--config", gatedPath, "config", "validate"], { env, cwd: run });
     writeFileSync(join(output, "config-validate-without-development.log"), `${gated.stdout}${gated.stderr}`);
     check("development-provider-requires-fixtures", gated.code === 3 && gated.stderr.includes("providers.conformance"),
       { exitCode: gated.code });
-    const validated = await runProcess(binary, ["--config", configPath, "config", "validate"], { env, cwd: run });
+    const validated = await runCaptured(supervisor, binary, ["--config", configPath, "config", "validate"], { env, cwd: run });
     writeFileSync(join(output, "config-validate.log"), `${validated.stdout}${validated.stderr}`);
     check("config-validate", validated.code === 0, { exitCode: validated.code });
 
+    const port = await freeLoopbackPort();
     const base = `http://127.0.0.1:${port}`;
     const log = openSync(join(output, "broker.log"), "w", 0o600);
-    const broker = spawn(binary, ["--config", configPath, "serve", "--listen", `127.0.0.1:${port}`],
-      { env, cwd: run, stdio: ["ignore", log, log] });
-    let stopped = false;
     try {
-      await waitForReady(`${base}/v1/readyz`, broker);
-      check("readyz", true);
-      const health = await fetch(`${base}/v1/healthz`);
-      check("healthz", health.ok, { status: health.status });
-      const anonymous = await fetch(`${base}/v1/broker/status`, { headers: { "X-Agent-Access-Request-Id": "downstream-consumer-anonymous" } });
-      const anonymousBody = await anonymous.json().catch(() => null);
-      check("status-requires-identity", anonymous.status === 401 && anonymousBody?.reasonCode === "identity_required",
-        { status: anonymous.status, reasonCode: anonymousBody?.reasonCode });
-      const statusResponse = await fetch(`${base}/v1/broker/status`, {
-        headers: { "X-Agent-Access-Identity-Token": principalToken, "X-Agent-Access-Request-Id": "downstream-consumer-status" },
-      });
-      const status = await statusResponse.json();
-      writeFileSync(join(output, "status.json"), `${JSON.stringify(status, null, 2)}\n`);
-      check("status-ok", statusResponse.ok, { status: statusResponse.status });
-      assertAssemblyStatus(status, { version });
-      check("status-assembly-identity", true, { brokerVersion: status.brokerVersion, buildProvenance: status.buildProvenance });
-
-      const clientConfig = join(run, "client.toml");
-      writeFileSync(clientConfig, `[service]\nurl = ${JSON.stringify(base)}\n\n[identity]\nheader = "X-Agent-Access-Identity-Token"\nscheme = "raw"\ntoken_file = ${JSON.stringify(join(run, "principal-token"))}\n`, { mode: 0o600 });
-      const invoke = (job) => runProcess(cli, ["--config", clientConfig, "invoke", "cloudbees_ci.build.log.read", "--input-json",
-        JSON.stringify({ controller: "team-ci", job, buildNumber: 42, maxBytes: 1024 }), "--output", "-"], { env, cwd: run });
-      const allowed = await invoke("payments/build-api");
-      writeFileSync(join(output, "cli-allowed.json"), allowed.stdout);
-      writeFileSync(join(output, "cli-allowed.stderr.log"), allowed.stderr);
-      check("cli-read-exit", allowed.code === 0, { exitCode: allowed.code });
-      const read = JSON.parse(allowed.stdout);
-      check("cli-read-result", read.decision === "allow" && read.result?.text === SYNTHETIC_LOG,
-        { decision: read.decision, reachedEnd: read.result?.reachedEnd });
-      const denied = await invoke("payments/other-job");
-      writeFileSync(join(output, "cli-denied.json"), denied.stdout);
-      writeFileSync(join(output, "cli-denied.stderr.log"), denied.stderr);
-      const refusal = JSON.parse(denied.stdout || "null");
-      check("cli-ungranted-job-denied", denied.code !== 0 && refusal?.decision === "deny",
-        { exitCode: denied.code, decision: refusal?.decision, reasonCode: refusal?.reasonCode });
-      const reads = controller.requests.filter((request) => request.url.startsWith("/team-ci/"));
-      writeFileSync(join(output, "controller-requests.json"), `${JSON.stringify(controller.requests.map((request) => ({
-        method: request.method, url: request.url, authorization: request.authorization === expectedAuthorization ? "expected-basic" : request.authorization ? "unexpected" : "absent",
-      })), null, 2)}\n`);
-      check("controller-saw-one-authorized-read", reads.length === 1 && reads[0].method === "GET"
-        && new URL(reads[0].url, "http://controller.invalid").pathname === "/team-ci/job/payments/job/build-api/42/consoleText"
-        && reads[0].authorization === expectedAuthorization, { requests: reads.length });
-
-      if (platform === "win32") {
-        broker.kill();
-        stopped = await waitForExit(broker, SHUTDOWN_TIMEOUT_MS);
-        result.shutdown = "forced; POSIX signals are not available on Windows";
-      } else {
-        broker.kill("SIGTERM");
-        stopped = await waitForExit(broker, SHUTDOWN_TIMEOUT_MS);
-        check("sigterm-clean-exit", stopped && broker.exitCode === 0, { exitCode: broker.exitCode, signal: broker.signalCode });
-        result.shutdown = "SIGTERM, exit 0";
-      }
+      broker = supervisor.start(binary, ["--config", configPath, "serve", "--listen", `127.0.0.1:${port}`],
+        { env, cwd: run, stdio: ["ignore", log, log] });
     } finally {
-      if (!stopped && broker.exitCode === null && broker.signalCode === null) {
-        broker.kill("SIGKILL");
-        await waitForExit(broker, SHUTDOWN_TIMEOUT_MS);
-      }
       closeSync(log);
+    }
+    await waitForReady(supervisor, `${base}/v1/readyz`, broker);
+    check("readyz", true);
+    const health = await fetch(`${base}/v1/healthz`);
+    check("healthz", health.ok, { status: health.status });
+    const anonymous = await fetch(`${base}/v1/broker/status`, { headers: { "X-Agent-Access-Request-Id": "downstream-consumer-anonymous" } });
+    const anonymousBody = await anonymous.json().catch(() => null);
+    check("status-requires-identity", anonymous.status === 401 && anonymousBody?.reasonCode === "identity_required",
+      { status: anonymous.status, reasonCode: anonymousBody?.reasonCode });
+    const statusResponse = await fetch(`${base}/v1/broker/status`, {
+      headers: { "X-Agent-Access-Identity-Token": principalToken, "X-Agent-Access-Request-Id": "downstream-consumer-status" },
+    });
+    const status = await statusResponse.json();
+    writeFileSync(join(output, "status.json"), `${JSON.stringify(status, null, 2)}\n`);
+    check("status-ok", statusResponse.ok, { status: statusResponse.status });
+    assertAssemblyStatus(status, { version });
+    check("status-assembly-identity", true, { brokerVersion: status.brokerVersion, buildProvenance: status.buildProvenance });
+
+    const clientConfig = join(run, "client.toml");
+    writeFileSync(clientConfig, `[service]\nurl = ${JSON.stringify(base)}\n\n[identity]\nheader = "X-Agent-Access-Identity-Token"\nscheme = "raw"\ntoken_file = ${JSON.stringify(join(run, "principal-token"))}\n`, { mode: 0o600 });
+    const invoke = (job) => runCaptured(supervisor, cli, ["--config", clientConfig, "invoke", "cloudbees_ci.build.log.read", "--input-json",
+      JSON.stringify({ controller: "team-ci", job, buildNumber: 42, maxBytes: 1024 }), "--output", "-"], { env, cwd: run });
+    const allowed = await invoke("payments/build-api");
+    writeFileSync(join(output, "cli-allowed.json"), allowed.stdout);
+    writeFileSync(join(output, "cli-allowed.stderr.log"), allowed.stderr);
+    check("cli-read-exit", allowed.code === 0, { exitCode: allowed.code });
+    const read = JSON.parse(allowed.stdout);
+    check("cli-read-result", read.decision === "allow" && read.result?.text === SYNTHETIC_LOG,
+      { decision: read.decision, reachedEnd: read.result?.reachedEnd });
+    const denied = await invoke("payments/other-job");
+    writeFileSync(join(output, "cli-denied.json"), denied.stdout);
+    writeFileSync(join(output, "cli-denied.stderr.log"), denied.stderr);
+    const refusal = JSON.parse(denied.stdout || "null");
+    check("cli-ungranted-job-denied", denied.code !== 0 && refusal?.decision === "deny",
+      { exitCode: denied.code, decision: refusal?.decision, reasonCode: refusal?.reasonCode });
+    const reads = controller.requests.filter((request) => request.url.startsWith("/team-ci/"));
+    writeFileSync(join(output, "controller-requests.json"), `${JSON.stringify(controller.requests.map((request) => ({
+      method: request.method, url: request.url,
+      authorization: request.authorization === expectedAuthorization ? "expected-basic" : request.authorization ? "unexpected" : "absent",
+    })), null, 2)}\n`);
+    check("controller-saw-one-authorized-read", reads.length === 1 && reads[0].method === "GET"
+      && new URL(reads[0].url, "http://controller.invalid").pathname === "/team-ci/job/payments/job/build-api/42/consoleText"
+      && reads[0].authorization === expectedAuthorization, { requests: reads.length });
+
+    if (platform === "win32") {
+      await supervisor.terminate(broker);
+      result.shutdown = "forced; POSIX signals are not available on Windows";
+    } else {
+      broker.child.kill("SIGTERM");
+      const exit = await Promise.race([broker.closed, delay(SHUTDOWN_TIMEOUT_MS).then(() => null)]);
+      supervisor.assertRunning();
+      check("sigterm-clean-exit", exit?.code === 0, { exitCode: exit?.code ?? null, signal: exit?.signal ?? null });
+      result.shutdown = "SIGTERM, exit 0";
     }
     const auditPath = join(run, "audit.jsonl");
     const audit = existsSync(auditPath) ? readFileSync(auditPath, "utf8") : "";
@@ -633,40 +768,44 @@ async function processAcceptance({ binary, cli, run, evidence, env, version, pla
     check("audit-records", records.some((record) => record.decision === "allow") && records.some((record) => record.decision === "deny"),
       { decisions: records.map((record) => record.decision) });
   } finally {
+    if (broker && !broker.finished) await supervisor.terminate(broker);
     await controller.close();
   }
   return result;
 }
 
-export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, cli, source = "staged", env = process.env,
-  platform = process.platform } = {}) {
+export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, source = "staged", env = process.env,
+  platform = process.platform, supervisor = new ProcessSupervisor({ platform }) } = {}) {
   const evidence = qualificationOutputDirectory(root, evidenceDir);
   mkdirSync(join(evidence, "logs"), { recursive: true, mode: 0o700 });
   const report = { schemaVersion: 1, status: "running", mode: source, commit, startedAt: stamp(), finishedAt: null, steps: [],
-    scope: "Independent provider repository and downstream assembly staged from one clean candidate commit; locked offline Cargo against the shared download cache; process acceptance of the assembled broker with a freshly built CLI.",
+    scope: "Independent provider repository and downstream assembly staged from one clean candidate commit; locked offline Cargo against the shared download cache; process acceptance of the assembled broker with the candidate's CLI built in the stage.",
     limitations: [
       "Host test support is not available yet; process acceptance starts the built assembly executable directly.",
       "Assembly identity covers name and version only; the qualification label and module provenance map are not checked yet.",
       "Portal assets are not served or checked by this fixture.",
       ...(source === "staged" ? ["Upstream is a staged local clone; the canonical remote pin needs a separate --source canonical run after publication."] : []),
-      ...(platform === "win32" ? ["Graceful POSIX-signal shutdown is not exercised on Windows."] : []),
+      ...(platform === "win32" ? ["Graceful POSIX-signal shutdown and process-group termination are not exercised on Windows."] : []),
     ] };
   const save = () => writeFileSync(join(evidence, "status.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   save();
+  const removeHandlers = installInterruptHandlers(supervisor);
   let stage = null;
   let logIndex = 0;
   const paths = {};
   const step = async (id, action) => {
+    supervisor.assertRunning();
     const record = { id, status: "running", startedAt: stamp(), finishedAt: null };
     report.steps.push(record);
     save();
     console.log(`Downstream consumer: ${id}`);
     try {
       const value = await action(record);
+      supervisor.assertRunning();
       record.status = "passed";
       return value;
     } catch (error) {
-      record.status = "failed";
+      record.status = supervisor.interruption ? "interrupted" : "failed";
       record.error = error.message;
       throw error;
     } finally {
@@ -674,68 +813,75 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       save();
     }
   };
-  const execute = (label, program, args, { cwd, env: commandEnv, input, captureOutput = false }) => {
+  const execute = async (label, program, args, { cwd, env: commandEnv, input, capture = false }) => {
     logIndex += 1;
     const name = `${String(logIndex).padStart(2, "0")}-${label}.log`;
     const log = openSync(join(evidence, "logs", name), "w", 0o600);
     try {
       writeSync(log, `$ ${[program, ...args].join(" ")}\n# cwd: ${cwd}\n# started: ${stamp()}\n`);
-      const result = spawnSync(program, args, { cwd, env: commandEnv, input,
-        stdio: [input === undefined ? "ignore" : "pipe", captureOutput ? "pipe" : log, log], maxBuffer: 1024 * 1024 * 1024 });
-      writeSync(log, `\n# exit: ${result.status ?? result.signal} ${stamp()}\n`);
+      let result;
+      try {
+        result = await supervisor.run(program, args, { cwd, env: commandEnv, input, stdout: capture ? "pipe" : log, stderr: log });
+      } catch (error) {
+        writeSync(log, `\n# ${error.message} ${stamp()}\n`);
+        throw error;
+      }
+      writeSync(log, `\n# exit: ${result.code ?? result.signal} ${stamp()}\n`);
       if (result.error) throw result.error;
-      if (result.status !== 0) throw new Error(`${label} failed with exit ${result.status ?? result.signal}; see logs/${name}`);
-      return captureOutput ? result.stdout : null;
+      if (result.code !== 0) throw new Error(`${label} failed with exit ${result.code ?? result.signal}; see logs/${name}`);
+      return capture ? result.stdout : null;
     } finally {
       closeSync(log);
     }
   };
+  const executable = (name) => (platform === "win32" ? `${name}.exe` : name);
   try {
     const { env: clean, removed } = sanitizedEnvironment(env);
     const sharedCargoHome = resolve(env.CARGO_HOME || join(homedir(), ".cargo"));
-    const gitEnv = { ...clean, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0" };
-    const git = (label, cwd, args, options = {}) => execute(label, "git", args, { cwd, env: gitEnv, ...options });
-    const gitText = (cwd, args) => execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    let gitEnv;
     let toolchain;
     let candidateLockText;
     let candidateRootText;
     let upstreamSourceUrl;
+    const git = (label, cwd, args, options = {}) => execute(label, "git", args, { cwd, env: gitEnv, ...options });
+    const gitText = (cwd, args) => execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
     await step("preflight", (record) => {
       assertNoGitOverrides(env);
       assertQualificationSource(root, commit, clean);
-      accessSync(cli, constants.X_OK);
-      const cliBytes = readFileSync(cli);
       toolchain = inspectLocalToolchain(root, { env: clean });
       report.toolchain = { pinned: toolchain.pinned, host: toolchain.host, cargoPath: toolchain.cargoPath,
         rustcPath: toolchain.rustcPath, cargoVersion: toolchain.cargoVersion, rustcVersion: toolchain.rustcVerbose.split("\n")[0] };
-      report.cli = { path: cli, sha256: sha256(cliBytes), bytes: cliBytes.length };
       report.removedEnvironment = removed;
       report.sharedCargoHome = sharedCargoHome;
       record.detail = { root, commit };
     });
 
-    await step("stage-upstream", () => {
+    await step("stage-upstream", async () => {
       stage = realpathSync(mkdtempSync(join(tmpdir(), "aab-downstream-")));
       chmodSync(stage, 0o700);
       if (isInside(realpathSync(root), stage)) throw new Error("The stage must be outside the candidate checkout; set TMPDIR elsewhere");
-      Object.assign(paths, { upstream: join(stage, "upstream"), provider: join(stage, "provider"), assembly: join(stage, "assembly"),
-        registry: join(stage, "registry"), cargoHome: join(stage, "cargo-home"), run: join(stage, "run") });
+      Object.assign(paths, { upstream: join(stage, "upstream"), candidate: join(stage, "candidate"), provider: join(stage, "provider"),
+        assembly: join(stage, "assembly"), registry: join(stage, "registry"), cargoHome: join(stage, "cargo-home"),
+        home: join(stage, "home"), run: join(stage, "run") });
       report.stage = { path: stage, deleted: false };
-      git("clone-upstream", stage, ["clone", "--bare", "--no-local", "--no-hardlinks", "--quiet", root, paths.upstream]);
+      mkdirSync(paths.home, { mode: 0o700 });
+      gitEnv = isolatedGitEnvironment(clean, { home: paths.home, protocols: source === "canonical" ? "file:https" : "file" });
+      report.gitIsolation = { home: "stage-owned and empty", systemConfig: "disabled", globalConfig: devNull, allowedProtocols: gitEnv.GIT_ALLOW_PROTOCOL };
+      await git("clone-upstream", stage, ["clone", "--bare", "--no-local", "--no-hardlinks", "--quiet", root, paths.upstream]);
       if (existsSync(join(paths.upstream, "objects", "info", "alternates"))) {
         throw new Error("The staged upstream clone must not borrow objects through alternates");
       }
       if (gitText(paths.upstream, ["rev-parse", "--verify", `${commit}^{commit}`]) !== commit) {
         throw new Error("The staged upstream clone does not contain the candidate commit");
       }
-      git("detach-upstream", paths.upstream, ["update-ref", "--no-deref", "HEAD", commit]);
+      await git("detach-upstream", paths.upstream, ["update-ref", "--no-deref", "HEAD", commit]);
       const refs = gitText(paths.upstream, ["for-each-ref", "--format=%(refname)"]).split("\n").filter(Boolean);
       if (refs.length) {
-        git("prune-upstream-refs", paths.upstream, ["update-ref", "--stdin"], { input: refs.map((ref) => `delete ${ref}\n`).join("") });
+        await git("prune-upstream-refs", paths.upstream, ["update-ref", "--stdin"], { input: refs.map((ref) => `delete ${ref}\n`).join("") });
       }
-      git("advertise-candidate", paths.upstream, ["update-ref", "refs/heads/candidate", commit]);
-      git("remove-origin", paths.upstream, ["remote", "remove", "origin"]);
+      await git("advertise-candidate", paths.upstream, ["update-ref", "refs/heads/candidate", commit]);
+      await git("remove-origin", paths.upstream, ["remote", "remove", "origin"]);
       const advertised = gitText(paths.upstream, ["ls-remote", "."]).split("\n").filter(Boolean);
       if (!advertised.length || advertised.some((line) => !line.startsWith(`${commit}\t`))) {
         throw new Error(`The staged upstream must advertise only the candidate commit: ${advertised.join("; ")}`);
@@ -749,12 +895,12 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
 
     const candidateLock = parseLockfile(candidateLockText);
     const upstreamNames = new Set(candidateLock.packages.filter((entry) => entry.source === null).map((entry) => entry.name));
-    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci"]) {
+    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, CLI_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci"]) {
       if (!upstreamNames.has(name)) throw new Error(`The candidate workspace has no ${name} package`);
     }
     const seed = thirdPartyLockSeed(candidateLockText);
 
-    await step("registry-source", (record) => {
+    await step("registry-source", async (record) => {
       const cacheRoot = join(sharedCargoHome, "registry", "cache");
       const cacheDirectories = existsSync(cacheRoot) ? readdirSync(cacheRoot, { withFileTypes: true })
         .filter((entry) => entry.isDirectory()).map((entry) => join(cacheRoot, entry.name)) : [];
@@ -777,74 +923,85 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       for (const { entry, file } of archives) {
         const directory = `${entry.name}-${entry.version}`;
         const extraction = mkdtempSync(join(paths.registry, ".extract-"));
-        const unpacked = spawnSync("tar", ["-xzf", file, "-C", extraction], { env: clean, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] });
-        if (unpacked.error || unpacked.status !== 0) {
-          throw new Error(`Extracting ${file} failed: ${unpacked.error?.message ?? unpacked.stderr.trim()}`);
+        const unpacked = await supervisor.run("tar", ["-xzf", file, "-C", extraction], { env: clean, stderr: "pipe" });
+        if (unpacked.error || unpacked.code !== 0) {
+          throw new Error(`Extracting ${file} failed: ${unpacked.error?.message ?? unpacked.stderr.toString("utf8").trim()}`);
         }
         const extracted = readdirSync(extraction);
-        if (extracted.length !== 1 || extracted[0] !== directory) {
-          throw new Error(`${file} must contain only ${directory}/`);
-        }
+        if (extracted.length !== 1 || extracted[0] !== directory) throw new Error(`${file} must contain only ${directory}/`);
         renameSync(join(extraction, directory), join(paths.registry, directory));
         rmSync(extraction, { recursive: true });
         writeFileSync(join(paths.registry, directory, ".cargo-checksum.json"), JSON.stringify({ files: {}, package: entry.checksum }));
       }
       mkdirSync(paths.cargoHome, { mode: 0o700 });
-      const config = `# Private Cargo home for the staged repositories. crates.io packages
-# resolve only from archives copied out of the shared download cache.
-[source.crates-io]
-replace-with = "shared-download-cache"
-
-[source.shared-download-cache]
-directory = ${JSON.stringify(paths.registry)}
-`;
+      const config = stagedCargoConfig(paths.registry);
       writeFileSync(join(paths.cargoHome, "config.toml"), config, { mode: 0o600 });
       writeFileSync(join(evidence, "cargo-home-config.toml"), config);
       record.detail = { crates: archives.length, cacheDirectories };
       report.registry = { replacement: "directory source built from the shared download cache", crates: archives.length, cacheDirectories };
-      // Ambient configuration in an ancestor directory still applies to the
-      // staged repositories; reject any that could change dependency sources.
-      const configs = [...new Map([paths.provider, paths.assembly]
-        .flatMap((directory) => cargoConfigInventory(directory, { CARGO_HOME: paths.cargoHome }))
-        .map((config) => [config.path, config])).values()];
-      report.cargoConfigs = configs;
-      const foreign = configs.filter((config) => config.path !== join(paths.cargoHome, "config.toml")
-        && /^\s*\[(?:source|patch|registries|registry)\b/m.test(readFileSync(config.path, "utf8")));
-      if (foreign.length) throw new Error(`Ambient Cargo configuration changes dependency sources: ${foreign.map((config) => config.path).join(", ")}`);
+      report.cargoConfiguration = { private: join(paths.cargoHome, "config.toml"), sha256: sha256(config), checkedDirectories: [] };
     });
 
-    const rustdoc = realpathSync(join(dirname(toolchain.rustcPath), process.platform === "win32" ? "rustdoc.exe" : "rustdoc"));
-    const rustfmt = realpathSync(join(dirname(toolchain.rustcPath), process.platform === "win32" ? "rustfmt.exe" : "rustfmt"));
-    const cargoEnv = { ...clean, CARGO_HOME: paths.cargoHome, RUSTC: toolchain.rustcPath, RUSTDOC: rustdoc, CARGO_TERM_COLOR: "never" };
+    const rustdoc = realpathSync(join(dirname(toolchain.rustcPath), executable("rustdoc")));
+    const rustfmt = realpathSync(join(dirname(toolchain.rustcPath), executable("rustfmt")));
+    const cargoEnv = { ...gitEnv, CARGO_HOME: paths.cargoHome, RUSTC: toolchain.rustcPath, RUSTDOC: rustdoc, CARGO_TERM_COLOR: "never" };
     const cargo = (label, cwd, args, options = {}) => execute(label, toolchain.cargoPath, args, { cwd, env: cargoEnv, ...options });
-    const extract = (label, path, destination, strip) => {
-      const archive = execFileSync("git", ["archive", "--format=tar", commit, "--", path],
-        { cwd: paths.upstream, env: gitEnv, maxBuffer: 1024 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
-      execute(label, "tar", ["-x", "-C", destination, ...(strip ? [`--strip-components=${strip}`] : [])], { cwd: destination, env: clean, input: archive });
+    const targetDirectory = (directory) => ["--target-dir", join(directory, "target")];
+    const extract = async (label, path, destination, strip) => {
+      const archive = await git(`${label}-archive`, paths.upstream, ["archive", "--format=tar", commit, ...(path ? ["--", path] : [])], { capture: true });
+      await execute(`${label}-extract`, "tar", ["-x", "-C", destination, ...(strip ? [`--strip-components=${strip}`] : [])],
+        { cwd: destination, env: clean, input: archive });
     };
-    const commitRepository = (label, directory, message) => {
+    const commitRepository = async (label, directory, message) => {
       const identity = { GIT_AUTHOR_NAME: "Downstream Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
         GIT_COMMITTER_NAME: "Downstream Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
         GIT_AUTHOR_DATE: report.upstream.committedAt, GIT_COMMITTER_DATE: report.upstream.committedAt };
-      git(`${label}-init`, directory, ["init", "--quiet", "--initial-branch=main"]);
-      git(`${label}-add`, directory, ["add", "--all"]);
-      execute(`${label}-commit`, "git", ["commit", "--quiet", "--no-verify", "-m", message], { cwd: directory, env: { ...gitEnv, ...identity } });
+      await git(`${label}-init`, directory, ["init", "--quiet", "--initial-branch=main"]);
+      await git(`${label}-add`, directory, ["add", "--all"]);
+      await execute(`${label}-commit`, "git", ["commit", "--quiet", "--no-verify", "-m", message], { cwd: directory, env: { ...gitEnv, ...identity } });
       return gitText(directory, ["rev-parse", "HEAD"]);
     };
     const assertToolchain = (directory) => {
       const channel = toolchainChannel(readFileSync(join(directory, "rust-toolchain.toml"), "utf8"));
       if (channel !== toolchain.pinned) throw new Error(`${directory} pins ${channel}; the candidate pins ${toolchain.pinned}`);
     };
+    // Runs after a repository's files are in place and before Cargo first
+    // runs there, so committed or ancestor configuration cannot apply.
+    const assertCargoConfiguration = (directory) => {
+      const foreign = foreignCargoConfigs(directory, paths.cargoHome);
+      report.cargoConfiguration.checkedDirectories.push(directory);
+      if (foreign.length) {
+        throw new Error(`Cargo configuration outside the stage's private Cargo home applies to ${directory}: `
+          + `${foreign.map((config) => config.path).join(", ")}. Remove it, or set TMPDIR to a directory without Cargo configuration in its ancestors.`);
+      }
+    };
     const upstreamSource = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamSourceUrl, rev: commit, packages: upstreamNames };
     const mapping = { schemaVersion: 1, mode: source, candidate: { commit, committedAt: report.upstream.committedAt },
       sources: [], manifests: [] };
+    let cli;
     let providerCommit;
 
-    await step("stage-provider", (record) => {
+    await step("candidate-cli", async (record) => {
+      mkdirSync(paths.candidate, { mode: 0o700 });
+      await extract("candidate", null, paths.candidate, 0);
+      assertToolchain(paths.candidate);
+      assertCargoConfiguration(paths.candidate);
+      const args = ["build", "--locked", "--offline", "-p", CLI_PACKAGE, ...targetDirectory(paths.candidate)];
+      await cargo("candidate-cli-build", paths.candidate, args);
+      cli = join(paths.candidate, "target", "debug", executable(CLI_PACKAGE));
+      accessSync(cli, constants.X_OK);
+      const bytes = readFileSync(cli);
+      report.cli = { builtFrom: commit, source: "git archive of the candidate commit from the staged clone, built in the stage",
+        command: ["cargo", ...args], sha256: sha256(bytes), bytes: bytes.length };
+      record.detail = { sha256: report.cli.sha256 };
+    });
+
+    await step("stage-provider", async (record) => {
       mkdirSync(paths.provider, { mode: 0o700 });
-      extract("archive-provider-template", `${FIXTURE_DIRECTORY}/provider-repo`, paths.provider, 3);
-      extract("archive-provider-crate", PROVIDER_CRATE_DIRECTORY, paths.provider, 0);
+      await extract("provider-template", `${FIXTURE_DIRECTORY}/provider-repo`, paths.provider, 3);
+      await extract("provider-crate", PROVIDER_CRATE_DIRECTORY, paths.provider, 0);
       assertToolchain(paths.provider);
+      assertCargoConfiguration(paths.provider);
       const crateManifestPath = join(paths.provider, PROVIDER_CRATE_DIRECTORY, "Cargo.toml");
       const crateManifest = readFileSync(crateManifestPath, "utf8");
       if (/^name = "([^"]+)"$/m.exec(crateManifest)?.[1] !== PROVIDER_PACKAGE) {
@@ -857,27 +1014,27 @@ directory = ${JSON.stringify(paths.registry)}
         throw new Error("The provider template must end with its [workspace.dependencies] table");
       }
       const inherited = inheritedWorkspaceDependencies(candidateRootText, normalized.inherited);
-      const sources = [upstreamSource];
-      const rootManifest = rewriteStagedManifest(`${template.trimEnd()}\n${inherited.join("\n")}\n`, sources);
-      const crate = rewriteStagedManifest(normalized.text, sources);
+      const rootManifest = rewriteStagedManifest(`${template.trimEnd()}\n${inherited.join("\n")}\n`, [upstreamSource]);
+      const crate = rewriteStagedManifest(normalized.text, [upstreamSource]);
       writeFileSync(rootPath, rootManifest.text);
       writeFileSync(crateManifestPath, crate.text);
       writeFileSync(join(paths.provider, "Cargo.lock"), seed);
       mapping.manifests.push({ repository: "provider", path: "Cargo.toml", rewrites: rootManifest.rewrites, inheritedFromCandidate: normalized.inherited },
         { repository: "provider", path: `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`, rewrites: crate.rewrites,
           normalized: `${SDK_PACKAGE} path dependency replaced by the provider workspace pin` });
-      cargo("provider-setup-fetch", paths.provider, ["fetch"]);
-      providerCommit = commitRepository("provider", paths.provider,
+      await cargo("provider-setup-fetch", paths.provider, ["fetch"]);
+      providerCommit = await commitRepository("provider", paths.provider,
         `Provider repository staged from ${commit}\n\nContains ${PROVIDER_CRATE_DIRECTORY} and ${FIXTURE_DIRECTORY}/provider-repo.`);
       record.detail = { commit: providerCommit };
     });
 
     const providerSourceUrl = pathToFileURL(paths.provider).href;
     let assemblyCommit;
-    await step("stage-assembly", (record) => {
+    await step("stage-assembly", async (record) => {
       mkdirSync(paths.assembly, { mode: 0o700 });
-      extract("archive-assembly-template", `${FIXTURE_DIRECTORY}/assembly-repo`, paths.assembly, 3);
+      await extract("assembly-template", `${FIXTURE_DIRECTORY}/assembly-repo`, paths.assembly, 3);
       assertToolchain(paths.assembly);
+      assertCargoConfiguration(paths.assembly);
       const manifestPath = join(paths.assembly, "Cargo.toml");
       const sources = [
         { canonical: CANONICAL_PROVIDER_URL, url: providerSourceUrl, rev: providerCommit, packages: new Set([PROVIDER_PACKAGE]) },
@@ -887,8 +1044,8 @@ directory = ${JSON.stringify(paths.registry)}
       writeFileSync(manifestPath, manifest.text);
       writeFileSync(join(paths.assembly, "Cargo.lock"), seed);
       mapping.manifests.push({ repository: "assembly", path: "Cargo.toml", rewrites: manifest.rewrites });
-      cargo("assembly-setup-fetch", paths.assembly, ["fetch"]);
-      assemblyCommit = commitRepository("assembly", paths.assembly, `Downstream assembly staged from ${commit}`);
+      await cargo("assembly-setup-fetch", paths.assembly, ["fetch"]);
+      assemblyCommit = await commitRepository("assembly", paths.assembly, `Downstream assembly staged from ${commit}`);
       record.detail = { commit: assemblyCommit };
     });
 
@@ -899,6 +1056,7 @@ directory = ${JSON.stringify(paths.registry)}
         lockSource: gitSourceId(providerSourceUrl, providerCommit),
         contents: [`${PROVIDER_CRATE_DIRECTORY} at ${commit}`, `${FIXTURE_DIRECTORY}/provider-repo at ${commit}`] },
       { role: "assembly", repository: "local only", commit: assemblyCommit, contents: [`${FIXTURE_DIRECTORY}/assembly-repo at ${commit}`] },
+      { role: "cli", builtFrom: commit, sha256: report.cli.sha256 },
     );
     mapping.registry = report.registry;
     writeFileSync(join(evidence, "source-mapping.json"), `${JSON.stringify(mapping, null, 2)}\n`);
@@ -915,33 +1073,33 @@ directory = ${JSON.stringify(paths.registry)}
       if (review.errors.length) throw new Error(`Lockfile review failed:\n${review.errors.join("\n")}`);
     });
 
-    await step("provider-tests", () => {
-      cargo("provider-test", paths.provider, ["test", "--locked", "--offline"]);
+    await step("provider-tests", async () => {
+      await cargo("provider-test", paths.provider, ["test", "--locked", "--offline", ...targetDirectory(paths.provider)]);
     });
 
-    await step("provider-boundaries", (record) => {
-      const metadata = JSON.parse(cargo("provider-metadata", paths.provider,
-        ["metadata", "--locked", "--offline", "--format-version", "1"], { captureOutput: true }).toString("utf8"));
-      const tree = cargo("provider-tree", paths.provider,
-        ["tree", "--locked", "--offline", "-e", "normal,build,dev,features", "--target", "all"], { captureOutput: true }).toString("utf8");
+    await step("provider-boundaries", async (record) => {
+      const metadata = JSON.parse((await cargo("provider-metadata", paths.provider,
+        ["metadata", "--locked", "--offline", "--format-version", "1"], { capture: true })).toString("utf8"));
+      const tree = (await cargo("provider-tree", paths.provider,
+        ["tree", "--locked", "--offline", "-e", "normal,build,dev,features", "--target", "all"], { capture: true })).toString("utf8");
       writeFileSync(join(evidence, "cargo-tree-provider.txt"), tree);
       const violations = providerBoundaryViolations(metadata);
       record.detail = { packages: metadata.packages.length };
       if (violations.length) throw new Error(`The provider repository reaches forbidden upstream crates:\n${violations.join("\n")}`);
     });
 
-    const binary = join(paths.assembly, "target", "debug", platform === "win32" ? `${ASSEMBLY_PACKAGE}.exe` : ASSEMBLY_PACKAGE);
-    await step("assembly-build", () => {
-      execute("assembly-format", rustfmt, ["--check", "--edition", ASSEMBLY_EDITION, "src/lib.rs", "src/main.rs"],
+    const binary = join(paths.assembly, "target", "debug", executable(ASSEMBLY_PACKAGE));
+    await step("assembly-build", async () => {
+      await execute("assembly-format", rustfmt, ["--check", "--edition", ASSEMBLY_EDITION, "src/lib.rs", "src/main.rs"],
         { cwd: paths.assembly, env: cargoEnv });
-      cargo("assembly-build", paths.assembly, ["build", "--locked", "--offline"]);
-      cargo("assembly-test", paths.assembly, ["test", "--locked", "--offline"]);
+      await cargo("assembly-build", paths.assembly, ["build", "--locked", "--offline", ...targetDirectory(paths.assembly)]);
+      await cargo("assembly-test", paths.assembly, ["test", "--locked", "--offline", ...targetDirectory(paths.assembly)]);
       accessSync(binary, constants.X_OK);
     });
 
-    await step("assembly-features", (record) => {
-      const tree = cargo("assembly-tree", paths.assembly, ["tree", "--locked", "--offline", "-e", "normal,build,features",
-        "--target", "all", "-p", ASSEMBLY_PACKAGE], { captureOutput: true }).toString("utf8");
+    await step("assembly-features", async (record) => {
+      const tree = (await cargo("assembly-tree", paths.assembly, ["tree", "--locked", "--offline", "-e", "normal,build,features",
+        "--target", "all", "-p", ASSEMBLY_PACKAGE], { capture: true })).toString("utf8");
       writeFileSync(join(evidence, "cargo-tree-assembly.txt"), tree);
       const violations = featureViolations(tree);
       record.detail = { lines: tree.split("\n").length };
@@ -949,19 +1107,23 @@ directory = ${JSON.stringify(paths.registry)}
     });
 
     await step("process-acceptance", async (record) => {
-      report.acceptance = await processAcceptance({ binary, cli, run: paths.run, evidence, env: clean,
-        version: /^version = "([^"]+)"$/m.exec(readFileSync(join(paths.assembly, "Cargo.toml"), "utf8"))[1], platform });
+      report.acceptance = await runProcessAcceptance({ supervisor, binary, cli, run: paths.run, evidence,
+        env: { ...clean, HOME: paths.home }, platform,
+        version: /^version = "([^"]+)"$/m.exec(readFileSync(join(paths.assembly, "Cargo.toml"), "utf8"))[1] });
       record.detail = { checks: report.acceptance.checks.length, shutdown: report.acceptance.shutdown };
     });
 
+    supervisor.assertRunning();
     assertQualificationSource(root, commit, clean);
     report.status = "passed";
   } catch (error) {
-    report.status = "failed";
-    report.error = error.message;
-    throw error;
+    const interrupted = supervisor.interruption;
+    report.status = interrupted ? "interrupted" : "failed";
+    report.error = interrupted && !(error instanceof InterruptedError) ? `Interrupted by ${interrupted}: ${error.message}` : error.message;
+    throw interrupted ? new InterruptedError(interrupted) : error;
   } finally {
     try {
+      await supervisor.stopAll();
       for (const [repository, files] of [["provider", ["Cargo.lock", "Cargo.toml", `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`]],
         ["assembly", ["Cargo.lock", "Cargo.toml"]]]) {
         for (const file of files) {
@@ -978,10 +1140,16 @@ directory = ${JSON.stringify(paths.registry)}
         rmSync(stage, { recursive: true, force: true });
         report.stage.deleted = !existsSync(stage);
       }
+      if (supervisor.interruption && report.status === "passed") {
+        report.status = "interrupted";
+        report.error = `Interrupted by ${supervisor.interruption} during cleanup`;
+      }
       report.finishedAt = stamp();
       save();
+      removeHandlers();
     }
   }
+  if (report.status === "interrupted") throw new InterruptedError(supervisor.interruption);
   console.log(`Downstream consumer passed at ${commit}: ${join(evidence, "status.json")}`);
   return report;
 }
@@ -991,6 +1159,6 @@ if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[
     await runDownstreamConsumer(parseConsumerArguments(process.argv.slice(2)));
   } catch (error) {
     console.error(error.message);
-    process.exitCode = 1;
+    process.exitCode = error instanceof InterruptedError ? 128 + (osConstants.signals[error.signal] ?? 0) : 1;
   }
 }
