@@ -659,6 +659,118 @@ async fn discovery_holds_adapters_to_the_verification_contract() {
     );
 }
 
+/// Throttling by an OpenAPI document server is the upstream's rate limit for
+/// the imported service, with or without a wait, never a provider contract
+/// failure at the discovery boundary.
+#[tokio::test]
+async fn openapi_discovery_throttling_stays_an_upstream_rate_limit() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let api = format!("{}/api", server.uri());
+    let document = format!("{}/definition.json", server.uri());
+    let fixture = fixture();
+    let token = admin_token(&fixture);
+    let mut config = fixture.config.clone();
+    config.imports.allowed_kinds.push("openapi_http".into());
+    config
+        .imports
+        .allowed_endpoints
+        .extend([api.clone(), document.clone()]);
+    let app = build_router(
+        BrokerRuntime::new(config.clone()).unwrap(),
+        broker_build_status(),
+    );
+    let mut definition = definition();
+    definition.service = "documents".into();
+    definition.adapter_kind = "openapi_http".into();
+    definition.endpoint = api;
+    definition.connection_settings = BTreeMap::from([
+        ("definitionUrl".into(), document),
+        ("securityScheme".into(), "access".into()),
+    ]);
+    definition.discovery = ImportedDiscoveryCredential::Anonymous;
+    let (status, created) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(json!(definition)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    // A runtime started on the same store loads the published import.
+    let runtime = BrokerRuntime::new(config).unwrap();
+
+    for retry_after in [Some("30"), None] {
+        let throttle = || async {
+            server.reset().await;
+            let mut throttled = ResponseTemplate::new(429);
+            if let Some(seconds) = retry_after {
+                throttled = throttled.insert_header("Retry-After", seconds);
+            }
+            Mock::given(method("GET"))
+                .and(path("/definition.json"))
+                .respond_with(throttled)
+                .expect(1)
+                .mount(&server)
+                .await;
+        };
+
+        // The runtime discovery boundary keeps the adapter's rate limit with
+        // its upstream status and result.
+        throttle().await;
+        let Err(ImportDiscoveryError::Discovery(error)) = runtime
+            .discover_imported_service("documents", "admin")
+            .await
+        else {
+            panic!("expected the adapter's discovery failure");
+        };
+        assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.upstream_status, Some(429));
+        let result = error.result.as_deref().unwrap();
+        assert_eq!(result["limitScope"], "upstream");
+        assert_eq!(result["service"], "documents");
+        match retry_after {
+            Some(_) => {
+                assert_eq!(result["retryAfterSeconds"], 30);
+                assert!(result["retryAt"].is_string());
+            }
+            None => {
+                assert!(result.get("retryAfterSeconds").is_none());
+                assert!(result.get("retryAt").is_none());
+            }
+        }
+        server.verify().await;
+
+        // Management reports it with the rate limit's own outcome.
+        throttle().await;
+        let (status, failed) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/documents/discover",
+            Some(versions(&created["result"])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{failed}");
+        assert_eq!(failed["decision"], "error", "{failed}");
+        assert_eq!(failed["reasonCode"], "upstream_rate_limited", "{failed}");
+        let message = failed["error"]["message"].as_str().unwrap();
+        assert!(
+            message.starts_with("documents is rate limiting requests. "),
+            "{failed}"
+        );
+        assert_eq!(
+            message.ends_with("Retry later."),
+            retry_after.is_none(),
+            "{failed}"
+        );
+        server.verify().await;
+    }
+}
+
 #[tokio::test]
 async fn import_management_requires_admin_and_gate_off_preserves_cleanup() {
     let fixture = fixture();

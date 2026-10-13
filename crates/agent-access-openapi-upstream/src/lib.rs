@@ -178,6 +178,15 @@ impl ImportedAdapter for OpenApiAdapter {
                 })?;
             let status = response.status().as_u16();
             complete_upstream_trace(&mut response, None);
+            if status == 429 {
+                // Throttling by the document server is the upstream's rate
+                // limit for this imported service, with its bounded wait.
+                return Err(upstream_rate_limited(
+                    &definition.service,
+                    UpstreamRetryAfter::from_headers(response.headers()),
+                )
+                .with_upstream(Some(status), None));
+            }
             if status != 200 {
                 return Err(ProviderError::error(
                     status_reason(status),
