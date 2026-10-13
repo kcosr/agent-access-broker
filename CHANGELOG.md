@@ -273,6 +273,18 @@ All notable changes to this project are documented in this file.
   `ProviderFixture` supplies the providers of configured native kinds, and
   read-only views expose the fixture's audit and managed stores. Release builds
   must not enable the feature.
+- A provider-author guide, `docs/provider-sdk.md`, replaces the "Adding a
+  backend" section of the architecture document. It covers the supported SDK
+  surface and trust model, registration and configuration, descriptors, scope
+  resolution and provider state, admitted authority and static and delegated
+  credential obligations, governed HTTP, continuation tokens, standard and
+  domain reasons, outcomes, testing, the compatibility policy and a worked
+  example.
+- A downstream assembly guide, `docs/downstream-assembly.md`, covers building
+  another distribution from the Broker host: composition, the application
+  lifecycle, assembly identity and module provenance, canonical Git pins,
+  coordinated upgrades, source overrides, lockfile review, CLI and portal
+  assets, the release-feature check and qualification.
 
 ### Changed
 

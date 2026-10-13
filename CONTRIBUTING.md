@@ -55,3 +55,34 @@ Discuss the scope and fit before investing in a larger implementation. For a new
 integration or access-control feature, explain the service, required actions,
 credential model, and resource boundaries involved. Keep feature proposals
 separate from bug-fix pull requests so each can be reviewed on its own merits.
+
+## Contribute a provider
+
+A native provider does not need to live in this repository. You can keep it in
+your own repository, depend on the provider SDK by a pinned upstream revision,
+and build your own distribution that links it; that needs no upstream change.
+The [provider SDK guide](docs/provider-sdk.md) describes the supported
+interfaces, the trust model and a worked example, and the
+[downstream assembly guide](docs/downstream-assembly.md) covers composition,
+identity, pinning and qualification.
+
+Propose a provider for this repository through a feature discussion first.
+An accepted first-party provider is a `crates/agent-access-<service>` crate
+whose manifest declares `role = "native"`. It depends only on the SDK and
+helper libraries, never on core, the host, an assembly, the CLI or an import
+adapter. The pull request also:
+
+- selects its registration in `crates/agent-access-broker/src/backends.rs` and
+  adds its package to the module provenance list in
+  `crates/agent-access-broker/src/build_info.rs`;
+- adds its registration to the reviewed selection entry points in
+  `scripts/public-api.mjs` and commits the regenerated `api/` inventory;
+- adds `docs/providers-<service>.md`, links it from
+  [providers.md](docs/providers.md) and the README integration table, and
+  updates the configuration reference and sample configuration;
+- includes unit tests built with the SDK's `test-support` feature and an
+  offline Broker/CLI smoke against a stubbed upstream.
+
+Propose changes to the SDK itself as a feature request with the provider use
+case. Supported interfaces follow the guide's
+[compatibility policy](docs/provider-sdk.md#compatibility-policy).

@@ -11,7 +11,8 @@ runtime spec endpoints are in [docs/http-api.md](http-api.md). Configuration
 keys for credentials, providers and `gateways` are in
 [docs/configuration.md](configuration.md). CLI-wide behavior is in
 [docs/cli.md](cli.md). Agent-facing recipes are maintained as access-surface
-skills under [skills/](../skills/).
+skills under [skills/](../skills/). Developers writing a provider start with the
+[provider SDK guide](provider-sdk.md).
 
 ## Provider Documents
 

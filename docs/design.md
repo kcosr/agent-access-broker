@@ -19,7 +19,9 @@ configuration keys are in [docs/configuration.md](configuration.md); per-provide
 behavior is in [docs/providers.md](providers.md); the broader agent containment
 and egress-boundary rationale is in [docs/security-model.md](security-model.md);
 managed-store database, encryption, and audit database details are in
-[docs/database.md](database.md).
+[docs/database.md](database.md). Writing a native provider is covered by the
+[provider SDK guide](provider-sdk.md), and building another distribution from
+the host by the [downstream assembly guide](downstream-assembly.md).
 
 ## MCP connection views
 
@@ -153,7 +155,7 @@ also includes a same-origin browser portal frontend:
 - **`agent-access-conformance`** — a test-only backend (not published, not
   linked by the broker binary) that uses every extension point of the backend
   contract; broker acceptance tests register it to prove a backend needs no
-  host changes. See [Adding a backend](#adding-a-backend).
+  host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules and request authorization.
 - **`agent-access-broker-host`** — the broker host library: module
@@ -185,11 +187,50 @@ Core owns the engine and the conceptual contract. The host owns the network
 surface and the process lifecycle; the broker binary selects the modules it links. The CLI never sees broker-held execution
 credentials and never makes authorization decisions; it is a thin client over the broker's HTTP API.
 
+Crate dependencies follow those roles. An assembly, upstream or downstream,
+links the host and the modules it selects; providers depend only on the SDK and
+ordinary helper libraries:
+
+```mermaid
+flowchart TD
+    Assembly[agent-access-broker assembly] --> Host[agent-access-broker-host]
+    Downstream[Downstream assembly] --> Host
+    Assembly --> Natives[Native provider crates]
+    Downstream --> Natives
+    Downstream --> Own[Downstream provider crates]
+    Assembly --> Adapters[Import adapters: MCP and OpenAPI]
+    Downstream --> Adapters
+    Host --> Core[agent-access-core]
+    Host --> SDK[agent-access-provider SDK]
+    Adapters --> Core
+    Core --> SDK
+    Natives --> SDK
+    Own --> SDK
+    Natives --> Helpers[Helpers: content and Atlassian]
+    Helpers --> SDK
+    Reference[Conformance reference, tests only] --> SDK
+    CLI[agent-access CLI] --> Core
+    CLI --> SDK
+```
+
+Every workspace crate declares one role (`sdk`, `core`, `host`, `assembly`,
+`cli`, `native`, `reference`, `adapter`, or `helper`), and
+`node scripts/check-crate-boundaries.mjs` rejects dependency edges that cross
+them: the SDK depends on no workspace crate, natives, the reference and helpers
+never reach core, the host, an assembly, the CLI or an adapter, and the
+production closures of core and the host contain no native, adapter or
+reference crate. See [testing](testing.md) for the exact rules, the
+[provider SDK guide](provider-sdk.md) for the supported provider surface, and
+the [downstream assembly guide](downstream-assembly.md) for building another
+distribution.
+
+At run time, requests flow through those components:
+
 ```mermaid
 flowchart LR
     Agent[Agent or user] --> CLI[agent-access CLI]
     Agent --> Http[Direct broker HTTP client]
-    CLI --> Broker[agent-access-broker]
+    CLI --> Broker[Broker host application]
     Http --> Broker
     Broker --> Core[agent-access-core runtime]
     Core --> Jira[Jira provider]
@@ -203,6 +244,27 @@ flowchart LR
     HttpSvc --> Upstream3[Operator-approved upstream]
     Gateway --> Upstream4[Git upstream]
 ```
+
+### Composition and process lifecycle
+
+An assembly builds one `BrokerComposition` from the native registrations,
+OAuth dialects and import adapter registrations it links. Building validates the
+selections together and produces an immutable registry that every command and
+runtime generation shares; nothing rebuilds it later. `BrokerApplication::new`
+checks the assembly's [identity](#assembly-identity) against the composition
+and derives the build status. `run_from_env` then owns command parsing,
+logging, the Tokio runtime, `config validate`, `audit verify` and `serve`, and
+returns an exit status instead of exiting: `3` for an invalid composition,
+identity or configuration.
+
+`serve` loads and validates the configuration through the selected parsers,
+acquires the state locks, builds the first runtime generation (each configured
+provider is built for it), then binds the listeners and starts serving. A
+[reload](#dynamic-config-reload) validates a candidate configuration and builds
+a new generation within the same composition; operations keep the generation
+that admitted them. Changing what is linked requires a new build and a restart.
+[Shutdown](#process-shutdown) drains listeners, operations and audit within a
+bounded budget.
 
 ### Core vs provider responsibilities
 
@@ -369,51 +431,25 @@ evidence-backed for itself, the host, the SDK and each of its workspace modules.
 ### Adding a backend
 
 A backend is a crate that depends only on `agent-access-provider` and exports
-one `BackendRegistration`; selecting it in the broker's `composition()` is the
-only host change. The crate supplies:
-
-- **Resource types**: `ResourceTypeDescriptor` statics with a canonical target
-  grammar and, optionally, namespace selectors and private attributes (secret
-  values on exact managed entries, such as a Teams webhook URL, which the host
-  encrypts and resolves only for an authorized invocation of that entry).
-  Policy validation, resource management, discovery, and the portal read the
-  published metadata.
-- **Typed configuration**: a strict `[providers.<kind>]` struct implementing
-  `BackendConfig` (validation messages under `providers.<kind>`, egress proxies
-  for preflight, and offline provider construction from a `BuildContext`).
-- **A service descriptor**: actions with input schemas, resource scopes,
-  credential modes and lookups, explicit read-only classification,
-  raw-download or multipart-upload I/O,
-  sensitive outputs, attribution, presentation (embedded bodies and a
-  whole-result Markdown renderer), credential kinds and managed profiles, and,
-  for services that accept delegated (OAuth) credentials, a description of
-  what connecting an account allows.
-  Descriptor validation rejects inconsistent declarations at startup; the
-  catalog, OpenAPI, send schema, MCP tools, and managed credential forms are
-  projected from it.
-- **A provider**: one scope-resolution hook (`ScopeRequest` in,
-  `ScopeResolution` with optional in-process `ProviderState` out), optional
-  body-part admission over the admitted request, and invocation through
-  `UpstreamClient`s, returning JSON or a bounded stream. Delegated leases expose
-  an opaque `DelegatedBindingId` for binding signed tokens to the connection.
-  Resumable cursors and handles use [continuation tokens](#continuation-tokens).
-- **Domain reasons** (optional): `ProviderReasonDefinition` statics listed on
-  the registration, each with a code under the kind's prefix and a fixed
-  decision and HTTP status. Failures report them with
-  `ProviderError::domain`; standard reasons are limited to the
-  [provider-reported subset](http-api.md#provider-reported-standard-reasons).
-  The registry rejects duplicate, standard, and reserved codes before serving.
+one `BackendRegistration`; selecting it in an assembly's composition is the only
+host change. The [provider SDK guide](provider-sdk.md) is the provider-author
+reference: the supported surface and trust model, registration and
+configuration, descriptors and typed resources, scope resolution and provider
+state, admitted authority and credentials, governed HTTP, continuation tokens,
+reasons and outcomes, testing with the SDK test support and the conformance
+reference, the compatibility policy, and a worked example.
 
 A backend builds SDK values through constructors and builders, not struct
 literals: registrations, resource types, reason definitions and presentations
 are `const` statics, and results, descriptors and OAuth values use `new` with
 `with_*` builders. Only the shared configuration tables, such as
 `AttachmentLimitsConfig`, are deserialized or built from `Default` with struct
-update syntax. Extendable SDK enums are non-exhaustive, so
-a backend's matches end with a fallback arm that rejects what it does not
-support, such as an unknown credential view. The policy and the intentionally
-exhaustive items are listed in the
-[inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
+update syntax. Extendable SDK enums are non-exhaustive, so a backend's matches
+end with a fallback arm that rejects what it does not support, such as an
+unknown credential view. The policy and the intentionally exhaustive items are
+listed in the [inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
+
+### Provider hook contract
 
 The runtime runs each provider hook (scope resolution including lookup, body
 admission, invocation, credential verification) under a host-supplied
@@ -434,17 +470,6 @@ reasons. Their adapters' administrative discovery runs as a
 credential-verification hook of the imported service; an adapter reports
 invalid settings or document destinations as a typed configuration failure,
 which the host reports as `config_validation_failed`.
-
-`crates/agent-access-conformance` is the reference: a test-only backend with a
-namespace-capable resource type, typed configuration, a managed profile, JSON,
-raw-download, and upload actions, a presenter, and (with `endpoints = true`)
-an endpoint type whose private key a single-attempt action consumes. The
-host's `tests::conformance` suite registers it beside the linked backends and
-drives configuration and validation, discovery, runtime specs, every invocation
-shape, MCP, and the private-attribute lifecycle under managed policy (create,
-encrypted storage, admin reveal, replacement, and resolution only for the
-authorized endpoint); it also generates the fixture the portal's unit tests
-use, so the portal is checked against a backend it was not written for.
 
 ### Service descriptors
 

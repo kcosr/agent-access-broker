@@ -50,6 +50,12 @@ provide action-level authorization without resource or query containment.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
 connections.
 
+Native integrations are ordinary Rust crates built on the provider SDK. A team
+can write providers in its own repository and build its own Broker distribution
+that links them alongside upstream modules; see the
+[provider SDK guide](docs/provider-sdk.md) and the
+[downstream assembly guide](docs/downstream-assembly.md).
+
 ## Access model
 
 The Rust broker, `agent-access` CLI, and administration portal share one
@@ -196,7 +202,9 @@ and [changelog](CHANGELOG.md) when changing a deployment.
 | [CLI](docs/cli.md) | Commands, discovery, input/output, and exit codes |
 | [HTTP API](docs/http-api.md) | Routes, request IDs, responses, and management API |
 | [MCP](docs/mcp.md) | Local and HTTP connections, discovery, transfers, and sessions |
-| [Architecture](docs/design.md) | Components and request lifecycle |
+| [Architecture](docs/design.md) | Components, crate layout, and request lifecycle |
+| [Provider SDK](docs/provider-sdk.md) | Writing native providers: supported API, trust model, contracts, testing, and compatibility |
+| [Downstream assembly](docs/downstream-assembly.md) | Building a distribution: composition, identity, pinning, assets, and qualification |
 | [Database](docs/database.md) | Storage, encryption, migrations, and keys |
 | [Providers](docs/providers.md) | Provider capabilities and individual contracts |
 | [OAuth](docs/oauth.md) | Supported delegated connections, consent, and recovery |

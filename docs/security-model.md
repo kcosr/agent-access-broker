@@ -552,6 +552,35 @@ contracts in [providers-jira.md](providers-jira.md),
 [providers-cloudbees-ci.md](providers-cloudbees-ci.md),
 and Git smart HTTP gateway rules in [git-http-gateway.md](git-http-gateway.md).
 
+## Linked module trust
+
+Native providers, OAuth companions and import adapters are compiled into the
+Broker executable. The assembly selects them when it is built; nothing is loaded
+at run time. Every linked module runs with the authority of the whole process:
+every credential the process can decrypt, the managed and audit stores, files,
+environment variables, network routes and audit state. Linking a module is
+therefore a trust decision for the entire deployment. Whoever builds the
+assembly must review and qualify each linked module and its dependencies, and a
+distribution that links upstream modules does not inherit upstream's
+qualification.
+
+The provider SDK's boundaries are cooperation contracts. Providers receive
+read-only admitted authority, credentials lent for one invocation, upstream
+clients the host builds with allowlists and manual redirects, typed reason
+validation and bound continuation tokens. The host enforces identity, policy,
+credential selection, limits and audit around every provider call. These
+contracts keep cooperating modules within policy and catch defects. They do not
+sandbox linked Rust code, and they cannot stop a module from deliberately
+bypassing them, for example with its own HTTP client or by reading process
+state directly. A module could also claim a host failure that it was never
+given. Module metadata, provenance maps and qualification labels are
+assembler-supplied labels, not attestation.
+
+Deploy mutually untrusted modules in separate deployments, each with its own
+state, keys, credentials and network policy. See the
+[provider SDK guide](provider-sdk.md#trust-model) and the
+[downstream assembly guide](downstream-assembly.md).
+
 ## Shared resource policy
 
 The five production surfaces use catalog references: Jira projects, Confluence
@@ -862,6 +891,7 @@ so configured identity headers remain with the original Broker endpoint.
 | Microsoft discovery, signing keys, or token exchange are unavailable. | Fail Microsoft login closed while keeping broker readiness, local login, and agent invocation available; monitor the provider-specific availability signal. |
 | Prompt injection causes an allowed but inappropriate action. | Keep operations narrow, require confirmation for sensitive writes, and audit all write operations. |
 | Broker implementation defect allows an overbroad operation. | Use reviewed code, deterministic tests, config validation, staged rollout, and release gates. |
+| A linked provider, OAuth companion, or import adapter misuses the process's authority. | Link only modules you have reviewed and qualified; SDK contracts are not a sandbox. Run mutually untrusted modules in separate deployments. See [linked module trust](#linked-module-trust). |
 | Users bypass the broker by giving direct upstream tokens to agents. | Establish policy and network controls so approved agent access to protected services uses brokered access unless an exception is approved. |
 
 ## Outbound server authentication
@@ -882,6 +912,8 @@ generation and refreshed by validated config reload.
 - Managed store database and encryption model: [database.md](database.md)
 - Configuration schema: [configuration.md](configuration.md)
 - Provider controls: [providers.md](providers.md)
+- Provider authoring and linked-module trust: [provider-sdk.md](provider-sdk.md)
+- Building a distribution: [downstream-assembly.md](downstream-assembly.md)
 - Operational deployment guide: [operator-guide.md](operator-guide.md)
 - Managed user onboarding: [end-user-guide.md](end-user-guide.md)
 - Trusted ingress contract: [trusted-callers.md](trusted-callers.md)

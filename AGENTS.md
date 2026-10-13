@@ -246,6 +246,7 @@ and audit checks through the real `agent-access` binary.
   delegated-lease wrapping and the host-origin failure port. `deps` re-exports
   the third-party types and macros supported signatures name. The SDK resolves
   no secrets, loads no TLS files and reads no process environment.
+  `docs/provider-sdk.md` documents its supported surface for provider authors.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
@@ -344,7 +345,9 @@ and audit checks through the real `agent-access` binary.
   `demo/seed-guide-accounts.mjs` adds an actual auditor and a temporary-password
   onboarding identity to the loopback demo for role-accurate captures; keep its
   private credential handoff in the disposable demo directory.
-- `docs/`: implemented architecture, reference, security, operator, and user docs.
+- `docs/`: implemented architecture, reference, security, operator, and user
+  docs, plus the provider-author guide (`docs/provider-sdk.md`) and the
+  downstream assembly guide (`docs/downstream-assembly.md`).
 - `schemas/`: published versioned JSON Schemas for runtime and contract
   surfaces.
 - `api/`: generated supported public API inventories, one file per surface,
@@ -355,8 +358,9 @@ and audit checks through the real `agent-access` binary.
 
 - `README.md`: project framing, quickstart, high-level architecture, and the
   top-level documentation index.
-- `CONTRIBUTING.md`: focused bug reports and fixes, feature proposals, and
-  contributor expectations for issues and pull requests.
+- `CONTRIBUTING.md`: focused bug reports and fixes, feature proposals,
+  where provider contributions go, and contributor expectations for issues and
+  pull requests.
 - `assets/screenshots/`: permanent copies of selected README showcase images.
   Keep README image sources and full-size links relative, with file checksums in
   the adjacent manifest. Keep unused selection images and review galleries
@@ -377,7 +381,8 @@ and audit checks through the real `agent-access` binary.
   offboarding.
 - `docs/release-readiness.md`: candidate validation, distribution contents,
   administrator acceptance, and publishing checklist.
-- `docs/design.md`: implemented architecture and conceptual contract for request lifecycle,
+- `docs/design.md`: implemented architecture and conceptual contract for crate
+  layout, composition and process lifecycle, request lifecycle,
   identity, policy, credential selection, audit, observability/correlation,
   limits, egress proxy, reloads, and security posture.
 - `docs/system-overview.html`: self-contained, hand-authored architecture
@@ -407,6 +412,18 @@ and audit checks through the real `agent-access` binary.
   administration.
 - `docs/providers.md`: provider overview, shared concepts, and links to the
   provider-specific docs.
+- `docs/provider-sdk.md`: provider-author guide: supported SDK surface, trust
+  model, registration and configuration, descriptors and scope resolution,
+  provider state, admitted authority and static/delegated credential
+  obligations, governed HTTP and the loopback rule, continuation tokens,
+  standard and domain reasons, outcomes, test support, the compatibility policy
+  and a worked example. Every `rust` block must compile against the current SDK;
+  update the guide with SDK changes.
+- `docs/downstream-assembly.md`: building another distribution from the host:
+  composition, application lifecycle and exit statuses, assembly identity and
+  module provenance, canonical Git pins, coordinated upgrades, source overrides,
+  lockfile review, CLI/portal assets and notices, the release-feature check, and
+  what qualification covers. Keep its `rust` blocks compiling against the host.
 - `docs/imported-services.md`: generic MCP import setup, administrator review,
   credential ownership, refresh, limits, and invocation outcomes.
 - `docs/imported-openapi.md`: OpenAPI document/API destination setup, discovery
@@ -430,7 +447,7 @@ and audit checks through the real `agent-access` binary.
   `[gateways] kind = "git_http"`.
 - `docs/security-model.md`: rationale for the broker, agent containment model,
   egress boundary, direct-token comparison, credential boundary, authorization
-  ownership, and residual risks.
+  ownership, linked-module trust, and residual risks.
 - `docs/end-user-guide.md`: user sign-in, personal credential/OAuth setup,
   separate setup/invocation client configuration, agent token issuance,
   CLI/MCP connections, and troubleshooting.
