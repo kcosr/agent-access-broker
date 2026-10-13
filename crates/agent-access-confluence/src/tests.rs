@@ -811,6 +811,60 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
 }
 
 #[tokio::test]
+async fn blog_scope_lookup_redirects_stay_scope_resolution_denials() {
+    for redirect_space in [false, true] {
+        let server = MockServer::start().await;
+        let redirect = || ResponseTemplate::new(302).insert_header("location", "/wiki/elsewhere");
+        if redirect_space {
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/blogposts/123456"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "123456",
+                    "type": "blogpost",
+                    "spaceId": "98765",
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/spaces/98765"))
+                .respond_with(redirect())
+                .expect(1)
+                .mount(&server)
+                .await;
+        } else {
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/blogposts/123456"))
+                .respond_with(redirect())
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let provider = ConfluenceProvider::with_backend(
+            confluence_config(),
+            ProviderLimits::default(),
+            Arc::new(http_confluence_backend_for_server(&server)),
+        );
+        // Both the blog evidence and its space lookup run in scope
+        // resolution: a redirect leaves the blog unconfirmed.
+        let error = provider
+            .lookup_scopes(
+                "blog.view",
+                &json!({ "blogId": "123456" }),
+                Some(&credential()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny, "{redirect_space}");
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(
+            error.message,
+            "Confluence blog 123456 scope requires lookup confirmation"
+        );
+        assert!(error.result.is_none());
+    }
+}
+
+#[tokio::test]
 async fn page_view_rejects_legacy_space_input() {
     let backend = Arc::new(StubConfluenceBackend {
         page: ConfluencePage {

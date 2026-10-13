@@ -8106,8 +8106,11 @@ fn comment_scope_requires_lookup(comment_id: String) -> ProviderError {
 
 fn blog_scope_lookup_error(blog_id: &str, error: ConfluenceBackendError) -> ProviderError {
     match error {
+        // A redirect, like an unusable response, leaves the blog
+        // unconfirmed rather than failing the lookup.
         ConfluenceBackendError::Forbidden
         | ConfluenceBackendError::NotFound
+        | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => blog_scope_requires_lookup(blog_id.to_string()),
         other => confluence_backend_error(other),
     }
