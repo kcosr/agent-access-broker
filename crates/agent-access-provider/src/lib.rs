@@ -66,7 +66,7 @@ pub use error::*;
 pub use finalization::*;
 pub use identifiers::*;
 pub use invocation::*;
-pub use module::ModuleMetadata;
+pub use module::{ModuleMetadata, SDK_PACKAGE};
 pub use oauth_dialect::*;
 pub use presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, PresentationBudget,

@@ -122,6 +122,13 @@ impl BackendRegistry {
             .map(ImportedAdapterRegistration::kind)
     }
 
+    /// Selected import adapter registrations, in selection order.
+    pub fn imported_adapter_registrations(
+        &self,
+    ) -> impl Iterator<Item = &ImportedAdapterRegistration> + '_ {
+        self.imported_adapters.iter()
+    }
+
     /// Each selected import kind whose adapter declares an OAuth companion,
     /// with that companion, in selection order.
     pub fn import_authentications(
@@ -192,6 +199,12 @@ impl BackendRegistry {
 
     pub fn oauth_dialect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.oauth_dialects.iter().map(|dialect| dialect.id())
+    }
+
+    /// Selected OAuth dialect registrations, including import companions, in
+    /// selection order.
+    pub fn oauth_dialects(&self) -> impl Iterator<Item = &'static OAuthDialectRegistration> + '_ {
+        self.oauth_dialects.iter().copied()
     }
 
     /// A registry with no backends or OAuth dialects: only the broker's own

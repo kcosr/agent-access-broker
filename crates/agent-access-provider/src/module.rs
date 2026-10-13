@@ -1,6 +1,7 @@
 //! Module metadata: the package a registration is declared in.
 
-/// The Cargo package that declares a native, OAuth or import registration.
+/// The Cargo package that declares a native, OAuth or import registration,
+/// or the SDK itself ([`SDK_PACKAGE`]).
 ///
 /// Capture it in the declaring crate with [`module_metadata!`](crate::module_metadata),
 /// which reads that package's name and version at compile time. The assembly
@@ -33,6 +34,10 @@ impl ModuleMetadata {
     }
 }
 
+/// This SDK package as linked, which a host reports next to its own identity
+/// and its module inventory.
+pub const SDK_PACKAGE: ModuleMetadata = crate::module_metadata!();
+
 /// The [`ModuleMetadata`] of the crate this macro is invoked in.
 ///
 /// ```
@@ -58,5 +63,6 @@ mod tests {
         let module = crate::module_metadata!();
         assert_eq!(module.crate_name(), "agent-access-provider");
         assert_eq!(module.crate_version(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(super::SDK_PACKAGE, module);
     }
 }

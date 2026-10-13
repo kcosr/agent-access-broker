@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file.
   through the MAC context only, `ContinuationSigner` seals and opens tokens,
   and `ContinuationError` reports rejected tokens separately from signing
   failures.
+- The provider SDK exports `SDK_PACKAGE`, its own package name and version,
+  which the host reports as the status's `sdk`.
 
 ### Changed
 
