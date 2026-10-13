@@ -3,7 +3,6 @@ use agent_access_broker_host::ImportedAdapterRegistration;
 use agent_access_broker_host::{BrokerComposition, CompositionError};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
-use agent_access_core::BackendRegistry;
 use agent_access_fake::{FAKE_BACKEND, OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 use agent_access_gitlab::GITLAB_BACKEND;
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
@@ -52,18 +51,6 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
         builder = builder.import_adapter(adapter);
     }
     builder.build()
-}
-
-/// The same selection as a raw core registry, for the CLI smokes that still
-/// construct host state directly. It goes away with the host's raw router and
-/// state exports.
-pub fn backend_registry() -> BackendRegistry {
-    BackendRegistry::new(NATIVES)
-        .expect("linked backends register consistently")
-        .with_oauth_dialects(OAUTH_DIALECTS)
-        .expect("linked OAuth dialects register consistently")
-        .with_imported_adapters(import_adapters())
-        .expect("linked imported adapters register consistently")
 }
 
 #[cfg(test)]

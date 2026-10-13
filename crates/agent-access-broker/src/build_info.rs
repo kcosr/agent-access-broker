@@ -1,6 +1,4 @@
-use agent_access_broker_host::{
-    AssemblyIdentity, BrokerApplication, BrokerBuildStatus, ModuleProvenance, SourceRevision,
-};
+use agent_access_broker_host::{AssemblyIdentity, ModuleProvenance, SourceRevision};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The commit a release build recorded; empty without release provenance.
@@ -47,19 +45,10 @@ pub fn build_identity() -> AssemblyIdentity {
     }
 }
 
-/// This executable's build status, for tests that construct host state
-/// directly.
-pub fn broker_build_status() -> BrokerBuildStatus {
-    let composition = crate::composition().expect("the assembly's modules compose");
-    BrokerApplication::new(composition, build_identity())
-        .expect("the assembly identity is valid")
-        .status()
-        .clone()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_broker_host::BrokerApplication;
     use serde_json::json;
 
     #[test]
