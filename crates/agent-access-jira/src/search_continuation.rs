@@ -3,8 +3,8 @@
 //!
 //! The binding covers the admitted context (service, action, execution
 //! context, credential mode, principal and whether it authenticated), the
-//! Jira configuration the upstream token depends on, the credential kind that
-//! selects the upstream route, and the normalized caller inputs: query type,
+//! Atlassian route fingerprint of the Jira configuration the upstream token
+//! depends on, the credential kind that selects the upstream route, and the normalized caller inputs: query type,
 //! canonical caller JQL, requested projects and effective `maxResults`. The
 //! effective project boundary is deliberately not bound: every page is
 //! authorized again and composed under the current boundary. Jira's token is
@@ -71,17 +71,6 @@ impl SearchPages {
     pub(crate) fn max_token_bytes(&self) -> usize {
         self.family.max_token_bytes()
     }
-}
-
-/// The fingerprint of the configuration an upstream token depends on: the
-/// tenant, the gateway cloud ID and whether the gateway route is enabled.
-pub(crate) fn search_configuration_fingerprint(config: &JiraProviderConfig) -> [u8; 32] {
-    let fields = json!({
-        "tenantHost": config.tenant_host,
-        "cloudId": config.cloud_id,
-        "gateway": agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts),
-    });
-    Sha256::digest(fields.to_string().as_bytes()).into()
 }
 
 /// The normalized search a continuation belongs to.
@@ -231,7 +220,7 @@ mod tests {
                     .principal("agent-one")
                     .credential_mode(CredentialMode::PerUser)
                     .build(),
-                configuration: search_configuration_fingerprint(&config),
+                configuration: config.site().route_fingerprint(),
                 credential: basic_credential("agent@example.com", "token"),
                 query: query(scope),
                 requested: BTreeSet::new(),

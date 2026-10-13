@@ -35,7 +35,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 use url::Url;
-use uuid::Uuid;
 
 const JIRA_PROJECT_KEY_PATTERN: &str = r"^[A-Z][A-Z0-9_]+$";
 const JIRA_ISSUE_KEY_PATTERN: &str = r"^[A-Z][A-Z0-9_]+-[1-9][0-9]*$";
@@ -83,7 +82,7 @@ impl JiraProvider {
         )?);
         Ok(Self {
             search_pages: SearchPages::new(&limits),
-            search_configuration: search_configuration_fingerprint(&config),
+            search_configuration: config.site().route_fingerprint(),
             config,
             limits,
             backend,
@@ -98,7 +97,7 @@ impl JiraProvider {
     ) -> Self {
         Self {
             search_pages: SearchPages::new(&limits),
-            search_configuration: search_configuration_fingerprint(&config),
+            search_configuration: config.site().route_fingerprint(),
             config,
             limits,
             backend,
@@ -740,9 +739,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     }
     let mut credentials =
         CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token");
-    if config.cloud_id.is_some()
-        && agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts)
-    {
+    if config.site().uses_gateway() {
         credentials = credentials.profile("jira-bearer-token", "bearer_token");
     }
     ServiceDescriptor::new("jira", "Jira")

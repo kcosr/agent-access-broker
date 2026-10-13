@@ -41,7 +41,7 @@ fn page() -> Value {
 async fn issue_types_uses_selected_auth_and_gateway_and_requests_one_page() {
     let api = MockServer::start().await;
     let mut backend = backend(&api, ProviderLimits::default());
-    backend.gateway_clients.as_mut().unwrap().api_base =
+    backend.routes.gateway_mut().unwrap().api_base =
         Url::parse(&format!("{}/ex/jira/cloud/rest/api/3/", api.uri())).unwrap();
     let mut response = page();
     response["startAt"] = json!(2);

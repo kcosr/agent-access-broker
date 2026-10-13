@@ -17,6 +17,18 @@ pub struct ConfluenceProviderConfig {
     pub search: SearchLimitsConfig,
 }
 
+impl ConfluenceProviderConfig {
+    /// The Atlassian site this configuration routes by.
+    pub(crate) fn site(&self) -> agent_access_atlassian::AtlassianSite<'_> {
+        agent_access_atlassian::AtlassianSite {
+            tenant_host: &self.tenant_host,
+            cloud_id: self.cloud_id.as_deref(),
+            egress_proxy: self.egress_proxy.as_ref(),
+            allowed_upstream_hosts: &self.allowed_upstream_hosts,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfluenceContentConfig {

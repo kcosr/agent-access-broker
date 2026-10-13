@@ -157,7 +157,9 @@ also includes a same-origin browser portal frontend:
   contract; broker acceptance tests register it to prove a backend needs no
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
-  backends: Atlassian gateway credential rules and request authorization.
+  backends: Atlassian gateway credential rules, request authorization, the
+  tenant/gateway client routes selected by credential type, and the route
+  fingerprint their relayed continuations bind.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the

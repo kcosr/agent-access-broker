@@ -260,12 +260,14 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
   client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`).
 - `crates/agent-access-confluence`: the Confluence backend (`backend.rs` wire
-  seam and HTTP client, `cql.rs` search and CQL parser, `config.rs`,
-  `present.rs`).
+  seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
+  page-token and draft-handle families, `config.rs`, `present.rs`).
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `config.rs`, `provisioning.rs`,
   `present.rs`).
-- `crates/agent-access-atlassian`: helpers shared by the Atlassian backends.
+- `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
+  (gateway credential rules, request authorization, tenant/gateway client
+  routes and their route fingerprint).
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and

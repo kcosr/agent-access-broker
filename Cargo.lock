@@ -86,6 +86,7 @@ version = "0.1.0"
 dependencies = [
  "agent-access-provider",
  "reqwest",
+ "sha2",
  "url",
  "uuid",
 ]

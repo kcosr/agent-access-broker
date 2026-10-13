@@ -247,7 +247,7 @@ async fn search_continuations_bind_the_jira_configuration_and_provider_generatio
         .first_page(search(base_inputs(), base_scope(), None).build())
         .await;
     let sharing_keys = |config: JiraProviderConfig| JiraProvider {
-        search_configuration: search_configuration_fingerprint(&config),
+        search_configuration: config.site().route_fingerprint(),
         config,
         ..harness.provider.clone()
     };

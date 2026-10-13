@@ -37,7 +37,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
-use uuid::Uuid;
 
 const MAX_COMMENT_PARENT_DEPTH: usize = 16;
 const DRAFT_ATTACHMENT_LOOKUP_PAGE_SIZE: u32 = 200;
@@ -347,9 +346,7 @@ pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
 pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescriptor {
     let mut credentials =
         CredentialDescriptor::default().profile("confluence-cloud-api-token", "basic_api_token");
-    if config.cloud_id.is_some()
-        && agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts)
-    {
+    if config.site().uses_gateway() {
         credentials = credentials.profile("confluence-bearer-token", "bearer_token");
     }
     let mut actions = confluence_content_actions(config);

@@ -3,13 +3,13 @@
 //!
 //! Every family binds the admitted service and execution context and the
 //! Confluence configuration it depends on: list and search tokens bind the
-//! route fingerprint (tenant host, gateway cloud ID and whether the gateway
-//! is enabled) plus the credential kind that selects the tenant or gateway
-//! route, because they relay Confluence's own route-relative cursors; draft
-//! handles bind the tenant host, because a draft's content ID names content
-//! on that tenant whichever route reaches it. No family binds the effective
-//! grant boundary: the host authorizes every page and handle use again and
-//! the provider re-applies its containment checks.
+//! Atlassian route fingerprint (tenant host, gateway cloud ID and whether the
+//! gateway is enabled) plus the credential kind that selects the tenant or
+//! gateway route, because they relay Confluence's own route-relative
+//! cursors; draft handles bind the tenant host, because a draft's content ID
+//! names content on that tenant whichever route reaches it. No family binds
+//! the effective grant boundary: the host authorizes every page and handle
+//! use again and the provider re-applies its containment checks.
 //!
 //! List and search tokens relay Confluence's own cursor, so their size is
 //! bounded by the provider's upstream response limit, which bounds both the
@@ -117,17 +117,6 @@ const DRAFT_HANDLES: ContinuationFamily = ContinuationFamily::new(
 /// The exact size of the largest draft handle, which bounds the input.
 pub(crate) const DRAFT_HANDLE_MAX_BYTES: usize = DRAFT_HANDLES.max_token_bytes();
 
-/// The configuration a relayed Confluence cursor depends on: the tenant, the
-/// gateway cloud ID and whether the gateway route is enabled.
-pub(crate) fn route_fingerprint(config: &ConfluenceProviderConfig) -> [u8; 32] {
-    let fields = json!({
-        "tenantHost": config.tenant_host,
-        "cloudId": config.cloud_id,
-        "gateway": agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts),
-    });
-    Sha256::digest(fields.to_string().as_bytes()).into()
-}
-
 /// `family` with the largest payload cap whose continuations fit the
 /// provider's response limit, which bounds the upstream response a relayed
 /// cursor arrives in and the result its continuation is returned in.
@@ -180,7 +169,7 @@ impl ConfluenceContinuations {
     ) -> Self {
         Self {
             signer: ContinuationSigner::new(stable),
-            route: route_fingerprint(config),
+            route: config.site().route_fingerprint(),
             tenant_host: config.tenant_host.clone(),
             attachment_pages: within_response_limit(ATTACHMENT_LIST_PAGES, limits),
             blog_attachment_pages: within_response_limit(BLOG_ATTACHMENT_LIST_PAGES, limits),

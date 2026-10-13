@@ -10,5 +10,9 @@ role = "helper"
 [dependencies]
 agent-access-provider = { path = "../agent-access-provider" }
 reqwest.workspace = true
+sha2.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }

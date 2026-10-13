@@ -291,7 +291,7 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
         tenants.push(other);
         for tenant in tenants {
             let other = ConfluenceContinuations {
-                route: route_fingerprint(&tenant),
+                route: tenant.site().route_fingerprint(),
                 ..continuations.clone()
             };
             assert_list_rejection(list.open(&other, &request, &credential, &token), list);
@@ -618,7 +618,7 @@ fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries
     let mut other_tenant = config();
     other_tenant.tenant_host = "other.atlassian.net".to_string();
     let other_tenant = ConfluenceContinuations {
-        route: route_fingerprint(&other_tenant),
+        route: other_tenant.site().route_fingerprint(),
         ..continuations.clone()
     };
     invalid(other_tenant.open_search_page(&issued.pages(&request, &credential), &token));
