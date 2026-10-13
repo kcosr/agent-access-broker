@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, PROVIDER_PACKAGE, ProcessSupervisor, SDK_PACKAGE,
   SENTINEL_REV, assertAssemblyStatus, featureViolations, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
   isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
+  processGroupAlive,
   parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment,
   stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
 } from "./verify-downstream-consumer.mjs";
@@ -397,4 +398,71 @@ createServer((request, response) => { response.writeHead(503); response.end(); }
   await waitUntil(() => processGone(pid));
   await assert.rejects(fetch(`${controller}/unknown`), /fetch failed/);
   assert.ok(existsSync(join(evidence, "acceptance", "broker.log")));
+});
+
+// A leader that starts one descendant in its own process group and waits
+// until the descendant is ready. The descendant writes its pid once it has
+// installed its signal handling; `leader` decides what the leader does next.
+const leaderScript = (directory, { ignoreTerm, leader }) => {
+  const script = join(directory, "leader.mjs");
+  const descendant = `${ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}`
+    + 'require("node:fs").writeFileSync(process.argv[1] + ".partial", String(process.pid));'
+    + 'require("node:fs").renameSync(process.argv[1] + ".partial", process.argv[1]);'
+    + "setInterval(() => {}, 1000);";
+  writeFileSync(script, `import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+const ready = process.argv[2];
+spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}, ready], { stdio: "inherit" }).unref();
+const wait = () => (existsSync(ready) ? (${leader})() : setTimeout(wait, 10));
+wait();
+`);
+  return script;
+};
+const exitLeader = "() => process.exit(0)";
+const stayLeader = "() => setInterval(() => {}, 1000)";
+
+test("a leader that exits first does not release descendants still running in its group", posixOnly, async (t) => {
+  for (const ignoreTerm of [false, true]) {
+    const directory = temporary(t);
+    const ready = join(directory, "descendant.pid");
+    const log = openSync(join(directory, "output.log"), "w");
+    const supervisor = new ProcessSupervisor({ graceMs: 300 });
+    try {
+      // The descendant inherits the file-backed output, so the leader's close
+      // does not wait for it.
+      const result = await supervisor.run(process.execPath, [leaderScript(directory, { ignoreTerm, leader: exitLeader }), ready],
+        { stdout: log, stderr: log });
+      assert.equal(result.code, 0);
+      const descendant = Number(readFileSync(ready, "utf8"));
+      assert.ok(processGone(descendant), `descendant ${descendant} survived run() (ignoreTerm=${ignoreTerm})`);
+      assert.equal(supervisor.strays.length, 1);
+      assert.ok(!processGroupAlive(supervisor.strays[0].processGroup));
+    } finally {
+      closeSync(log);
+    }
+  }
+});
+
+test("a timed-out run returns only after its SIGTERM-ignoring descendants are stopped", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const ready = join(directory, "descendant.pid");
+  const supervisor = new ProcessSupervisor({ graceMs: 300 });
+  const result = await supervisor.run(process.execPath, [leaderScript(directory, { ignoreTerm: true, leader: stayLeader }), ready],
+    { timeoutMs: 1_000 });
+  assert.equal(result.timedOut, true);
+  assert.notEqual(result.code, 0);
+  assert.ok(processGone(Number(readFileSync(ready, "utf8"))));
+});
+
+test("an interruption stops descendants of a started process whose leader already exited", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const ready = join(directory, "descendant.pid");
+  const supervisor = new ProcessSupervisor({ graceMs: 300 });
+  const record = supervisor.start(process.execPath, [leaderScript(directory, { ignoreTerm: true, leader: exitLeader }), ready]);
+  assert.equal((await record.closed).code, 0);
+  const descendant = Number(readFileSync(ready, "utf8"));
+  assert.ok(!processGone(descendant));
+  await supervisor.interrupt("SIGTERM");
+  assert.ok(processGone(descendant));
+  await supervisor.stopAll();
 });

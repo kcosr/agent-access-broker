@@ -428,11 +428,39 @@ export class InterruptedError extends Error {
   }
 }
 
+// Whether a process group still has a live member. On Linux exited but
+// unreaped descendants (zombies) do not count; elsewhere any member counts.
+export function processGroupAlive(pgid) {
+  try {
+    process.kill(-pgid, 0);
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+  if (process.platform !== "linux") return true;
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat;
+    try {
+      stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+    } catch {
+      continue;
+    }
+    const [state, , group] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (Number(group) === pgid && state !== "Z" && state !== "X") return true;
+  }
+  return false;
+}
+
 // Owns every process the driver starts. On POSIX each child leads its own
 // process group, so termination reaches whole trees such as Cargo and its
-// compiler processes. Once interrupted, no new process starts.
+// compiler processes. A record stays owned until its leader has exited and
+// its group has no live member; descendants that outlive their leader are
+// stopped then. Processes that leave the group (setsid) are not tracked.
+// Once interrupted, no new process starts.
 export class ProcessSupervisor {
   #records = new Set();
+  #strays = [];
   #interruption = null;
   #platform;
   #graceMs;
@@ -446,6 +474,11 @@ export class ProcessSupervisor {
     return this.#interruption?.signal ?? null;
   }
 
+  // Process groups whose leader exited while descendants were still running.
+  get strays() {
+    return this.#strays.map((stray) => ({ ...stray }));
+  }
+
   assertRunning() {
     if (this.#interruption) throw new InterruptedError(this.#interruption.signal);
   }
@@ -453,21 +486,21 @@ export class ProcessSupervisor {
   start(command, args, { cwd, env, stdio = ["ignore", "ignore", "ignore"] } = {}) {
     this.assertRunning();
     const child = spawn(command, args, { cwd, env, stdio, detached: this.#platform !== "win32" });
-    const record = { child, finished: false };
+    const record = { child, command, finished: false, released: false };
     record.closed = new Promise((resolvePromise) => {
       child.once("error", (error) => resolvePromise({ code: null, signal: null, error }));
       child.once("close", (code, signal) => resolvePromise({ code, signal, error: null }));
     }).then((result) => {
       record.finished = true;
-      this.#records.delete(record);
       return result;
     });
     this.#records.add(record);
     return record;
   }
 
-  // Runs one command to completion. `stdout`/`stderr` take "ignore", "pipe"
-  // (collected and returned) or an open file descriptor.
+  // Runs one command to completion, including any descendants left in its
+  // process group. `stdout`/`stderr` take "ignore", "pipe" (collected and
+  // returned) or an open file descriptor.
   async run(command, args, { cwd, env, input, stdout = "ignore", stderr = "ignore", timeoutMs } = {}) {
     const record = this.start(command, args, { cwd, env, stdio: [input === undefined ? "ignore" : "pipe", stdout, stderr] });
     const output = { stdout: [], stderr: [] };
@@ -477,19 +510,26 @@ export class ProcessSupervisor {
       record.child.stdin.on("error", () => {});
       record.child.stdin.end(input);
     }
-    let timedOut = false;
-    const timer = timeoutMs ? setTimeout(() => { timedOut = true; this.terminate(record); }, timeoutMs) : null;
+    let termination = null;
+    const timer = timeoutMs ? setTimeout(() => { termination = this.terminate(record); }, timeoutMs) : null;
     const result = await record.closed;
     clearTimeout(timer);
+    await (termination ?? this.release(record));
     this.assertRunning();
-    return { ...result, timedOut, stdout: Buffer.concat(output.stdout), stderr: Buffer.concat(output.stderr) };
+    return { ...result, timedOut: termination !== null, stdout: Buffer.concat(output.stdout), stderr: Buffer.concat(output.stderr) };
+  }
+
+  #groupAlive(record) {
+    const { pid } = record.child;
+    if (pid === undefined) return false;
+    return this.#platform === "win32" ? !record.finished : processGroupAlive(pid);
   }
 
   #signal(record, signal) {
     const { pid } = record.child;
     if (pid === undefined) return false;
     try {
-      if (this.#platform === "win32") return signal === 0 ? !record.finished : record.child.kill(signal);
+      if (this.#platform === "win32") return record.child.kill(signal);
       process.kill(-pid, signal);
       return true;
     } catch (error) {
@@ -498,20 +538,49 @@ export class ProcessSupervisor {
     }
   }
 
-  // Stops a process tree: SIGTERM to its group, SIGKILL after the grace
-  // period, then waits for the leader and any remaining group members.
+  async #waitForEmptyGroup(record, milliseconds) {
+    const deadline = Date.now() + milliseconds;
+    while (this.#groupAlive(record)) {
+      if (Date.now() >= deadline) return false;
+      await delay(50);
+    }
+    return true;
+  }
+
+  // Stops what remains of a group whose leader has exited.
+  async #stopGroup(record) {
+    if (!this.#groupAlive(record)) return;
+    this.#signal(record, "SIGTERM");
+    if (await this.#waitForEmptyGroup(record, this.#graceMs)) return;
+    this.#signal(record, "SIGKILL");
+    if (!(await this.#waitForEmptyGroup(record, this.#graceMs))) {
+      throw new Error(`Process group ${record.child.pid} of ${record.command} still has live members after SIGKILL`);
+    }
+  }
+
+  // Waits for the leader, stops descendants it left running, and releases
+  // ownership of the group.
+  async release(record) {
+    await record.closed;
+    if (!record.released && this.#groupAlive(record)) {
+      this.#strays.push({ command: record.command, processGroup: record.child.pid });
+      await this.#stopGroup(record);
+    }
+    record.released = true;
+    this.#records.delete(record);
+  }
+
+  // Stops a whole process tree: SIGTERM to its group, SIGKILL to the leader
+  // after the grace period, then the same for any descendants that remain.
   async terminate(record) {
+    if (record.released) return;
     this.#signal(record, "SIGTERM");
     const stopped = await Promise.race([record.closed.then(() => true), delay(this.#graceMs).then(() => false)]);
     if (!stopped) this.#signal(record, "SIGKILL");
     await record.closed;
-    const deadline = Date.now() + this.#graceMs;
-    let remaining = this.#signal(record, 0);
-    while (remaining && Date.now() < deadline) {
-      await delay(50);
-      remaining = this.#signal(record, 0);
-    }
-    if (remaining) this.#signal(record, "SIGKILL");
+    await this.#stopGroup(record);
+    record.released = true;
+    this.#records.delete(record);
   }
 
   interrupt(signal) {
@@ -521,15 +590,19 @@ export class ProcessSupervisor {
     return this.#interruption.done;
   }
 
+  // Stops every process still owned, including after an interruption.
   async stopAll() {
-    await Promise.all([this.#interruption?.done, ...[...this.#records].map((record) => this.terminate(record))]);
+    const results = await Promise.allSettled([this.#interruption?.done, ...[...this.#records].map((record) => this.terminate(record))]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
   }
 }
 
 export function installInterruptHandlers(supervisor, signals = ["SIGINT", "SIGTERM"]) {
   const handler = (signal) => {
     console.error(`Downstream consumer: ${signal} received; stopping child processes and removing the stage`);
-    supervisor.interrupt(signal);
+    // Termination failures surface through stopAll() during cleanup.
+    supervisor.interrupt(signal).catch(() => {});
   };
   for (const signal of signals) process.on(signal, handler);
   return () => {
@@ -758,6 +831,7 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
       const exit = await Promise.race([broker.closed, delay(SHUTDOWN_TIMEOUT_MS).then(() => null)]);
       supervisor.assertRunning();
       check("sigterm-clean-exit", exit?.code === 0, { exitCode: exit?.code ?? null, signal: exit?.signal ?? null });
+      await supervisor.release(broker);
       result.shutdown = "SIGTERM, exit 0";
     }
     const auditPath = join(run, "audit.jsonl");
@@ -768,7 +842,7 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
     check("audit-records", records.some((record) => record.decision === "allow") && records.some((record) => record.decision === "deny"),
       { decisions: records.map((record) => record.decision) });
   } finally {
-    if (broker && !broker.finished) await supervisor.terminate(broker);
+    if (broker) await supervisor.terminate(broker);
     await controller.close();
   }
   return result;
@@ -1123,7 +1197,11 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     throw interrupted ? new InterruptedError(interrupted) : error;
   } finally {
     try {
-      await supervisor.stopAll();
+      try {
+        await supervisor.stopAll();
+      } catch (error) {
+        report.cleanupError = error.message;
+      }
       for (const [repository, files] of [["provider", ["Cargo.lock", "Cargo.toml", `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`]],
         ["assembly", ["Cargo.lock", "Cargo.toml"]]]) {
         for (const file of files) {
@@ -1140,9 +1218,13 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
         rmSync(stage, { recursive: true, force: true });
         report.stage.deleted = !existsSync(stage);
       }
+      report.strayProcessGroups = supervisor.strays;
       if (supervisor.interruption && report.status === "passed") {
         report.status = "interrupted";
         report.error = `Interrupted by ${supervisor.interruption} during cleanup`;
+      } else if (report.cleanupError && report.status === "passed") {
+        report.status = "failed";
+        report.error = `Child process cleanup failed: ${report.cleanupError}`;
       }
       report.finishedAt = stamp();
       save();
@@ -1150,6 +1232,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     }
   }
   if (report.status === "interrupted") throw new InterruptedError(supervisor.interruption);
+  if (report.status === "failed") throw new Error(report.error);
   console.log(`Downstream consumer passed at ${commit}: ${join(evidence, "status.json")}`);
   return report;
 }
