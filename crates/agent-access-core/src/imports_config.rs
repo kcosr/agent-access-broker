@@ -54,19 +54,21 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
     {
         errors.push("enabled imports require nonempty allowed_kinds and allowed_endpoints".into());
     }
+    let development_fixtures_enabled =
+        config.deployment.environment != "production" && config.deployment.enable_fake_service;
     for kind in &imports.allowed_kinds {
-        if imports.enabled && config.providers.registry().imported_adapter(kind).is_none() {
+        let adapter = config.providers.registry().imported_adapter(kind);
+        if imports.enabled && adapter.is_none() {
             errors.push(format!(
                 "imports.allowed_kinds contains an unlinked adapter kind {kind}"
             ));
         }
-        if kind == "conformance_import"
-            && (config.deployment.environment == "production"
-                || !config.deployment.enable_fake_service)
+        if adapter.is_some_and(|adapter| adapter.development_only())
+            && !development_fixtures_enabled
         {
-            errors.push(
-                "conformance_import requires non-production deployment.enable_fake_service".into(),
-            );
+            errors.push(format!(
+                "imports.allowed_kinds contains the development-only adapter kind {kind}, which requires non-production deployment.enable_fake_service"
+            ));
         }
     }
     for endpoint in &imports.allowed_endpoints {
@@ -87,6 +89,112 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BackendRegistry, ProvidersConfig, parse_broker_config_raw};
+    use agent_access_provider::{
+        BuildContext, ExecutionCredential, HostError, ImportedActionDefinition, ImportedAdapter,
+        ImportedDiscovery, ImportedDiscoveryAuthentication, ImportedServiceDefinition, Provider,
+        ProviderError,
+    };
+    use std::sync::Arc;
+
+    /// Validation-only adapter double; configuration checks never build one.
+    #[derive(Debug)]
+    struct MarkedAdapter {
+        kind: &'static str,
+        development_only: bool,
+    }
+    static DEVELOPMENT_ADAPTER: MarkedAdapter = MarkedAdapter {
+        kind: "fixture_import",
+        development_only: true,
+    };
+    static PRODUCTION_ADAPTER: MarkedAdapter = MarkedAdapter {
+        kind: "remote_import",
+        development_only: false,
+    };
+
+    #[async_trait::async_trait]
+    impl ImportedAdapter for MarkedAdapter {
+        fn kind(&self) -> &'static str {
+            self.kind
+        }
+        fn development_only(&self) -> bool {
+            self.development_only
+        }
+        fn validate_action(&self, _: &ImportedActionDefinition) -> Result<(), String> {
+            unreachable!("configuration validation never validates actions")
+        }
+        fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
+            unreachable!("configuration validation never names actions")
+        }
+        fn build(
+            &self,
+            _: &ImportedServiceDefinition,
+            _: &[ImportedActionDefinition],
+            _: Option<ExecutionCredential>,
+            _: &BuildContext<'_>,
+        ) -> Result<Arc<dyn Provider>, HostError> {
+            unreachable!("configuration validation never builds providers")
+        }
+        async fn discover(
+            &self,
+            _: &ImportedServiceDefinition,
+            _: &ImportedDiscoveryAuthentication,
+            _: Option<ExecutionCredential>,
+            _: &BuildContext<'_>,
+        ) -> Result<ImportedDiscovery, ProviderError> {
+            unreachable!("configuration validation never discovers")
+        }
+    }
+
+    fn import_errors(environment: &str, enable_fake_service: bool, kind: &str) -> Vec<String> {
+        let registry = BackendRegistry::empty()
+            .with_imported_adapters([
+                &DEVELOPMENT_ADAPTER as &dyn ImportedAdapter,
+                &PRODUCTION_ADAPTER as &dyn ImportedAdapter,
+            ])
+            .unwrap();
+        let mut config = parse_broker_config_raw(
+            "imports.toml",
+            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n",
+            &Arc::new(BackendRegistry::empty()),
+        )
+        .unwrap();
+        config.providers = ProvidersConfig::new(Arc::new(registry));
+        config.deployment.environment = environment.into();
+        config.deployment.enable_fake_service = enable_fake_service;
+        config.imports.allowed_kinds = vec![kind.into()];
+        let mut errors = Vec::new();
+        validate_imports(&config, &mut errors);
+        errors
+    }
+
+    #[test]
+    fn development_only_adapter_kinds_require_the_fake_service_opt_in() {
+        assert!(import_errors("development", true, "fixture_import").is_empty());
+        for (environment, enable_fake_service) in [
+            ("development", false),
+            ("production", true),
+            ("production", false),
+        ] {
+            assert_eq!(
+                import_errors(environment, enable_fake_service, "fixture_import"),
+                [
+                    "imports.allowed_kinds contains the development-only adapter kind fixture_import, which requires non-production deployment.enable_fake_service"
+                ],
+                "{environment} {enable_fake_service}"
+            );
+        }
+        for (environment, enable_fake_service) in [
+            ("development", true),
+            ("development", false),
+            ("production", false),
+        ] {
+            assert!(
+                import_errors(environment, enable_fake_service, "remote_import").is_empty(),
+                "{environment} {enable_fake_service}"
+            );
+        }
+    }
 
     #[test]
     fn operator_gate_requires_every_boundary() {

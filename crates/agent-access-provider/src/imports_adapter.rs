@@ -39,9 +39,9 @@ pub enum ImportedDiscoveryAuthentication {
 #[async_trait]
 pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> &'static str;
-    fn development_only(&self) -> bool {
-        false
-    }
+    /// A development fixture: the host accepts its kind only in a non-production
+    /// deployment with `deployment.enable_fake_service`.
+    fn development_only(&self) -> bool;
     /// Validate protocol-specific configuration without contacting upstream.
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()?;

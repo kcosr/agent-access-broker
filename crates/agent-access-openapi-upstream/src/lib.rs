@@ -24,6 +24,9 @@ impl ImportedAdapter for OpenApiAdapter {
     fn kind(&self) -> &'static str {
         "openapi_http"
     }
+    fn development_only(&self) -> bool {
+        false
+    }
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         Settings::parse(definition).map(|_| ())
     }

@@ -40,6 +40,10 @@ impl ImportedAdapter for McpAdapter {
         "mcp_http"
     }
 
+    fn development_only(&self) -> bool {
+        false
+    }
+
     fn sensitive_output_pointers(&self) -> &'static [&'static str] {
         &["/result/upstreamMcp"]
     }

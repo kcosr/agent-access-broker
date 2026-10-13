@@ -2049,6 +2049,11 @@ allowed_endpoints = ["https://tools.internal.example/mcp"]
 disabled_services = []
 ```
 
+`allowed_kinds` names linked adapters: `mcp_http` and `openapi_http` in this
+binary. An adapter that declares itself a development fixture is accepted only
+with non-production `deployment.enable_fake_service`; the shipped adapters are not
+development fixtures.
+
 The endpoint allowlist uses the same origin/path matching rules as upstream host
 allowlists; prefer exact URLs. HTTPS is required except loopback HTTP outside
 production. Administrators manage import definitions; auditors can inspect definitions and
