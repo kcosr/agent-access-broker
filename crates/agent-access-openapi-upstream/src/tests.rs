@@ -401,9 +401,11 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
 }
 #[tokio::test]
 async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", closed.local_addr().unwrap());
-    drop(closed);
+    // Bound without a listener, the port refuses connections, and no other
+    // socket can take it meanwhile.
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let base = format!("http://{}", reserved.local_addr().unwrap());
     let def = definition(&format!("{base}/api"), &format!("{base}/definition.json"));
     let host = test_host();
     let provider = OpenApiAdapter

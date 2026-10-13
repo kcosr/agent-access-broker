@@ -561,9 +561,11 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
         .unwrap()
     };
     // A closed port refuses the connection: nothing reached Gmail.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let origin = format!("http://{}", closed.local_addr().unwrap());
-    drop(closed);
+    // Bound without a listener, the port refuses connections, and no other
+    // socket can take it meanwhile.
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let origin = format!("http://{}", reserved.local_addr().unwrap());
     for action in ["message.trash", "thread.archive", "message.view"] {
         let error = gmail(&origin)
             .invoke(invocation(action, json!({"id":"a123"})))
