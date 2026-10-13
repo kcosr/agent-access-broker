@@ -2230,8 +2230,8 @@ this applied-unverified 409 contract rather than an ordinary retryable upstream
 error. CloudBees CI `build.trigger` does the same when its POST may have reached
 the controller without a confirming response (a timeout or transport failure
 after sending, or a 5xx); its `safeLocators` are the `controller` and `job`
-inputs. A trigger proven not to have been sent remains an ordinary upstream
-error. `merge_request.draft_note.publish_all` and
+inputs. A trigger proven not to have been sent keeps its ordinary upstream
+error and reports `mutationStatus = "not_applied"`, `retrySafe = true`. `merge_request.draft_note.publish_all` and
 `merge_request.review.submit` re-read the owner-draft snapshot and reviewer
 state; they may return an ordinary sanitized upstream failure only when that
 readback proves the operation made no change, and otherwise use this 409

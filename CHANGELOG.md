@@ -495,6 +495,13 @@ All notable changes to this project are documented in this file.
   `retrySafe: true` with their unchanged `mutationStatus: "not_applied"`
   instead of `retrySafe: false`. Dispatched failures keep
   `mutationStatus: "unknown"`, `retrySafe: false`.
+- A CloudBees CI `build.trigger` POST and a Teams `notification.send` request
+  that the Broker proves were never sent now add `mutationStatus:
+  "not_applied"`, `retrySafe: true` to their unchanged error (CloudBees CI:
+  `upstream_connection_failed` or `upstream_timeout`, `CloudBees CI request
+  failed`; Teams: `Teams notification request was not sent`, which also covers
+  a refused endpoint URL). Both previously carried no result. Reads, including
+  the trigger's job read, carry no receipt.
 
 ### Fixed
 

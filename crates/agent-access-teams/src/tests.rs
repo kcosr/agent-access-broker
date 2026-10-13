@@ -479,6 +479,10 @@ async fn proven_unsent_requests_are_reported_apart_from_unknown_outcomes() {
     assert_eq!(error.decision(), Decision::Error);
     assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
     assert_eq!(error.message, "Teams notification request was not sent");
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+    );
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
 }
 
@@ -630,6 +634,7 @@ async fn http_redirects_errors_and_timeouts_never_retry_or_leak_urls() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert!(error.message.contains("outcome may be unknown"));
+    assert!(error.result.is_none());
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

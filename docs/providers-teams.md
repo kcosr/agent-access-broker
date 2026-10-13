@@ -150,7 +150,11 @@ returns `{"destination":"release-alerts","accepted":true}` plus upstream status
 metadata. This confirms endpoint acceptance, not successful Workflow completion
 or a visible Teams message. Inspect Workflow run history when delivery is unclear.
 After a timeout or connection interruption the outcome may be unknown; check before
-retrying to avoid duplicate notifications. An HTTP 429 from the Workflow endpoint
+retrying to avoid duplicate notifications. A request the Broker proves was never
+sent, because no connection was established or the endpoint URL was refused,
+fails with its ordinary reason and the message `Teams notification request was
+not sent`, and reports `mutationStatus: "not_applied"`, `retrySafe: true`:
+nothing reached the Workflow, so the notification can be sent again. An HTTP 429 from the Workflow endpoint
 returns `upstream_rate_limited`; its `Retry-After`, when valid, is read only as a
 bounded wait (`retryAfterSeconds`, `retryAt`). See
 [http-api.md](http-api.md#reason-code-table).

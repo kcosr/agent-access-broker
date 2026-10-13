@@ -262,6 +262,10 @@ impl CloudbeesCiProvider {
                 (UpstreamError::Timeout | UpstreamError::Transport(_), Some(locators)) => {
                     trigger_unverified(locators)
                 }
+                (error @ UpstreamError::NotSent { .. }, Some(_)) => {
+                    ProviderError::error(error.reason_code(), "CloudBees CI request failed")
+                        .with_mutation_receipt(MutationReceipt::not_applied())
+                }
                 (error, _) => {
                     ProviderError::error(error.reason_code(), "CloudBees CI request failed")
                 }
@@ -2873,7 +2877,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trigger_post_proven_not_sent_stays_a_plain_connection_error() {
+    async fn trigger_post_proven_not_sent_is_not_applied_and_retry_safe() {
         let (origin, server) = raw_trigger_controller(false).await;
         let error = provider_with_limits(&origin, ProviderLimits::default())
             .invoke(invocation("build.trigger", job_inputs(json!({}))))
@@ -2881,7 +2885,24 @@ mod tests {
             .unwrap_err();
         server.await.unwrap();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
-        assert!(error.result.is_none());
+        assert_eq!(error.message, "CloudBees CI request failed");
+        assert_eq!(
+            error.result.as_deref(),
+            Some(&json!({"mutationStatus":"not_applied","retrySafe":true}))
+        );
+        // A read that was never sent, including the trigger's own job read,
+        // carries no mutation receipt.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        for action in ["job.view", "build.trigger"] {
+            let error = provider_with_limits(&origin, ProviderLimits::default())
+                .invoke(invocation(action, job_inputs(json!({}))))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+            assert!(error.result.is_none(), "{action}");
+        }
     }
 
     #[tokio::test]

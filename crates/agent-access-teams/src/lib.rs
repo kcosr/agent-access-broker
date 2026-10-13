@@ -245,11 +245,17 @@ impl NotificationTransport for HttpTransport {
             .body(body);
         let mut response = client.send(request, UpstreamCall::new(ACTION)).await.map_err(|error| {
             // reqwest's error string can contain the entire signed URL.
-            let message = match error {
-                UpstreamError::NotSent { .. } | UpstreamError::NotAllowed => "Teams notification request was not sent",
-                _ => "Teams notification request failed; outcome may be unknown, inspect the workflow before retrying",
-            };
-            ProviderError::error(error.reason_code(), message)
+            match error {
+                // Nothing reached the Workflow, so repeating the send is safe.
+                UpstreamError::NotSent { .. } | UpstreamError::NotAllowed => {
+                    ProviderError::error(error.reason_code(), "Teams notification request was not sent")
+                        .with_mutation_receipt(MutationReceipt::not_applied())
+                }
+                _ => ProviderError::error(
+                    error.reason_code(),
+                    "Teams notification request failed; outcome may be unknown, inspect the workflow before retrying",
+                ),
+            }
         })?;
         let status = response.status().as_u16();
         complete_upstream_trace(&mut response, status_reason(status).map(Into::into));
