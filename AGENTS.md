@@ -226,7 +226,8 @@ and audit checks through the real `agent-access` binary.
   host-owned request values (scope requests, static credentials, admitted
   requests, spooled body parts, final invocations), the initial correlation,
   hook (`HookContext`) and deadline scopes, service-scoped signer wrapping,
-  delegated-lease wrapping and the host-origin failure port. The SDK resolves
+  delegated-lease wrapping and the host-origin failure port. `deps` re-exports
+  the third-party types and macros supported signatures name. The SDK resolves
   no secrets, loads no TLS files and reads no process environment.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction

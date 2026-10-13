@@ -199,6 +199,12 @@ All notable changes to this project are documented in this file.
 - Release qualification runs a required `public-api` gate
   (`node scripts/public-api.mjs check`). Preflight requires the pinned nightly
   and `cargo-public-api` and records their versions in `qualification.json`.
+- `agent_access_provider::deps` re-exports the third-party types and macros
+  that the SDK's supported signatures name: the `async_trait` attribute and
+  selected `bytes`, `chrono`, `futures-core`, `http`, `reqwest`, `serde_json`,
+  `tokio`, `toml` and `url` items, each under a module named after its
+  package. The SDK's crate documentation records their versions, the supported
+  surface, the trust model and the compatibility policy.
 
 ### Changed
 

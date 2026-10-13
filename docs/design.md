@@ -117,8 +117,9 @@ also includes a same-origin browser portal frontend:
   static execution credentials, admitted requests, spooled body parts and the
   final invocation), the initial correlation, hook and deadline scopes,
   service-scoped signer wrapping, delegated-lease wrapping and the host-origin
-  failure port. The SDK resolves no secret references, loads no TLS files and
-  reads no process environment.
+  failure port. `deps` re-exports the third-party types and macros those
+  signatures name. The SDK resolves no secret references, loads no TLS files
+  and reads no process environment.
 - **`agent-access-core`** — the library: the request runtime
   (`runtime.rs`), the audit writer and its storage backends
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries
