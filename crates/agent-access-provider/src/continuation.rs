@@ -378,8 +378,8 @@ impl ContinuationBinding {
     pub fn delegated(self, credential: &DelegatedCredential) -> Self {
         let access = credential.access();
         self.bytes("delegatedBinding", credential.binding_identity().digest())
-            .text("delegatedTarget", &access.target)
-            .text("delegatedAudience", &access.audience)
+            .text("delegatedTarget", &access.target())
+            .text("delegatedAudience", &access.audience())
     }
 
     fn absent(mut self, label: &'static str) -> Self {
@@ -1157,13 +1157,13 @@ mod tests {
     #[async_trait::async_trait]
     impl DelegatedLease for Lease {
         fn access(&self) -> DelegatedAccess {
-            DelegatedAccess {
-                token: self.token.to_string(),
-                target: self.target.to_string(),
-                audience: self.audience.to_string(),
-                version: self.token.to_string(),
-                expires_at: 0,
-            }
+            DelegatedAccess::new(
+                self.token.to_string(),
+                self.target.to_string(),
+                self.audience.to_string(),
+                self.token.to_string(),
+                0,
+            )
         }
 
         fn binding_identity(&self) -> DelegatedBindingId {

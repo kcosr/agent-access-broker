@@ -779,8 +779,13 @@ impl DelegatedLease for TestLease {
         }
         if count > 1 {
             let mut access = self.access.lock().unwrap();
-            access.token = "renewed-delegated-token".into();
-            access.version = "version-two".into();
+            *access = DelegatedAccess::new(
+                "renewed-delegated-token",
+                access.target(),
+                access.audience(),
+                "version-two",
+                access.expires_at(),
+            );
         }
         Ok(())
     }
@@ -810,13 +815,13 @@ fn leased_invocation(
     reject_after_handshake: bool,
 ) -> (ProviderInvocation, Arc<TestLease>) {
     let lease = Arc::new(TestLease {
-        access: Mutex::new(DelegatedAccess {
-            token: "initial-delegated-token".into(),
-            target: endpoint.into(),
-            audience: endpoint.into(),
-            version: "version-one".into(),
-            expires_at: i64::MAX,
-        }),
+        access: Mutex::new(DelegatedAccess::new(
+            "initial-delegated-token",
+            endpoint,
+            endpoint,
+            "version-one",
+            i64::MAX,
+        )),
         validations: AtomicUsize::new(0),
         recoveries: AtomicUsize::new(0),
         rejected: Mutex::new(Vec::new()),
@@ -929,13 +934,13 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
     let request = InvocationBuilder::from(request)
         .execution(ExecutionAccess::Delegated(
             agent_access_provider::host::delegated_credential(Arc::new(BusyLease(
-                DelegatedAccess {
-                    token: "busy-delegated-token".into(),
-                    target: fixture.endpoint.clone(),
-                    audience: fixture.endpoint.clone(),
-                    version: "version-one".into(),
-                    expires_at: i64::MAX,
-                },
+                DelegatedAccess::new(
+                    "busy-delegated-token",
+                    fixture.endpoint.clone(),
+                    fixture.endpoint.clone(),
+                    "version-one",
+                    i64::MAX,
+                ),
             ))),
         ))
         .build();
@@ -1024,10 +1029,24 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
             .unwrap();
         let (mut request, lease) = leased_invocation(&fixture.endpoint, failure == "revoked");
         if failure == "resource" {
-            lease.access.lock().unwrap().target = "https://other.example/mcp".into();
+            let mut access = lease.access.lock().unwrap();
+            *access = DelegatedAccess::new(
+                access.token(),
+                "https://other.example/mcp",
+                access.audience(),
+                access.version(),
+                access.expires_at(),
+            );
         }
         if failure == "audience" {
-            lease.access.lock().unwrap().audience = "https://other.example/mcp".into();
+            let mut access = lease.access.lock().unwrap();
+            *access = DelegatedAccess::new(
+                access.token(),
+                access.target(),
+                "https://other.example/mcp",
+                access.version(),
+                access.expires_at(),
+            );
         }
         if failure == "fallback" {
             request = InvocationBuilder::from(request)

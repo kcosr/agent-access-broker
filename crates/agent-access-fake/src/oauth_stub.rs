@@ -104,10 +104,7 @@ impl OAuthDialect for StubDialect {
     }
 
     fn callback_issuer(&self, config: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
-        OAuthCallbackIssuer {
-            value: config.base_url.trim_end_matches('/').to_string(),
-            required: true,
-        }
+        OAuthCallbackIssuer::new(config.base_url.trim_end_matches('/').to_string(), true)
     }
 
     fn refresh_replay(&self, config: &OAuthRegistrationConfig) -> RefreshReplay {
@@ -165,10 +162,7 @@ impl OAuthDialect for StubDialect {
         access_token: &str,
     ) -> Result<ConnectedIdentity, OAuthDialectError> {
         let identity: IdentityResponse = get(http, client, "me", access_token).await?;
-        Ok(ConnectedIdentity {
-            subject: Some(identity.id),
-            display_name: identity.name,
-        })
+        Ok(ConnectedIdentity::new(identity.name).with_subject(identity.id))
     }
 
     async fn discover_targets(
@@ -224,18 +218,20 @@ fn grant_from_value(
         None if config.rotation == OAuthRotation::PreserveOld => IssuedRefreshToken::Retained,
         None => IssuedRefreshToken::Absent,
     };
-    Ok(TokenGrant {
-        access_token: response.access_token,
-        token_type: response.token_type,
-        expires_in: response.expires_in,
-        scopes: response
+    Ok(TokenGrant::new(
+        response.access_token,
+        response.token_type,
+        response.expires_in,
+        refresh_token,
+    )
+    .with_scopes(
+        response
             .scope
             .split_ascii_whitespace()
             .map(str::to_owned)
             .collect(),
-        refresh_token,
-        supersedes_other_access: config.rotation == OAuthRotation::RotateBoth,
-    })
+    )
+    .with_supersedes_other_access(config.rotation == OAuthRotation::RotateBoth))
 }
 
 async fn get<T: serde::de::DeserializeOwned>(

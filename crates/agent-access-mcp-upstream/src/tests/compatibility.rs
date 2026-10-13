@@ -1572,11 +1572,23 @@ impl DelegatedLease for ChangingBindingLease {
         self.inner.revalidate().await?;
         if self.inner.validations.load(Ordering::SeqCst) > self.after {
             let mut access = self.inner.access.lock().unwrap();
-            if self.change_audience {
-                access.audience = "https://different.example/mcp".into();
+            *access = if self.change_audience {
+                DelegatedAccess::new(
+                    access.token(),
+                    access.target(),
+                    "https://different.example/mcp",
+                    access.version(),
+                    access.expires_at(),
+                )
             } else {
-                access.target = "https://different.example/mcp".into();
-            }
+                DelegatedAccess::new(
+                    access.token(),
+                    "https://different.example/mcp",
+                    access.audience(),
+                    access.version(),
+                    access.expires_at(),
+                )
+            };
         }
         Ok(())
     }

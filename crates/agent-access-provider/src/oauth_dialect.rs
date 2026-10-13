@@ -42,6 +42,12 @@ impl OAuthAdapter {
     }
 }
 
+/// One `[oauth.registrations.<id>]` configuration table.
+///
+/// Configuration schema is intentionally exhaustive: its fields are the
+/// documented keys of a table that rejects unknown keys, so adding one is a
+/// configuration contract change that every consumer rendering or validating
+/// the table must handle. Dialects only read it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthRegistrationConfig {
@@ -107,6 +113,10 @@ impl OAuthScopeMode {
     }
 }
 
+/// One permission profile of an OAuth registration's configuration.
+///
+/// Configuration schema is intentionally exhaustive, like
+/// [`OAuthRegistrationConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthPermissionProfile {
@@ -140,6 +150,7 @@ where
 
 /// A resource the authorization server lets a connection reach, with the
 /// scopes it grants there.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthTarget {
     pub id: String,
@@ -147,6 +158,28 @@ pub struct OAuthTarget {
     pub name: String,
     pub audience: String,
     pub scopes: BTreeSet<String>,
+}
+
+impl OAuthTarget {
+    /// The resource `id` for the API `audience`, granting `scopes` there. It
+    /// has an empty display name until [`Self::with_name`] sets one.
+    pub fn new(
+        id: impl Into<String>,
+        audience: impl Into<String>,
+        scopes: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: String::new(),
+            audience: audience.into(),
+            scopes,
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
 }
 
 /// A dialect the broker binary links, under the `adapter` name registrations
@@ -212,11 +245,27 @@ impl std::fmt::Debug for OAuthDialectRegistration {
     }
 }
 
-/// One registration as its dialect sees it.
+/// One registration as its dialect sees it. The host creates it; dialect
+/// tests build one with [`Self::new`].
+#[non_exhaustive]
 pub struct OAuthClient<'a> {
     pub registration_id: &'a str,
     pub config: &'a OAuthRegistrationConfig,
     pub client_secret: &'a str,
+}
+
+impl<'a> OAuthClient<'a> {
+    pub fn new(
+        registration_id: &'a str,
+        config: &'a OAuthRegistrationConfig,
+        client_secret: &'a str,
+    ) -> Self {
+        Self {
+            registration_id,
+            config,
+            client_secret,
+        }
+    }
 }
 
 impl std::fmt::Debug for OAuthClient<'_> {
@@ -228,7 +277,9 @@ impl std::fmt::Debug for OAuthClient<'_> {
     }
 }
 
-/// What the authorization URL carries for one consent flow.
+/// What the authorization URL carries for one consent flow. The host
+/// creates it; dialect tests build one with [`Self::new`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct AuthorizationRequest<'a> {
     pub state: &'a str,
@@ -236,12 +287,33 @@ pub struct AuthorizationRequest<'a> {
     pub code_challenge_s256: &'a str,
 }
 
-/// An authorization code to exchange, with its PKCE verifier.
+impl<'a> AuthorizationRequest<'a> {
+    pub fn new(state: &'a str, code_challenge_s256: &'a str) -> Self {
+        Self {
+            state,
+            code_challenge_s256,
+        }
+    }
+}
+
+/// An authorization code to exchange, with its PKCE verifier. The host
+/// creates it; dialect tests build one with [`Self::new`].
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct CodeExchange<'a> {
     pub code: &'a str,
     pub code_verifier: &'a str,
     pub profile: &'a OAuthPermissionProfile,
+}
+
+impl<'a> CodeExchange<'a> {
+    pub fn new(code: &'a str, code_verifier: &'a str, profile: &'a OAuthPermissionProfile) -> Self {
+        Self {
+            code,
+            code_verifier,
+            profile,
+        }
+    }
 }
 
 /// What a token response says about the refresh token.
@@ -255,6 +327,10 @@ pub enum IssuedRefreshToken {
 }
 
 /// A token response. The manager validates its bounds.
+///
+/// The public fields are what the manager reads. A dialect builds a grant
+/// with [`Self::new`] and the `with_*` builders.
+#[non_exhaustive]
 pub struct TokenGrant {
     pub access_token: String,
     pub token_type: String,
@@ -268,13 +344,66 @@ pub struct TokenGrant {
     pub supersedes_other_access: bool,
 }
 
+impl TokenGrant {
+    /// An access token of `token_type` that expires `expires_in` seconds
+    /// after issue. Its scopes are unknown until [`Self::with_scopes`]
+    /// records them, and it supersedes no other access.
+    pub fn new(
+        access_token: impl Into<String>,
+        token_type: impl Into<String>,
+        expires_in: u64,
+        refresh_token: IssuedRefreshToken,
+    ) -> Self {
+        Self {
+            access_token: access_token.into(),
+            token_type: token_type.into(),
+            expires_in,
+            scopes: Vec::new(),
+            refresh_token,
+            supersedes_other_access: false,
+        }
+    }
+
+    /// Known access-token scopes, from the response or protocol-defined
+    /// inference. Empty represents unknown server-default permissions.
+    pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// Whether this grant invalidates access tokens issued earlier for other
+    /// permission profiles of the same connection.
+    pub fn with_supersedes_other_access(mut self, supersedes_other_access: bool) -> Self {
+        self.supersedes_other_access = supersedes_other_access;
+        self
+    }
+}
+
 /// Optional upstream account evidence. When present, the subject must be stable
 /// across code exchange and later consent revalidation. Authorization-only
 /// protocols must leave it absent instead of inventing an upstream user.
+#[non_exhaustive]
 pub struct ConnectedIdentity {
     /// None means the grant authorizes a resource but proves no upstream account identity.
     pub subject: Option<String>,
     pub display_name: String,
+}
+
+impl ConnectedIdentity {
+    /// A connection shown as `display_name` that proves no upstream account
+    /// identity until [`Self::with_subject`] records one.
+    pub fn new(display_name: impl Into<String>) -> Self {
+        Self {
+            subject: None,
+            display_name: display_name.into(),
+        }
+    }
+
+    /// The stable upstream account the grant proves.
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
 }
 
 /// How an OAuth request failed. The manager's refresh fences depend on the
@@ -315,18 +444,39 @@ pub enum RefreshReplay {
     Reusable,
 }
 
+/// The `iss` a consent callback carries: `value`, and whether the callback
+/// must carry it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCallbackIssuer {
     pub value: String,
     pub required: bool,
 }
 
+/// An authorization URL and the issuer its consent callback must carry.
+#[non_exhaustive]
 pub struct PreparedAuthorization {
     pub url: Url,
     pub callback_issuer: OAuthCallbackIssuer,
 }
 
+impl PreparedAuthorization {
+    pub fn new(url: Url, callback_issuer: OAuthCallbackIssuer) -> Self {
+        Self {
+            url,
+            callback_issuer,
+        }
+    }
+}
+
 impl OAuthCallbackIssuer {
+    pub fn new(value: impl Into<String>, required: bool) -> Self {
+        Self {
+            value: value.into(),
+            required,
+        }
+    }
+
     pub fn accepts(&self, actual: Option<&str>) -> bool {
         match actual {
             Some(value) => value == self.value,
@@ -371,10 +521,10 @@ pub trait OAuthDialect: Send + Sync + 'static {
         profile: &OAuthPermissionProfile,
         request: AuthorizationRequest<'_>,
     ) -> Result<PreparedAuthorization, OAuthDialectError> {
-        Ok(PreparedAuthorization {
-            url: self.authorization_url(client, profile, request)?,
-            callback_issuer: self.callback_issuer(client.config),
-        })
+        Ok(PreparedAuthorization::new(
+            self.authorization_url(client, profile, request)?,
+            self.callback_issuer(client.config),
+        ))
     }
 
     /// The `iss` a consent callback must carry, when the dialect requires one.

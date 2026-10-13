@@ -132,15 +132,15 @@ impl Fixture {
         }
     }
     fn client(&self) -> OAuthClient<'_> {
-        OAuthClient {
-            registration_id: "mcp",
-            config: &self.config,
-            client_secret: if self.config.client_auth == OAuthClientAuth::None {
+        OAuthClient::new(
+            "mcp",
+            &self.config,
+            if self.config.client_auth == OAuthClientAuth::None {
                 ""
             } else {
                 "secret&value"
             },
-        }
+        )
     }
     fn profile(&self) -> &OAuthPermissionProfile {
         &self.config.permission_profiles["read"]
@@ -156,10 +156,7 @@ impl Fixture {
                 &self.http,
                 &self.client(),
                 self.profile(),
-                AuthorizationRequest {
-                    state: "flow-state",
-                    code_challenge_s256: "pkce-challenge",
-                },
+                AuthorizationRequest::new("flow-state", "pkce-challenge"),
             )
             .await
     }
@@ -168,11 +165,7 @@ impl Fixture {
             .exchange_code(
                 &self.http,
                 &self.client(),
-                CodeExchange {
-                    code: "one-use-code",
-                    code_verifier: "pkce-verifier",
-                    profile: self.profile(),
-                },
+                CodeExchange::new("one-use-code", "pkce-verifier", self.profile()),
             )
             .await
     }

@@ -124,8 +124,8 @@ impl BrokerRuntime {
                 .await
                 .map_err(ImportDiscoveryError::Discovery)?;
                 let access = lease.access();
-                if access.target != record.definition.endpoint
-                    || access.audience != record.definition.endpoint
+                if access.target() != record.definition.endpoint
+                    || access.audience() != record.definition.endpoint
                 {
                     return Err(import_control_unavailable().into());
                 }

@@ -99,10 +99,7 @@ impl OAuthDialect for GoogleDialect {
         Ok(url)
     }
     fn callback_issuer(&self, _: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
-        OAuthCallbackIssuer {
-            value: ISSUER.into(),
-            required: false,
-        }
+        OAuthCallbackIssuer::new(ISSUER, false)
     }
     fn refresh_replay(&self, _: &OAuthRegistrationConfig) -> RefreshReplay {
         RefreshReplay::Reusable
@@ -163,10 +160,7 @@ impl OAuthDialect for GoogleDialect {
             .as_str()
             .filter(|s| !s.is_empty() && s.len() <= 512)
             .ok_or(OAuthDialectError::InvalidResponse)?;
-        Ok(ConnectedIdentity {
-            subject: Some(subject.into()),
-            display_name: email.into(),
-        })
+        Ok(ConnectedIdentity::new(email).with_subject(subject))
     }
     async fn discover_targets(
         &self,
@@ -177,12 +171,10 @@ impl OAuthDialect for GoogleDialect {
     ) -> Result<Vec<OAuthTarget>, OAuthDialectError> {
         // Google's token-response evidence is authoritative for this fixed
         // account target. Never manufacture evidence from requested scopes.
-        Ok(vec![OAuthTarget {
-            id: GMAIL_TARGET.into(),
-            name: "Connected Gmail mailbox".into(),
-            audience: GMAIL_AUDIENCE.into(),
-            scopes: granted_scopes.clone(),
-        }])
+        Ok(vec![
+            OAuthTarget::new(GMAIL_TARGET, GMAIL_AUDIENCE, granted_scopes.clone())
+                .with_name("Connected Gmail mailbox"),
+        ])
     }
 }
 async fn get(
@@ -267,14 +259,13 @@ fn parse_grant(
         None => IssuedRefreshToken::Absent,
         _ => return Err(invalid()),
     };
-    Ok(TokenGrant {
-        access_token: value["access_token"].as_str().ok_or_else(invalid)?.into(),
-        token_type: value["token_type"].as_str().ok_or_else(invalid)?.into(),
-        expires_in: value["expires_in"].as_u64().ok_or_else(invalid)?,
-        scopes,
+    Ok(TokenGrant::new(
+        value["access_token"].as_str().ok_or_else(invalid)?,
+        value["token_type"].as_str().ok_or_else(invalid)?,
+        value["expires_in"].as_u64().ok_or_else(invalid)?,
         refresh_token,
-        supersedes_other_access: false,
-    })
+    )
+    .with_scopes(scopes))
 }
 
 #[cfg(test)]
@@ -314,19 +305,12 @@ mod tests {
         let dialect = GOOGLE_OAUTH_DIALECT.dialect();
         let mut c = config();
         dialect.validate_registration(&c).unwrap();
-        let client = OAuthClient {
-            registration_id: "google",
-            config: &c,
-            client_secret: "secret",
-        };
+        let client = OAuthClient::new("google", &c, "secret");
         let url = dialect
             .authorization_url(
                 &client,
                 &c.permission_profiles["mail"],
-                AuthorizationRequest {
-                    state: "state",
-                    code_challenge_s256: "challenge",
-                },
+                AuthorizationRequest::new("state", "challenge"),
             )
             .unwrap();
         let pairs: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
@@ -389,11 +373,7 @@ mod tests {
         )
         .unwrap();
         let c = config();
-        let client = OAuthClient {
-            registration_id: "google",
-            config: &c,
-            client_secret: "secret&value",
-        };
+        let client = OAuthClient::new("google", &c, "secret&value");
         for (status, error, retry_after, expected) in [
             (400, "invalid_grant", "3", OAuthDialectError::GrantInvalid),
             (

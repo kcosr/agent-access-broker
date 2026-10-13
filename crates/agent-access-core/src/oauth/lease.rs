@@ -114,13 +114,13 @@ impl DelegatedLease for ManagedOAuthLease {
     }
     fn access(&self) -> DelegatedAccess {
         let lease = self.current();
-        DelegatedAccess {
-            token: lease.token().to_owned(),
-            target: lease.target().to_owned(),
-            audience: lease.audience().to_owned(),
-            version: lease.access_version().to_owned(),
-            expires_at: lease.expires_at(),
-        }
+        DelegatedAccess::new(
+            lease.token().to_owned(),
+            lease.target().to_owned(),
+            lease.audience().to_owned(),
+            lease.access_version().to_owned(),
+            lease.expires_at(),
+        )
     }
 
     /// A stale lease (expired, superseded, or its connection changed) is

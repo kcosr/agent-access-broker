@@ -206,9 +206,9 @@ impl OAuthRecordsProvider {
         let request = self
             .client
             .request(reqwest::Method::GET, url.clone())
-            .bearer_auth(&access.token)
-            .header("X-Stub-Target", &access.target)
-            .header("X-Stub-Audience", &access.audience);
+            .bearer_auth(access.token())
+            .header("X-Stub-Target", access.target())
+            .header("X-Stub-Audience", access.audience());
         self.client
             .send(
                 request,

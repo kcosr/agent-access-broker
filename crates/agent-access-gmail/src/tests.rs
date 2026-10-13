@@ -16,13 +16,7 @@ impl DelegatedLease for Lease {
         Ok(())
     }
     fn access(&self) -> DelegatedAccess {
-        DelegatedAccess {
-            token: "secret".into(),
-            target: GMAIL_TARGET.into(),
-            audience: GMAIL_AUDIENCE.into(),
-            version: "v1".into(),
-            expires_at: i64::MAX,
-        }
+        DelegatedAccess::new("secret", GMAIL_TARGET, GMAIL_AUDIENCE, "v1", i64::MAX)
     }
     async fn revalidate(&self) -> Result<(), ProviderError> {
         Ok(())

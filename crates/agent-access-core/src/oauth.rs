@@ -541,11 +541,7 @@ struct ResolvedRegistration {
 
 impl ResolvedRegistration {
     fn client(&self) -> OAuthClient<'_> {
-        OAuthClient {
-            registration_id: &self.id,
-            config: &self.config,
-            client_secret: &self.secret,
-        }
+        OAuthClient::new(&self.id, &self.config, &self.secret)
     }
 }
 type SlotLocks = Mutex<BTreeMap<(String, String), Arc<tokio::sync::Mutex<()>>>>;
@@ -869,11 +865,10 @@ impl OAuthManager {
                 &r.http,
                 &r.client(),
                 profile,
-                AuthorizationRequest {
-                    state: &state,
-                    code_challenge_s256: &URL_SAFE_NO_PAD
-                        .encode(Sha256::digest(verifier.as_bytes())),
-                },
+                AuthorizationRequest::new(
+                    &state,
+                    &URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
+                ),
             )
             .await?;
         self.update(owner, &binding.registration, |conn, current| {
@@ -1086,11 +1081,7 @@ impl OAuthManager {
             .exchange_code(
                 &r.http,
                 &client,
-                CodeExchange {
-                    code,
-                    code_verifier: &flow.verifier,
-                    profile,
-                },
+                CodeExchange::new(code, &flow.verifier, profile),
             )
             .await?;
         let scopes = grant_scopes(&grant, profile.scope_mode)?;
@@ -2053,10 +2044,9 @@ pub(crate) mod tests {
             _client: &OAuthClient<'_>,
             _access_token: &str,
         ) -> Result<agent_access_provider::ConnectedIdentity, OAuthDialectError> {
-            Ok(agent_access_provider::ConnectedIdentity {
-                subject: None,
-                display_name: "Example connection".into(),
-            })
+            Ok(agent_access_provider::ConnectedIdentity::new(
+                "Example connection",
+            ))
         }
         async fn discover_targets(
             &self,
@@ -2066,12 +2056,14 @@ pub(crate) mod tests {
             granted_scopes: &BTreeSet<String>,
         ) -> Result<Vec<OAuthTarget>, OAuthDialectError> {
             let profile = client.config.permission_profiles.values().next().unwrap();
-            Ok(vec![OAuthTarget {
-                id: profile.target.clone(),
-                name: "Example resource".into(),
-                audience: profile.audience.clone(),
-                scopes: granted_scopes.clone(),
-            }])
+            Ok(vec![
+                OAuthTarget::new(
+                    profile.target.clone(),
+                    profile.audience.clone(),
+                    granted_scopes.clone(),
+                )
+                .with_name("Example resource"),
+            ])
         }
     }
 
@@ -2611,12 +2603,8 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let mut targets = vec![OAuthTarget {
-            id: "one".into(),
-            name: "One".into(),
-            audience: "records-api".into(),
-            scopes: BTreeSet::new(),
-        }];
+        let mut targets =
+            vec![OAuthTarget::new("one", "records-api", BTreeSet::new()).with_name("One")];
         assert!(eligible(&profile, &BTreeSet::new(), &targets).is_ok());
         assert_eq!(
             eligible(&profile, &BTreeSet::new(), &[]),
@@ -3711,8 +3699,8 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         let first = credential.access();
-        assert_eq!(first.token, "protected-access-0");
-        assert_eq!(first.target, "workspace-one");
+        assert_eq!(first.token(), "protected-access-0");
+        assert_eq!(first.target(), "workspace-one");
         credential.revalidate().await.unwrap();
         assert_eq!(credential.access(), first);
 
@@ -3722,10 +3710,10 @@ pub(crate) mod tests {
         let current = manager.acquire("user", &binding()).await.unwrap();
         assert_eq!(current.token(), "protected-access-1");
         credential.revalidate().await.unwrap();
-        assert_eq!(credential.access().version, current.access_version());
+        assert_eq!(credential.access().version(), current.access_version());
 
         let recovered = credential.recover_after_unauthorized().await.unwrap();
-        assert_eq!(recovered.token, "protected-access-2");
+        assert_eq!(recovered.token(), "protected-access-2");
         assert_eq!(credential.access(), recovered);
         let again = credential.recover_after_unauthorized().await.unwrap_err();
         assert_eq!(again.reason_code(), ReasonCode::CredentialInvalid);
@@ -4305,18 +4293,13 @@ pub(crate) mod tests {
             target: "one".into(),
         };
         let targets = vec![
-            OAuthTarget {
-                id: "one".into(),
-                name: "One".into(),
-                audience: "records-api".into(),
-                scopes: BTreeSet::new(),
-            },
-            OAuthTarget {
-                id: "two".into(),
-                name: "Two".into(),
-                audience: "records-api".into(),
-                scopes: BTreeSet::from(["records.read".into()]),
-            },
+            OAuthTarget::new("one", "records-api", BTreeSet::new()).with_name("One"),
+            OAuthTarget::new(
+                "two",
+                "records-api",
+                BTreeSet::from(["records.read".into()]),
+            )
+            .with_name("Two"),
         ];
         assert_eq!(
             eligible(&profile, &BTreeSet::from(["records.read".into()]), &targets),
@@ -4515,14 +4498,13 @@ pub(crate) mod tests {
     }
 
     fn grant(token_type: &str, expires_in: u64) -> TokenGrant {
-        TokenGrant {
-            access_token: "protected-access-1".into(),
-            token_type: token_type.into(),
+        TokenGrant::new(
+            "protected-access-1",
+            token_type,
             expires_in,
-            scopes: vec!["records.read".into(), "offline_access".into()],
-            refresh_token: IssuedRefreshToken::Issued("protected-refresh-1".into()),
-            supersedes_other_access: false,
-        }
+            IssuedRefreshToken::Issued("protected-refresh-1".into()),
+        )
+        .with_scopes(vec!["records.read".into(), "offline_access".into()])
     }
 
     #[test]

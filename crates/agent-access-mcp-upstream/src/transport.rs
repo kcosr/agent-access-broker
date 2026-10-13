@@ -326,18 +326,18 @@ impl OperationContext {
         if let Some((credential, resource)) = &self.delegated {
             credential.revalidate().await?;
             let access = credential.access();
-            if access.target != *resource
-                || access.audience != *resource
-                || access.version.is_empty()
-                || !crate::valid_token(&access.token)
+            if access.target() != *resource
+                || access.audience() != *resource
+                || access.version().is_empty()
+                || !crate::valid_token(&access.token())
             {
                 return Err(crate::credential_error());
             }
-            let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token))
+            let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token()))
                 .map_err(|_| crate::credential_error())?;
             bearer.set_sensitive(true);
             headers.insert("authorization", bearer);
-            sent_version = Some(access.version);
+            sent_version = Some(access.version().to_string());
         }
         Ok((headers, sent_version))
     }

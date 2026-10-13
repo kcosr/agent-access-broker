@@ -169,7 +169,7 @@ impl GmailProvider {
             // Every page/detail call rechecks the original account and consent.
             credential.revalidate().await?;
             let access = credential.access();
-            if access.target != GMAIL_TARGET || access.audience != GMAIL_AUDIENCE {
+            if access.target() != GMAIL_TARGET || access.audience() != GMAIL_AUDIENCE {
                 return Err(ProviderError::deny(
                     ReasonCode::CredentialInvalid,
                     "Gmail needs an account-bound Gmail OAuth connection",
@@ -178,7 +178,7 @@ impl GmailProvider {
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
-                .bearer_auth(&access.token);
+                .bearer_auth(&access.token());
             if let Some(body) = &body {
                 request = request.json(body);
             }

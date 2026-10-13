@@ -233,10 +233,7 @@ async fn discover(
         Some(Value::Bool(value)) => *value,
         _ => return Err(OAuthDialectError::InvalidResponse),
     };
-    Ok(OAuthCallbackIssuer {
-        value: config.base_url.clone(),
-        required,
-    })
+    Ok(OAuthCallbackIssuer::new(config.base_url.clone(), required))
 }
 
 #[async_trait]
@@ -297,18 +294,15 @@ impl OAuthDialect for McpOAuthDialect {
         request: AuthorizationRequest<'_>,
     ) -> Result<PreparedAuthorization, OAuthDialectError> {
         let callback_issuer = discover(http, client.config, false).await?;
-        Ok(PreparedAuthorization {
-            url: self.authorization_url(client, profile, request)?,
+        Ok(PreparedAuthorization::new(
+            self.authorization_url(client, profile, request)?,
             callback_issuer,
-        })
+        ))
     }
 
     fn callback_issuer(&self, config: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
         // Dynamic preparation supplies the authoritative advertised requirement.
-        OAuthCallbackIssuer {
-            value: config.base_url.clone(),
-            required: true,
-        }
+        OAuthCallbackIssuer::new(config.base_url.clone(), true)
     }
 
     fn refresh_replay(&self, _: &OAuthRegistrationConfig) -> RefreshReplay {
@@ -363,10 +357,9 @@ impl OAuthDialect for McpOAuthDialect {
         _: &OAuthClient<'_>,
         _: &str,
     ) -> Result<ConnectedIdentity, OAuthDialectError> {
-        Ok(ConnectedIdentity {
-            subject: None,
-            display_name: "Connected; upstream account identity unavailable".into(),
-        })
+        Ok(ConnectedIdentity::new(
+            "Connected; upstream account identity unavailable",
+        ))
     }
 
     async fn discover_targets(
@@ -379,12 +372,14 @@ impl OAuthDialect for McpOAuthDialect {
         let endpoints = endpoints(client.config).map_err(|_| OAuthDialectError::Configuration)?;
         // Resource binding was validated before issuing/refreshing the token;
         // only the actual grant's scopes supply authorization evidence here.
-        Ok(vec![OAuthTarget {
-            id: endpoints.resource.into(),
-            audience: endpoints.resource.into(),
-            name: "Connected MCP resource".into(),
-            scopes: granted_scopes.clone(),
-        }])
+        Ok(vec![
+            OAuthTarget::new(
+                endpoints.resource,
+                endpoints.resource,
+                granted_scopes.clone(),
+            )
+            .with_name("Connected MCP resource"),
+        ])
     }
 }
 
@@ -528,18 +523,16 @@ fn parse_grant(
         .and_then(Value::as_str)
         .filter(|value| value.eq_ignore_ascii_case("Bearer"))
         .ok_or_else(invalid)?;
-    Ok(TokenGrant {
-        access_token: access_token.into(),
-        token_type: token_type.into(),
-        expires_in: body
-            .get("expires_in")
+    Ok(TokenGrant::new(
+        access_token,
+        token_type,
+        body.get("expires_in")
             .and_then(Value::as_u64)
             .filter(|value| *value > 0)
             .ok_or_else(invalid)?,
-        scopes,
         refresh_token,
-        supersedes_other_access: false,
-    })
+    )
+    .with_scopes(scopes))
 }
 
 #[cfg(test)]
