@@ -966,6 +966,27 @@ impl core::marker::Unpin for agent_access_provider::Decision
 impl core::marker::UnsafeUnpin for agent_access_provider::Decision
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Decision
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::Decision
+#[non_exhaustive] pub enum agent_access_provider::DelegatedAccessError
+pub agent_access_provider::DelegatedAccessError::Mismatch
+pub agent_access_provider::DelegatedAccessError::Revalidation(agent_access_provider::ProviderError)
+impl core::clone::Clone for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::clone(&self) -> agent_access_provider::DelegatedAccessError
+impl core::cmp::Eq for agent_access_provider::DelegatedAccessError
+impl core::cmp::PartialEq for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::eq(&self, &agent_access_provider::DelegatedAccessError) -> bool
+impl core::error::Error for agent_access_provider::DelegatedAccessError
+impl core::fmt::Debug for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::DelegatedAccessError
+impl core::marker::Freeze for agent_access_provider::DelegatedAccessError
+impl core::marker::Send for agent_access_provider::DelegatedAccessError
+impl core::marker::Sync for agent_access_provider::DelegatedAccessError
+impl core::marker::Unpin for agent_access_provider::DelegatedAccessError
+impl core::marker::UnsafeUnpin for agent_access_provider::DelegatedAccessError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::DelegatedAccessError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::DelegatedAccessError
 #[non_exhaustive] pub enum agent_access_provider::EgressDeclaration<'a>
 pub agent_access_provider::EgressDeclaration::LiteralLoopback
 pub agent_access_provider::EgressDeclaration::Ordinary(core::option::Option<&'a agent_access_provider::EgressProxyConfig>)
@@ -2109,6 +2130,20 @@ impl<Stage> core::marker::Unpin for agent_access_provider::ContinuationBinding<S
 impl<Stage> core::marker::UnsafeUnpin for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::UnsafeUnpin
 impl<Stage> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::RefUnwindSafe
 impl<Stage> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::UnwindSafe
+pub struct agent_access_provider::ContinuationFailures<P>
+impl<P: core::ops::function::FnOnce(usize) -> agent_access_provider::ProviderError> agent_access_provider::ContinuationFailures<P>
+pub fn agent_access_provider::ContinuationFailures<P>::durable_key_unavailable(self, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::expired(self, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::new(agent_access_provider::ProviderError, P, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::report(self, agent_access_provider::ContinuationError) -> agent_access_provider::ProviderError
+pub fn agent_access_provider::ContinuationFailures<P>::upstream_query_changed(self, agent_access_provider::ProviderError) -> Self
+impl<P> core::marker::Freeze for agent_access_provider::ContinuationFailures<P> where P: core::marker::Freeze
+impl<P> core::marker::Send for agent_access_provider::ContinuationFailures<P> where P: core::marker::Send
+impl<P> core::marker::Sync for agent_access_provider::ContinuationFailures<P> where P: core::marker::Sync
+impl<P> core::marker::Unpin for agent_access_provider::ContinuationFailures<P> where P: core::marker::Unpin
+impl<P> core::marker::UnsafeUnpin for agent_access_provider::ContinuationFailures<P> where P: core::marker::UnsafeUnpin
+impl<P> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationFailures<P> where P: core::panic::unwind_safe::RefUnwindSafe
+impl<P> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationFailures<P> where P: core::panic::unwind_safe::UnwindSafe
 pub struct agent_access_provider::ContinuationFamily
 impl agent_access_provider::ContinuationFamily
 pub fn agent_access_provider::ContinuationFamily::bind(&self, &agent_access_provider::AdmittedContext, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding
@@ -2307,10 +2342,12 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::DelegatedCo
 pub struct agent_access_provider::DelegatedCredential(_)
 impl agent_access_provider::DelegatedCredential
 pub fn agent_access_provider::DelegatedCredential::access(&self) -> agent_access_provider::DelegatedAccess
+pub fn agent_access_provider::DelegatedCredential::access_for(&self, &str, &str) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::DelegatedAccessError>
 pub fn agent_access_provider::DelegatedCredential::binding_identity(&self) -> agent_access_provider::DelegatedBindingId
 pub fn agent_access_provider::DelegatedCredential::mark_rejected(&self, &str) -> core::result::Result<(), agent_access_provider::ProviderError>
 pub async fn agent_access_provider::DelegatedCredential::recover_after_unauthorized(&self) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::ProviderError>
 pub async fn agent_access_provider::DelegatedCredential::revalidate(&self) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub async fn agent_access_provider::DelegatedCredential::revalidated_access_for(&self, &str, &str) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::DelegatedAccessError>
 impl core::clone::Clone for agent_access_provider::DelegatedCredential
 pub fn agent_access_provider::DelegatedCredential::clone(&self) -> agent_access_provider::DelegatedCredential
 impl core::fmt::Debug for agent_access_provider::DelegatedCredential
@@ -3836,6 +3873,7 @@ enum agent_access_provider::ContinuationOwner: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
 enum agent_access_provider::CredentialView: non-exhaustive
 enum agent_access_provider::Decision: exhaustive
+enum agent_access_provider::DelegatedAccessError: non-exhaustive
 enum agent_access_provider::EgressDeclaration: non-exhaustive
 enum agent_access_provider::EgressProxySource: non-exhaustive
 enum agent_access_provider::ExecutionAccess: non-exhaustive
@@ -3886,6 +3924,7 @@ struct agent_access_provider::BuildContext: named fields, private fields
 struct agent_access_provider::CodeExchange: named fields, non-exhaustive
 struct agent_access_provider::ConnectedIdentity: named fields, non-exhaustive
 struct agent_access_provider::ContinuationBinding: named fields, private fields
+struct agent_access_provider::ContinuationFailures: named fields, private fields
 struct agent_access_provider::ContinuationFamily: named fields, private fields
 struct agent_access_provider::ContinuationSigner: named fields, private fields
 struct agent_access_provider::CorrelationContext: named fields, non-exhaustive
