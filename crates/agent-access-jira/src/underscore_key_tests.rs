@@ -116,15 +116,18 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
     });
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let request = InvocationBuilder::from(search_request(vec![], Some("next-page-fixture")))
-        .search(SearchAuthorization::new(
-            "project".to_string(),
-            SearchAuthorizationScope::Finite {
-                values: vec!["PROJ".to_string()],
-            },
-        ))
-        .build();
-    let error = provider.invoke(request).await.unwrap_err();
+    let finite = |token: Option<&str>| {
+        InvocationBuilder::from(search_request(vec![], token))
+            .search(SearchAuthorization::new(
+                "project".to_string(),
+                SearchAuthorizationScope::Finite {
+                    values: vec!["PROJ".to_string()],
+                },
+            ))
+            .build()
+    };
+    let token = continuation_for(&provider, &backend, finite(None), "next-page-fixture").await;
+    let error = provider.invoke(finite(Some(&token))).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.internal_diagnostic_code,
@@ -144,6 +147,36 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
             .jql
             .contains("project IN (PROJ)")
     );
+    assert_eq!(
+        backend
+            .last_search
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .next_page_token
+            .as_deref(),
+        Some("next-page-fixture")
+    );
+}
+
+/// The sealed continuation for Jira's `upstream` token, issued by serving
+/// `request` a first page of in-scope issues.
+async fn continuation_for(
+    provider: &JiraProvider,
+    backend: &StubJiraBackend,
+    request: ProviderInvocation,
+    upstream: &str,
+) -> String {
+    let mut first_page = search_page_with_issue("PROJ", "PROJ-9");
+    first_page.next_page_token = Some(upstream.to_string());
+    first_page.is_last = Some(false);
+    let next_page = backend.search_page.lock().unwrap().replace(first_page);
+    let first = provider.invoke(request).await.unwrap();
+    *backend.search_page.lock().unwrap() = next_page;
+    let token = first.result["nextPageToken"].as_str().unwrap();
+    assert_ne!(token, upstream);
+    token.to_string()
 }
 
 fn search_request(excluded: Vec<String>, token: Option<&str>) -> ProviderInvocation {
@@ -195,8 +228,11 @@ async fn unrestricted_paginated_search_accepts_underscore_issue_on_continuation(
     let first = provider.invoke(search_request(vec![], None)).await.unwrap();
     assert_eq!(first.result["issues"].as_array().unwrap().len(), 50);
     assert_eq!(first.result["isLast"], false);
+    // The caller receives a sealed continuation, never Jira's token.
     let token = first.result["nextPageToken"].as_str().unwrap();
-    assert_eq!(token, "next-page-fixture");
+    assert_ne!(token, "next-page-fixture");
+    assert!(!token.contains("next-page-fixture"));
+    assert!(token.len() <= JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
     assert!(
         backend
             .last_search
@@ -241,7 +277,7 @@ async fn unrestricted_paginated_search_accepts_underscore_issue_on_continuation(
     let search = backend.last_search.lock().unwrap();
     let search = search.as_ref().unwrap();
     assert_eq!(search.jql, DATE_QUERY);
-    assert_eq!(search.next_page_token.as_deref(), Some(token));
+    assert_eq!(search.next_page_token.as_deref(), Some("next-page-fixture"));
     assert_eq!(search.max_results, 50);
     assert_eq!(backend.credential_observations.lock().unwrap().len(), 2);
 }
@@ -270,8 +306,15 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
         });
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+        let token = continuation_for(
+            &provider,
+            &backend,
+            search_request(excluded.clone(), None),
+            "next-page-fixture",
+        )
+        .await;
         let error = provider
-            .invoke(search_request(excluded.clone(), Some("next-page-fixture")))
+            .invoke(search_request(excluded.clone(), Some(&token)))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -288,6 +331,10 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
         assert_eq!(audit["pageTokenPresent"], true);
         assert_eq!(audit["resultCount"], 50);
         let search = backend.last_search.lock().unwrap();
+        assert_eq!(
+            search.as_ref().unwrap().next_page_token.as_deref(),
+            Some("next-page-fixture")
+        );
         let jql = &search.as_ref().unwrap().jql;
         if excluded.is_empty() {
             assert_eq!(jql, DATE_QUERY);

@@ -722,7 +722,8 @@ passthroughs; those require a separate typed policy and validation design.
 
 The `search` input takes a `query` object of `{ type: "jql" | "text", value }`,
 an optional `projects` array (min 1), an optional `maxResults`, and an optional
-`nextPageToken`. Omit `projects` to search the caller's effective broker scope,
+`nextPageToken` continuation (see [Search pagination](#search-pagination)).
+Omit `projects` to search the caller's effective broker scope,
 including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional.
 
@@ -847,6 +848,45 @@ Query grammar and cap failures return `input_invalid`, with safe token locations
 and supported alternatives where applicable. Diagnostics do not echo query
 literals. `scope_unresolved` covers returned-result identity/containment failures.
 
+### Search pagination
+
+A search result's `nextPageToken` is an opaque broker-signed continuation, not
+Jira's own token. To fetch the next page, pass it back unchanged as
+`nextPageToken` with the same search:
+
+- the same `query` type and canonical JQL (equivalent spellings, such as quoted
+  and bare values, are the same query);
+- the same `projects`, compared as a set;
+- the same effective `maxResults`; an omitted value equals the configured
+  default, and values above `providers.jira.search.max_results` equal the cap.
+
+The continuation is also bound to the execution context, the principal and
+whether it authenticated, the credential mode, the selected credential's type
+(which chooses the tenant or gateway route), and the Jira configuration Jira's
+token depends on: `tenant_host`, `cloud_id`, and whether `api.atlassian.com` is
+allowed. Any change rejects the token with `input_invalid`. Continuations
+expire 15 minutes after they are issued. They are signed with a key generated
+for each broker runtime generation, so a configuration reload or restart also
+invalidates them. Jira may also expire its own token.
+
+A continuation carries no authority and does not bind the effective project
+boundary. Every page is authorized again under current policy, its JQL is
+composed under the current boundary, and returned issues are checked against
+it, so a grant change applies from the next page. When that change alters the
+composed upstream query, for example when a grant adds or removes a project of
+an effective-access search or a new exclusion applies, the broker rejects the
+continuation with `input_invalid` before calling Jira; repeat the search
+without `nextPageToken`. Jira's token is never sent with a different query. A
+grant change that leaves the composed query unchanged, such as one outside
+explicit `projects`, keeps the continuation valid; losing a requested project
+denies the request as usual.
+
+The `nextPageToken` input accepts 1 to 21943 characters, the encoded size of
+the largest continuation. The broker relays Jira tokens of up to 16384 bytes;
+Jira documents no maximum, and its tokens return to Jira in a request URL
+alongside the composed JQL. A longer Jira token fails the page with
+`upstream_protocol_failed` and is never truncated.
+
 ### Diagnosing rejected search results
 
 Search result validation retains the public `scope_unresolved` denial and its
@@ -890,7 +930,8 @@ pagination, or which results are returned.
 
 Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
-and an optional `nextPageToken`. Search results include the same lightweight
+and, on a continuation, Jira's `nextPageToken` recovered from the caller's
+broker continuation. Search results include the same lightweight
 issue metadata as `issue.view`, but are intentionally body-free and never
 include issue `description`; callers should use `issue.view` on a specific
 result when they need the body.

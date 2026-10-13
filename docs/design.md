@@ -377,11 +377,11 @@ on redirect targets.
 The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
 resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
-page tokens and Gmail search page tokens use it; other native providers keep
-their own token handling, which is described in each provider's documentation. A
-provider that uses the envelope declares each token family once: its service and
-purpose, a version, an explicit payload cap, an optional expiry, and a signing
-lifetime:
+page tokens, and Gmail and Jira search page tokens use it; other native
+providers keep their own token handling, which is described in each provider's
+documentation. A provider that uses the envelope declares each token family
+once: its service and purpose, a version, an explicit payload cap, an optional
+expiry, and a signing lifetime:
 
 - **generation**: a key generated with the provider instance, so a reload or
   restart invalidates the tokens even when a stable key is configured;

@@ -5,6 +5,7 @@ mod backend;
 mod config;
 mod jql;
 mod present;
+mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
 mod tests;
@@ -13,6 +14,7 @@ mod validation;
 pub use backend::*;
 pub use config::*;
 use jql::*;
+use search_continuation::*;
 use validation::*;
 
 use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
@@ -30,7 +32,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
@@ -63,6 +65,9 @@ pub struct JiraProvider {
     limits: ProviderLimits,
     backend: Arc<dyn JiraBackend>,
     attribution: ProviderAttributionConfig,
+    /// Seals search continuations with this instance's generation key.
+    search_pages: ContinuationSigner,
+    search_configuration: [u8; 32],
 }
 
 impl JiraProvider {
@@ -77,6 +82,8 @@ impl JiraProvider {
             host.clients(),
         )?);
         Ok(Self {
+            search_pages: search_page_signer(),
+            search_configuration: search_configuration_fingerprint(&config),
             config,
             limits,
             backend,
@@ -90,6 +97,8 @@ impl JiraProvider {
         backend: Arc<dyn JiraBackend>,
     ) -> Self {
         Self {
+            search_pages: search_page_signer(),
+            search_configuration: search_configuration_fingerprint(&config),
             config,
             limits,
             backend,
@@ -104,6 +113,12 @@ impl JiraProvider {
     ) -> Self {
         Self::from_backend(config, limits, backend)
     }
+}
+
+/// Search continuations use only [`ContinuationLifetime::Generation`] keys,
+/// which the signer generates itself, so it needs no host stable key.
+fn search_page_signer() -> ContinuationSigner {
+    ContinuationSigner::new(None)
 }
 
 /// Jira projects, identified by project key.
@@ -372,7 +387,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                         "minItems": 1
                     },
                     "maxResults": { "type": "integer", "minimum": 1, "description": "Requested page size, capped by broker configuration." },
-                    "nextPageToken": { "type": "string", "description": "Continuation token from the previous response; reuse the same query and projects." }
+                    "nextPageToken": { "type": "string", "minLength": 1, "maxLength": JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES, "description": "Opaque continuation from the previous response; reuse the same query, projects, and maxResults." }
                 },
                 "additionalProperties": false
             }),
@@ -2043,6 +2058,19 @@ impl JiraProvider {
         )?;
         let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
+        let pages = SearchPageRequest {
+            request: &request,
+            configuration: &self.search_configuration,
+            credential,
+            query: &query,
+            requested_projects: &requested,
+            max_results,
+        };
+        let upstream_page_token = inputs
+            .next_page_token
+            .as_deref()
+            .map(|token| pages.open(&self.search_pages, token, SystemTime::now()))
+            .transpose()?;
         let response = self
             .backend
             .search(
@@ -2050,7 +2078,7 @@ impl JiraProvider {
                     jql: query.jql.clone(),
                     projects: response_scope.values_for_backend(),
                     max_results,
-                    next_page_token: inputs.next_page_token.clone(),
+                    next_page_token: upstream_page_token,
                 },
                 credential,
             )
@@ -2093,8 +2121,20 @@ impl JiraProvider {
             .iter()
             .map(|issue| issue.project.clone())
             .collect::<BTreeSet<_>>();
+        let next_page_token = response
+            .value
+            .next_page_token
+            .as_deref()
+            .map(|upstream| {
+                pages
+                    .seal(&self.search_pages, upstream, SystemTime::now())
+                    .map_err(|error| {
+                        error.with_upstream(Some(response.status), Some(response.duration_ms))
+                    })
+            })
+            .transpose()?;
 
-        let result = search_result(&response.value, &self.config);
+        let result = search_result(&response.value, next_page_token.as_deref(), &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
             .with_audit(json!({
@@ -5974,13 +6014,19 @@ fn issue_view_result(issue: &JiraIssue, config: &JiraProviderConfig) -> Value {
     })
 }
 
-fn search_result(page: &JiraSearchPage, config: &JiraProviderConfig) -> Value {
+/// The search page result; `next_page_token` is the sealed continuation,
+/// never Jira's upstream token.
+fn search_result(
+    page: &JiraSearchPage,
+    next_page_token: Option<&str>,
+    config: &JiraProviderConfig,
+) -> Value {
     json!({
         "issues": page.issues.iter().map(|issue| issue_search_result(issue, config)).collect::<Vec<_>>(),
         "maxResults": page.max_results,
         "startAt": page.start_at,
         "total": page.total,
-        "nextPageToken": page.next_page_token,
+        "nextPageToken": next_page_token,
         "isLast": page.is_last,
     })
 }
