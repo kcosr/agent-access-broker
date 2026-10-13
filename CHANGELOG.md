@@ -241,6 +241,17 @@ All notable changes to this project are documented in this file.
   `ContinuationLifetime::Durable` family replaces `sign_durable` and
   `verify_durable`. `StableSigningKey` and `host::service_signing_key` remain
   the host's signing-key port.
+- `UpstreamClient` now keeps credentials on its base origin. Every send
+  method, including each hop of `get_following_redirects`, refuses a request to
+  another origin that carries an `Authorization`, `Proxy-Authorization` or
+  `Cookie` header or a header value marked sensitive (as `bearer_auth`,
+  `basic_auth` and URL-embedded credentials produce), failing before it is
+  sent with `UpstreamError::NotSent`. Previously only the redirect helper kept
+  credentials on the base origin, and `send` delivered them to any allowlisted
+  origin. Requests without credentials still reach every allowlisted origin.
+  A provider that needs credentials on another origin builds a client whose
+  base is that origin, and marks custom credential headers sensitive. The
+  shipped providers already met this rule.
 
 ### Added
 

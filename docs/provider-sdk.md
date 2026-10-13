@@ -549,8 +549,8 @@ UpstreamClient::build(
   decides nothing.
 - `provider` is the name traces record.
 - `base` is the service's base URL. `request()` adds the invocation's
-  correlation headers only on this origin. The client does not decide where
-  credentials go; see [credentials and origins](#credentials-and-origins).
+  correlation headers only on this origin, and the send methods deliver
+  credentials only to it; see [credentials and origins](#credentials-and-origins).
 - `egress` declares the route the client needs; see below.
 - `allowed_upstream_hosts` are URL patterns. The client's send methods and its
   redirect helper refuse every request and redirect hop outside them.
@@ -631,20 +631,30 @@ correlation, hook, deadline and tracing span, so its traces stay attributed.
 
 ### Credentials and origins
 
-`UpstreamClient` enforces the allowlist and places correlation headers by
-origin, but credential placement is the provider's obligation. `send` delivers
-every header the provider added to the builder to any allowlisted URL,
-including a secondary origin such as a media or artifact host. A token attached
-with `bearer_auth` to a request for such a URL reaches that host.
+Credentials stay on the client's base origin. Every send method, including
+each hop of `get_following_redirects`, refuses a request whose URL is on
+another origin while it carries an `Authorization`, `Proxy-Authorization` or
+`Cookie` header or any header value marked sensitive. The request fails before
+it is sent with `UpstreamError::NotSent`, and its trace records
+`upstream_connection_failed`. `bearer_auth`, `basic_auth` and credentials
+embedded in a URL produce a sensitive `Authorization` header. Mark any other
+header that carries a secret, such as an API-key header, sensitive with
+`HeaderValue::set_sensitive(true)` so the rule covers it. A credential in a URL
+query is not a header: keep such URLs on the base origin yourself.
+
+A request without credentials may still go to any allowlisted origin, such as a
+media or artifact host. There is no opt-in for sending credentials to a second
+origin; build another client whose base is that origin, as the Atlassian
+gateway route and each OAuth destination do.
 
 - Build request URLs from `client.base()`. Treat a URL from an upstream response
   or a caller input, such as a pagination link or a download location, as
-  untrusted.
-- Attach credentials to an ordinary request only when the URL's origin equals
-  the client's base origin, as `same_origin(&url, client.base())` checks.
+  untrusted, and check its origin first, as `same_origin(&url, client.base())`
+  does, when you want to report your own reason instead of `NotSent`.
 - For a redirect chain, pass credentials in the `authorize` callback of
-  `get_following_redirects` rather than on the first request. The helper
-  applies it only to hops on the base origin.
+  `get_following_redirects`, which applies them only to hops on the base
+  origin. Headers from `with_decorate` go to every hop, so they must not carry
+  credentials.
 
 ```rust check
 use agent_access_provider::deps::http::Method;
@@ -652,8 +662,8 @@ use agent_access_provider::deps::reqwest::RequestBuilder;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{ProviderError, ReasonCode, UpstreamClient, same_origin};
 
-/// A GET for an upstream-supplied link that carries the token only on the
-/// client's own origin.
+/// A GET for an upstream-supplied link that reports a link on another origin
+/// as a protocol failure before the client would refuse it.
 fn authorized_get(
     client: &UpstreamClient,
     link: Url,

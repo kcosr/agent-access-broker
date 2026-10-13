@@ -107,7 +107,8 @@ impl<'a> UpstreamClientSpec<'a> {
 pub enum UpstreamError {
     #[error("upstream URL is not allowlisted")]
     NotAllowed,
-    /// The request never reached the upstream: it could not be built, or no
+    /// The request never reached the upstream: it could not be built, it
+    /// carried credentials to another origin than the service's, or no
     /// connection was established. Nothing upstream acted on it.
     #[error("upstream request was not sent: {detail}")]
     NotSent { timed_out: bool, detail: String },
@@ -211,7 +212,9 @@ impl<'a> RedirectRules<'a> {
         self
     }
 
-    /// Headers every hop carries.
+    /// Headers every hop carries. A credential-bearing header (see
+    /// [`UpstreamClient::request`]) makes a hop to another origin fail as
+    /// [`UpstreamError::NotSent`]; authorize hops with `authorize` instead.
     pub fn with_decorate(
         mut self,
         decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
@@ -289,6 +292,13 @@ impl UpstreamClient {
 
     /// Starts a request. Requests to the service's own origin carry the
     /// invocation's correlation headers; requests elsewhere carry none.
+    ///
+    /// Credentials stay on the service's origin: every send method refuses,
+    /// before sending, a request to another origin that carries an
+    /// `Authorization`, `Proxy-Authorization` or `Cookie` header or any
+    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Mark
+    /// another credential-bearing header sensitive
+    /// (`HeaderValue::set_sensitive`) so the client keeps it there too.
     pub fn request(&self, method: Method, url: Url) -> RequestBuilder {
         let trusted = same_origin(&url, &self.base);
         let request = self.client.request(method, url);
@@ -471,6 +481,12 @@ impl UpstreamClient {
             request.url().origin().ascii_serialization(),
             request.method().as_str(),
         );
+        if !same_origin(request.url(), &self.base) && carries_credentials(request.headers()) {
+            return Err(trace.fail(UpstreamError::NotSent {
+                timed_out: false,
+                detail: "credentials are sent only to the service origin".to_string(),
+            }));
+        }
         Ok((request, trace))
     }
 
@@ -492,6 +508,17 @@ impl UpstreamClient {
             started: Instant::now(),
         }
     }
+}
+
+/// Whether a request carries credentials: an `Authorization`,
+/// `Proxy-Authorization` or `Cookie` header, or any header value marked
+/// sensitive, as `basic_auth`, `bearer_auth` and credentials embedded in the
+/// URL produce.
+fn carries_credentials(headers: &reqwest::header::HeaderMap) -> bool {
+    use reqwest::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION};
+    headers.iter().any(|(name, value)| {
+        value.is_sensitive() || [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE].contains(name)
+    })
 }
 
 /// A body streaming the file at `path`, with its upload progress.
@@ -857,6 +884,158 @@ mod tests {
         );
         assert!(!hops[0].headers.contains_key(REQUEST_ID_HEADER));
         assert_eq!(hops[1].headers[REQUEST_ID_HEADER], "test-agent-request-id");
+    }
+
+    /// Credentials reach only the service's origin: a request carrying them
+    /// anywhere else is refused before it is sent, while the same request
+    /// without them, such as a media or artifact download, still goes out.
+    #[tokio::test(flavor = "current_thread")]
+    async fn credentials_never_leave_the_service_origin() {
+        let service = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        for server in [&service, &elsewhere] {
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(server)
+                .await;
+        }
+        let client = client(
+            &service.uri(),
+            &allow(&[&service, &elsewhere]),
+            ClientProfile::Request,
+        );
+        let item = |server: &MockServer| Url::parse(&format!("{}/item", server.uri())).unwrap();
+        let mut api_key = reqwest::header::HeaderValue::from_static("service-secret");
+        api_key.set_sensitive(true);
+        type Authorize = Box<dyn Fn(RequestBuilder) -> RequestBuilder>;
+        let credentials: Vec<(&str, Authorize)> = vec![
+            ("bearer", Box::new(|r| r.bearer_auth("service-secret"))),
+            (
+                "basic",
+                Box::new(|r| r.basic_auth("user", Some("service-secret"))),
+            ),
+            (
+                "raw authorization",
+                Box::new(|r| r.header("authorization", "Token service-secret")),
+            ),
+            (
+                "proxy authorization",
+                Box::new(|r| r.header("proxy-authorization", "Basic c2VjcmV0")),
+            ),
+            (
+                "cookie",
+                Box::new(|r| r.header("cookie", "session=service-secret")),
+            ),
+            (
+                "sensitive header",
+                Box::new(move |r| r.header("x-api-key", api_key.clone())),
+            ),
+        ];
+        let capture = crate::test_support::install_trace_capture().start();
+        for (name, authorize) in &credentials {
+            let error = capture
+                .run(client.send(
+                    authorize(client.request(Method::GET, item(&elsewhere))),
+                    UpstreamCall::new("item.view"),
+                ))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    UpstreamError::NotSent {
+                        timed_out: false,
+                        ..
+                    }
+                ),
+                "{name}: {error:?}"
+            );
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+            client
+                .send(
+                    authorize(client.request(Method::GET, item(&service))),
+                    UpstreamCall::new("item.view"),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        }
+        // Credentials embedded in the URL become an Authorization header.
+        let mut embedded = item(&elsewhere);
+        embedded.set_username("user").unwrap();
+        embedded.set_password(Some("service-secret")).unwrap();
+        let error = client
+            .send(
+                client.request(Method::GET, embedded),
+                UpstreamCall::new("item.view"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
+        // The refusals are traced as unsent attempts to the other origin.
+        let events = capture.take_upstream_requests();
+        assert_eq!(events.len(), credentials.len(), "{events:?}");
+        assert!(events.iter().all(|event| {
+            event["upstreamOrigin"] == elsewhere.uri()
+                && event["reasonCode"] == "upstream_connection_failed"
+        }));
+        assert!(elsewhere.received_requests().await.unwrap().is_empty());
+
+        // Without credentials, another allowlisted origin is reachable.
+        client
+            .send(
+                client
+                    .request(Method::GET, item(&elsewhere))
+                    .header("accept", "application/octet-stream"),
+                UpstreamCall::new("item.download"),
+            )
+            .await
+            .unwrap();
+        let received = elsewhere.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(!received[0].headers.contains_key("authorization"));
+        let authorized = service.received_requests().await.unwrap();
+        assert_eq!(authorized.len(), credentials.len());
+        assert_eq!(
+            authorized[0].headers["authorization"],
+            "Bearer service-secret"
+        );
+    }
+
+    /// A redirect hop to another origin cannot carry credentials through
+    /// `with_decorate`; `authorize` keeps them on the service's origin.
+    #[tokio::test]
+    async fn redirect_hops_cannot_decorate_other_origins_with_credentials() {
+        let service = MockServer::start().await;
+        let storage = MockServer::start().await;
+        Mock::given(path("/download"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/blob", storage.uri())),
+            )
+            .mount(&service)
+            .await;
+        Mock::given(path("/blob"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("bytes"))
+            .mount(&storage)
+            .await;
+        let client = client(
+            &service.uri(),
+            &allow(&[&service, &storage]),
+            ClientProfile::Stream,
+        );
+        let url = Url::parse(&format!("{}/download", service.uri())).unwrap();
+        let error = client
+            .get_following_redirects(
+                url,
+                RedirectRules::new(3, Duration::from_secs(5), &|request| request)
+                    .with_decorate(&|request| request.bearer_auth("service-secret")),
+                "item.download",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
+        assert_eq!(service.received_requests().await.unwrap().len(), 1);
+        assert!(storage.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
