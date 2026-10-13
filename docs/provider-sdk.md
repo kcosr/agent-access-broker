@@ -849,7 +849,9 @@ response limit already bounds the response the upstream token arrives in and the
 result the continuation leaves in. Declare the family's expiry and prefix, then
 size it with
 `family.with_max_payload_bytes(family.max_payload_bytes_within(response_limit))`.
-The continuation then always fits the result it is returned in.
+The continuation then always fits the result it is returned in. Jira and
+Confluence search continuations use `max_upstream_response_bytes` this way;
+Gmail keeps its documented 2048-byte upstream cap.
 
 A family whose tokens must be read during scope resolution, before the host
 admits a credential mode, declares `.opened_during_scope_resolution()`.
