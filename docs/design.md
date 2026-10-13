@@ -286,7 +286,13 @@ origin; redirect hops to other origins carry correlation headers only when the
 backend opts in (Jira does, for Atlassian media hosts; CloudBees CI does not,
 for artifact storage). Each request records one
 `upstream_request_completed` trace, either when the backend has classified the
-response or when the response is dropped. Backends keep their own protocol:
+response or when the response is dropped. The trace captures the provider hook
+that sent the request, including from work moved onto other tasks with
+`InvocationScope`. The backend's classification, or a status reason its client
+declared, must be one that hook may report, a registered domain reason, or a
+host port's failure; any other, or one made outside a provider hook, is
+recorded as `broker_provider_contract_failed`. A transport failure's
+classification is the client's own. Backends keep their own protocol:
 URLs, authentication schemes, status and body handling, and any extra checks
 on redirect targets.
 

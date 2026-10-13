@@ -1326,18 +1326,33 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
         reason_code: None,
         path_template: Some("/repos/{owner}/{repo}/issues"),
     });
-    emit_upstream_request_completed(UpstreamTrace {
+    let classified = |duration_ms| UpstreamTrace {
         provider: "configured_http",
         upstream_operation: "issues.list",
         upstream_origin: "https://api.example.test",
         method: "GET",
         status: Some(200),
-        duration_ms: 6,
+        duration_ms,
         attempt: 1,
         egress_proxy_mode: "direct",
         reason_code: Some(ReasonCode::UpstreamProtocolFailed.into()),
         path_template: Some("/repos/{owner}/{repo}/issues"),
-    });
+    };
+    // A provider's own classification is checked against its hook.
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(agent_access_provider::host::with_hook_context(
+            agent_access_provider::host::hook_context(
+                "configured_http",
+                "issues.list",
+                HookPhase::Invocation,
+                &[],
+            ),
+            async { emit_upstream_request_completed(classified(6)) },
+        ));
+    // Outside any provider hook it cannot be, so it is not recorded.
+    emit_upstream_request_completed(classified(7));
 
     let events = captured.take();
     let redirect = event_by_status(&events, 302);
@@ -1369,6 +1384,14 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
     assert_eq!(
         string_field(protocol_failed, "reasonCode"),
         Some("upstream_protocol_failed")
+    );
+    let unattributed = events
+        .iter()
+        .find(|event| number_field(event, "upstreamDurationMs") == Some(7))
+        .expect("unattributed classification event is captured");
+    assert_eq!(
+        string_field(unattributed, "reasonCode"),
+        Some("broker_provider_contract_failed")
     );
 }
 

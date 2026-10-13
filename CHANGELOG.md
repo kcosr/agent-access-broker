@@ -203,7 +203,12 @@ All notable changes to this project are documented in this file.
   message instead of the provider's outcome; an invocation's adds
   `result.executionState = "unknown"` and `result.retrySafe = false`. A
   delegated credential's failures, such as a busy refresh's
-  `concurrency_limited`, still pass through unchanged.
+  `concurrency_limited`, still pass through unchanged. Upstream trace
+  classifications, including a client's declared status reasons, are checked
+  against the hook that sent the request and logged as
+  `broker_provider_contract_failed` when rejected or made outside a provider
+  hook. Rejections log a `provider_contract_failed` event with a diagnostic
+  code.
 
 ### Fixed
 

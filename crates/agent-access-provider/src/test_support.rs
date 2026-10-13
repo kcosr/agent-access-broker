@@ -222,6 +222,21 @@ pub fn credential_token(credential: &ExecutionCredential) -> &str {
     }
 }
 
+/// Runs `future` as the invocation hook of `service`'s `action`, as the host
+/// runs a provider's invoke, so upstream traces it starts are checked against
+/// that hook. The backend's registered domain reasons are not included.
+pub async fn in_invocation_hook<F: std::future::Future>(
+    service: &str,
+    action: &str,
+    future: F,
+) -> F::Output {
+    crate::host::with_hook_context(
+        crate::host::hook_context(service, action, crate::HookPhase::Invocation, &[]),
+        future,
+    )
+    .await
+}
+
 /// The username of a `basic_api_token` credential, for test assertions.
 pub fn credential_username(credential: &ExecutionCredential) -> Option<&str> {
     match credential.view() {

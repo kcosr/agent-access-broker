@@ -1268,7 +1268,11 @@ mod tests {
                 .await;
             let capture = install_trace_capture().start();
             let outcome = capture
-                .run(view(&provider(&server.uri(), limits.clone())))
+                .run(agent_access_provider::test_support::in_invocation_hook(
+                    "conformance",
+                    "item.view",
+                    view(&provider(&server.uri(), limits.clone())),
+                ))
                 .await;
             let events = capture.take_upstream_requests();
             assert_eq!(events.len(), 1, "{body}: {events:?}");

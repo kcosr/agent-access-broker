@@ -300,7 +300,11 @@ async fn issue_types_traces_semantic_protocol_failure_without_response_text() {
             CorrelationContext::for_tests(),
             "jira".to_string(),
             "issue_type.list".to_string(),
-            backend.issue_types("PROJ", request(0, 2), &credential),
+            agent_access_provider::test_support::in_invocation_hook(
+                "jira",
+                "issue_type.list",
+                backend.issue_types("PROJ", request(0, 2), &credential),
+            ),
         ))
         .await
         .unwrap_err();

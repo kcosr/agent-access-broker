@@ -754,6 +754,16 @@ to durable audit records. Keep using the public `reasonCode` and safe result for
 caller behavior; the internal code must not be copied into caller-visible or
 audit records.
 
+A provider outcome its contract does not allow logs a `provider_contract_failed`
+warning with `service`, `action`, `phase` (`scope_resolution`,
+`body_admission`, `invocation`, or `credential_verification`), `emission`
+(`hook_failure`, `late_stream`, or `upstream_trace`) and a `diagnosticCode`
+such as `provider_reason_host_only` or `provider_domain_reason_unregistered`.
+The caller, stream audit record, or trace sees `broker_provider_contract_failed`
+instead of the provider's reason, and the operation's `invoke_completed` event
+carries the same `diagnosticCode` when an invocation hook was rejected. A trace classified
+outside any provider hook logs `provider_hook_context_missing`.
+
 For Jira search result denials, `jira_search_issue_key_invalid`,
 `jira_search_issue_project_mismatch`, and `jira_search_project_unauthorized`
 distinguish metadata validation from project containment. The raw audit's

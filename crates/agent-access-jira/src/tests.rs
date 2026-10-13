@@ -9045,17 +9045,21 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
             CorrelationContext::for_tests(),
             "jira".to_string(),
             "attachment.add".to_string(),
-            backend.add_attachment(
-                "PROJ-1",
-                JiraAttachmentUpload {
-                    filename: "evidence.txt".to_string(),
-                    content_type: "text/plain".to_string(),
-                    size: 8,
-                    sha256: sha256_hex(b"evidence"),
-                    bytes: b"evidence".to_vec(),
-                    temp_file: None,
-                },
-                &test_credential(),
+            agent_access_provider::test_support::in_invocation_hook(
+                "jira",
+                "attachment.add",
+                backend.add_attachment(
+                    "PROJ-1",
+                    JiraAttachmentUpload {
+                        filename: "evidence.txt".to_string(),
+                        content_type: "text/plain".to_string(),
+                        size: 8,
+                        sha256: sha256_hex(b"evidence"),
+                        bytes: b"evidence".to_vec(),
+                        temp_file: None,
+                    },
+                    &test_credential(),
+                ),
             ),
         ))
         .await

@@ -9,7 +9,7 @@
 use crate::host::{ClientTransportSpec, UpstreamClientFactory};
 use crate::{
     EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode, UpstreamTrace,
-    apply_current_correlation_headers, current_provider_action,
+    apply_current_correlation_headers, checked_trace_reason, current_provider_action,
     emit_upstream_request_completed_for, same_origin, url_allowed_by_patterns,
 };
 use futures_util::TryStreamExt;
@@ -386,6 +386,7 @@ impl UpstreamClient {
             status_reasons: self.status_reasons,
             service,
             action,
+            hook: crate::current_hook_context(),
             span: tracing::Span::current(),
             provider: self.provider,
             operation: call.operation.to_string(),
@@ -432,13 +433,15 @@ fn redirect_location(response: &Response, base: &Url) -> Option<Url> {
     base.join(location).ok()
 }
 
-/// One request's trace. It keeps the invocation and span that sent the
-/// request, so a trace recorded after the invocation's scope ended, or while
-/// another invocation runs, is still attributed to its own.
+/// One request's trace. It keeps the invocation, provider hook and span that
+/// sent the request, so a trace recorded after the invocation's scope ended,
+/// or while another invocation runs, is still attributed to and checked
+/// against its own.
 struct TraceEvent {
     status_reasons: &'static [(u16, ReasonCode)],
     service: String,
     action: String,
+    hook: Option<crate::HookContext>,
     span: tracing::Span,
     provider: &'static str,
     operation: String,
@@ -451,14 +454,27 @@ struct TraceEvent {
 }
 
 impl TraceEvent {
+    /// Records the trace with the provider's classification, or the one its
+    /// client declared for the status; both are checked against the hook
+    /// that sent the request.
     fn emit(&self, reason_code: Option<ProviderReason>) {
-        let reason_code = reason_code.or_else(|| {
-            let status = self.status?;
-            self.status_reasons
-                .iter()
-                .find(|(code, _)| *code == status)
-                .map(|(_, reason)| ProviderReason::from(*reason))
-        });
+        let reason_code = reason_code
+            .or_else(|| {
+                let status = self.status?;
+                self.status_reasons
+                    .iter()
+                    .find(|(code, _)| *code == status)
+                    .map(|(_, reason)| ProviderReason::from(*reason))
+            })
+            .map(|reason| {
+                checked_trace_reason(reason, &self.service, &self.action, self.hook.as_ref())
+            });
+        self.emit_classified(reason_code);
+    }
+
+    /// Records the trace with a classification this crate made itself, such
+    /// as a transport failure's.
+    fn emit_classified(&self, reason_code: Option<ProviderReason>) {
         let trace = UpstreamTrace {
             provider: self.provider,
             upstream_operation: &self.operation,
@@ -507,7 +523,7 @@ impl TraceEvent {
     }
 
     fn fail(self, error: UpstreamError) -> UpstreamError {
-        self.emit(Some(error.reason_code().into()));
+        self.emit_classified(Some(error.reason_code().into()));
         error
     }
 }
@@ -822,9 +838,13 @@ mod tests {
         let url = Url::parse(&format!("{}/page", service.uri())).unwrap();
         for reason in [None, Some(ReasonCode::UpstreamProtocolFailed.into())] {
             let mut response = capture
-                .run(client.send(
-                    client.request(Method::PUT, url.clone()),
-                    UpstreamCall::new("page.update"),
+                .run(crate::test_support::in_invocation_hook(
+                    "example",
+                    "page.update",
+                    client.send(
+                        client.request(Method::PUT, url.clone()),
+                        UpstreamCall::new("page.update"),
+                    ),
                 ))
                 .await
                 .unwrap();
@@ -991,41 +1011,51 @@ mod tests {
         let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
 
         capture
-            .run(async {
-                let mut classified = client
-                    .send(
-                        client.request(Method::GET, url.clone()),
-                        UpstreamCall::new("item.view"),
-                    )
-                    .await
-                    .unwrap();
-                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed.into()));
-                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout.into()));
-                drop(classified);
-                let dropped = client
-                    .send(
-                        client.request(Method::GET, url),
-                        UpstreamCall::new("item.list"),
-                    )
-                    .await
-                    .unwrap();
-                drop(dropped);
+            .run(crate::test_support::in_invocation_hook(
+                "example",
+                "item.view",
+                async {
+                    let mut classified = client
+                        .send(
+                            client.request(Method::GET, url.clone()),
+                            UpstreamCall::new("item.view"),
+                        )
+                        .await
+                        .unwrap();
+                    complete_upstream_trace(
+                        &mut classified,
+                        Some(ReasonCode::UpstreamFailed.into()),
+                    );
+                    complete_upstream_trace(
+                        &mut classified,
+                        Some(ReasonCode::UpstreamTimeout.into()),
+                    );
+                    drop(classified);
+                    let dropped = client
+                        .send(
+                            client.request(Method::GET, url),
+                            UpstreamCall::new("item.list"),
+                        )
+                        .await
+                        .unwrap();
+                    drop(dropped);
 
-                let mut detached = client
-                    .send(
-                        client.request(
-                            Method::GET,
-                            Url::parse(&format!("{}/item", service.uri())).unwrap(),
-                        ),
-                        UpstreamCall::new("item.update"),
-                    )
-                    .await
-                    .unwrap();
-                let trace = take_upstream_trace(&mut detached).unwrap();
-                assert_eq!(trace.operation(), "item.update");
-                drop(detached);
-                trace.complete(Some(ReasonCode::UpstreamProtocolFailed.into()));
-            })
+                    let mut detached = client
+                        .send(
+                            client.request(
+                                Method::GET,
+                                Url::parse(&format!("{}/item", service.uri())).unwrap(),
+                            ),
+                            UpstreamCall::new("item.update"),
+                        )
+                        .await
+                        .unwrap();
+                    let trace = take_upstream_trace(&mut detached).unwrap();
+                    assert_eq!(trace.operation(), "item.update");
+                    drop(detached);
+                    trace.complete(Some(ReasonCode::UpstreamProtocolFailed.into()));
+                },
+            ))
             .await;
 
         let events = capture.take_upstream_requests();
@@ -1037,5 +1067,160 @@ mod tests {
         assert_eq!(events[1]["provider"], "example");
         assert_eq!(events[2]["upstreamOperation"], "item.update");
         assert_eq!(events[2]["reasonCode"], "upstream_protocol_failed");
+    }
+
+    static ITEM_LOCKED: crate::ProviderReasonDefinition = crate::ProviderReasonDefinition::deny(
+        "example_item_locked",
+        crate::ProviderFailureStatus::Conflict,
+    );
+    static ITEM_REASONS: [&crate::ProviderReasonDefinition; 1] = [&ITEM_LOCKED];
+    static OTHER_LOCKED: crate::ProviderReasonDefinition = crate::ProviderReasonDefinition::deny(
+        "other_item_locked",
+        crate::ProviderFailureStatus::Conflict,
+    );
+
+    /// Classifications are checked against the hook that sent the request,
+    /// captured at send time: its phase, its backend's domain reasons and its
+    /// service. A rejected or unattributable one is recorded as
+    /// `broker_provider_contract_failed`; the transport's own classification
+    /// is not the provider's and needs no hook.
+    #[tokio::test]
+    async fn trace_classifications_are_checked_against_the_sending_hook() {
+        use crate::HookPhase;
+        use crate::host::{hook_context, with_hook_context};
+        let service = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(409))
+            .mount(&service)
+            .await;
+        let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
+        let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
+        let capture = crate::test_support::install_trace_capture().start();
+        let send = || {
+            client.send(
+                client.request(Method::GET, url.clone()),
+                UpstreamCall::new("item.view"),
+            )
+        };
+        let cases: Vec<(Option<crate::HookContext>, Option<ProviderReason>, &str)> = vec![
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &ITEM_REASONS,
+                )),
+                Some((&ITEM_LOCKED).into()),
+                "example_item_locked",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &ITEM_REASONS,
+                )),
+                Some((&OTHER_LOCKED).into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &[],
+                )),
+                Some(ReasonCode::RateLimited.into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::CredentialVerification,
+                    &[],
+                )),
+                Some(ReasonCode::MutationVerificationFailed.into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &[],
+                )),
+                Some(ReasonCode::MutationVerificationFailed.into()),
+                "mutation_verification_failed",
+            ),
+            (
+                None,
+                Some(ReasonCode::UpstreamFailed.into()),
+                "broker_provider_contract_failed",
+            ),
+            // The client's declared status reason (409) is the provider's
+            // classification too, so it needs a hook.
+            (None, None, "broker_provider_contract_failed"),
+        ];
+        for (hook, reason, expected) in cases {
+            let mut response = match hook {
+                Some(hook) => capture.run(with_hook_context(hook, send())).await,
+                None => capture.run(send()).await,
+            }
+            .unwrap();
+            capture.in_scope(|| complete_upstream_trace(&mut response, reason));
+            let events = capture.take_upstream_requests();
+            assert_eq!(events.len(), 1, "{events:?}");
+            assert_eq!(events[0]["reasonCode"], expected, "{reason:?}");
+        }
+
+        // A hook nested under another service's provider action cannot
+        // attribute the trace consistently.
+        let mut response = capture
+            .run(with_hook_context(
+                hook_context("example", "item.view", HookPhase::Invocation, &[]),
+                crate::with_provider_context(
+                    crate::CorrelationContext::for_tests(),
+                    "other".to_owned(),
+                    "item.view".to_owned(),
+                    send(),
+                ),
+            ))
+            .await
+            .unwrap();
+        capture.in_scope(|| {
+            complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamFailed.into()))
+        });
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "broker_provider_contract_failed");
+
+        // The provider's classification made after its hook returned is
+        // still checked against that hook, which the trace captured.
+        let mut response = capture
+            .run(with_hook_context(
+                hook_context("example", "item.view", HookPhase::Invocation, &ITEM_REASONS),
+                send(),
+            ))
+            .await
+            .unwrap();
+        capture.in_scope(|| complete_upstream_trace(&mut response, Some((&ITEM_LOCKED).into())));
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "example_item_locked");
+
+        // A transport failure's classification is the client's own.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let unreachable =
+            super::tests::client(&base, &[format!("{base}/**")], ClientProfile::Request);
+        let _ = capture
+            .run(unreachable.send(
+                unreachable.request(Method::GET, Url::parse(&format!("{base}/item")).unwrap()),
+                UpstreamCall::new("item.view"),
+            ))
+            .await
+            .unwrap_err();
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "upstream_connection_failed");
     }
 }

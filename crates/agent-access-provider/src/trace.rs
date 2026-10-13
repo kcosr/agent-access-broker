@@ -1,5 +1,7 @@
 //! Upstream request trace events.
-use crate::{ProviderReason, ReasonCode, current_provider_action};
+use crate::{
+    HookContext, ProviderReason, ReasonCode, current_hook_context, current_provider_action,
+};
 
 /// One completed upstream HTTP request, reported by a backend.
 pub struct UpstreamTrace<'a> {
@@ -11,17 +13,59 @@ pub struct UpstreamTrace<'a> {
     pub duration_ms: u64,
     pub attempt: u32,
     pub egress_proxy_mode: &'a str,
-    /// The provider's classification: a standard reason or one of its
-    /// registered domain reasons.
+    /// The provider's classification: a reason its current hook may report,
+    /// one of its registered domain reasons, or a host port's failure it
+    /// passes on. A classification outside the hook's contract, or made
+    /// outside any provider hook, is recorded as
+    /// `broker_provider_contract_failed`.
     pub reason_code: Option<ProviderReason>,
     pub path_template: Option<&'a str>,
 }
 
 /// Emits the `upstream_request_completed` event under this crate's log
-/// target, tagged with the invocation's service and action.
-pub fn emit_upstream_request_completed(trace: UpstreamTrace<'_>) {
+/// target, tagged with the invocation's service and action, after checking
+/// the provider's classification against the current hook.
+pub fn emit_upstream_request_completed(mut trace: UpstreamTrace<'_>) {
     let (service, action) = current_provider_action().unwrap_or_default();
+    trace.reason_code = trace.reason_code.map(|reason| {
+        checked_trace_reason(reason, &service, &action, current_hook_context().as_ref())
+    });
     emit_upstream_request_completed_for(trace, &service, &action);
+}
+
+/// A provider's trace classification, checked against the hook that sent
+/// the request: the reasons that hook may report, attributed to that hook's
+/// own service. A classification made outside any provider hook, or under
+/// another service's, cannot be checked and is rejected. A rejected one is
+/// recorded as `broker_provider_contract_failed`, never the supplied code.
+pub(crate) fn checked_trace_reason(
+    reason: ProviderReason,
+    service: &str,
+    action: &str,
+    hook: Option<&HookContext>,
+) -> ProviderReason {
+    let checked = match hook {
+        None => Err(crate::ContractViolation::MissingHookContext),
+        Some(hook) if hook.service() != service => {
+            Err(crate::ContractViolation::InconsistentHookContext)
+        }
+        Some(hook) => hook.check_trace(reason),
+    };
+    match checked {
+        Ok(()) => reason,
+        Err(violation) => {
+            tracing::warn!(
+                event = "provider_contract_failed",
+                service,
+                action,
+                phase = hook.map_or("", |hook| hook.phase().as_str()),
+                emission = "upstream_trace",
+                diagnosticCode = violation.diagnostic_code(),
+                "provider outcome rejected by its hook contract"
+            );
+            ReasonCode::BrokerProviderContractFailed.into()
+        }
+    }
 }
 
 /// [`emit_upstream_request_completed`] for an invocation that may no longer
