@@ -233,7 +233,7 @@ impl BackendRegistry {
                 registration
                     .resource_types()
                     .iter()
-                    .any(|descriptor| &descriptor.id == resource_type)
+                    .any(|descriptor| descriptor.id() == resource_type)
             })
             .map(|registration| registration.kind())
     }
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(registry.oauth_dialect_ids().collect::<Vec<_>>(), ["stub"]);
         assert!(registry.oauth_dialect("outlook").is_none());
         assert_eq!(
-            registry.resource_owner(&OAUTH_STUB_BACKEND.resource_types()[0].id),
+            registry.resource_owner(&OAUTH_STUB_BACKEND.resource_types()[0].id()),
             Some("oauth_stub")
         );
         let errors = registry

@@ -5767,7 +5767,7 @@ mod tests {
         agent_access_core::ResourceDefinition {
             id: id.to_string(),
             display_name: None,
-            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector,
             allowed_execution_contexts: vec!["default".to_string()],
             enabled: true,

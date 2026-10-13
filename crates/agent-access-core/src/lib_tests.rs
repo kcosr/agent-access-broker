@@ -1140,7 +1140,7 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
     );
     let resources = select_resources(
         &mut config,
-        CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+        CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
         &[namespace("team-ci/payments")],
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -1965,7 +1965,7 @@ fn disjoint_execution_contexts_remove_static_and_containment_ambiguity() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config.policy.grants[0].execution_contexts = Some(vec!["external".to_string()]);
@@ -2158,7 +2158,7 @@ fn validates_jira_issue_link_config_and_exposes_project_scope_only() {
     assert!(!capabilities.resource_scopes.contains_key("issue"));
     assert_eq!(
         capabilities.resource_scopes["project"].resource_type,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone()
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()
     );
 }
 
@@ -2599,7 +2599,7 @@ fn service_mode_confluence_comment_actions_require_lookup_credentials() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[exact("ENG")],
     );
@@ -2620,7 +2620,7 @@ fn accepts_wildcard_per_user_lookup_actions_without_lookup_credentials() {
     config.policy.grants[0].credential_mode = "per_user".to_string();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     validate_broker_config(&config).unwrap();
@@ -2636,7 +2636,7 @@ fn accepts_wildcard_per_user_lookup_actions_without_lookup_credentials() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[ResourceSelector::All],
     );
@@ -2656,7 +2656,7 @@ fn rejects_shadowed_service_lookup_grant_without_lookup_credentials() {
     config.policy.grants[0].priority = Some(100);
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2665,7 +2665,7 @@ fn rejects_shadowed_service_lookup_grant_without_lookup_credentials() {
     service_grant.priority = Some(10);
     service_grant.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
     config.policy.grants.push(service_grant);
@@ -2684,7 +2684,7 @@ fn rejects_lookup_backed_both_wildcard_mixed_modes() {
     config.policy.grants[0].actions = vec!["issue.view".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2722,7 +2722,7 @@ fn accepts_disjoint_mixed_lookup_grants_when_lookup_is_configured() {
     config.policy.grants[0].credential_mode = "service".to_string();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
 
@@ -2730,7 +2730,7 @@ fn accepts_disjoint_mixed_lookup_grants_when_lookup_is_configured() {
     per_user.credential_mode = "per_user".to_string();
     per_user.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("OPS")],
     );
     config.policy.grants.push(per_user);
@@ -2768,7 +2768,7 @@ fn accepts_typed_containment_wildcard_scopes() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     validate_broker_config(&config).unwrap();
@@ -2778,7 +2778,7 @@ fn accepts_typed_containment_wildcard_scopes() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[ResourceSelector::All],
     );
@@ -2790,7 +2790,7 @@ fn validates_resource_selectors_and_rejects_retired_child_scope_types() {
     let mut config = sample_broker();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All, exact("PROJ")],
     );
     validate_broker_config(&config).unwrap();
@@ -2799,7 +2799,7 @@ fn validates_resource_selectors_and_rejects_retired_child_scope_types() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[exact("eng")],
     );
@@ -2837,7 +2837,7 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2845,7 +2845,7 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     duplicate.credential_mode = "per_user".to_string();
     duplicate.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
     config.policy.grants.push(duplicate);
@@ -3119,7 +3119,7 @@ fn fake_service_requires_explicit_non_production_enablement() {
     config.policy.grants[0].actions = vec!["echo".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        FAKE_PROJECT_RESOURCE.id.clone(),
+        FAKE_PROJECT_RESOURCE.id().clone(),
         &[exact("TEST")],
     );
 
@@ -3239,7 +3239,7 @@ fn git_http_gateway_accepts_typed_repository_resources_and_exposes_capabilities(
         .insert("gitlab_git".to_string(), git_http_gateway_config());
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[
             exact("sip/service"),
             exact("platform/tool"),
@@ -3274,7 +3274,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     let mut config = sample_broker();
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[
             exact("sip/service"),
             exact("platform/tool"),
@@ -3300,7 +3300,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     );
     assert_eq!(
         capabilities.resource_scopes["repository"].resource_type,
-        GIT_REPOSITORY_RESOURCE.id.clone()
+        GIT_REPOSITORY_RESOURCE.id().clone()
     );
     assert!(
         capabilities.resource_scopes["repository"]
@@ -3344,7 +3344,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
 
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config
@@ -3362,7 +3362,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     );
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -3652,7 +3652,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
         config.gateways.insert("gitlab_git".to_string(), gateway);
         let resources = select_resources(
             &mut config,
-            GIT_REPOSITORY_RESOURCE.id.clone(),
+            GIT_REPOSITORY_RESOURCE.id().clone(),
             &[exact("sip/service")],
         );
         config.policy.grants.push(PolicyGrantConfig {
@@ -3679,7 +3679,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
     let last = config.policy.grants.len() - 1;
     config.policy.grants[last].resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[exact("sip%65/service")],
     );
     let errors = validation_errors(validate_broker_config(&config));
@@ -3703,7 +3703,7 @@ fn git_http_gateway_rejects_invalid_gateway_options() {
         config.gateways.insert("gitlab_git".to_string(), gateway);
         let resources = select_resources(
             &mut config,
-            GIT_REPOSITORY_RESOURCE.id.clone(),
+            GIT_REPOSITORY_RESOURCE.id().clone(),
             &[exact("sip/service")],
         );
         config.policy.grants.push(PolicyGrantConfig {

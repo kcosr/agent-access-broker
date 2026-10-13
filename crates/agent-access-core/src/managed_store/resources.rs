@@ -1036,7 +1036,7 @@ mod tests {
         CreateResourceRequest {
             id: Some(id.into()),
             display_name: None,
-            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector,
             allowed_execution_contexts: vec!["internal".into()],
             enabled: true,
@@ -1292,7 +1292,7 @@ mod tests {
             resources: vec![ResourceDefinition {
                 id: "configured".into(),
                 display_name: None,
-                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
                 selector: ResourceSelector::All,
                 allowed_execution_contexts: vec!["internal".into()],
                 enabled: true,

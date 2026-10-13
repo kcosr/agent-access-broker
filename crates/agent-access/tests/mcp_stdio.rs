@@ -654,14 +654,14 @@ fn fake_config(directory: &Path, first_token: &Path, second_token: &Path) -> Bro
             resources: resource_catalog(&[
                 (
                     "project-test",
-                    FAKE_PROJECT_RESOURCE.id.clone(),
+                    FAKE_PROJECT_RESOURCE.id().clone(),
                     ResourceSelector::Exact {
                         value: "TEST".into(),
                     },
                 ),
                 (
                     "project-test2",
-                    FAKE_PROJECT_RESOURCE.id.clone(),
+                    FAKE_PROJECT_RESOURCE.id().clone(),
                     ResourceSelector::Exact {
                         value: "TEST2".into(),
                     },

@@ -4457,7 +4457,7 @@ fn confluence_config(audit_path: &std::path::Path) -> BrokerConfig {
         policy: PolicyConfig {
             resources: resource_catalog(&[(
                 "space-eng",
-                CONFLUENCE_SPACE_RESOURCE.id.clone(),
+                CONFLUENCE_SPACE_RESOURCE.id().clone(),
                 ResourceSelector::Exact {
                     value: "ENG".to_string(),
                 },

@@ -565,21 +565,20 @@ impl CloudbeesCiProvider {
 
 /// CloudBees CI jobs, identified as `controller/full/job/name`. Namespaces
 /// cover a controller or a folder beneath it.
-pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: Some(input::job_action_inputs),
-    attributes: &[],
-    id: ResourceType::from_static("cloudbees_ci_job"),
-    label: "CloudBees CI job",
-    plural_label: "CloudBees CI jobs",
-    example: "team-ci/payments/build-api",
-    canonical: |value| is_cloudbees_ci_resource_path(value, false),
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: |value| is_cloudbees_ci_resource_path(value, true),
-        label: "Jobs under a controller or folder",
-        members_label: "Jobs",
-        example: "team-ci/payments",
-    }),
-};
+pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("cloudbees_ci_job"),
+    "CloudBees CI job",
+    "CloudBees CI jobs",
+    "team-ci/payments/build-api",
+    |value| is_cloudbees_ci_resource_path(value, false),
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    |value| is_cloudbees_ci_resource_path(value, true),
+    "Jobs under a controller or folder",
+    "Jobs",
+    "team-ci/payments",
+))
+.with_action_inputs(input::job_action_inputs);
 
 /// CloudBees CI jobs across configured controllers.
 pub fn cloudbees_ci_descriptor(_config: &CloudbeesCiProviderConfig) -> ServiceDescriptor {
@@ -635,7 +634,7 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
         resource_scopes: BTreeMap::from([(
             "job".into(),
             ResourceScopeCapabilities {
-                resource_type: crate::CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+                resource_type: crate::CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
                 selectors: vec!["exact".into(), "namespace".into(), "all".into()],
             },
         )]),
@@ -668,7 +667,7 @@ impl Provider for CloudbeesCiProvider {
     }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
-        if *resource_type == CLOUDBEES_CI_JOB_RESOURCE.id {
+        if resource_type == CLOUDBEES_CI_JOB_RESOURCE.id() {
             self.controllers.keys().cloned().collect()
         } else {
             Vec::new()

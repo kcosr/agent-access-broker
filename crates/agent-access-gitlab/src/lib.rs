@@ -7370,7 +7370,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         resource_scopes: BTreeMap::from([(
             "repository".to_string(),
             ResourceScopeCapabilities {
-                resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+                resource_type: crate::GIT_REPOSITORY_RESOURCE.id().clone(),
                 selectors: vec![
                     "exact".to_string(),
                     "namespace".to_string(),

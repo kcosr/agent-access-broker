@@ -18,7 +18,10 @@ fn underscore_project_keys_are_canonical_and_match_discovery_schema() {
     )
     .unwrap();
     for project in ["OPS_TOOLS", "A_B2", "OPS__TOOLS", "OPS_"] {
-        assert!((JIRA_PROJECT_RESOURCE.canonical)(project), "{project}");
+        assert!(
+            JIRA_PROJECT_RESOURCE.is_canonical_target(project),
+            "{project}"
+        );
         assert!(pattern.is_match(project), "{project}");
         assert_eq!(validate_project_key(project).unwrap(), project);
         assert!(is_issue_key(&format!("{project}-12345")));
@@ -34,7 +37,10 @@ fn underscore_project_keys_are_canonical_and_match_discovery_schema() {
         "O",
         "OPS_TOOLS\n",
     ] {
-        assert!(!(JIRA_PROJECT_RESOURCE.canonical)(project), "{project:?}");
+        assert!(
+            !JIRA_PROJECT_RESOURCE.is_canonical_target(project),
+            "{project:?}"
+        );
         assert!(!pattern.is_match(project), "{project:?}");
         assert!(validate_project_key(project).is_err(), "{project:?}");
     }

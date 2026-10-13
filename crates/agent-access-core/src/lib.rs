@@ -4374,7 +4374,7 @@ fn validate_private_resource_consumers(
                     && registry
                         .resource_types()
                         .get(resource_type)
-                        .is_some_and(|ty| !ty.attributes.is_empty())
+                        .is_some_and(|ty| !ty.attributes().is_empty())
             }) {
                 errors.push(format!(
                     "{}.{} must consume private attributes of its defining backend's resource type",
@@ -4394,7 +4394,7 @@ fn validate_private_resource_consumers(
             registry
                 .resource_types()
                 .get(&resource.resource_type)
-                .is_some_and(|ty| !ty.attributes.is_empty())
+                .is_some_and(|ty| !ty.attributes().is_empty())
                 && matches!(resource.selector, ResourceSelector::Exact { .. })
         })
     {

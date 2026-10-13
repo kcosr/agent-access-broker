@@ -393,7 +393,7 @@ mod tests {
         ResourceDefinition {
             id: id.into(),
             display_name: None,
-            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector,
             allowed_execution_contexts: contexts.iter().map(|c| (*c).into()).collect(),
             enabled,
@@ -482,7 +482,7 @@ mod tests {
     fn cloudbees_ci_job_selectors_keep_controller_and_folder_boundaries() {
         let mut controller = resource("controller", namespace("team-ci"), &["internal"], true);
         controller.resource_type = agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-            .id
+            .id()
             .clone();
         let mut payments = resource(
             "payments",
@@ -491,7 +491,7 @@ mod tests {
             true,
         );
         payments.resource_type = agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-            .id
+            .id()
             .clone();
         let mut exact_job = resource(
             "exact-job",
@@ -500,12 +500,12 @@ mod tests {
             true,
         );
         exact_job.resource_type = agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-            .id
+            .id()
             .clone();
         let catalog = ResourceCatalog::new(&[controller, payments, exact_job], &[]).unwrap();
         let boundary = catalog.resolve(
             &selection(&["payments"], &[]),
-            &agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id,
+            agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
             "internal",
         );
         assert!(boundary.matches("team-ci/payments/build-api"));
@@ -522,7 +522,7 @@ mod tests {
             catalog
                 .resolve(
                     &selection(&["controller"], &[]),
-                    &agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id,
+                    agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
                     "internal",
                 )
                 .matches("team-ci/other/build-api")
@@ -531,7 +531,7 @@ mod tests {
             catalog
                 .resolve(
                     &selection(&["exact-job"], &[]),
-                    &agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id,
+                    agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
                     "internal",
                 )
                 .matches("team-ci/payments/build-api")
@@ -554,7 +554,7 @@ mod tests {
             };
             let mut entry = resource("invalid", selector, &["internal"], true);
             entry.resource_type = agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-                .id
+                .id()
                 .clone();
             assert!(
                 entry
@@ -595,7 +595,7 @@ mod tests {
         let catalog = ResourceCatalog::new(&resources, &groups).unwrap();
         let boundary = catalog.resolve(
             &selection(&["special"], &["wide", "special"]),
-            &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
             "external",
         );
         assert!(boundary.matches("engineering/new"));
@@ -604,7 +604,7 @@ mod tests {
         assert!(!boundary.is_empty());
         let separate = catalog.resolve(
             &selection(&[], &["special"]),
-            &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
             "external",
         );
         assert!(separate.matches("private/special"));
@@ -630,7 +630,7 @@ mod tests {
         ] {
             let boundary = catalog.resolve(
                 &selected,
-                &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
+                agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
                 "internal",
             );
             assert!(boundary.is_empty());
@@ -664,7 +664,7 @@ mod tests {
     fn namespace_selectors_follow_the_resource_type_registry() {
         let registry = crate::tests::test_resource_types();
         let mut entry = resource("bad", namespace("engineering"), &["internal"], true);
-        entry.resource_type = agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone();
+        entry.resource_type = agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone();
         assert_eq!(
             entry.validate_type(&registry).unwrap_err(),
             "resource bad selector is invalid for jira_project"
@@ -749,7 +749,7 @@ resources = { resource_group_ids = ["team"] }
         assert_eq!(config.grants[0].resources.resource_group_ids, ["team"]);
         assert_eq!(
             config.resources[0].resource_type,
-            agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone()
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone()
         );
         let json = serde_json::to_value(&config.resources[0]).unwrap();
         assert_eq!(json["resourceType"], "git_repository");

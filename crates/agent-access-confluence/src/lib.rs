@@ -1180,16 +1180,13 @@ fn decode_confluence_comment_list_token(
 }
 
 /// Confluence spaces, identified by space key.
-pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("confluence_space"),
-    label: "Confluence space",
-    plural_label: "Confluence spaces",
-    example: "ENG",
-    canonical: is_space_key,
-    namespace: None,
-};
+pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("confluence_space"),
+    "Confluence space",
+    "Confluence spaces",
+    "ENG",
+    is_space_key,
+);
 
 /// Confluence's authoritative service descriptor, derived from its typed
 /// configuration alone.
@@ -1211,7 +1208,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
         resource_scopes: BTreeMap::from([(
             "space".to_string(),
             ResourceScopeCapabilities {
-                resource_type: crate::CONFLUENCE_SPACE_RESOURCE.id.clone(),
+                resource_type: crate::CONFLUENCE_SPACE_RESOURCE.id().clone(),
                 selectors: vec!["exact".to_string(), "all".to_string()],
             },
         )]),

@@ -1535,7 +1535,7 @@ mod tests {
 
     #[test]
     fn action_inputs_project_exact_and_namespace_selectors() {
-        let project = |selector| CLOUDBEES_CI_JOB_RESOURCE.action_inputs.unwrap()(&selector);
+        let project = |selector| CLOUDBEES_CI_JOB_RESOURCE.action_inputs(&selector);
         assert_eq!(
             project(ResourceSelector::Exact {
                 value: "team-ci/payments/build-api".into()
@@ -1559,7 +1559,7 @@ mod tests {
     fn resource_roots_are_configured_aliases_for_jobs_only() {
         let ci = provider();
         assert_eq!(
-            ci.resource_roots(&CLOUDBEES_CI_JOB_RESOURCE.id),
+            ci.resource_roots(CLOUDBEES_CI_JOB_RESOURCE.id()),
             ["nested", "root", "team-ci", "twin-a", "twin-b"]
         );
         assert!(

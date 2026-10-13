@@ -114,20 +114,20 @@ fn fixture_resources(contexts: &[&str]) -> Vec<ResourceDefinition> {
     let entries: &[(&str, ResourceType, &[&str])] = &[
         (
             "project",
-            FAKE_PROJECT_RESOURCE.id.clone(),
+            FAKE_PROJECT_RESOURCE.id().clone(),
             &[
                 "TEST", "PROJ", "OPS", "SVC", "PARTNER", "ENG", "SLUG", "EMPTY", "SUBJECTS",
             ],
         ),
         (
             "jira-project",
-            JIRA_PROJECT_RESOURCE.id.clone(),
+            JIRA_PROJECT_RESOURCE.id().clone(),
             &["TEST", "PROJ"],
         ),
-        ("space", CONFLUENCE_SPACE_RESOURCE.id.clone(), &["ENG"]),
+        ("space", CONFLUENCE_SPACE_RESOURCE.id().clone(), &["ENG"]),
         (
             "repository",
-            GIT_REPOSITORY_RESOURCE.id.clone(),
+            GIT_REPOSITORY_RESOURCE.id().clone(),
             &["sip/service", "sip/other", "other/project", "acme/portal"],
         ),
     ];
@@ -207,9 +207,9 @@ fn fixture_scope_capabilities(
         scope.to_string(),
         agent_access_provider::ResourceScopeCapabilities {
             resource_type: match scope {
-                "project" => JIRA_PROJECT_RESOURCE.id.clone(),
-                "space" => CONFLUENCE_SPACE_RESOURCE.id.clone(),
-                "repository" => GIT_REPOSITORY_RESOURCE.id.clone(),
+                "project" => JIRA_PROJECT_RESOURCE.id().clone(),
+                "space" => CONFLUENCE_SPACE_RESOURCE.id().clone(),
+                "repository" => GIT_REPOSITORY_RESOURCE.id().clone(),
                 _ => panic!("no fixture resource type for scope {scope}"),
             },
             selectors: vec!["exact".to_string(), "all".to_string()],

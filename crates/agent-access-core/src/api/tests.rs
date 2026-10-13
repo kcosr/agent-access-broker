@@ -154,22 +154,21 @@ fn imported_local_schema_refs_remain_scoped_in_send_openapi_and_mcp() {
 #[test]
 fn resource_attribute_schemas_require_private_fields_only_on_exact_creation() {
     static RESOURCE: agent_access_provider::ResourceTypeDescriptor =
-        agent_access_provider::ResourceTypeDescriptor {
-            action_inputs: None,
-            id: agent_access_provider::ResourceType::from_static("test_destination"),
-            label: "Destination",
-            plural_label: "Destinations",
-            example: "alerts",
-            canonical: |_| true,
-            namespace: None,
-            attributes: &[agent_access_provider::ResourceAttributeDescriptor {
-                name: "webhookUrl",
-                label: "Webhook URL",
-                description: "Private destination",
-                required: true,
-                validate: |_| true,
-            }],
-        };
+        agent_access_provider::ResourceTypeDescriptor::new(
+            agent_access_provider::ResourceType::from_static("test_destination"),
+            "Destination",
+            "Destinations",
+            "alerts",
+            |_| true,
+        )
+        .with_attributes(&[
+            agent_access_provider::ResourceAttributeDescriptor::required(
+                "webhookUrl",
+                "Webhook URL",
+                "Private destination",
+                |_| true,
+            ),
+        ]);
     let types = agent_access_provider::ResourceTypeRegistry::new([&RESOURCE]).unwrap();
     let routes = http_route_specs(&types);
     let create = routes

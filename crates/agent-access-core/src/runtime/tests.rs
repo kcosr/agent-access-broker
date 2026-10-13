@@ -233,24 +233,24 @@ fn test_resources() -> Vec<ResourceDefinition> {
     let mut resources = Vec::new();
     for (resource_type, prefix, values) in [
         (
-            agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+            agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
             "project",
             &["TEST", "ENG", "OPS", "PROJ", "OTHER", "RESEARCH"][..],
         ),
         (
-            agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone(),
+            agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
             "fake-project",
             &["TEST", "ENG", "OPS", "PROJ", "OTHER", "RESEARCH"][..],
         ),
         (
             agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-                .id
+                .id()
                 .clone(),
             "space",
             &["ENG", "OPS", "RESEARCH", "TEST"][..],
         ),
         (
-            agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             "repository",
             &[
                 "sip/service",
@@ -286,7 +286,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
         resources.push(ResourceDefinition {
             id: format!("repository-namespace-{value}"),
             display_name: None,
-            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector: ResourceSelector::Namespace {
                 value: value.into(),
             },
@@ -1981,13 +1981,13 @@ struct LookupTraceProvider {
 /// The registered resource type a trace fixture's scope name stands for.
 fn fixture_resource_type(scope: &str) -> ResourceType {
     match scope {
-        "project" => agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        "project" => agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         "space" => agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
-        "repository" => agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+        "repository" => agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         "job" => agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-            .id
+            .id()
             .clone(),
         other => panic!("no fixture resource type for scope {other}"),
     }
@@ -2130,7 +2130,7 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
             resource_scopes: BTreeMap::from([(
                 "project".into(),
                 ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
                     selectors: vec!["exact".into(), "all".into()],
                 },
             )]),
@@ -2247,7 +2247,7 @@ impl agent_access_provider::test_support::DescribedProvider for DependencyPolicy
             resource_scopes: BTreeMap::from([(
                 "project".into(),
                 ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
                     selectors: vec!["exact".into(), "all".into()],
                 },
             )]),
@@ -9044,7 +9044,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
     config.policy.resources.push(crate::ResourceDefinition {
         id: "foreign-repo".into(),
         display_name: None,
-        resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+        resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         selector: ResourceSelector::Exact {
             value: "foreign/repo".into(),
         },

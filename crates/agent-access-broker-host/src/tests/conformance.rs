@@ -624,7 +624,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         config.policy.resources.push(ResourceDefinition {
             id: "shelf-one".into(),
             display_name: None,
-            resource_type: CONFORMANCE_ITEM_RESOURCE.id.clone(),
+            resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
             selector: ResourceSelector::Namespace {
                 value: "shelf-one".into(),
             },
@@ -634,7 +634,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         config.policy.resources.push(ResourceDefinition {
             id: "item-one".into(),
             display_name: None,
-            resource_type: CONFORMANCE_ITEM_RESOURCE.id.clone(),
+            resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {
                 value: "shelf-one/item-one".into(),
             },
@@ -672,7 +672,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
             config.policy.resources.push(ResourceDefinition {
                 id: id.into(),
                 display_name: None,
-                resource_type: CONFORMANCE_ITEM_RESOURCE.id.clone(),
+                resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
                 selector,
                 allowed_execution_contexts: vec!["default".into()],
                 enabled: true,
@@ -1100,7 +1100,7 @@ async fn conformance_private_attributes_reach_only_the_authorized_invocation() {
     let fixture = managed_conformance().await;
     let admin = fixture.admin_token.clone();
     let endpoint = |id: &str, attributes: Value| {
-        json!({"id": id, "resourceType": CONFORMANCE_ENDPOINT_RESOURCE.id,
+        json!({"id": id, "resourceType": CONFORMANCE_ENDPOINT_RESOURCE.id(),
             "selector": {"kind": "exact", "value": id},
             "allowedExecutionContexts": ["default"], "attributes": attributes})
     };

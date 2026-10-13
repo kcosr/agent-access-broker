@@ -861,7 +861,7 @@ async fn cli_resource_discovery_reports_job_inputs_and_namespace_coverage() {
     let mut config = config(&controller, temp.path());
     config.policy.resources.extend(resource_catalog(&[(
         "payments-folder",
-        CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+        CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
         ResourceSelector::Namespace {
             value: "team-ci/payments".into(),
         },
@@ -1920,7 +1920,7 @@ fn config(controller: &MockServer, temp: &std::path::Path) -> BrokerConfig {
         policy: PolicyConfig {
             resources: resource_catalog(&[(
                 "payments-job",
-                CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+                CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
                 ResourceSelector::Exact {
                     value: "team-ci/payments/build-api".into(),
                 },

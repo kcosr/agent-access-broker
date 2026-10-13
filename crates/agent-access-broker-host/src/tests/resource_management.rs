@@ -708,7 +708,7 @@ async fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixtur
         .create_managed_resource(agent_access_core::CreateResourceRequest {
             id: Some("release".into()),
             display_name: Some("Release notifications".into()),
-            resource_type: agent_access_teams::TEAMS_DESTINATION_RESOURCE.id.clone(),
+            resource_type: agent_access_teams::TEAMS_DESTINATION_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {
                 value: "release-alerts".into(),
             },
@@ -1443,7 +1443,7 @@ async fn resource_catalog_mutation_owner_completes_audit_after_waiter_cancellati
                 runtime.create_managed_resource(agent_access_core::CreateResourceRequest {
                     id: Some("cancelled-repo".into()),
                     display_name: Some("Committed after cancellation".into()),
-                    resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+                    resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
                     selector: ResourceSelector::Exact {
                         value: "audit/cancelled".into(),
                     },

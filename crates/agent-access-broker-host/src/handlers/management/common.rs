@@ -2131,7 +2131,7 @@ mod tests {
             resources: vec![agent_access_core::ResourceDefinition {
                 id: "eng".to_string(),
                 display_name: None,
-                resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+                resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
                 selector: agent_access_provider::ResourceSelector::Exact {
                     value: "ENG".to_string(),
                 },
@@ -2150,7 +2150,7 @@ mod tests {
                     description: "View issue".to_string(),
                     read_only: true,
                     required_scope_types: vec!["project".to_string()],
-                    resource_type: Some(agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone()),
+                    resource_type: Some(agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()),
                     execution_contexts: vec![internal, external],
                     effective_access_by_execution_context: BTreeMap::new(),
                 }],

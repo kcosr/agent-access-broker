@@ -149,7 +149,7 @@ pub fn fake_descriptor() -> ServiceDescriptor {
         resource_scopes: BTreeMap::from([(
             "project".to_string(),
             ResourceScopeCapabilities {
-                resource_type: FAKE_PROJECT_RESOURCE.id.clone(),
+                resource_type: FAKE_PROJECT_RESOURCE.id().clone(),
                 selectors: vec!["exact".to_string(), "all".to_string()],
             },
         )]),
@@ -211,16 +211,13 @@ impl BackendConfig for FakeProviderConfig {
 }
 
 /// Projects of the development fake service.
-pub static FAKE_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("fake_project"),
-    label: "Fake project",
-    plural_label: "Fake projects",
-    example: "TEST",
-    canonical: is_fake_project_key,
-    namespace: None,
-};
+pub static FAKE_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("fake_project"),
+    "Fake project",
+    "Fake projects",
+    "TEST",
+    is_fake_project_key,
+);
 
 fn is_fake_project_key(value: &str) -> bool {
     let mut chars = value.chars();

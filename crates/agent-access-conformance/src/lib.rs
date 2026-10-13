@@ -46,44 +46,38 @@ pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration::new(
 
 /// Items on shelves, identified as `shelf/item` with up to two nested
 /// shelves. Namespaces cover a shelf and everything below it.
-pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: Some(item_inputs),
-    attributes: &[],
-    id: ResourceType::from_static("conformance_item"),
-    label: "Conformance item",
-    plural_label: "Conformance items",
-    example: "shelf-one/item-one",
-    canonical: |value| is_item_path(value, 2..=4),
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: |value| is_item_path(value, 1..=3),
-        label: "Items on a shelf",
-        members_label: "Items",
-        example: "shelf-one",
-    }),
-};
+pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("conformance_item"),
+    "Conformance item",
+    "Conformance items",
+    "shelf-one/item-one",
+    |value| is_item_path(value, 2..=4),
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    |value| is_item_path(value, 1..=3),
+    "Items on a shelf",
+    "Items",
+    "shelf-one",
+))
+.with_action_inputs(item_inputs);
 
 /// Named endpoints that receive pings. Each managed entry keeps the key the
 /// upstream expects as a private attribute: encrypted by the broker, shown
 /// only through an audited admin reveal, and handed to the provider only for
 /// an authorized invocation that targets exactly that endpoint.
-pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "signingKey",
-        label: "Signing key",
-        description: "Key the conformance upstream requires for pings to this endpoint",
-        required: true,
-        validate: |value| {
-            (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic())
-        },
-    }],
-    id: ResourceType::from_static("conformance_endpoint"),
-    label: "Conformance endpoint",
-    plural_label: "Conformance endpoints",
-    example: "alerts",
-    canonical: is_endpoint_name,
-    namespace: None,
-};
+pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("conformance_endpoint"),
+    "Conformance endpoint",
+    "Conformance endpoints",
+    "alerts",
+    is_endpoint_name,
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "signingKey",
+    "Signing key",
+    "Key the conformance upstream requires for pings to this endpoint",
+    |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
+)]);
 
 /// An exact item is addressed by its whole path.
 fn item_inputs(selector: &ResourceSelector) -> Option<Map<String, Value>> {
@@ -186,7 +180,7 @@ impl BackendConfig for ConformanceConfig {
         resource_type: &ResourceType,
         _attributes: &ResourceAttributes,
     ) -> Result<(), String> {
-        if resource_type != &CONFORMANCE_ENDPOINT_RESOURCE.id {
+        if resource_type != CONFORMANCE_ENDPOINT_RESOURCE.id() {
             return Err("conformance items have no private attributes".into());
         }
         if !self.endpoints {
@@ -250,7 +244,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     let mut resource_scopes = BTreeMap::from([(
         "item".into(),
         ResourceScopeCapabilities {
-            resource_type: CONFORMANCE_ITEM_RESOURCE.id.clone(),
+            resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
             selectors: vec!["exact".into(), "namespace".into(), "all".into()],
         },
     )]);
@@ -272,7 +266,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         resource_scopes.insert(
             "endpoint".into(),
             ResourceScopeCapabilities {
-                resource_type: CONFORMANCE_ENDPOINT_RESOURCE.id.clone(),
+                resource_type: CONFORMANCE_ENDPOINT_RESOURCE.id().clone(),
                 selectors: vec!["exact".into(), "all".into()],
             },
         );
@@ -914,7 +908,7 @@ impl Provider for ConformanceProvider {
     }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
-        if resource_type == &CONFORMANCE_ITEM_RESOURCE.id {
+        if resource_type == CONFORMANCE_ITEM_RESOURCE.id() {
             self.shelves.clone()
         } else {
             Vec::new()
@@ -1114,7 +1108,7 @@ mod tests {
             value: "shelf-one/item-one".into(),
         };
         assert_eq!(
-            (CONFORMANCE_ITEM_RESOURCE.action_inputs.unwrap())(&exact),
+            CONFORMANCE_ITEM_RESOURCE.action_inputs(&exact),
             Some(Map::from_iter([(
                 "item".into(),
                 json!("shelf-one/item-one")
@@ -1126,10 +1120,7 @@ mod tests {
             },
             ResourceSelector::All,
         ] {
-            assert_eq!(
-                (CONFORMANCE_ITEM_RESOURCE.action_inputs.unwrap())(&selector),
-                None
-            );
+            assert_eq!(CONFORMANCE_ITEM_RESOURCE.action_inputs(&selector), None);
         }
         let mut provider = provider(
             "https://conformance.example.test",
@@ -1137,17 +1128,17 @@ mod tests {
         );
         assert!(
             provider
-                .resource_roots(&CONFORMANCE_ITEM_RESOURCE.id)
+                .resource_roots(CONFORMANCE_ITEM_RESOURCE.id())
                 .is_empty()
         );
         provider.shelves = vec!["shelf-one".into(), "shelf-two".into()];
         assert_eq!(
-            provider.resource_roots(&CONFORMANCE_ITEM_RESOURCE.id),
+            provider.resource_roots(CONFORMANCE_ITEM_RESOURCE.id()),
             ["shelf-one", "shelf-two"]
         );
         assert!(
             provider
-                .resource_roots(&CONFORMANCE_ENDPOINT_RESOURCE.id)
+                .resource_roots(CONFORMANCE_ENDPOINT_RESOURCE.id())
                 .is_empty()
         );
         assert!(
@@ -1212,17 +1203,17 @@ mod tests {
         );
         let mut config = config("https://conformance.example.test");
         config
-            .validate_resource_attributes(&endpoint.id, &key(KEY))
+            .validate_resource_attributes(endpoint.id(), &key(KEY))
             .unwrap();
         assert!(
             config
-                .validate_resource_attributes(&CONFORMANCE_ITEM_RESOURCE.id, &key(KEY))
+                .validate_resource_attributes(CONFORMANCE_ITEM_RESOURCE.id(), &key(KEY))
                 .is_err()
         );
         config.endpoints = false;
         assert_eq!(
             config
-                .validate_resource_attributes(&endpoint.id, &key(KEY))
+                .validate_resource_attributes(endpoint.id(), &key(KEY))
                 .unwrap_err(),
             "conformance endpoints need providers.conformance.endpoints = true"
         );
@@ -1352,9 +1343,9 @@ mod tests {
         assert!(!item.is_canonical_target("a/b/c/d/e"));
         assert!(!item.is_canonical_target("Shelf/item"));
         assert!(!item.is_canonical_target("shelf//item"));
-        let namespace = item.namespace.as_ref().unwrap();
-        assert!((namespace.valid)("shelf-one"));
-        assert!(!(namespace.valid)("a/b/c/d"));
+        let namespace = item.namespace().unwrap();
+        assert!(namespace.is_valid("shelf-one"));
+        assert!(!namespace.is_valid("a/b/c/d"));
     }
 
     #[test]

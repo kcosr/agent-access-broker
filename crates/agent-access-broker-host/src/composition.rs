@@ -301,7 +301,7 @@ default_decision = "deny"
                 .is_none()
         );
         let resource_types = composition.resource_types();
-        assert!(resource_types.get(&GIT_REPOSITORY_RESOURCE.id).is_some());
+        assert!(resource_types.get(GIT_REPOSITORY_RESOURCE.id()).is_some());
         assert!(
             resource_types
                 .get(&ResourceType::new("jira_project").unwrap())
@@ -329,7 +329,7 @@ default_decision = "deny"
         assert!(
             composition
                 .resource_types()
-                .get(&GIT_REPOSITORY_RESOURCE.id)
+                .get(GIT_REPOSITORY_RESOURCE.id())
                 .is_some()
         );
     }

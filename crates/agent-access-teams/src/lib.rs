@@ -19,22 +19,19 @@ const MAX_BODY_BYTES: u64 = 24 * 1024;
 const ACTION: &str = "notification.send";
 const SERVICE: &str = "teams";
 
-pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    id: ResourceType::from_static("teams_notification_destination"),
-    label: "Teams notification destination",
-    plural_label: "Teams notification destinations",
-    example: "release-alerts",
-    canonical: valid_destination,
-    namespace: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "webhookUrl",
-        label: "Webhook URL",
-        description: "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
-        required: true,
-        validate: valid_webhook_url,
-    }],
-};
+pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("teams_notification_destination"),
+    "Teams notification destination",
+    "Teams notification destinations",
+    "release-alerts",
+    valid_destination,
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "webhookUrl",
+    "Webhook URL",
+    "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
+    valid_webhook_url,
+)]);
 
 fn valid_destination(value: &str) -> bool {
     !value.is_empty()
@@ -148,7 +145,7 @@ impl BackendConfig for TeamsConfig {
         resource_type: &ResourceType,
         attributes: &ResourceAttributes,
     ) -> Result<(), String> {
-        if resource_type != &TEAMS_DESTINATION_RESOURCE.id {
+        if resource_type != TEAMS_DESTINATION_RESOURCE.id() {
             return Err("unsupported Teams resource type".into());
         }
         if let Some(value) = attributes.get("webhookUrl") {
@@ -203,7 +200,7 @@ pub fn descriptor() -> ServiceDescriptor {
     ServiceDescriptor {
         service: "teams".into(), display_name: "Microsoft Teams notifications".into(), surface: ServiceSurface::Invoke,
         resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities {
-            resource_type: TEAMS_DESTINATION_RESOURCE.id.clone(), selectors: vec!["exact".into(), "all".into()],
+            resource_type: TEAMS_DESTINATION_RESOURCE.id().clone(), selectors: vec!["exact".into(), "all".into()],
         })]),
         actions: vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
             .scope("destination").credential_modes(["service"]).resource_attributes()],

@@ -1416,16 +1416,13 @@ fn present_provider_outcome(
 
 /// Stand-in for a scope whose resource type is not registered: no resource
 /// catalog entry uses its identifier and no target is canonical.
-static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("unresolved_resource_type"),
-    label: "Unresolved resource type",
-    plural_label: "Unresolved resource types",
-    example: "",
-    canonical: |_| false,
-    namespace: None,
-};
+static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("unresolved_resource_type"),
+    "Unresolved resource type",
+    "Unresolved resource types",
+    "",
+    |_| false,
+);
 
 #[derive(Debug, Clone)]
 struct PolicySnapshot {
@@ -5370,7 +5367,7 @@ impl BrokerRuntime {
 
     fn action_resource_type(&self, service: &str, action: &str) -> Option<ResourceType> {
         self.action_resource_scope(service, action)
-            .map(|scope| scope.resource_type.id.clone())
+            .map(|scope| scope.resource_type.id().clone())
     }
 
     fn policy_candidates_for_action(
@@ -5402,7 +5399,7 @@ impl BrokerRuntime {
                     |resource_scope| {
                         policy_snapshot.resources.resolve(
                             &grant.resources,
-                            &resource_scope.resource_type.id,
+                            resource_scope.resource_type.id(),
                             execution_context.as_str(),
                         )
                     },
@@ -6753,7 +6750,7 @@ pub(crate) fn gateway_service_descriptor(
         resource_scopes: BTreeMap::from([(
             "repository".to_string(),
             ResourceScopeCapabilities {
-                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
+                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
                 selectors: vec![
                     "exact".to_string(),
                     "namespace".to_string(),

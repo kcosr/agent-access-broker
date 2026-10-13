@@ -5,22 +5,19 @@ use agent_access_provider::{BackendConfig, BackendRegistration};
 use async_trait::async_trait;
 use std::sync::Mutex;
 
-static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    id: ResourceType::from_static("attribute_fixture"),
-    label: "Fixture destination",
-    plural_label: "Fixture destinations",
-    example: "one",
-    canonical: |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
-    namespace: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "endpoint",
-        label: "Endpoint",
-        description: "Private test endpoint",
-        required: true,
-        validate: |value| value.starts_with("secret-"),
-    }],
-};
+static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("attribute_fixture"),
+    "Fixture destination",
+    "Fixture destinations",
+    "one",
+    |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "endpoint",
+    "Endpoint",
+    "Private test endpoint",
+    |value| value.starts_with("secret-"),
+)]);
 static BACKEND: BackendRegistration = BackendRegistration::new(
     agent_access_provider::module_metadata!(),
     "attribute_fixture",
@@ -54,7 +51,7 @@ impl BackendConfig for FixtureConfig {
     fn descriptor(&self) -> ServiceDescriptor {
         ServiceDescriptor {
             service: self.kind().into(), display_name: "Attribute conformance".into(), surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities { resource_type: TYPE.id.clone(), selectors: vec!["exact".into(), "all".into()] })]),
+            resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities { resource_type: TYPE.id().clone(), selectors: vec!["exact".into(), "all".into()] })]),
             actions: vec![ActionDescriptor::new("send", "Send to a private fixture", json!({"type":"object","required":["destination"],"properties":{"destination":{"type":"string"}},"additionalProperties":false}))
                 .scope("destination").credential_modes(["service"]).resource_attributes()],
             credentials: CredentialDescriptor::without_execution_credential(), presentation_body_limit: None,
@@ -153,7 +150,7 @@ fn create(
     runtime.create_managed_resource(CreateResourceRequest {
         id: Some(id.into()),
         display_name: None,
-        resource_type: TYPE.id.clone(),
+        resource_type: TYPE.id().clone(),
         selector,
         attributes: values,
         allowed_execution_contexts: vec!["default".into()],

@@ -3811,7 +3811,7 @@ async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_regis
         let mut config = fake_config();
         config.policy.resources.extend(resource_catalog(&[(
             "all-projects",
-            FAKE_PROJECT_RESOURCE.id.clone(),
+            FAKE_PROJECT_RESOURCE.id().clone(),
             ResourceSelector::All,
         )]));
         // Disabling an exclusion must never expose its target through a wildcard.
@@ -5646,7 +5646,7 @@ fn fake_config() -> BrokerConfig {
         policy: PolicyConfig {
             resources: resource_catalog(&[(
                 "project-test",
-                FAKE_PROJECT_RESOURCE.id.clone(),
+                FAKE_PROJECT_RESOURCE.id().clone(),
                 ResourceSelector::Exact {
                     value: "TEST".to_string(),
                 },

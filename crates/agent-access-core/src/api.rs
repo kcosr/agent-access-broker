@@ -1585,8 +1585,8 @@ fn resource_mutation_schema(
         .collect::<Vec<_>>();
     let without_namespace = resource_types
         .descriptors()
-        .filter(|descriptor| descriptor.namespace.is_none())
-        .map(|descriptor| descriptor.id.as_str().to_string())
+        .filter(|descriptor| descriptor.namespace().is_none())
+        .map(|descriptor| descriptor.id().as_str().to_string())
         .collect::<Vec<_>>();
     let ids = json!({"type":"array","uniqueItems":true,"items":resource_id_schema()});
     let mut properties = if group {
@@ -1617,9 +1617,9 @@ fn resource_mutation_schema(
     let mut schema = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
     if !group {
         let attribute_schema = |descriptor: &agent_access_provider::ResourceTypeDescriptor| {
-            let properties = descriptor.attributes.iter().map(|attribute| (
-                attribute.name.to_string(),
-                json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true,"description":attribute.description}),
+            let properties = descriptor.attributes().iter().map(|attribute| (
+                attribute.name().to_string(),
+                json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true,"description":attribute.description()}),
             )).collect::<serde_json::Map<_,_>>();
             json!({"type":"object","additionalProperties":false,"properties":properties,"writeOnly":true})
         };
@@ -1627,8 +1627,8 @@ fn resource_mutation_schema(
             resource_types
                 .descriptors()
                 .flat_map(|descriptor| {
-                    descriptor.attributes.iter().map(|attribute| (
-                attribute.name.to_string(),
+                    descriptor.attributes().iter().map(|attribute| (
+                attribute.name().to_string(),
                 json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true}),
             ))
                 })
@@ -1646,18 +1646,18 @@ fn resource_mutation_schema(
         ];
         for descriptor in resource_types.descriptors() {
             conditions.push(json!({
-                "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id.as_str()}}},
+                "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id().as_str()}}},
                 "then":{"properties":{"attributes":attribute_schema(descriptor)}}
             }));
             let required = descriptor
-                .attributes
+                .attributes()
                 .iter()
-                .filter(|attribute| attribute.required)
-                .map(|attribute| attribute.name)
+                .filter(|attribute| attribute.is_required())
+                .map(|attribute| attribute.name())
                 .collect::<Vec<_>>();
             if !patch && !required.is_empty() {
                 conditions.push(json!({
-                    "if":{"required":["resourceType","selector"],"properties":{"resourceType":{"const":descriptor.id.as_str()},"selector":{"properties":{"kind":{"const":"exact"}}}}},
+                    "if":{"required":["resourceType","selector"],"properties":{"resourceType":{"const":descriptor.id().as_str()},"selector":{"properties":{"kind":{"const":"exact"}}}}},
                     "then":{"required":["attributes"],"properties":{"attributes":{"required":required}}}
                 }));
             }

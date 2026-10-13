@@ -53,7 +53,7 @@ async fn cloudbees_ci_catalog_and_discovery_follow_job_grant_and_context() {
     config.policy.resources.push(ResourceDefinition {
         id: "ci-payments".into(),
         display_name: None,
-        resource_type: CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+        resource_type: CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
         selector: ResourceSelector::Namespace {
             value: "team-ci/payments".into(),
         },
@@ -213,7 +213,7 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
         config.policy.resources.push(ResourceDefinition {
             id: id.into(),
             display_name: None,
-            resource_type: CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+            resource_type: CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
             selector,
             allowed_execution_contexts: vec!["default".into()],
             enabled: true,

@@ -275,7 +275,7 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
         ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())]));
     assert!(
         config()
-            .validate_resource_attributes(&TEAMS_DESTINATION_RESOURCE.id, &attributes)
+            .validate_resource_attributes(TEAMS_DESTINATION_RESOURCE.id(), &attributes)
             .is_ok()
     );
     let other = TeamsConfig {
@@ -284,7 +284,7 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
     };
     assert!(
         other
-            .validate_resource_attributes(&TEAMS_DESTINATION_RESOURCE.id, &attributes)
+            .validate_resource_attributes(TEAMS_DESTINATION_RESOURCE.id(), &attributes)
             .is_err()
     );
     let unsafe_config = TeamsConfig {

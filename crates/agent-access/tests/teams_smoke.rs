@@ -282,7 +282,7 @@ async fn fixture() -> Fixture {
             json!({"webhookUrl":ENDPOINT}).to_string(),
         )
         .unwrap();
-    let resource_type = agent_access_teams::TEAMS_DESTINATION_RESOURCE.id.as_str();
+    let resource_type = agent_access_teams::TEAMS_DESTINATION_RESOURCE.id().as_str();
     for (id, selector, attributes) in [
         (
             "destination",

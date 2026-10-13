@@ -30,16 +30,13 @@ pub static OAUTH_STUB_BACKEND: BackendRegistration = BackendRegistration::new(
 .development_only();
 
 /// Collections served by the development OAuth test provider.
-pub static OAUTH_COLLECTION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("oauth_collection"),
-    label: "OAuth test collection",
-    plural_label: "OAuth test collections",
-    example: "alpha",
-    canonical: is_oauth_collection,
-    namespace: None,
-};
+pub static OAUTH_COLLECTION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("oauth_collection"),
+    "OAuth test collection",
+    "OAuth test collections",
+    "alpha",
+    is_oauth_collection,
+);
 
 fn is_oauth_collection(value: &str) -> bool {
     !value.is_empty()
@@ -124,7 +121,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
         resource_scopes: BTreeMap::from([(
             "collection".into(),
             ResourceScopeCapabilities {
-                resource_type: OAUTH_COLLECTION_RESOURCE.id.clone(),
+                resource_type: OAUTH_COLLECTION_RESOURCE.id().clone(),
                 selectors: vec!["exact".into(), "all".into()],
             },
         )]),
@@ -484,7 +481,7 @@ mod tests {
             OAUTH_STUB_BACKEND
                 .resource_types()
                 .iter()
-                .map(|descriptor| descriptor.id.as_str())
+                .map(|descriptor| descriptor.id().as_str())
                 .collect::<Vec<_>>(),
             ["oauth_collection"]
         );

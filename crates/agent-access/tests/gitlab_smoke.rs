@@ -9638,14 +9638,14 @@ fn gitlab_config(audit_path: &std::path::Path) -> BrokerConfig {
             resources: resource_catalog(&[
                 (
                     "repository-sip-service",
-                    GIT_REPOSITORY_RESOURCE.id.clone(),
+                    GIT_REPOSITORY_RESOURCE.id().clone(),
                     ResourceSelector::Exact {
                         value: "sip/service".to_string(),
                     },
                 ),
                 (
                     "repository-fork-service",
-                    GIT_REPOSITORY_RESOURCE.id.clone(),
+                    GIT_REPOSITORY_RESOURCE.id().clone(),
                     ResourceSelector::Exact {
                         value: "fork/service".to_string(),
                     },

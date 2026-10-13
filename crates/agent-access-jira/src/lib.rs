@@ -107,16 +107,13 @@ impl JiraProvider {
 }
 
 /// Jira projects, identified by project key.
-pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("jira_project"),
-    label: "Jira project",
-    plural_label: "Jira projects",
-    example: "ENG",
-    canonical: is_project_key,
-    namespace: None,
-};
+pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("jira_project"),
+    "Jira project",
+    "Jira projects",
+    "ENG",
+    is_project_key,
+);
 
 /// Jira's authoritative service definition. Every action is authorized
 /// against a project; comment writes are offered only while ADF comment
@@ -746,7 +743,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         resource_scopes: BTreeMap::from([(
             "project".to_string(),
             ResourceScopeCapabilities {
-                resource_type: crate::JIRA_PROJECT_RESOURCE.id.clone(),
+                resource_type: crate::JIRA_PROJECT_RESOURCE.id().clone(),
                 selectors: vec!["exact".to_string(), "all".to_string()],
             },
         )]),

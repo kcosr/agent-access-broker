@@ -948,7 +948,7 @@ mod tests {
                         .any(|clause| clause.matches_request(&targets)),
                     expected,
                     "whole-request preview diverged for {} {targets:?}",
-                    resource_type.id
+                    resource_type.id()
                 );
             }
             assert!(!clauses.iter().any(|clause| clause.matches(first)));
