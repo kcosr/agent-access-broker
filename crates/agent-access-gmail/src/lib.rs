@@ -31,7 +31,7 @@ const SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
     MAX_UPSTREAM_PAGE_TOKEN_BYTES,
 )
 .expires_after(Duration::from_secs(SEARCH_PAGE_TOKEN_TTL_MINUTES * 60));
-/// Gmail's own page token, the sealed payload. Never truncated.
+/// Gmail's own page token, the relayed payload. Never truncated.
 const MAX_UPSTREAM_PAGE_TOKEN_BYTES: usize = 2048;
 const SEARCH_PAGE_TOKEN_TTL_MINUTES: u64 = 15;
 /// The `pageToken` input bound: the exact size of the largest envelope.
@@ -291,29 +291,27 @@ impl GmailProvider {
             .number("maxResults", search.max_results)
             .flag("includeSpamTrash", search.include_spam_trash)
     }
+    /// Opens a continuation and returns Gmail's own page token.
     fn open_page_token(
         &self,
         binding: &ContinuationBinding,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let payload = self
-            .search_pages
-            .open(binding, token)
-            .map_err(page_token_failure)?;
-        String::from_utf8(payload).map_err(|_| page_token_error())
+        self.search_pages
+            .open_relayed(binding, None, token)
+            .map_err(page_token_failure)
     }
-    /// Seals Gmail's page token whole. One over the upstream cap is an
+    /// Seals Gmail's page token whole, relayed without an upstream-query
+    /// commitment (Gmail composes no query under the grant). The family's
+    /// payload cap is Gmail's 2048-byte token cap; a longer token is an
     /// upstream protocol failure, never truncated.
     fn seal_page_token(
         &self,
         binding: &ContinuationBinding,
         upstream: &str,
     ) -> Result<String, ProviderError> {
-        if upstream.len() > MAX_UPSTREAM_PAGE_TOKEN_BYTES {
-            return Err(oversized_page_token());
-        }
         self.search_pages
-            .seal(binding, upstream.as_bytes())
+            .seal_relayed(binding, None, upstream)
             .map_err(page_token_failure)
     }
     async fn execute(

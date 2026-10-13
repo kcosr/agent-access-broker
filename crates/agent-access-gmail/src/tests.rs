@@ -690,34 +690,44 @@ async fn search_continuations_are_purpose_separated_expiring_and_tamper_evident(
     let credential = template.execution().delegated().unwrap();
     let settings = SearchSettings::from_inputs(template.inputs());
     let binding = p.search_binding(template.context(), credential, &settings);
-    let page = b"upstream-page-2";
+    let page = "upstream-page-2";
     let foreign = p
         .search_pages
-        .seal(
+        .seal_relayed(
             &OTHER_PURPOSE
                 .bind(template.context(), p.client.base().as_str())
                 .delegated(credential)
                 .optional_text("query", None)
                 .number("maxResults", DEFAULT_MAX_RESULTS)
                 .flag("includeSpamTrash", false),
+            None,
             page,
         )
         .unwrap();
     let expired = p
         .search_pages
-        .seal_at(
+        .seal_relayed_at(
             &binding,
+            None,
             page,
             SystemTime::now() - Duration::from_secs(SEARCH_PAGE_TOKEN_TTL_MINUTES * 60 + 1),
         )
         .unwrap();
-    let valid = p.search_pages.seal(&binding, page).unwrap();
+    // A token sealed as an ordinary envelope is not a relayed page token.
+    let ordinary = p.search_pages.seal(&binding, page.as_bytes()).unwrap();
+    let valid = p.search_pages.seal_relayed(&binding, None, page).unwrap();
     let mut tampered = valid.clone().into_bytes();
     let middle = tampered.len() / 2;
     tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
     let tampered = String::from_utf8(tampered).unwrap();
     // Raw upstream tokens are no longer accepted.
-    for token in [foreign, expired, tampered, "upstream-page-2".to_owned()] {
+    for token in [
+        foreign,
+        expired,
+        tampered,
+        ordinary,
+        "upstream-page-2".to_owned(),
+    ] {
         let error = p
             .invoke(builder.clone().input("pageToken", json!(token)).build())
             .await
