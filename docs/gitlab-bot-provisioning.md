@@ -161,10 +161,10 @@ All inputs use `project` (the full repository path). IDs are positive integers;
 
 Lists return `items`, `count`, `maxResults`, `isLast`, and `nextPageToken`.
 Pagination is bounded by `providers.gitlab.search.max_results` and uses signed,
-expiring cursors bound to the caller, credential mode, action, project, account,
-provider configuration, and page size. Account token rotation locates the old
-token through the account's paginated token list, capped at 100 pages of 100
-entries; an exhausted lookup fails before rotation.
+expiring cursors bound to the caller, execution context, credential mode,
+action, project, account, provider configuration, and page size. Account token
+rotation locates the old token through the account's paginated token list,
+capped at 100 pages of 100 entries; an exhausted lookup fails before rotation.
 
 Rotation checks the old token's active/revoked state, scopes, and role against
 current operator limits before requesting a replacement. It preserves the
