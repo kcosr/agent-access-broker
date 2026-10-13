@@ -698,14 +698,54 @@ returns a `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with
 `timed_out` set when the client's deadline expired) for you to map to your own
 outcome.
 
-Return a raw download with `ProviderResultStream::from_bounded_response(content_type,
-response, BoundedDownload::new(label, byte_cap, cap_reason, idle_timeout)
-.with_expected_size(response.content_length()))`. The stream fails once no chunk
-arrives within the idle timeout, past the byte cap with the cap reason you
-choose, and when the body overruns or falls short of the expected size, each as
-a [late stream failure](#late-stream-failures) whose message names only the
-label. Reject a declared length over the cap before returning the result, while
-it can still be an ordinary error.
+Return a raw download with `ProviderResultStream::from_bounded_response`,
+bounded by a `BoundedDownload` with a label, the byte cap, the reason an overrun
+reports and the idle timeout. The stream fails once no chunk arrives within the
+idle timeout, past the byte cap with that reason, and when the body overruns or
+falls short of the expected size, each as a
+[late stream failure](#late-stream-failures) whose message names only the
+label. Read the declared length before the response moves into the stream, and
+reject one over the cap first, while it can still be an ordinary error:
+
+```rust check
+use agent_access_provider::deps::reqwest::Response;
+use agent_access_provider::deps::serde_json::Value;
+use agent_access_provider::{
+    BoundedDownload, ProviderError, ProviderLimits, ProviderResult, ProviderResultStream,
+    ReasonCode,
+};
+use std::time::Duration;
+
+/// Returns `response`'s body as a raw download, with `metadata` as its result.
+fn attachment_download(
+    response: Response,
+    limits: &ProviderLimits,
+    metadata: Value,
+) -> Result<ProviderResult, ProviderError> {
+    let expected_size = response.content_length();
+    if expected_size.is_some_and(|size| size > limits.max_download_bytes) {
+        return Err(ProviderError::deny(
+            ReasonCode::AttachmentSizeDenied,
+            "the attachment exceeds the download limit",
+        ));
+    }
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let download = BoundedDownload::new(
+        "Notes attachment download",
+        limits.max_download_bytes,
+        ReasonCode::AttachmentSizeDenied,
+        Duration::from_millis(limits.streaming_idle_timeout_ms),
+    )
+    .with_expected_size(expected_size);
+    let stream = ProviderResultStream::from_bounded_response(content_type, response, download);
+    Ok(ProviderResult::new(metadata).with_stream(stream))
+}
+```
 
 Report upstream throttling with `upstream_rate_limited(service, retry_after)`,
 where `UpstreamRetryAfter::from_headers` reads a bounded `Retry-After`. Its
