@@ -398,6 +398,14 @@ All notable changes to this project are documented in this file.
   and a `UrlPatternPolicy`: the allowlist grammar (a fixed host, no embedded
   credentials, literal, `*` or `**` path segments) plus the policy's schemes,
   emptiness, query and fragment, and repeat rules.
+- The provider SDK builds mutation receipts with `MutationReceipt`:
+  `not_applied()` for a proven-unsent write (`mutationStatus: "not_applied"`,
+  `retrySafe: true`), `unknown()` for a write that may have reached the
+  upstream without a response (`mutationStatus: "unknown"`,
+  `retrySafe: false`) and `applied_unverified(stage, safe_locators)`.
+  `ProviderError::with_mutation_receipt` attaches one to a failure's result,
+  keeping its other fields, and `MutationReceipt::write_into` writes one into a
+  result value. `MutationStatus` names the non-exhaustive status vocabulary.
 
 ### Changed
 

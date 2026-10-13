@@ -14,7 +14,8 @@
 //!   for one runtime generation. The provider resolves an action's resources
 //!   ([`ScopeRequest`], [`ScopeResolution`]), admits multipart body parts
 //!   ([`BodyAdmission`]), verifies credentials and serves
-//!   [`ProviderInvocation`]s with a [`ProviderResult`] or a [`ProviderError`].
+//!   [`ProviderInvocation`]s with a [`ProviderResult`] or a [`ProviderError`];
+//!   a write's [`MutationReceipt`] says whether a failed write applied.
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
 //!   allowlists, correlation ([`InvocationScope`]), upstream trace events
@@ -180,6 +181,7 @@ pub mod host;
 mod identifiers;
 mod invocation;
 mod module;
+mod mutation_receipt;
 mod oauth_dialect;
 pub mod presentation;
 mod provider;
@@ -257,6 +259,7 @@ pub use invocation::{
     SearchAuthorization, SearchAuthorizationScope,
 };
 pub use module::{ModuleMetadata, SDK_PACKAGE};
+pub use mutation_receipt::{MutationReceipt, MutationStatus};
 pub use oauth_dialect::{
     AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken,
     OAUTH_MAX_RESPONSE_BYTES, OAuthAdapter, OAuthCallbackIssuer, OAuthClient, OAuthClientAuth,
