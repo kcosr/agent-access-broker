@@ -1180,3 +1180,74 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         assert_eq!(backend.cursors().len(), 2, "{action}");
     }
 }
+
+const CONTINUATION_ERRORS: [ContinuationError; 8] = [
+    ContinuationError::Invalid,
+    ContinuationError::UnsupportedVersion,
+    ContinuationError::Expired,
+    ContinuationError::UpstreamQueryChanged,
+    ContinuationError::TokenTooLarge { limit: 1 },
+    ContinuationError::PayloadTooLarge { limit: 1 },
+    ContinuationError::SigningUnavailable,
+    ContinuationError::DurableKeyUnavailable,
+];
+
+fn hook(action: &str, phase: HookPhase) -> agent_access_provider::host::HookContext {
+    agent_access_provider::host::hook_context(
+        "confluence",
+        action,
+        phase,
+        crate::CONFLUENCE_BACKEND.domain_reasons(),
+    )
+}
+
+/// Every continuation failure stays within the provider-reportable subset of
+/// the hooks that report it: draft handles open during scope resolution and
+/// at invocation, list and search tokens at invocation.
+#[test]
+fn continuation_failures_pass_the_hook_contracts() {
+    for phase in [HookPhase::ScopeResolution, HookPhase::Invocation] {
+        let hook = hook("page.draft.publish", phase);
+        for error in CONTINUATION_ERRORS {
+            let failure = draft_handle_failure(error);
+            assert_eq!(
+                hook.check_failure(&failure),
+                Ok(()),
+                "{phase:?} {error:?}: {failure:?}"
+            );
+        }
+        assert_eq!(hook.check_failure(&invalid_draft_handle_error()), Ok(()));
+    }
+    for (action, pages) in [
+        ("page.attachment.list", ListPages::Attachment),
+        ("blog.attachment.list", ListPages::BlogAttachment),
+        ("page.footer_comment.list", ListPages::Comment),
+        ("page.draft.attachment.list", ListPages::DraftAttachment),
+    ] {
+        let hook = hook(action, HookPhase::Invocation);
+        for error in CONTINUATION_ERRORS {
+            let failure = list_token_failure(pages, error);
+            assert_eq!(
+                hook.check_failure(&failure),
+                Ok(()),
+                "{action} {error:?}: {failure:?}"
+            );
+        }
+    }
+    assert_eq!(
+        hook("page.attachment.list", HookPhase::Invocation)
+            .check_failure(&pagination_signing_unavailable()),
+        Ok(())
+    );
+    for action in ["search", "blog.search"] {
+        let hook = hook(action, HookPhase::Invocation);
+        for error in CONTINUATION_ERRORS {
+            let failure = search_token_failure(action, error);
+            assert_eq!(
+                hook.check_failure(&failure),
+                Ok(()),
+                "{action} {error:?}: {failure:?}"
+            );
+        }
+    }
+}

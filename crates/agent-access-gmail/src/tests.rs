@@ -823,3 +823,35 @@ async fn upstream_page_tokens_keep_their_cap_and_are_never_truncated() {
     assert!(error.message.contains("not truncated"), "{}", error.message);
     assert!(error.result.is_none());
 }
+
+/// Every search continuation failure the invoke hook can report stays within
+/// the provider-reportable subset for an invocation.
+#[test]
+fn page_token_failures_pass_the_invocation_contract() {
+    let hook = agent_access_provider::host::hook_context(
+        "gmail",
+        "message.search",
+        HookPhase::Invocation,
+        GMAIL_BACKEND.domain_reasons(),
+    );
+    for error in [
+        ContinuationError::Invalid,
+        ContinuationError::UnsupportedVersion,
+        ContinuationError::Expired,
+        ContinuationError::UpstreamQueryChanged,
+        ContinuationError::TokenTooLarge { limit: 1 },
+        ContinuationError::PayloadTooLarge { limit: 1 },
+        ContinuationError::SigningUnavailable,
+        ContinuationError::DurableKeyUnavailable,
+    ] {
+        let failure = page_token_failure(error);
+        assert_eq!(
+            hook.check_failure(&failure),
+            Ok(()),
+            "{error:?}: {failure:?}"
+        );
+    }
+    for failure in [page_token_error(), oversized_page_token()] {
+        assert_eq!(hook.check_failure(&failure), Ok(()), "{failure:?}");
+    }
+}

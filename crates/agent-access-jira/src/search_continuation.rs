@@ -469,4 +469,37 @@ mod tests {
             "upstream"
         );
     }
+
+    /// Every search continuation failure stays within the
+    /// provider-reportable subset of the hooks that report it: an empty
+    /// token during scope resolution and every token failure at invocation.
+    #[test]
+    fn search_page_token_failures_pass_the_hook_contracts() {
+        for phase in [HookPhase::ScopeResolution, HookPhase::Invocation] {
+            let hook = agent_access_provider::host::hook_context(
+                "jira",
+                "search",
+                phase,
+                crate::JIRA_BACKEND.domain_reasons(),
+            );
+            for error in [
+                ContinuationError::Invalid,
+                ContinuationError::UnsupportedVersion,
+                ContinuationError::Expired,
+                ContinuationError::UpstreamQueryChanged,
+                ContinuationError::TokenTooLarge { limit: 1 },
+                ContinuationError::PayloadTooLarge { limit: 1 },
+                ContinuationError::SigningUnavailable,
+                ContinuationError::DurableKeyUnavailable,
+            ] {
+                let failure = search_page_token_failure(error);
+                assert_eq!(
+                    hook.check_failure(&failure),
+                    Ok(()),
+                    "{phase:?} {error:?}: {failure:?}"
+                );
+            }
+            assert_eq!(hook.check_failure(&search_page_token_invalid()), Ok(()));
+        }
+    }
 }
