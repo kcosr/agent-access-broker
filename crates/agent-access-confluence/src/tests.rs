@@ -2934,11 +2934,11 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         None,
     );
     let token = continuations
-        .seal_draft_attachment_page(request.context(), &credential, &handle, "cursor=next")
+        .seal_draft_attachment_page(request.context(), &credential, &handle, 2, "cursor=next")
         .unwrap();
     assert_eq!(
         continuations
-            .open_draft_attachment_page(request.context(), &credential, &handle, &token)
+            .open_draft_attachment_page(request.context(), &credential, &handle, 2, &token)
             .unwrap(),
         "cursor=next"
     );
@@ -2952,6 +2952,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
                     .context(),
                 &credential,
                 &handle,
+                2,
                 &token
             )
             .unwrap(),
@@ -2985,6 +2986,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
                 changed_request.context(),
                 &credential,
                 &changed_handle,
+                2,
                 &token,
             )
             .unwrap_err();
@@ -2996,7 +2998,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         .identity(identity("agent-one"))
         .build();
     let owned = continuations
-        .seal_draft_attachment_page(per_user.context(), &credential, &handle, "cursor=next")
+        .seal_draft_attachment_page(per_user.context(), &credential, &handle, 2, "cursor=next")
         .unwrap();
     let error = continuations
         .open_draft_attachment_page(
@@ -3006,6 +3008,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
                 .context(),
             &credential,
             &handle,
+            2,
             &owned,
         )
         .unwrap_err();
@@ -4273,11 +4276,11 @@ fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
     let request = invocation("attachment.list", json!({"pageId": "123456"}));
 
     let valid = continuations
-        .seal_attachment_page(request.context(), &credential, &page, "start=1")
+        .seal_attachment_page(request.context(), &credential, &page, 2, "start=1")
         .unwrap();
     assert_eq!(
         continuations
-            .open_attachment_page(request.context(), &credential, &page, &valid)
+            .open_attachment_page(request.context(), &credential, &page, 2, &valid)
             .unwrap(),
         "start=1"
     );
@@ -4321,6 +4324,7 @@ fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
                 changed_request.context(),
                 &changed_credential,
                 &changed_page,
+                2,
                 &valid,
             )
             .unwrap_err();
@@ -4332,10 +4336,10 @@ fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
     }
 
     let unsupported = continuations
-        .seal_attachment_page(request.context(), &credential, &page, "start=1&limit=1")
+        .seal_attachment_page(request.context(), &credential, &page, 2, "start=1&limit=1")
         .unwrap();
     let error = continuations
-        .open_attachment_page(request.context(), &credential, &page, &unsupported)
+        .open_attachment_page(request.context(), &credential, &page, 2, &unsupported)
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(

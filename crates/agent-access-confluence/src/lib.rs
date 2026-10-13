@@ -4887,6 +4887,7 @@ impl ConfluenceProvider {
             .draft_page_response_with_space(&inputs.page_id, Some("storage"), lookup_credential)
             .await?;
         ensure_draft_content_matches_handle(&draft.value, &handle)?;
+        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let next_position = inputs
             .next_page_token
             .as_deref()
@@ -4895,11 +4896,11 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &handle,
+                    max_results,
                     token,
                 )
             })
             .transpose()?;
-        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let response = self
             .backend
             .page_draft_attachments_page(
@@ -4921,6 +4922,7 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &handle,
+                    max_results,
                     &position,
                 )
             })
@@ -5299,15 +5301,20 @@ impl ConfluenceProvider {
                 lookup_credential,
             )
             .await?;
+        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let next_position = inputs
             .next_page_token
             .as_deref()
             .map(|token| {
-                self.continuations
-                    .open_attachment_page(request.context(), credential, &page, token)
+                self.continuations.open_attachment_page(
+                    request.context(),
+                    credential,
+                    &page,
+                    max_results,
+                    token,
+                )
             })
             .transpose()?;
-        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let response = self
             .backend
             .page_attachments_page(&page.id, max_results, next_position.as_deref(), credential)
@@ -5353,6 +5360,7 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &page,
+                    max_results,
                     &position,
                 )
             })
@@ -6755,6 +6763,7 @@ impl ConfluenceProvider {
             .draft_blog_response_with_space(&inputs.blog_id, Some("storage"), lookup_credential)
             .await?;
         ensure_draft_content_matches_handle(&draft.value, &handle)?;
+        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let next_position = inputs
             .next_page_token
             .as_deref()
@@ -6763,11 +6772,11 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &handle,
+                    max_results,
                     token,
                 )
             })
             .transpose()?;
-        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let response = self
             .backend
             .blog_draft_attachments_page(
@@ -6789,6 +6798,7 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &handle,
+                    max_results,
                     &position,
                 )
             })
@@ -7175,6 +7185,7 @@ impl ConfluenceProvider {
             .confirmed_blog(&inputs.locator.blog_id, lookup_credential)
             .await?;
         validate_blog_locator_space(&inputs.locator, &blog.space)?;
+        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let next_position = inputs
             .next_page_token
             .as_deref()
@@ -7183,11 +7194,11 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &blog,
+                    max_results,
                     token,
                 )
             })
             .transpose()?;
-        let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let response = self
             .backend
             .blog_attachments_page(&blog.id, max_results, next_position.as_deref(), credential)
@@ -7233,6 +7244,7 @@ impl ConfluenceProvider {
                     request.context(),
                     credential,
                     &blog,
+                    max_results,
                     &position,
                 )
             })

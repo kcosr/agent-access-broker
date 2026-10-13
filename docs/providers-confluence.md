@@ -893,7 +893,8 @@ bounded content with up to 5 allowlisted redirects and same-origin-only auth.
 `{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is
 an opaque broker-signed continuation carrying Confluence's next position. It
 expires 15 minutes after it is issued and is bound to the action, the page ID
-and its space, the execution context, the principal and whether it
+and its space, the effective `maxResults` (an omitted value equals the
+configured default; larger values equal the cap), the execution context, the principal and whether it
 authenticated, the credential mode, the selected credential's type (tenant or
 gateway route), and the Confluence route configuration (`tenant_host`,
 `cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
@@ -909,7 +910,8 @@ search.
 
 Draft attachment list pagination tokens use the same continuation model but bind
 the draft handle facts (content type and ID, space key and ID, origin, base
-version, and parent-page placement) instead of the page. They follow the
+version, and parent-page placement) instead of the page, with the effective
+`maxResults`. They follow the
 handle's ownership: a service-mode listing may be continued by any principal
 admitted in service mode, while a per-user listing belongs to its principal.
 

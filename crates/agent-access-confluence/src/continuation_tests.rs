@@ -147,13 +147,18 @@ impl List {
     ) -> Result<String, ProviderError> {
         let context = request.context();
         match self {
-            Self::Attachment => {
-                continuations.seal_attachment_page(context, credential, &page(), self.position())
-            }
+            Self::Attachment => continuations.seal_attachment_page(
+                context,
+                credential,
+                &page(),
+                PAGE_SIZE,
+                self.position(),
+            ),
             Self::BlogAttachment => continuations.seal_blog_attachment_page(
                 context,
                 credential,
                 &blog(),
+                PAGE_SIZE,
                 self.position(),
             ),
             Self::Comment => continuations.seal_comment_page(
@@ -166,6 +171,7 @@ impl List {
                 context,
                 credential,
                 &draft_handle(ConfluenceDraftContentType::Page),
+                PAGE_SIZE,
                 self.position(),
             ),
         }
@@ -178,21 +184,41 @@ impl List {
         credential: &ExecutionCredential,
         token: &str,
     ) -> Result<String, ProviderError> {
+        self.open_with_page_size(continuations, request, credential, PAGE_SIZE, token)
+    }
+
+    /// Opens with another effective `maxResults`; comment lists take theirs
+    /// from [`comment_list`].
+    fn open_with_page_size(
+        self,
+        continuations: &ConfluenceContinuations,
+        request: &ProviderInvocation,
+        credential: &ExecutionCredential,
+        max_results: u32,
+        token: &str,
+    ) -> Result<String, ProviderError> {
         let context = request.context();
         match self {
             Self::Attachment => {
-                continuations.open_attachment_page(context, credential, &page(), token)
+                continuations.open_attachment_page(context, credential, &page(), max_results, token)
             }
-            Self::BlogAttachment => {
-                continuations.open_blog_attachment_page(context, credential, &blog(), token)
-            }
+            Self::BlogAttachment => continuations.open_blog_attachment_page(
+                context,
+                credential,
+                &blog(),
+                max_results,
+                token,
+            ),
             Self::Comment => {
-                continuations.open_comment_page(context, credential, &comment_list(), token)
+                let mut list = comment_list();
+                list.max_results = max_results;
+                continuations.open_comment_page(context, credential, &list, token)
             }
             Self::DraftAttachment => continuations.open_draft_attachment_page(
                 context,
                 credential,
                 &draft_handle(ConfluenceDraftContentType::Page),
+                max_results,
                 token,
             ),
         }
@@ -208,11 +234,18 @@ impl List {
     ) -> ContinuationBinding {
         let binding = continuations.route_binding(family, request.context(), &credential());
         match self {
-            Self::Attachment => binding.text("pageId", "123456").text("space", "ENG"),
+            Self::Attachment => binding
+                .text("pageId", "123456")
+                .text("space", "ENG")
+                .number("maxResults", u64::from(PAGE_SIZE)),
             _ => unreachable!("only attachment lists are forged"),
         }
     }
 }
+
+/// The effective `maxResults` the list tests seal under; [`comment_list`]
+/// uses the same.
+const PAGE_SIZE: u32 = 2;
 
 fn assert_list_rejection(result: Result<String, ProviderError>, list: List) {
     let error = result.unwrap_err();
@@ -349,15 +382,37 @@ fn draft_attachment_listings_are_shared_in_service_mode_and_owned_per_user() {
 }
 
 #[test]
+fn list_tokens_bind_the_effective_page_size() {
+    let continuations = signers(None);
+    let credential = credential();
+    for list in LISTS {
+        let request = invocation(list.action());
+        let token = list.seal(&continuations, &request, &credential).unwrap();
+        assert_eq!(
+            list.open_with_page_size(&continuations, &request, &credential, PAGE_SIZE, &token)
+                .unwrap(),
+            list.position()
+        );
+        for other in [1, 3] {
+            assert_list_rejection(
+                list.open_with_page_size(&continuations, &request, &credential, other, &token),
+                list,
+            );
+        }
+    }
+}
+
+#[test]
 fn list_tokens_reject_obsolete_versions_and_formats() {
     let continuations = signers(None);
     let request = invocation("attachment.list");
     let list = List::Attachment;
+    // The previous version, which did not bind maxResults.
     let obsolete = within_response_limit(
         ContinuationFamily::new(
             "confluence",
             "attachment-list-page",
-            1,
+            2,
             ContinuationLifetime::StableWhenConfigured,
             0,
         )
@@ -466,11 +521,11 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
     let request = invocation("attachment.list");
     let long = format!("cursor={}", "c".repeat(100 * 1024));
     let token = generous
-        .seal_attachment_page(request.context(), &credential, &page(), &long)
+        .seal_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &long)
         .unwrap();
     assert_eq!(
         generous
-            .open_attachment_page(request.context(), &credential, &page(), &token)
+            .open_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &token)
             .unwrap(),
         long
     );
@@ -483,11 +538,17 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
         "c".repeat(bounded.attachment_pages.max_payload_bytes() - "cursor=".len())
     );
     let token = bounded
-        .seal_attachment_page(request.context(), &credential, &page(), &fits)
+        .seal_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &fits)
         .unwrap();
     assert_eq!(token.len(), bounded.attachment_pages.max_token_bytes());
     let error = bounded
-        .seal_attachment_page(request.context(), &credential, &page(), &format!("{fits}c"))
+        .seal_attachment_page(
+            request.context(),
+            &credential,
+            &page(),
+            PAGE_SIZE,
+            &format!("{fits}c"),
+        )
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.decision(), Decision::Error);
@@ -497,6 +558,7 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
             request.context(),
             &credential,
             &page(),
+            PAGE_SIZE,
             &format!("{token}A"),
         )
         .unwrap_err();

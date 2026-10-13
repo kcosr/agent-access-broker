@@ -34,7 +34,7 @@ const PAGE_TOKEN_CLOCK_SKEW: Duration = Duration::from_secs(60);
 const ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "attachment-list-page",
-    2,
+    3,
     ContinuationLifetime::StableWhenConfigured,
     0,
 )
@@ -45,7 +45,7 @@ const ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
 const BLOG_ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "blog-attachment-list-page",
-    2,
+    3,
     ContinuationLifetime::StableWhenConfigured,
     0,
 )
@@ -70,7 +70,7 @@ const COMMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
 const DRAFT_ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "draft-attachment-list-page",
-    3,
+    4,
     ContinuationLifetime::StableWhenConfigured,
     0,
 )
@@ -197,10 +197,12 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         page: &ConfluencePage,
+        max_results: u32,
     ) -> ContinuationBinding {
         self.route_binding(&self.attachment_pages, context, credential)
             .text("pageId", &page.id)
             .text("space", &page.space)
+            .number("maxResults", u64::from(max_results))
     }
 
     pub(crate) fn seal_attachment_page(
@@ -208,9 +210,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         page: &ConfluencePage,
+        max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.attachment_binding(context, credential, page);
+        let binding = self.attachment_binding(context, credential, page, max_results);
         self.seal_list(ListPages::Attachment, &binding, position)
     }
 
@@ -219,9 +222,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         page: &ConfluencePage,
+        max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.attachment_binding(context, credential, page);
+        let binding = self.attachment_binding(context, credential, page, max_results);
         let position = self.open_list(ListPages::Attachment, &binding, token)?;
         checked_position(ListPages::Attachment, position)
     }
@@ -231,11 +235,13 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         blog: &ConfluenceBlog,
+        max_results: u32,
     ) -> ContinuationBinding {
         self.route_binding(&self.blog_attachment_pages, context, credential)
             .text("blogId", &blog.id)
             .text("space", &blog.space)
             .text("spaceId", &blog.space_id)
+            .number("maxResults", u64::from(max_results))
     }
 
     pub(crate) fn seal_blog_attachment_page(
@@ -243,9 +249,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         blog: &ConfluenceBlog,
+        max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.blog_attachment_binding(context, credential, blog);
+        let binding = self.blog_attachment_binding(context, credential, blog, max_results);
         self.seal_list(ListPages::BlogAttachment, &binding, position)
     }
 
@@ -254,9 +261,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         blog: &ConfluenceBlog,
+        max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.blog_attachment_binding(context, credential, blog);
+        let binding = self.blog_attachment_binding(context, credential, blog, max_results);
         let position = self.open_list(ListPages::BlogAttachment, &binding, token)?;
         checked_position(ListPages::BlogAttachment, position)
     }
@@ -307,6 +315,7 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         handle: &ConfluenceDraftHandle,
+        max_results: u32,
     ) -> ContinuationBinding {
         self.route_binding(&self.draft_attachment_pages, context, credential)
             .text("contentType", handle.content_type.as_str())
@@ -316,6 +325,7 @@ impl ConfluenceContinuations {
             .text("origin", handle.origin.as_str())
             .optional_text("parentPageId", handle.parent_page_id.as_deref())
             .optional_number("baseVersion", handle.base_version)
+            .number("maxResults", u64::from(max_results))
     }
 
     pub(crate) fn seal_draft_attachment_page(
@@ -323,9 +333,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         handle: &ConfluenceDraftHandle,
+        max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.draft_attachment_binding(context, credential, handle);
+        let binding = self.draft_attachment_binding(context, credential, handle, max_results);
         self.seal_list(ListPages::DraftAttachment, &binding, position)
     }
 
@@ -334,9 +345,10 @@ impl ConfluenceContinuations {
         context: &AdmittedContext,
         credential: &ExecutionCredential,
         handle: &ConfluenceDraftHandle,
+        max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.draft_attachment_binding(context, credential, handle);
+        let binding = self.draft_attachment_binding(context, credential, handle, max_results);
         let position = self.open_list(ListPages::DraftAttachment, &binding, token)?;
         checked_position(ListPages::DraftAttachment, position)
     }
