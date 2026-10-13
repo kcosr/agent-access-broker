@@ -2343,7 +2343,27 @@ failure in the stream's terminal audit record with `decision = error`.
 A delegated OAuth credential's own failures pass through providers unchanged.
 In particular, a refresh already in progress for the same connection reports
 `concurrency_limited` (HTTP 429, `decision = error`) through Gmail and imported
-MCP actions, although providers cannot report that reason themselves.
+MCP actions, although providers cannot report that reason themselves. The same
+applies to the SDK's own contract failures: a provider that finds its operation
+state missing or of another type, or asks for an authority its action was not
+admitted with, reports `broker_provider_contract_failed`.
+
+The Broker checks each outcome at the hook that reported it, imported services
+included: a standard reason against the table above, a domain reason against
+the provider's own registration, and a delegated credential's failure against
+the credential's own outcomes. An `upstream_rate_limited` failure must carry
+its upstream rate-limit `result`, described below, naming the invoked service.
+Any other outcome becomes the Broker's own
+`broker_provider_contract_failed` (HTTP 500, `decision = error`) with a fixed
+message: the provider's code, message, and result are not returned, and the
+Broker logs a `provider_contract_failed` event with the hook and a diagnostic
+code. An invocation's contract failure reports
+`result.executionState = "unknown"` and `result.retrySafe = false`, because
+the provider may already have acted upstream. A failed pre-authorization
+lookup keeps its concealment and shows the lookup denial. A late stream failure
+with any other code, including a delegated credential's, is recorded as
+`broker_provider_contract_failed` with a fixed message in its terminal audit
+record.
 
 ### Provider-owned domain reasons
 

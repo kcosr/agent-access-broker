@@ -889,6 +889,74 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
     }
 }
 
+/// A lease whose refresh is already in progress for the same connection.
+struct BusyLease(DelegatedAccess);
+#[async_trait]
+impl DelegatedLease for BusyLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("mcp-busy-binding")
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn access(&self) -> DelegatedAccess {
+        self.0.clone()
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Err(agent_access_provider::host::port_failure(
+            agent_access_provider::host::HostPort::DelegatedLease,
+            ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+        ))
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(credential_error())
+    }
+}
+
+#[tokio::test]
+async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
+    let fixture = Fixture::new(FixtureState::default()).await;
+    let host = test_host();
+    let provider = McpAdapter
+        .build(
+            &oauth_definition(&fixture.endpoint),
+            &[action()],
+            None,
+            &host.context(),
+        )
+        .unwrap();
+    let (request, _) = leased_invocation(&fixture.endpoint, false);
+    let request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
+            Arc::new(BusyLease(DelegatedAccess {
+                token: "busy-delegated-token".into(),
+                target: fixture.endpoint.clone(),
+                audience: fixture.endpoint.clone(),
+                version: "version-one".into(),
+                expires_at: i64::MAX,
+            })),
+        )))
+        .build();
+    let action = request.action().to_owned();
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
+    assert_eq!(
+        error.reason_code().host_port(),
+        Some(agent_access_provider::host::HostPort::DelegatedLease)
+    );
+    assert_eq!(fixture.calls(), 0);
+    // Imported services register no domain reasons; the host accepts the
+    // lease's failure at the invocation boundary.
+    let hook = agent_access_provider::host::hook_context(
+        "imported",
+        action,
+        agent_access_provider::HookPhase::Invocation,
+        &[],
+    );
+    assert_eq!(hook.check_failure(&error), Ok(()));
+}
+
 #[tokio::test]
 async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_write() {
     for status in [StatusCode::OK, StatusCode::UNAUTHORIZED] {

@@ -192,6 +192,19 @@ All notable changes to this project are documented in this file.
   Broker host implementation, instead of `agent-access-broker` with the adapter
   package version.
 
+- The Broker now enforces each provider's reason contract at the hook that
+  reported it (scope resolution, body admission, invocation, credential
+  verification, and late result streams), for native and imported services. A
+  standard reason outside the provider-reportable subset for its hook and
+  decision, an unregistered or modified domain reason, a host port's failure
+  outside its allowlist, an `upstream_rate_limited` failure without its
+  rate-limit result, or a late stream code outside its subset now reports
+  `broker_provider_contract_failed` (HTTP 500, `decision = error`) with a fixed
+  message instead of the provider's outcome; an invocation's adds
+  `result.executionState = "unknown"` and `result.retrySafe = false`. A
+  delegated credential's failures, such as a busy refresh's
+  `concurrency_limited`, still pass through unchanged.
+
 ### Fixed
 
 - Management credential verification and imported-service discovery report a

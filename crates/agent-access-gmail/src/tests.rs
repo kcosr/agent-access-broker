@@ -34,6 +34,59 @@ impl DelegatedLease for Lease {
         ))
     }
 }
+/// A lease whose refresh is already in progress for the same connection.
+struct BusyLease;
+#[async_trait]
+impl DelegatedLease for BusyLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        Lease.binding_identity()
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn access(&self) -> DelegatedAccess {
+        Lease.access()
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(agent_access_provider::host::port_failure(
+            agent_access_provider::host::HostPort::DelegatedLease,
+            ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let request = InvocationBuilder::from(invocation("account.view", json!({})))
+        .delegated(DelegatedCredential::new(Arc::new(BusyLease)))
+        .build();
+    let error = provider(&server).invoke(request).await.unwrap_err();
+    assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
+    assert_eq!(error.reason_code().http_status(), 429);
+    assert_eq!(
+        error.reason_code().host_port(),
+        Some(agent_access_provider::host::HostPort::DelegatedLease)
+    );
+    // The host accepts it at the invocation boundary, though Gmail itself
+    // could not report concurrency_limited.
+    let hook = agent_access_provider::host::hook_context(
+        "gmail",
+        "account.view",
+        agent_access_provider::HookPhase::Invocation,
+        GMAIL_BACKEND.domain_reasons(),
+    );
+    assert_eq!(hook.check_failure(&error), Ok(()));
+}
+
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     InvocationBuilder::new("gmail", action)
         .inputs(inputs)

@@ -387,6 +387,22 @@ only host change. The crate supplies:
   [provider-reported subset](http-api.md#provider-reported-standard-reasons).
   The registry rejects duplicate, standard, and reserved codes before serving.
 
+The runtime runs each provider hook (scope resolution including lookup, body
+admission, invocation, credential verification) under a host-supplied
+`HookContext`: service, action, phase, and the domain reasons pinned with the
+prepared operation's provider. It checks only the hook's own future, not host
+work around it such as lease revalidation or attribute decryption. A failure
+passes when it is a registered domain definition (compared by value), a host
+port's failure within that port's allowlist (the delegated lease, or the SDK's
+admitted-operation accessors), or a provider-reportable standard reason for
+the phase and decision, with `upstream_rate_limited` carrying its rate-limit
+result and allow limited to an invocation's `verification_mismatch` with its
+result. Anything else becomes `broker_provider_contract_failed` with a fixed
+message and an internal diagnostic code; an invocation's failure adds an
+unknown, not retry-safe execution state, and lookup concealment still applies.
+Late result-stream failures are checked against the code-only subset and the
+domain reasons, never a host port's reason.
+
 `crates/agent-access-conformance` is the reference: a test-only backend with a
 namespace-capable resource type, typed configuration, a managed profile, JSON,
 raw-download, and upload actions, a presenter, and (with `endpoints = true`)

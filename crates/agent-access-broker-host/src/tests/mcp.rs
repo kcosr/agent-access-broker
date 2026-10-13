@@ -1686,8 +1686,9 @@ async fn http_caller_admission_envelopes_prove_zero_provider_invocations() {
     }
 }
 
-/// A provider may use the same reason codes as ingress admission after work was
-/// dispatched. Those errors must retain provider attribution and outcome data.
+/// A provider reporting ingress admission's host-only reason codes after work
+/// was dispatched never produces an admission proof: the Broker reports its
+/// provider contract failure, attributed to the provider operation.
 struct PostDispatchReasonProvider {
     reason: ReasonCode,
     raw_download: bool,
@@ -1760,18 +1761,31 @@ async fn post_dispatch_reasons_never_become_admission_proofs_on_http_or_mcp() {
                 runtime,
                 StateLockSet::empty(),
             ));
+            // A provider cannot report these host-only reasons: the Broker
+            // replaces them with its provider contract failure, still
+            // attributed to the provider operation and with an unknown,
+            // not retry-safe execution state, never the provider's receipt.
             let assert_provider_error = |envelope: &Value| {
                 assert_eq!(envelope["service"], "fake", "{envelope}");
                 assert_eq!(envelope["action"], "echo", "{envelope}");
-                assert_eq!(envelope["reasonCode"], reason.as_str(), "{envelope}");
+                assert_eq!(envelope["decision"], "error", "{envelope}");
+                assert_eq!(
+                    envelope["reasonCode"], "broker_provider_contract_failed",
+                    "{envelope}"
+                );
                 assert_eq!(envelope["resourceScopes"], json!({"project":["TEST"]}));
                 assert_eq!(
                     envelope["result"],
                     json!({
                         "executionState": "unknown",
-                        "retrySafe": false,
-                        "providerReceipt": "invoked"
+                        "retrySafe": false
                     })
+                );
+                assert!(
+                    !envelope
+                        .to_string()
+                        .contains("provider failed after dispatch"),
+                    "{envelope}"
                 );
             };
             // JSON goes through owned operation dispatch; raw download uses the
@@ -1795,7 +1809,10 @@ async fn post_dispatch_reasons_never_become_admission_proofs_on_http_or_mcp() {
                 ))
                 .unwrap();
             let response = fixture.send(request).await;
-            assert_eq!(response.status().as_u16(), reason.http_status());
+            assert_eq!(
+                response.status().as_u16(),
+                ReasonCode::BrokerProviderContractFailed.http_status()
+            );
             let envelope = response_json(response).await;
             assert_eq!(envelope["agentRequestId"], "post-dispatch-proof");
             assert_provider_error(&envelope);
@@ -1816,9 +1833,8 @@ async fn post_dispatch_reasons_never_become_admission_proofs_on_http_or_mcp() {
             assert_eq!(provider.executions.load(Ordering::SeqCst), expected_calls);
             let records = read_audit_records(&fixture.audit_path);
             assert_eq!(records.len(), expected_calls);
-            assert!(records.iter().all(
-                |record| record["service"] == "fake" && record["reasonCode"] == reason.as_str()
-            ));
+            assert!(records.iter().all(|record| record["service"] == "fake"
+                && record["reasonCode"] == "broker_provider_contract_failed"));
         }
     }
 }

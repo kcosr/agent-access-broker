@@ -16,6 +16,8 @@ mod imports;
 mod mcp_views;
 mod owned;
 #[cfg(test)]
+mod provider_contract_tests;
+#[cfg(test)]
 mod provider_state_tests;
 #[cfg(test)]
 mod resource_attribute_tests;
@@ -1222,6 +1224,10 @@ fn add_upstream_resource_ownership_hint(
         );
 }
 
+/// The caller-facing form of a pre-authorization lookup failure: lookup
+/// concealment keeps only failures that reveal nothing about the resource.
+/// A concealed failure keeps its internal diagnostic code, such as a
+/// provider contract failure's, for the Broker's own records.
 fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
     match error.reason_code().standard() {
         Some(
@@ -1233,8 +1239,100 @@ fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
             | ReasonCode::CredentialInvalid
             | ReasonCode::CredentialExpired,
         ) => error,
-        _ => lookup_scope_denial(),
+        _ => {
+            let mut denial = lookup_scope_denial();
+            denial.internal_diagnostic_code = error.internal_diagnostic_code;
+            denial
+        }
     }
+}
+
+/// The caller-facing message of a provider contract failure; the provider's
+/// own message, result and reason are never forwarded.
+const PROVIDER_CONTRACT_FAILED_MESSAGE: &str =
+    "the provider reported an outcome its contract does not allow";
+
+/// Runs one provider hook future under its hook context and checks the
+/// failure it returns against that hook's contract. Host work around the
+/// hook, such as lease revalidation or attribute decryption, stays outside.
+async fn run_provider_hook<T>(
+    hook: HookContext,
+    future: impl std::future::Future<Output = Result<T, ProviderError>>,
+) -> Result<T, ProviderError> {
+    let checked = hook.clone();
+    agent_access_provider::host::with_hook_context(hook, future)
+        .await
+        .map_err(|error| match checked.check_failure(&error) {
+            Ok(()) => error,
+            Err(violation) => provider_contract_failure(&checked, violation, error),
+        })
+}
+
+/// The host's `broker_provider_contract_failed` (error/500) replacing a hook
+/// failure its contract does not allow. It keeps the upstream status,
+/// duration, audit and object IDs the provider reported, but never its
+/// message, result or reason; the diagnostic code is internal. After
+/// dispatch the provider may already have acted upstream, so an invocation's
+/// contract failure reports an unknown, not retry-safe execution state.
+fn provider_contract_failure(
+    hook: &HookContext,
+    violation: ContractViolation,
+    error: ProviderError,
+) -> ProviderError {
+    record_provider_contract_failure(hook, "hook_failure", violation);
+    let mut failure = ProviderError::error(
+        ReasonCode::BrokerProviderContractFailed,
+        PROVIDER_CONTRACT_FAILED_MESSAGE,
+    )
+    .with_internal_diagnostic_code(violation.diagnostic_code());
+    if hook.phase() == HookPhase::Invocation {
+        failure = failure.with_result(json!({"executionState": "unknown", "retrySafe": false}));
+    }
+    failure.audit = error.audit;
+    failure.upstream_status = error.upstream_status;
+    failure.upstream_duration_ms = error.upstream_duration_ms;
+    failure.object_ids = error.object_ids;
+    failure
+}
+
+fn record_provider_contract_failure(
+    hook: &HookContext,
+    emission: &'static str,
+    violation: ContractViolation,
+) {
+    tracing::warn!(
+        event = "provider_contract_failed",
+        service = hook.service(),
+        action = hook.action(),
+        phase = hook.phase().as_str(),
+        emission,
+        diagnosticCode = violation.diagnostic_code(),
+        "provider outcome rejected by its hook contract"
+    );
+}
+
+/// Checks each late failure of the result's stream against the invocation's
+/// contract. A rejected failure keeps the host's late-failure handling but
+/// carries `broker_provider_contract_failed` and a fixed message.
+fn checked_result_stream(mut result: ProviderResult, hook: HookContext) -> ProviderResult {
+    use futures_util::StreamExt;
+    result.stream = result.stream.map(|stream| {
+        stream.map_byte_stream(move |inner| {
+            Box::pin(inner.map(move |item| {
+                item.map_err(|error| match hook.check_late_stream(error.reason_code) {
+                    Ok(()) => error,
+                    Err(violation) => {
+                        record_provider_contract_failure(&hook, "late_stream", violation);
+                        ProviderStreamError::new(
+                            ReasonCode::BrokerProviderContractFailed,
+                            "the provider stream failed outside its contract",
+                        )
+                    }
+                })
+            }))
+        })
+    });
+    result
 }
 
 fn preserve_result_metadata_on_error(
@@ -1552,6 +1650,9 @@ pub struct BrokerRuntime {
 pub struct PreparedInvocation {
     resource_binding: Option<crate::ResourceAttributeBinding>,
     provider: Arc<dyn Provider>,
+    /// The domain reasons the provider's backend registered, pinned with
+    /// the provider for the operation's later hooks.
+    domain_reasons: &'static [&'static ProviderReasonDefinition],
     request: AdmittedRequest,
     /// Body parts supplied with the invoke request itself; multipart bodies
     /// are consumed separately after admission.
@@ -3919,7 +4020,15 @@ impl BrokerRuntime {
                 correlation.clone(),
                 service.to_string(),
                 "credential.verify".to_string(),
-                provider.verify_execution_credential(credential, &correlation),
+                run_provider_hook(
+                    agent_access_provider::host::hook_context(
+                        service,
+                        "credential.verify",
+                        HookPhase::CredentialVerification,
+                        self.service_domain_reasons(service),
+                    ),
+                    provider.verify_execution_credential(credential, &correlation),
+                ),
             )
             .await;
         }
@@ -4244,6 +4353,7 @@ impl BrokerRuntime {
         let started = Instant::now();
         let policy_snapshot = self.policy_snapshot();
         let policy_generation = policy_snapshot.generation();
+        let domain_reasons = self.service_domain_reasons(&service);
         let Some(provider) = self.providers.get(&service).cloned() else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
@@ -4507,17 +4617,25 @@ impl BrokerRuntime {
                     correlation.clone(),
                     service.clone(),
                     action.clone(),
-                    provider.resolve_scopes(agent_access_provider::host::scope_request(
-                        agent_access_provider::host::ScopeRequestParts {
-                            service: &service,
-                            action: &action,
-                            inputs: &request.inputs,
-                            execution_context: execution_context.as_str(),
-                            identity: &scope_identity,
-                            correlation: &correlation,
-                            lookup_credential: pre_scope_lookup.as_ref(),
-                        },
-                    )),
+                    run_provider_hook(
+                        agent_access_provider::host::hook_context(
+                            &service,
+                            &action,
+                            HookPhase::ScopeResolution,
+                            domain_reasons,
+                        ),
+                        provider.resolve_scopes(agent_access_provider::host::scope_request(
+                            agent_access_provider::host::ScopeRequestParts {
+                                service: &service,
+                                action: &action,
+                                inputs: &request.inputs,
+                                execution_context: execution_context.as_str(),
+                                identity: &scope_identity,
+                                correlation: &correlation,
+                                lookup_credential: pre_scope_lookup.as_ref(),
+                            },
+                        )),
+                    ),
                 )
                 .await
                 {
@@ -4752,6 +4870,7 @@ impl BrokerRuntime {
         Ok(PreparedInvocation {
             resource_binding,
             provider,
+            domain_reasons,
             request: admitted,
             body_parts: request.body_parts,
             state: provider_state,
@@ -4786,9 +4905,17 @@ impl BrokerRuntime {
             context.correlation().clone(),
             context.service().to_owned(),
             context.action().to_owned(),
-            prepared
-                .provider
-                .authorize_body_parts(&prepared.request, prepared.state.as_ref()),
+            run_provider_hook(
+                agent_access_provider::host::hook_context(
+                    context.service(),
+                    context.action(),
+                    HookPhase::BodyAdmission,
+                    prepared.domain_reasons,
+                ),
+                prepared
+                    .provider
+                    .authorize_body_parts(&prepared.request, prepared.state.as_ref()),
+            ),
         )
         .await;
         match result {
@@ -4842,6 +4969,7 @@ impl BrokerRuntime {
         let PreparedInvocation {
             resource_binding,
             provider,
+            domain_reasons,
             request,
             body_parts: _,
             state,
@@ -4902,14 +5030,23 @@ impl BrokerRuntime {
                     "imported service changed or is unavailable; repeat discovery",
                 ));
             }
-            provider
-                .invoke(agent_access_provider::host::invocation(
+            let hook = agent_access_provider::host::hook_context(
+                &service,
+                &action,
+                HookPhase::Invocation,
+                domain_reasons,
+            );
+            let result = run_provider_hook(
+                hook.clone(),
+                provider.invoke(agent_access_provider::host::invocation(
                     request,
                     body_parts,
                     resource_attributes,
                     state,
-                ))
-                .await
+                )),
+            )
+            .await?;
+            Ok(checked_result_stream(result, hook))
         })
         .await;
         let result = result.and_then(|result| {
@@ -4945,6 +5082,19 @@ impl BrokerRuntime {
             .get(service)
             .and_then(|descriptor| descriptor.action(action))
             .and_then(|action| action.presentation)
+    }
+
+    /// The domain reasons `service`'s native backend registered; none for an
+    /// imported service.
+    fn service_domain_reasons(
+        &self,
+        service: &str,
+    ) -> &'static [&'static ProviderReasonDefinition] {
+        self.config
+            .providers
+            .registry()
+            .get(service)
+            .map_or(&[], BackendRegistration::domain_reasons)
     }
 
     fn presentation_body_limit(&self, service: &str) -> u64 {

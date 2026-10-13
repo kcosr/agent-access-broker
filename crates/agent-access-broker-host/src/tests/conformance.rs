@@ -562,6 +562,28 @@ async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
 }
 
 #[tokio::test]
+async fn conformance_upstream_rejections_keep_their_deny_outcomes_through_enforcement() {
+    let fixture = conformance().await;
+    for (item, status, reason) in [
+        ("shelf-one/item-one", 401, "upstream_unauthorized"),
+        ("shelf-one/item-two", 403, "upstream_forbidden"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/items/{item}")))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&fixture.server)
+            .await;
+        let response = fixture
+            .invoke("item.view", json!({"inputs": {"item": item}}), None)
+            .await;
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+        let body = response_json(response).await;
+        assert_eq!(body["decision"], "deny", "{body}");
+        assert_eq!(body["reasonCode"], reason, "{body}");
+    }
+}
+
+#[tokio::test]
 async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();

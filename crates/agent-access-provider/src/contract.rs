@@ -354,6 +354,23 @@ mod tests {
         }
     }
 
+    /// The development fixtures' existing outcomes stay reportable: the
+    /// conformance backend's deny/upstream_unauthorized, deny/upstream_forbidden
+    /// and error/body_malformed, and the OAuth records fixture's
+    /// error/input_invalid.
+    #[test]
+    fn fixture_outcomes_pass_their_invocation_contract() {
+        let invocation = hook(HookPhase::Invocation);
+        for error in [
+            ProviderError::deny(ReasonCode::UpstreamUnauthorized, "rejected"),
+            ProviderError::deny(ReasonCode::UpstreamForbidden, "denied"),
+            ProviderError::error(ReasonCode::BodyMalformed, "upload unavailable"),
+            ProviderError::error(ReasonCode::InputInvalid, "invalid route"),
+        ] {
+            assert_eq!(invocation.check_failure(&error), Ok(()), "{error:?}");
+        }
+    }
+
     #[test]
     fn only_an_invocations_verification_mismatch_with_its_result_reports_allow() {
         let mismatch = ProviderError::allow_with_result(
