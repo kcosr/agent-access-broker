@@ -526,7 +526,7 @@ impl BrokerRuntime {
             if services.contains_key(name)
                 || config.gateways.contains_key(name)
                 || config.providers.registry().get(name).is_some()
-                || matches!(name.as_str(), "oauth_stub" | "broker")
+                || name == "broker"
                 || config.credentials.service.contains_key(name)
                 || config.credentials.lookup.contains_key(name)
                 || config.credentials.per_user.contains_key(name)

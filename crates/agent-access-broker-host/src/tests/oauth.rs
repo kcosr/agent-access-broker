@@ -108,7 +108,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         "stub".into(),
         OAuthRegistrationConfig {
             adapter_settings: Default::default(),
-            adapter: OAuthAdapter::STUB,
+            adapter: OAuthAdapter::new("stub"),
             base_url: server.uri(),
             redirect_uri: "http://127.0.0.1/v1/oauth/callback/stub".into(),
             client_id: "broker".into(),
@@ -128,6 +128,12 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
             )]),
         },
     );
+    // The records API and the authorization server are the same test server.
+    config
+        .providers
+        .insert(agent_access_fake::OAuthStubProviderConfig {
+            base_url: server.uri(),
+        });
     config.credentials.per_user.insert(
         "oauth_stub".into(),
         CredentialConfig {

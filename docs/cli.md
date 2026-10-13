@@ -1834,7 +1834,8 @@ authorization, result bounds, and trigger semantics.
 
 ## OAuth test records
 
-The development test provider provides `oauth-stub record list --collection alpha`,
+When the Broker configures the development `oauth_stub` backend, the CLI provides
+`oauth-stub record list --collection alpha`,
 `oauth-stub record view alice-alpha-1 --collection alpha`, and `oauth-stub account`.
 They invoke the canonical `oauth_stub.record.list`, `record.view`, and
 `account.view` actions using the caller’s existing Broker token. Connect the

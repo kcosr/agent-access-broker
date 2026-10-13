@@ -104,3 +104,46 @@ fn a_production_registration_is_denied_the_loopback_route_whatever_its_label() {
         "{error:?}"
     );
 }
+
+/// The shipped `oauth_stub` records backend, selected with its own
+/// development-only registration or with a production marker on the same
+/// parser.
+static PRODUCTION_RECORDS: BackendRegistration = BackendRegistration {
+    kind: "oauth_stub",
+    resource_types: agent_access_fake::OAUTH_STUB_BACKEND.resource_types,
+    parse: agent_access_fake::OAUTH_STUB_BACKEND.parse,
+    development_only: false,
+};
+
+fn records_config(registration: &'static BackendRegistration) -> BrokerConfig {
+    let mut config = tests::base_fake_config();
+    config.credentials = Default::default();
+    config.policy.resources.clear();
+    config.policy.resource_groups.clear();
+    config.policy.grants.clear();
+    config.providers = ProvidersConfig::new(Arc::new(
+        BackendRegistry::new([registration]).unwrap(),
+    ))
+    .with(agent_access_fake::OAuthStubProviderConfig {
+        base_url: "http://127.0.0.1:8099".into(),
+    });
+    config
+}
+
+#[test]
+fn the_records_fixture_gets_its_direct_route_only_as_an_enabled_development_registration() {
+    BrokerRuntime::new(records_config(&agent_access_fake::OAUTH_STUB_BACKEND)).unwrap();
+    let error = match BrokerRuntime::new(records_config(&PRODUCTION_RECORDS)) {
+        Ok(_) => panic!("only the development registration may route the records API directly"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            &error,
+            RuntimeError::Config(ConfigError::Invalid { errors })
+                if errors.len() == 1
+                    && errors[0].contains("providers.oauth_stub requests the direct loopback route")
+        ),
+        "{error:?}"
+    );
+}

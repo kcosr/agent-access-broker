@@ -224,8 +224,11 @@ backend kinds, resource types, dialects, and adapters. Each
 backend defines, a strict parser for its `[providers.<kind>]` table, and whether
 it is a development fixture. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
-supplies the resource type registry (the broker's own `git_repository` and
-`oauth_collection` types plus every backend's types, in registration order).
+supplies the resource type registry (the broker's own `git_repository` type
+plus every backend's types, in registration order). Development fixtures are
+ordinary registrations: the binary selects the `oauth_stub` records backend
+last, so its `oauth_collection` type lists last, and selects the `stub` OAuth
+dialect alongside the production dialects. An empty registry has neither.
 A parsed table is a `BackendConfig`: it validates itself against a narrow view
 of the rest of the configuration (deployment environment, broker limits, and
 the credential kinds configured for its service), derives its service
@@ -307,8 +310,8 @@ use, so the portal is checked against a backend it was not written for.
 
 Each service has one authoritative `ServiceDescriptor`. A built-in backend
 derives it from its typed configuration alone (`jira_descriptor`,
-`confluence_descriptor`, `gitlab_descriptor`, `cloudbees_ci_descriptor`,
-`oauth_records_descriptor`, and the development fake provider); configured
+`confluence_descriptor`, `gitlab_descriptor`, `cloudbees_ci_descriptor`, and
+the development `fake` and `oauth_stub` backends); configured
 Git gateways get a descriptor from their gateway configuration. Providers do
 not describe themselves: the runtime pairs each provider it builds with its
 configuration's descriptor (a `ServiceProvider`), so offline configuration
@@ -1913,9 +1916,9 @@ refresh, identity and target discovery, sending each request at most once and
 classifying failures. The manager's fences rely on that classification: a
 dialect reports a retry-after, permission, or request rejection only when the
 authorization server guarantees the grant was not consumed. Dialects register
-with the binary through the backend registry, like backends; the host registers
-the development-only `stub` dialect, and this binary links `google` and
-`mcp_oauth`. Dialect requests go through an
+with the binary through the backend registry, like backends; core registers
+none of its own, and this binary selects `google`, `mcp_oauth` and the
+development-only `stub` dialect from `agent-access-fake`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
 connect), the registration's allowlist, and upstream traces. The manager
 builds them through its host OAuth client factory, one client per approved

@@ -35,7 +35,6 @@ pub mod microsoft_oidc;
 mod network;
 mod node_identity;
 pub mod oauth;
-mod oauth_records;
 mod resource_policy;
 mod runtime;
 mod sqlite_support;
@@ -4293,17 +4292,11 @@ pub(crate) fn configured_service_descriptors(
 }
 
 fn configured_provider_descriptors(config: &BrokerConfig) -> Vec<ServiceDescriptor> {
-    let mut descriptors = Vec::new();
-    if config
-        .credentials
-        .per_user
-        .get("oauth_stub")
-        .is_some_and(|c| c.kind == "oauth")
-    {
-        descriptors.push(oauth_records::oauth_records_descriptor());
-    }
-    descriptors.extend(config.providers.iter().map(BackendConfig::descriptor));
-    descriptors
+    config
+        .providers
+        .iter()
+        .map(BackendConfig::descriptor)
+        .collect()
 }
 
 /// Checks each `[providers.<kind>]` table: its backend is registered, its

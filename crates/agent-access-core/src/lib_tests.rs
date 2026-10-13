@@ -16,7 +16,8 @@ pub(crate) fn test_outbound_tls() -> PreparedOutboundTls {
         .expect("test CA is valid")
 }
 
-/// Every backend core defines, as the broker binary registers them.
+/// The backends core tests configure, in the broker binary's order: the
+/// development records backend comes last, with its `stub` OAuth dialect.
 pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
     std::sync::Arc::new(
         BackendRegistry::new([
@@ -25,8 +26,11 @@ pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
             &agent_access_gitlab::GITLAB_BACKEND,
             &CLOUDBEES_CI_BACKEND,
             &FAKE_BACKEND,
+            &OAUTH_STUB_BACKEND,
         ])
-        .expect("core backends register consistently"),
+        .expect("core backends register consistently")
+        .with_oauth_dialects([&STUB_OAUTH_DIALECT])
+        .expect("core OAuth dialects register consistently"),
     )
 }
 
@@ -4801,7 +4805,7 @@ fn provider_tables_for_unregistered_backends_fail_to_parse_with_their_position()
     let error = parse_test_config(&raw).unwrap_err().to_string();
     assert!(
         error.contains(
-            "unknown provider `outlook`, expected one of `jira`, `confluence`, `gitlab`, `cloudbees_ci`, `fake`"
+            "unknown provider `outlook`, expected one of `jira`, `confluence`, `gitlab`, `cloudbees_ci`, `fake`, `oauth_stub`"
         ),
         "{error}"
     );
@@ -4880,6 +4884,50 @@ fn development_backends_require_the_fake_service_opt_in() {
         "environment = \"development\"\nenable_fake_service = true",
     );
     validate_broker_config(&parse_test_config(&enabled).unwrap()).unwrap();
+}
+
+#[test]
+fn the_oauth_records_fixture_is_configured_explicitly_and_only_in_development() {
+    let enabled = MINIMAL_BROKER_CONFIG.replace(
+        "environment = \"development\"",
+        "environment = \"development\"\nenable_fake_service = true",
+    );
+    // A delegated binding alone no longer creates the records service.
+    let binding = "\n[credentials.per_user.oauth_stub]\ntype = \"oauth\"\nprovider = \"stub\"\nprofile = \"read\"\n";
+    let config = parse_test_config(&format!("{enabled}{binding}")).unwrap();
+    assert!(!configured_service_descriptors(&config).contains_key("oauth_stub"));
+    assert_contains(
+        validate_broker_config(&config).unwrap_err().errors(),
+        "credentials.per_user.oauth_stub: OAuth credentials are per_user only, for services that accept delegated credentials",
+    );
+
+    let table = "\n[providers.oauth_stub]\nbase_url = \"http://127.0.0.1:8099\"\n";
+    let config = parse_test_config(&format!("{enabled}{table}")).unwrap();
+    validate_broker_config(&config).unwrap();
+    let descriptor = &configured_service_descriptors(&config)["oauth_stub"];
+    assert!(descriptor.credentials.delegated.is_some());
+
+    let disabled = parse_test_config(&format!("{MINIMAL_BROKER_CONFIG}{table}")).unwrap();
+    assert_contains(
+        validate_broker_config(&disabled).unwrap_err().errors(),
+        "providers.oauth_stub is a development backend and requires deployment.enable_fake_service",
+    );
+    let mut production = config.clone();
+    production.deployment.environment = "production".into();
+    assert_contains(
+        validate_broker_config(&production).unwrap_err().errors(),
+        "deployment.enable_fake_service is not allowed in production",
+    );
+
+    let named = table.replace("127.0.0.1", "localhost");
+    let config = parse_test_config(&format!("{enabled}{named}")).unwrap();
+    assert_contains(
+        validate_broker_config(&config).unwrap_err().errors(),
+        "providers.oauth_stub.base_url must be an http or https literal-IP loopback URL",
+    );
+    let unknown = format!("{enabled}{table}allow_insecure_loopback = true\n");
+    assert!(parse_test_config(&unknown).is_err());
+    assert!(parse_test_config(&format!("{enabled}\n[providers.oauth_stub]\n")).is_err());
 }
 
 #[test]

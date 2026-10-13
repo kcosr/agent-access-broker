@@ -26,7 +26,9 @@ impl EgressProxyEnvironment {
         })
     }
 
-    pub fn empty() -> Self {
+    /// No proxy variables: every ordinary route is direct.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
         Self {
             https_proxy: None,
             http_proxy: None,

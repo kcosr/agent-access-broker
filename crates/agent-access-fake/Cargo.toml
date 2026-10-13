@@ -10,5 +10,10 @@ role = "native"
 [dependencies]
 agent-access-provider = { path = "../agent-access-provider" }
 async-trait.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }

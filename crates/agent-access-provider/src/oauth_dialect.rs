@@ -33,8 +33,6 @@ const OAUTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct OAuthAdapter(Cow<'static, str>);
 
 impl OAuthAdapter {
-    pub const STUB: Self = Self(Cow::Borrowed("stub"));
-
     pub fn new(id: impl Into<String>) -> Self {
         Self(Cow::Owned(id.into()))
     }

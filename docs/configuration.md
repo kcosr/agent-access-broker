@@ -426,7 +426,7 @@ Additional rules:
   must be absolute.
 - `oauth` sets only `provider` and `profile`. The service's descriptor must
   accept delegated credentials (`gmail` and the development `oauth_stub`
-  service), and none of the service's per-user actions may need a lookup
+  service, each configured by its own `[providers.<kind>]` table), and none of the service's per-user actions may need a lookup
   credential, which a delegated credential cannot provide. See
   [oauth.md](oauth.md).
 - `managed_store` must not set `username_ref`, `token_ref`, `provider`, `path`,
@@ -886,7 +886,8 @@ priority = 0                  # optional
 - `resource_type` must name a registered resource type (see
   [resources.md](resources.md#resource-entries)); this build registers
   `git_repository`, `jira_project`, `confluence_space`, `cloudbees_ci_job`,
-  `fake_project`, and `oauth_collection`.
+  `fake_project`, `teams_notification_destination`, and the development
+  `oauth_collection`.
 - Exact selectors are `{ kind = "exact", value = "engineering/payments" }`.
 - Namespace selectors apply to Git repositories and CloudBees CI jobs, for example
   `{ kind = "namespace", value = "engineering/platform" }` for a repository group.
@@ -957,7 +958,8 @@ rejected if the final broker-mutated body exceeds that cap.
 ## `[providers]`
 
 `[providers]` configures the backends the broker binary registers: Jira,
-Confluence, GitLab REST, CloudBees CI, Gmail, Teams, and the development `fake` backend. Each
+Confluence, GitLab REST, CloudBees CI, Gmail, Teams, and the development `fake`
+and `oauth_stub` backends. Each
 `[providers.<kind>]` table enables one backend, whose service ID is its kind.
 All sub-tables are optional, but a provider must be present for any
 `policy.grant` to target its service: a grant against an absent provider fails
@@ -1354,6 +1356,28 @@ The development `fake` backend has no settings. It serves one `fake.echo`
 action authorized against `fake_project` resources and needs no execution
 credential. It is accepted only with `deployment.enable_fake_service = true`,
 which production rejects.
+
+### `[providers.oauth_stub]`
+
+```toml
+[deployment]
+enable_fake_service = true
+
+[providers.oauth_stub]
+base_url = "http://127.0.0.1:8099"
+```
+
+The development OAuth test-records backend reads `oauth_collection` resources
+from the separate OAuth test server using the caller's delegated connection.
+`base_url` is required and is the records API origin: an `http` or `https` URL
+with a literal loopback IP host (such as `127.0.0.1` or `[::1]`) and no path,
+query, fragment or user information. Host names, including `localhost`, are
+rejected. As an enabled development fixture, the backend receives the host's
+direct literal-loopback route to the records API, never an egress proxy.
+Its delegated credential is configured separately, as
+`[credentials.per_user.oauth_stub]` with `type = "oauth"` naming a `stub`
+registration; see [oauth.md](oauth.md#development-test-provider-configuration).
+Like `fake`, it is accepted only with `deployment.enable_fake_service = true`.
 
 ## `[gateways]`
 
@@ -2023,9 +2047,10 @@ new administrator is rejected without provisioning one.
 
 The `[oauth.registrations]` configuration and delegated credential bindings are
 documented in [oauth.md](oauth.md). They require managed storage/encryption and
-browser management. A registration's `adapter` must name a linked OAuth dialect:
-`google` for Gmail, `mcp_oauth` for approved imported MCP services, or the
-development-only `stub`. This is separate from Microsoft OIDC browser login.
+browser management. A registration's `adapter` must name an OAuth dialect the
+binary selects: `google` for Gmail, `mcp_oauth` for approved imported MCP
+services, or the development-only `stub`. The Broker core defines no dialect of
+its own. This is separate from Microsoft OIDC browser login.
 Each approved OAuth destination origin (issuer, metadata, token, identity or
 target endpoint) follows the global egress proxy resolution independently. Only
 literal IPv4/IPv6 loopback addresses connect directly, and a loopback issuer

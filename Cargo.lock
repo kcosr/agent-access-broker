@@ -300,8 +300,10 @@ version = "0.1.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
+ "reqwest",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]

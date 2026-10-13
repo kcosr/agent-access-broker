@@ -30,6 +30,14 @@ All notable changes to this project are documented in this file.
   `ImportedAdapter::build` and `OAuthHttp::build`. It carries safe
   configuration diagnostics; host network failures keep their cause for the
   Broker's own diagnostics.
+- The development `oauth_stub` OAuth test-records service now requires an
+  explicit `[providers.oauth_stub]` table with a `base_url` naming the records
+  API, which must be a literal loopback IP origin (for example
+  `http://127.0.0.1:8099`). A `[credentials.per_user.oauth_stub]` OAuth binding
+  no longer creates the service implicitly or borrows the `stub` registration's
+  `base_url`; configure both, pointing at the same test server. The fixture
+  still requires a non-production deployment with
+  `deployment.enable_fake_service = true`.
 
 ### Added
 

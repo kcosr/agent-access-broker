@@ -3,7 +3,7 @@ use agent_access_broker_host::{BrokerComposition, CompositionError};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
 use agent_access_core::BackendRegistry;
-use agent_access_fake::FAKE_BACKEND;
+use agent_access_fake::{FAKE_BACKEND, OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 use agent_access_gitlab::GITLAB_BACKEND;
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use agent_access_jira::JIRA_BACKEND;
@@ -12,8 +12,10 @@ use agent_access_openapi_upstream::OpenApiAdapter;
 use agent_access_provider::{BackendRegistration, ImportedAdapter, OAuthDialectRegistration};
 use agent_access_teams::TEAMS_BACKEND;
 
-/// Native providers, in resource-type listing order.
-static NATIVES: [&BackendRegistration; 7] = [
+/// Native providers, in resource-type listing order. The development
+/// `oauth_stub` records backend comes last, so its resource type keeps the
+/// bundled listing order.
+static NATIVES: [&BackendRegistration; 8] = [
     &JIRA_BACKEND,
     &CONFLUENCE_BACKEND,
     &GITLAB_BACKEND,
@@ -21,11 +23,18 @@ static NATIVES: [&BackendRegistration; 7] = [
     &FAKE_BACKEND,
     &GMAIL_BACKEND,
     &TEAMS_BACKEND,
+    &OAUTH_STUB_BACKEND,
 ];
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] = [&GOOGLE_OAUTH_DIALECT, &MCP_OAUTH_DIALECT];
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+    &GOOGLE_OAUTH_DIALECT,
+    &MCP_OAUTH_DIALECT,
+    &STUB_OAUTH_DIALECT,
+];
 static IMPORT_ADAPTERS: [&dyn ImportedAdapter; 2] = [&McpAdapter, &OpenApiAdapter];
 
-/// Every module this broker can configure.
+/// Every module this broker can configure. The development fixtures
+/// (`fake`, `oauth_stub` and the `stub` dialect) are selected but stay
+/// unusable unless a non-production deployment enables fake services.
 pub fn composition() -> Result<BrokerComposition, CompositionError> {
     let mut builder = BrokerComposition::builder();
     for native in NATIVES {
@@ -73,11 +82,21 @@ mod tests {
                 "cloudbees_ci",
                 "fake",
                 "gmail",
-                "teams"
+                "teams",
+                "oauth_stub"
             ]
         );
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "mcp_oauth"));
+        assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
+        assert_eq!(
+            composition
+                .resource_types()
+                .ids()
+                .last()
+                .map(|id| id.as_str()),
+            Some("oauth_collection")
+        );
     }
 
     #[test]
@@ -85,7 +104,7 @@ mod tests {
         // Exercise the actual registered configuration parsers and descriptors.
         // Parsing and projection do not resolve credentials or contact providers.
         let raw = format!(
-            "{}\n[providers.gmail]\n[providers.teams]\nallowed_upstream_hosts = []\n[providers.cloudbees_ci]\ncontrollers = {{}}\n[providers.fake]\n",
+            "{}\n[providers.gmail]\n[providers.teams]\nallowed_upstream_hosts = []\n[providers.cloudbees_ci]\ncontrollers = {{}}\n[providers.fake]\n[providers.oauth_stub]\nbase_url = \"http://127.0.0.1:8099\"\n",
             include_str!("../../../agent-access-broker.sample.toml")
                 .replace("[deployment]", "[deployment]\nenable_fake_service = true")
         );
@@ -154,7 +173,8 @@ mod tests {
                 "cloudbees_ci",
                 "fake",
                 "gmail",
-                "teams"
+                "teams",
+                "oauth_stub"
             ]
             .into_iter()
             .map(str::to_owned)

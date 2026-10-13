@@ -232,8 +232,10 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
   bounded operation plans and single-attempt HTTP execution.
 - `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
-- `crates/agent-access-fake`: the development `fake` backend used by smoke
-  tests and fixtures.
+- `crates/agent-access-fake`: development fixtures, each selected separately:
+  the `fake` backend used by smoke tests and fixtures, the `oauth_stub`
+  records backend (`[providers.oauth_stub]`) and the `stub` OAuth dialect for
+  the external OAuth test server. Core defines no fixture of its own.
 - `crates/agent-access-conformance`: a test-only backend using every backend
   contract extension point; the host's `tests::conformance` acceptance suite
   registers it and generates `apps/portal/unit/conformance.fixture.json`

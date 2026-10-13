@@ -4700,7 +4700,7 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
         "stub".into(),
         agent_access_provider::OAuthRegistrationConfig {
             adapter_settings: Default::default(),
-            adapter: agent_access_provider::OAuthAdapter::STUB,
+            adapter: agent_access_provider::OAuthAdapter::new("stub"),
             base_url: "https://unreachable.example.test".into(),
             redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
             client_id: "readiness-test".into(),
@@ -4734,6 +4734,11 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
         .credentials
         .per_user
         .insert("oauth_stub".into(), credential.clone());
+    config
+        .providers
+        .insert(agent_access_fake::OAuthStubProviderConfig {
+            base_url: "http://127.0.0.1:9".into(),
+        });
     let runtime = BrokerRuntime::new(config.clone()).unwrap();
     runtime.readiness().await.unwrap();
     assert!(
@@ -4783,7 +4788,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
     let secret_path = write_temp_secret("oauth-dialect-client-secret");
     let registration = agent_access_provider::OAuthRegistrationConfig {
         adapter_settings: Default::default(),
-        adapter: agent_access_provider::OAuthAdapter::STUB,
+        adapter: agent_access_provider::OAuthAdapter::new("stub"),
         base_url: "https://stub.example.test".into(),
         redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
         client_id: "dialect-test".into(),

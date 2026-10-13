@@ -11,18 +11,9 @@ use std::fmt;
 use std::sync::Arc;
 use toml::de::{DeValue, ValueDeserializer};
 
-/// Resource types the broker itself defines, independent of any backend.
-fn host_resource_types() -> [&'static ResourceTypeDescriptor; 2] {
-    [
-        &GIT_REPOSITORY_RESOURCE,
-        &crate::oauth_records::OAUTH_COLLECTION_RESOURCE,
-    ]
-}
-
-/// OAuth dialects the broker itself provides.
-fn host_oauth_dialects() -> [&'static OAuthDialectRegistration; 1] {
-    [&crate::oauth::STUB_OAUTH_DIALECT]
-}
+/// The resource type the broker itself defines, independent of any backend:
+/// the Git gateway's repositories.
+static HOST_RESOURCE_TYPE: &ResourceTypeDescriptor = &GIT_REPOSITORY_RESOURCE;
 
 /// The backends and OAuth dialects this build can configure, and every
 /// resource type they and the broker define. Built once by the broker binary.
@@ -55,23 +46,20 @@ impl BackendRegistry {
                 ));
             }
         }
-        let [git, oauth] = host_resource_types();
-        let types = std::iter::once(git)
-            .chain(
-                registrations
-                    .iter()
-                    .flat_map(|registration| registration.resource_types.iter().copied()),
-            )
-            .chain(std::iter::once(oauth));
+        let types = std::iter::once(HOST_RESOURCE_TYPE).chain(
+            registrations
+                .iter()
+                .flat_map(|registration| registration.resource_types.iter().copied()),
+        );
         let resource_types = ResourceTypeRegistry::new(types).unwrap_or_else(|type_errors| {
             errors.extend(type_errors);
-            ResourceTypeRegistry::new(host_resource_types()).expect("host resource types are valid")
+            ResourceTypeRegistry::new([HOST_RESOURCE_TYPE]).expect("host resource types are valid")
         });
         if errors.is_empty() {
             Ok(Self {
                 registrations,
                 resource_types,
-                oauth_dialects: host_oauth_dialects().to_vec(),
+                oauth_dialects: Vec::new(),
                 imported_adapters: Vec::new(),
             })
         } else {
@@ -104,8 +92,8 @@ impl BackendRegistry {
             .find(|adapter| adapter.kind() == kind)
     }
 
-    /// Adds OAuth dialects linked outside core, selectable by a
-    /// registration's `adapter`.
+    /// Adds the selected OAuth dialects, selectable by a registration's
+    /// `adapter`. Core provides none of its own.
     pub fn with_oauth_dialects(
         mut self,
         dialects: impl IntoIterator<Item = &'static OAuthDialectRegistration>,
@@ -144,7 +132,8 @@ impl BackendRegistry {
         self.oauth_dialects.iter().map(|dialect| dialect.id)
     }
 
-    /// A registry with no backends: only the broker's own resource types.
+    /// A registry with no backends or OAuth dialects: only the broker's own
+    /// resource type.
     pub fn empty() -> Self {
         Self::new([]).expect("the empty backend registry is valid")
     }
@@ -408,25 +397,48 @@ impl ProvidersConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_fake::{OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 
     static SECOND_STUB: OAuthDialectRegistration = OAuthDialectRegistration {
         id: "stub",
         development_only: true,
-        dialect: crate::oauth::STUB_OAUTH_DIALECT.dialect,
+        dialect: STUB_OAUTH_DIALECT.dialect,
     };
     static INVALID: OAuthDialectRegistration = OAuthDialectRegistration {
         id: "Not A Name",
         development_only: false,
-        dialect: crate::oauth::STUB_OAUTH_DIALECT.dialect,
+        dialect: STUB_OAUTH_DIALECT.dialect,
     };
 
     #[test]
-    fn oauth_dialects_include_the_stub_and_reject_conflicts() {
+    fn an_empty_registry_has_no_fixture_dialect_service_or_resource_type() {
         let registry = BackendRegistry::empty();
+        assert_eq!(registry.oauth_dialect_ids().count(), 0);
+        assert!(registry.oauth_dialect("stub").is_none());
+        assert!(registry.get("oauth_stub").is_none());
+        assert_eq!(
+            registry
+                .resource_types()
+                .ids()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>(),
+            ["git_repository"]
+        );
+    }
+
+    #[test]
+    fn selected_fixtures_register_and_conflicting_dialects_are_rejected() {
+        let registry = BackendRegistry::new([&OAUTH_STUB_BACKEND])
+            .unwrap()
+            .with_oauth_dialects([&STUB_OAUTH_DIALECT])
+            .unwrap();
         assert_eq!(registry.oauth_dialect_ids().collect::<Vec<_>>(), ["stub"]);
-        assert!(registry.oauth_dialect("stub").is_some());
         assert!(registry.oauth_dialect("outlook").is_none());
-        let errors = BackendRegistry::empty()
+        assert_eq!(
+            registry.resource_owner(&OAUTH_STUB_BACKEND.resource_types[0].id),
+            Some("oauth_stub")
+        );
+        let errors = registry
             .with_oauth_dialects([&SECOND_STUB, &INVALID])
             .unwrap_err();
         assert_eq!(

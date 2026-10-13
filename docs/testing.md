@@ -1619,14 +1619,19 @@ end-to-end harnesses are separate from this repository's build and test suite.
 
 ## Development OAuth test provider
 
-The shared-core `oauth::tests` and managed-store OAuth tests cover encrypted
+The shared-core `oauth::tests` select the `stub` dialect and `oauth_stub`
+records backend from `agent-access-fake` explicitly; `cargo test -p
+agent-access-fake` covers the dialect's protocol units and the records
+backend's configuration. Those and the managed-store OAuth tests cover encrypted
 storage, consent/session/grant and binding fences, refresh concurrency/cancellation,
 restart, rotation and disconnect races. Personal setup tests cover direct/group
 `per_user` grants without credential rights, rights-only denial, current
 membership expiry, owner cleanup after grant loss and denied-flow retry behavior.
 Resource/context availability remains independent of setup authorization.
 The separate `oauth-provider-stub` repository contains provider protocol tests and `scripts/broker_e2e.py`, which drives the
-real Broker and CLI. With built binaries and portal assets, run the harness and
+real Broker and CLI. Its generated configuration points both
+`[providers.oauth_stub] base_url` and the `stub` registration at the same test
+server. With built binaries and portal assets, run the harness and
 the optional `OAUTH_STUB_REPO` Playwright test as described in [oauth.md](oauth.md).
 
 ## Gmail

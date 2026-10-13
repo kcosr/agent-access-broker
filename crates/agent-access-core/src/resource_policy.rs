@@ -3,14 +3,6 @@ use agent_access_provider::{ResourceSelector, ResourceType, ResourceTypeRegistry
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn is_oauth_collection(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-}
-
 fn enabled_default() -> bool {
     true
 }

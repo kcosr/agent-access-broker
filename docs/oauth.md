@@ -3,7 +3,8 @@
 The Broker can hold a user's delegated upstream OAuth connection and obtain a
 short-lived access token when an authorized action needs it. [Gmail](providers-gmail.md)
 provides a production Google dialect and typed mailbox actions. The development-only
-records dialect uses the separate `oauth-provider-stub` repository. Microsoft Graph,
+`stub` dialect and `oauth_stub` records provider use the separate
+`oauth-provider-stub` repository. Microsoft Graph,
 Atlassian and GitLab delegated adapters are not enabled.
 
 This is separate from `[browser_auth.oidc.microsoft]`, which signs a person into
@@ -120,9 +121,15 @@ cannot be recalled.
 
 A registration describes the upstream application and its token behavior. A
 named permission profile describes the requested scopes, API audience and selected
-target. A service's per-user credential points to that registration/profile:
+target. A service's per-user credential points to that registration/profile.
+The records service itself is configured by its own `[providers.oauth_stub]`
+table, whose `base_url` names the records API. The fixture serves both from the
+same test server:
 
 ```toml
+[providers.oauth_stub]
+base_url = "http://127.0.0.1:8099"
+
 [oauth.registrations.stub]
 adapter = "stub"
 base_url = "http://127.0.0.1:8099"
@@ -157,9 +164,13 @@ credential PUT/reveal APIs.
 one family of authorization servers. Dialects register with the Broker binary
 alongside its backends; configuration validation rejects an adapter that no
 registered dialect claims and applies the dialect's own registration checks.
-The binary links `google` and `mcp_oauth`; the host also registers the
-development-only `stub` dialect. Production configuration and deployments without
-`deployment.enable_fake_service` reject `stub`.
+The Broker core provides no dialect of its own. The binary selects `google`,
+`mcp_oauth` and the development-only `stub` dialect. The `stub` dialect and the
+`oauth_stub` records backend are independent development selections; a build
+that omits them has no test dialect, service or `oauth_collection` resource type.
+Production configuration and deployments without
+`deployment.enable_fake_service` reject both `stub` registrations and
+`[providers.oauth_stub]`.
 
 The stub dialect supports `client_secret_post` and `client_secret_basic`, form or
 JSON token bodies, and `preserve_old`, `rotate_refresh`, or `rotate_both` refresh
@@ -186,8 +197,9 @@ independently follows global egress proxy resolution (`NO_PROXY`, environment
 proxy, then `network.egress_proxy`). Only literal loopback IP destinations, such
 as `127.0.0.1` or `[::1]`, connect directly. Host names, including `localhost`,
 follow that resolution, and the issuer's route does not determine another
-destination's route. Records API reads use the same routing, are limited
-to paths under `base_url`, are bounded by `limits.request_timeout_ms`, and are
+destination's route. Records API reads go to `[providers.oauth_stub] base_url`,
+which must be a literal loopback IP origin and is reached directly. They are
+limited to paths under that URL, bounded by `limits.request_timeout_ms`, and
 traced and correlated like any backend request.
 
 ## Typed reads and policy

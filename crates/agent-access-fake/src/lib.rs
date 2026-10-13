@@ -1,5 +1,20 @@
-//! The development fake backend: one `echo` action authorized against
-//! `fake_project` resources, used by smoke tests and local fixtures.
+//! Development fixtures, each an independent selection for an assembly:
+//!
+//! - [`FAKE_BACKEND`]: the `fake` backend, one `echo` action authorized
+//!   against `fake_project` resources, used by smoke tests and local fixtures;
+//! - [`OAUTH_STUB_BACKEND`]: the `oauth_stub` records backend, reading
+//!   `oauth_collection` resources with the caller's delegated OAuth access;
+//! - [`STUB_OAUTH_DIALECT`]: the `stub` OAuth dialect for the independent
+//!   OAuth test server.
+//!
+//! Every fixture is development-only: configuring one requires a
+//! non-production deployment with `deployment.enable_fake_service`.
+mod oauth_records;
+mod oauth_stub;
+
+pub use oauth_records::{OAUTH_COLLECTION_RESOURCE, OAUTH_STUB_BACKEND, OAuthStubProviderConfig};
+pub use oauth_stub::STUB_OAUTH_DIALECT;
+
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, CredentialDescriptor,
     EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,

@@ -30,7 +30,8 @@ as `resourceTypes` in the runtime catalog (`/v1/spec/catalog`);
   exact entry binds its alias to one encrypted Workflow URL in managed storage.
 - `fake_project` supports `exact` and `all` selectors; it belongs to the
   development `fake` service.
-- `oauth_collection` supports `exact` and `all` selectors.
+- `oauth_collection` supports `exact` and `all` selectors; it belongs to the
+  development `oauth_stub` service.
 
 A resource whose type is not registered, or whose selector form or value the
 type rejects, fails TOML validation, managed mutations, and managed startup with
@@ -389,7 +390,9 @@ upgrade procedures.
 
 ## Development OAuth collections
 
-The development service `oauth_stub` uses scope `collection` and resource type
-`oauth_collection`, with `exact` or `all` selectors. Exact values contain 1–64
+The development service `oauth_stub`, configured by `[providers.oauth_stub]`,
+uses scope `collection` and resource type `oauth_collection`, with `exact` or
+`all` selectors. A build that does not select the `oauth_stub` backend has no
+`oauth_collection` type. Exact values contain 1–64
 lowercase ASCII letters, digits, `_`, or `-`. The account owner remains credential
 identity, not a policy resource. See [oauth.md](oauth.md#typed-reads-and-policy).

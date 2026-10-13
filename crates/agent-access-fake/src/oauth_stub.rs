@@ -1,5 +1,5 @@
-//! The OAuth test provider's dialect: a development authorization server
-//! whose contract the refresh fences were designed against.
+//! The development `stub` OAuth dialect: the independent OAuth test server
+//! whose contract the broker's refresh fences were designed against.
 use agent_access_provider::{
     AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, OAuthCallbackIssuer,
     OAuthClient, OAuthClientAuth, OAuthDialect, OAuthDialectError, OAuthDialectRegistration,
@@ -13,6 +13,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use url::Url;
 
+/// The development `stub` OAuth dialect, selected independently of the
+/// `oauth_stub` records backend.
 pub static STUB_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
     id: "stub",
     development_only: true,
@@ -44,9 +46,7 @@ struct TokenResponse {
 #[async_trait]
 impl OAuthDialect for StubDialect {
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String> {
-        if config.client_auth == agent_access_provider::OAuthClientAuth::None
-            || !config.adapter_settings.is_empty()
-        {
+        if config.client_auth == OAuthClientAuth::None || !config.adapter_settings.is_empty() {
             return Err(
                 "stub requires secret-post/basic client authentication and no adapter settings"
                     .into(),
@@ -295,7 +295,7 @@ async fn response(
 }
 
 /// Seconds or an HTTP date, bounded to between one second and one day.
-pub(super) fn retry_after_seconds(value: Option<&str>) -> u64 {
+fn retry_after_seconds(value: Option<&str>) -> u64 {
     value
         .and_then(UpstreamRetryAfter::parse)
         .map_or(1, |wait| wait.seconds())
@@ -308,12 +308,12 @@ fn bounded(value: &str, max: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::{OAuthAdapter, OAuthClientAuth, OAuthTokenEncoding};
+    use agent_access_provider::OAuthAdapter;
     use serde_json::json;
 
     fn registration(rotation: OAuthRotation) -> OAuthRegistrationConfig {
         OAuthRegistrationConfig {
-            adapter: OAuthAdapter::STUB,
+            adapter: OAuthAdapter::new("stub"),
             base_url: "https://stub.example/".into(),
             redirect_uri: "https://broker.example/v1/oauth/callback/stub".into(),
             client_id: "broker".into(),
@@ -391,5 +391,13 @@ mod tests {
             StubDialect.validate_registration(&online).unwrap_err(),
             "permission_profiles.read.scopes must include offline_access"
         );
+    }
+
+    #[test]
+    fn retry_after_is_bounded_to_one_second_through_one_day() {
+        assert_eq!(retry_after_seconds(Some("9999999")), 86_400);
+        assert_eq!(retry_after_seconds(Some("3600")), 3600);
+        assert_eq!(retry_after_seconds(Some("invalid")), 1);
+        assert_eq!(retry_after_seconds(None), 1);
     }
 }

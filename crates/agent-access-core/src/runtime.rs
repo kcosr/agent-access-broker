@@ -1791,43 +1791,6 @@ impl BrokerRuntime {
                 })?,
             )
         };
-        if let Some(credential) = config
-            .credentials
-            .per_user
-            .get("oauth_stub")
-            .filter(|c| c.kind == "oauth")
-        {
-            let registration = credential
-                .provider
-                .as_ref()
-                .and_then(|id| config.oauth.registrations.get(id))
-                .ok_or_else(|| RuntimeError::ManagedStore {
-                    message: "OAuth registration is missing".into(),
-                })?;
-            // The development records fixture shares the stub dialect's
-            // loopback server; only an enabled deployment grants it the direct
-            // loopback route.
-            let clients = network.client_factory(ClientCaller::Native {
-                kind: "oauth_stub",
-                development: crate::network::development_fixtures_enabled(&config.deployment),
-            });
-            let provider = crate::oauth_records::OAuthRecordsProvider::new(
-                registration,
-                &clients,
-                network.limits(),
-            )
-            .map_err(|error| RuntimeError::ManagedStore {
-                message: error.to_string(),
-            })?;
-            register_service_provider(
-                &mut provider_map,
-                &config,
-                ServiceProvider::new(
-                    crate::oauth_records::oauth_records_descriptor(),
-                    Arc::new(provider),
-                ),
-            )?;
-        }
         let trusted_callers = load_trusted_callers(&config)?;
         let local_password_hasher = config
             .browser_auth
@@ -1871,7 +1834,7 @@ impl BrokerRuntime {
             let name = &record.definition.service;
             if services.contains_key(name)
                 || config.providers.registry().get(name).is_some()
-                || matches!(name.as_str(), "oauth_stub" | "broker")
+                || name == "broker"
                 || config.credentials.service.contains_key(name)
                 || config.credentials.per_user.contains_key(name)
                 || config.credentials.lookup.contains_key(name)
