@@ -1990,12 +1990,13 @@ Audit queries use the reader pool of the generation that admitted the request.
 On `SIGTERM` or `SIGINT`, the broker enters a single graceful shutdown path. The
 public listener stops accepting new connections, in-flight HTTP work drains
 within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. If listener
-drain exceeds the timeout, the remaining listener tasks are aborted and open
-streaming downloads are marked
-canceled so their writer-backed terminal audit records are queued when the
-stream wrappers drop. The audit writer registry then receives the remaining
-shutdown budget to drain and join its writer threads; terminal audit durability
-after a forced timeout is best-effort if that final writer drain also expires.
+drain exceeds the timeout, open streaming downloads are marked canceled so their
+writer-backed terminal audit records are queued when the stream wrappers drop,
+and the connections still open are cut off: each listener cancels its connection
+tasks and waits for them to end. The audit writer registry then receives the
+remaining shutdown budget to drain and join its writer threads; terminal audit
+durability after a forced timeout is best-effort if that final writer drain also
+expires.
 The JSON-operation supervisor preserves admission for requests accepted before
 shutdown while the listeners drain, including requests still reading their bodies.
 It closes operation admission after listener drain, or when the shutdown budget

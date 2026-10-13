@@ -537,7 +537,7 @@ audit and upstream state for operations whose completion is uncertain. Delegated
 OAuth and private-resource dispatch checks remain independently enforced.
 
 On `SIGTERM` or `SIGINT`, the broker stops accepting new public and gateway connections, lets in-flight work drain within `--shutdown-timeout-ms`,
-then forces any remaining listener tasks closed. If the timeout is reached while
+then cuts off the connections still open. If the timeout is reached while
 streaming downloads are still open, those streams are canceled and their
 terminal audit records are queued through the audit writer before final writer
 drain. Unix `SIGUSR2` reloads continue to work before shutdown starts; once

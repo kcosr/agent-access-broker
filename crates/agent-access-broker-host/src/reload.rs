@@ -1284,17 +1284,21 @@ impl ReloadableState {
         let build_deadline = deadline.clone();
         let backends = Arc::clone(&self.backends);
         let build_status = Arc::clone(&self.build_status);
+        // The build reports to the dispatcher the reload runs under.
+        let dispatch = tracing::dispatcher::get_default(tracing::Dispatch::clone);
         let mut build = tokio::task::spawn_blocking(move || {
-            let admission = admit_candidate_config(
-                &config_path,
-                &backends,
-                &build_status,
-                body_hard_cap,
-                &live_locks,
-                &previous_runtime,
-                &build_deadline,
-            )?;
-            build_candidate_runtime(admission, generation, previous_runtime, build_deadline)
+            tracing::dispatcher::with_default(&dispatch, || {
+                let admission = admit_candidate_config(
+                    &config_path,
+                    &backends,
+                    &build_status,
+                    body_hard_cap,
+                    &live_locks,
+                    &previous_runtime,
+                    &build_deadline,
+                )?;
+                build_candidate_runtime(admission, generation, previous_runtime, build_deadline)
+            })
         });
         match tokio::time::timeout(self.reload_timeout, &mut build).await {
             Ok(Ok(result)) => {

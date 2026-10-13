@@ -242,6 +242,10 @@ All notable changes to this project are documented in this file.
   `{"name": "agent-access-broker-host", "version": <host version>}`, naming the
   Broker host implementation, instead of `agent-access-broker` with the adapter
   package version.
+- When shutdown reaches `--shutdown-timeout-ms`, the broker now cuts off the
+  public and gateway connections still open and waits for their tasks to end
+  before the final audit drain, instead of leaving them running until the
+  process exits.
 
 - The Broker now enforces each provider's reason contract at the hook that
   reported it (scope resolution, body admission, invocation, credential

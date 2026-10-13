@@ -7,7 +7,7 @@ use crate::reload::{start_reloadable_state, validate_shutdown_timeout};
 use crate::router::{build_gateway_router, public_router};
 use crate::state::ReloadableState;
 use agent_access_core::{AuditRuntimeRegistry, BrokerConfig, BrokerRuntime, RuntimeError};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::{FutureExt, StreamExt};
@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
+use tracing::instrument::WithSubscriber;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -391,14 +393,20 @@ async fn run_service(
     let coordinator = ShutdownCoordinator::new();
     let SignalSource { shutdown, reload } = signals;
     let reload_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let reload_signal_task = tokio::spawn(run_reload_signal_loop(
-        reload,
-        state.clone(),
-        coordinator.clone(),
-        Arc::clone(&reload_tasks),
-    ));
-    let shutdown_signal_task = tokio::spawn(shutdown_signal_task(shutdown, coordinator.clone()));
-    let mut servers = JoinSet::new();
+    // Lifecycle and connection tasks run under the dispatcher `serve` runs
+    // under: the process subscriber, or an isolated application's own.
+    let reload_signal_task = tokio::spawn(
+        run_reload_signal_loop(
+            reload,
+            state.clone(),
+            coordinator.clone(),
+            Arc::clone(&reload_tasks),
+        )
+        .with_current_subscriber(),
+    );
+    let shutdown_signal_task =
+        tokio::spawn(shutdown_signal_task(shutdown, coordinator.clone()).with_current_subscriber());
+    let mut servers = Servers::new();
 
     let node_id = state.node_id();
     tracing::info!(
@@ -411,12 +419,7 @@ async fn run_service(
     let (public_app, mcp) = public_router(state.clone());
     #[cfg(test)]
     let served_public_app = public_app.clone();
-    spawn_public_server(
-        &mut servers,
-        public_listener,
-        public_app,
-        coordinator.clone(),
-    );
+    servers.serve(public_listener, public_app, coordinator.clone());
     #[cfg(test)]
     let mut served_gateway_app = None;
     if let Some((gateway_listen, gateway_listener)) = gateway_listener {
@@ -431,12 +434,7 @@ async fn run_service(
         {
             served_gateway_app = Some(gateway_app.clone());
         }
-        spawn_gateway_server(
-            &mut servers,
-            gateway_listener,
-            gateway_app,
-            coordinator.clone(),
-        );
+        servers.serve(gateway_listener, gateway_app, coordinator.clone());
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(listening) = listening {
@@ -498,48 +496,56 @@ impl PreboundListeners {
     }
 }
 
-fn spawn_public_server(
-    servers: &mut JoinSet<Result<()>>,
-    listener: tokio::net::TcpListener,
-    app: axum::Router,
-    coordinator: ShutdownCoordinator,
-) {
-    servers.spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = coordinator.wait().await;
-        })
-        .await
-        .context("public listener failed")
-    });
+/// The listeners' server tasks. Each server owns its connections' tasks; at
+/// the shutdown deadline, [`Self::cut_off`] cancels the connections still
+/// open.
+struct Servers {
+    tasks: JoinSet<Result<()>>,
+    force: CancellationToken,
 }
 
-fn spawn_gateway_server(
-    servers: &mut JoinSet<Result<()>>,
-    listener: tokio::net::TcpListener,
-    app: axum::Router,
-    coordinator: ShutdownCoordinator,
-) {
-    servers.spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
+impl Servers {
+    fn new() -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            force: CancellationToken::new(),
+        }
+    }
+
+    /// Serves `app` on `listener` until shutdown starts, then drains its
+    /// connections gracefully.
+    fn serve(
+        &mut self,
+        listener: tokio::net::TcpListener,
+        app: axum::Router,
+        coordinator: ShutdownCoordinator,
+    ) {
+        let shutdown = async move {
             let _ = coordinator.wait().await;
-        })
-        .await
-        .context("gateway listener failed")
-    });
+        };
+        let force = self.force.clone();
+        self.tasks.spawn(
+            async move {
+                crate::http_server::serve_http(listener, app, shutdown, force).await;
+                Ok(())
+            }
+            .with_current_subscriber(),
+        );
+    }
+
+    /// Cancels the connections still open and waits until every server
+    /// task, and with it every connection task and the broker state it
+    /// held, has ended.
+    async fn cut_off(&mut self) {
+        self.force.cancel();
+        while self.tasks.join_next().await.is_some() {}
+    }
 }
 
 async fn drain_lifecycle(
     state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
-    mut servers: JoinSet<Result<()>>,
+    mut servers: Servers,
     reload_signal_task: JoinHandle<()>,
     shutdown_signal_task: JoinHandle<()>,
     reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
@@ -548,13 +554,13 @@ async fn drain_lifecycle(
     let mut listener_error = None;
     loop {
         tokio::select! {
-            result = servers.join_next(), if !servers.is_empty() => {
+            result = servers.tasks.join_next(), if !servers.tasks.is_empty() => {
                 match result {
                     Some(Ok(Ok(()))) => {
-                        if servers.is_empty() && !coordinator.is_shutdown() {
+                        if servers.tasks.is_empty() && !coordinator.is_shutdown() {
                             coordinator.trigger(ShutdownCause::ListenerFinished);
                         }
-                        if servers.is_empty() {
+                        if servers.tasks.is_empty() {
                             break;
                         }
                     }
@@ -589,24 +595,27 @@ async fn drain_lifecycle(
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or_default();
     let operation_deadline = tokio::time::Instant::now() + operation_budget;
     let (listeners_drained, listener_drain) = tokio::sync::oneshot::channel();
-    let operation_drain = tokio::spawn(async move {
-        // Accepted requests may still be reading their bodies. Keep the owner
-        // registry open while those listeners drain, then close admission and
-        // drain detached owners. The hard deadline reserves a bounded final phase
-        // even when a slow request never finishes intake.
-        let reserve = (operation_budget / 4).min(Duration::from_secs(1));
-        tokio::select! {
-            _ = listener_drain => {}
-            _ = tokio::time::sleep_until(operation_deadline - reserve) => {}
+    let operation_drain = tokio::spawn(
+        async move {
+            // Accepted requests may still be reading their bodies. Keep the owner
+            // registry open while those listeners drain, then close admission and
+            // drain detached owners. The hard deadline reserves a bounded final phase
+            // even when a slow request never finishes intake.
+            let reserve = (operation_budget / 4).min(Duration::from_secs(1));
+            tokio::select! {
+                _ = listener_drain => {}
+                _ = tokio::time::sleep_until(operation_deadline - reserve) => {}
+            }
+            operation_state
+                .shutdown_operations(
+                    operation_deadline.saturating_duration_since(tokio::time::Instant::now()),
+                )
+                .await
         }
-        operation_state
-            .shutdown_operations(
-                operation_deadline.saturating_duration_since(tokio::time::Instant::now()),
-            )
-            .await
-    });
+        .with_current_subscriber(),
+    );
     let timed_out =
-        drain_servers_until_deadline(&mut servers, &coordinator, shutdown_timeout).await;
+        drain_servers_until_deadline(&mut servers.tasks, &coordinator, shutdown_timeout).await;
     let _ = listeners_drained.send(());
     if timed_out {
         let canceled = state.cancel_terminal_audits();
@@ -614,8 +623,7 @@ async fn drain_lifecycle(
             event = "broker_shutdown_forced",
             terminalStreamsCanceled = canceled,
         );
-        servers.abort_all();
-        while servers.join_next().await.is_some() {}
+        servers.cut_off().await;
     }
 
     let lifecycle_timed_out = drain_reload_tasks_until_deadline(
@@ -932,7 +940,7 @@ async fn run_reload_signal_loop(
                         }
                         #[cfg(not(any(test, feature = "test-support")))]
                         let _ = (request, outcome);
-                    });
+                    }.with_current_subscriber());
                     track_reload_task(&mut reload_tasks, handle);
                 }).is_none() {
                     break;
@@ -1209,25 +1217,26 @@ mod tests {
     #[tokio::test]
     async fn public_server_stops_on_shutdown_trigger() {
         let coordinator = ShutdownCoordinator::new();
-        let mut servers = JoinSet::new();
+        let mut servers = Servers::new();
         let public_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let public_addr = public_listener.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "ok" }));
 
-        spawn_public_server(&mut servers, public_listener, app, coordinator.clone());
+        servers.serve(public_listener, app, coordinator.clone());
 
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         assert!(
-            !drain_servers_until_deadline(&mut servers, &coordinator, Duration::from_secs(1)).await
+            !drain_servers_until_deadline(&mut servers.tasks, &coordinator, Duration::from_secs(1))
+                .await
         );
-        assert!(servers.is_empty());
+        assert!(servers.tasks.is_empty());
         assert!(tokio::net::TcpStream::connect(public_addr).await.is_err());
     }
 
     #[tokio::test]
     async fn admitted_request_delays_shutdown_until_it_finishes() {
         let coordinator = ShutdownCoordinator::new();
-        let mut servers = JoinSet::new();
+        let mut servers = Servers::new();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let release = Arc::new(Notify::new());
@@ -1251,13 +1260,13 @@ mod tests {
                 }
             }),
         );
-        spawn_public_server(&mut servers, listener, app, coordinator.clone());
+        servers.serve(listener, app, coordinator.clone());
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         let mut drain = Box::pin(drain_servers_until_deadline(
-            &mut servers,
+            &mut servers.tasks,
             &coordinator,
             Duration::from_secs(1),
         ));
@@ -1349,8 +1358,8 @@ path="{}"
             ))
         }));
         let (completed, response) = tokio::sync::oneshot::channel();
-        let mut servers = JoinSet::new();
-        servers.spawn(async move {
+        let mut servers = Servers::new();
+        servers.tasks.spawn(async move {
             let result = app
                 .oneshot(
                     Request::builder()
@@ -1407,18 +1416,24 @@ path="{}"
     #[tokio::test]
     async fn admitted_request_is_cut_off_when_shutdown_timeout_expires() {
         let coordinator = ShutdownCoordinator::new();
-        let mut servers = JoinSet::new();
+        let mut servers = Servers::new();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+        let (dropped_tx, mut dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let dropped_tx = Arc::new(Mutex::new(Some(dropped_tx)));
         let app = Router::new().route(
             "/",
             get({
                 let entered_tx = Arc::clone(&entered_tx);
+                let dropped_tx = Arc::clone(&dropped_tx);
                 move || {
                     let entered_tx = Arc::clone(&entered_tx);
+                    let dropped = dropped_tx.lock().unwrap().take();
                     async move {
+                        // Sends when the cut-off request is dropped.
+                        let _dropped = dropped;
                         if let Some(tx) = entered_tx.lock().unwrap().take() {
                             let _ = tx.send(());
                         }
@@ -1428,17 +1443,31 @@ path="{}"
                 }
             }),
         );
-        spawn_public_server(&mut servers, listener, app, coordinator.clone());
+        servers.serve(listener, app, coordinator.clone());
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         assert!(
-            drain_servers_until_deadline(&mut servers, &coordinator, Duration::from_millis(25))
-                .await
+            drain_servers_until_deadline(
+                &mut servers.tasks,
+                &coordinator,
+                Duration::from_millis(25)
+            )
+            .await
         );
-        servers.abort_all();
-        while servers.join_next().await.is_some() {}
+        assert_eq!(
+            dropped_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "the request is still running"
+        );
+        // Forcing the server cuts its connection off: once the server task
+        // ends, the connection's request is gone.
+        servers.cut_off().await;
+        assert_eq!(
+            dropped_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        );
         client.abort();
     }
 
@@ -1473,10 +1502,12 @@ path="{}"
     #[tokio::test]
     async fn listener_error_triggers_drain_and_returns_original_error() {
         let coordinator = ShutdownCoordinator::new();
-        let mut servers = JoinSet::new();
-        servers.spawn(async { Err(anyhow::anyhow!("injected listener failure")) });
+        let mut servers = Servers::new();
+        servers
+            .tasks
+            .spawn(async { Err(anyhow::anyhow!("injected listener failure")) });
         let observed_shutdown = Arc::new(Notify::new());
-        servers.spawn({
+        servers.tasks.spawn({
             let coordinator = coordinator.clone();
             let observed_shutdown = Arc::clone(&observed_shutdown);
             async move {

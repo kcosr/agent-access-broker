@@ -272,7 +272,8 @@ and audit checks through the real `agent-access` binary.
   (`src/build_status.rs`), the broker application (`src/application.rs`:
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
-  bounded shutdown), HTTP routers and handlers, management, HTTP MCP serving,
+  bounded shutdown; `src/http_server.rs` serves each listener's connections and
+  owns their tasks), HTTP routers and handlers, management, HTTP MCP serving,
   portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
   broker unit-test tree
   (`src/tests/`). Its production code depends on no backend or import adapter;

@@ -7,8 +7,10 @@
 //! reloads and drains operations exactly as `serve` does. It never installs a
 //! process signal handler or a global log subscriber:
 //! [`RunningBroker::reload`] and [`RunningBroker::shutdown`] stand in for
-//! SIGUSR2 and SIGTERM, and events reach whatever dispatcher the starting
-//! task has.
+//! SIGUSR2 and SIGTERM. The lifecycle's tasks, reloads and connections
+//! report to the dispatcher of the task that calls [`IsolatedBroker::start`];
+//! tasks that request handlers spawn themselves report to the default
+//! dispatcher.
 //!
 //! [`ProviderFixture`] is a fixture control, not an embedding API. It
 //! replaces the provider that a selected and configured native registration
@@ -585,7 +587,8 @@ impl RunningBroker {
     }
 
     /// The active generation's audit store, or `None` when audit is
-    /// disabled. The view stays usable after shutdown.
+    /// disabled. The view stays usable after shutdown: it keeps the fixture
+    /// directory alive.
     pub fn audit(&self) -> Option<AuditStoreView> {
         let snapshot = self.state().current();
         snapshot
@@ -596,18 +599,22 @@ impl RunningBroker {
             .map(|audit| AuditStoreView {
                 kind: audit.kind,
                 path: PathBuf::from(&audit.path),
+                _directory: self.directory.clone(),
             })
     }
 
     /// The active generation's managed store, read-only, or `None` without
-    /// one.
+    /// one. Like the audit view, it keeps the fixture directory alive.
     pub fn managed_store(&self) -> Option<ManagedStoreView> {
         self.state()
             .current()
             .runtime
             .managed_store()
             .cloned()
-            .map(|store| ManagedStoreView { store })
+            .map(|store| ManagedStoreView {
+                store,
+                _directory: self.directory.clone(),
+            })
     }
 
     fn state(&self) -> &Arc<ReloadableState> {
@@ -784,6 +791,8 @@ impl From<DrainReport> for ShutdownReport {
 pub struct AuditStoreView {
     kind: AuditStoreType,
     path: PathBuf,
+    /// Keeps a store inside the fixture directory from being removed.
+    _directory: FixtureDir,
 }
 
 impl AuditStoreView {
@@ -814,6 +823,7 @@ impl AuditStoreView {
 #[derive(Clone)]
 pub struct ManagedStoreView {
     store: ManagedStore,
+    _directory: FixtureDir,
 }
 
 impl ManagedStoreView {

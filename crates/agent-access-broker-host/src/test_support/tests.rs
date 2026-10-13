@@ -474,3 +474,205 @@ async fn join_ends_http_mcp_sessions_left_open() {
         .unwrap();
     assert!(report.is_clean(), "{report:?}");
 }
+
+#[tokio::test]
+async fn join_cuts_off_connections_still_open_at_the_shutdown_deadline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let application = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .shutdown_timeout(Duration::from_millis(500));
+    let document = fake_document(application.directory(), "TEST");
+    let broker = application.config_document(document).start().await.unwrap();
+    // A request whose body never finishes: the broker's 100 Continue shows
+    // that the request is being served and its body is being read.
+    let mut client = tokio::net::TcpStream::connect(broker.public_addr())
+        .await
+        .unwrap();
+    client
+        .write_all(
+            b"POST /v1/invoke/fake/echo HTTP/1.1\r\n\
+              host: 127.0.0.1\r\n\
+              content-type: application/json\r\n\
+              x-agent-access-request-id: partial-body\r\n\
+              expect: 100-continue\r\n\
+              content-length: 1000\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut interim = Vec::new();
+    while !interim.ends_with(b"\r\n\r\n") {
+        let mut byte = [0; 1];
+        let read = tokio::time::timeout(Duration::from_secs(10), client.read(&mut byte))
+            .await
+            .expect("the broker reads the request body")
+            .unwrap();
+        assert_eq!(read, 1, "{}", String::from_utf8_lossy(&interim));
+        interim.push(byte[0]);
+    }
+    assert!(
+        interim.starts_with(b"HTTP/1.1 100 Continue"),
+        "{}",
+        String::from_utf8_lossy(&interim)
+    );
+    client.write_all(br#"{"inputs":"#).await.unwrap();
+
+    let directory = broker.directory().clone();
+    let config_path = broker.config_path().to_path_buf();
+    broker.shutdown();
+    let report = tokio::time::timeout(Duration::from_secs(4), broker.join())
+        .await
+        .expect("a connection left open must not outlive the shutdown deadline")
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    assert!(report.was_forced(), "{report:?}");
+    // The broker closed the connection without answering the request.
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut rest))
+        .await
+        .expect("the broker closed the connection");
+    if let Ok(read) = closed {
+        assert_eq!(read, 0, "{}", String::from_utf8_lossy(&rest));
+    }
+
+    // Every lock is released, so a restart on the same state succeeds at once.
+    let restarted = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .in_directory(directory)
+        .config_path(config_path)
+        .start()
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    assert_eq!(echo(&restarted, "cut-off-restarted", "TEST").await.0, 200);
+    restarted.shutdown();
+    restarted.join().await.unwrap();
+}
+
+#[tokio::test]
+async fn audit_views_keep_the_fixture_directory_after_join() {
+    let application = IsolatedBroker::new(composition(), IDENTITY).unwrap();
+    let document = fake_document(application.directory(), "TEST");
+    let directory = application.directory().path().to_path_buf();
+    let broker = application.config_document(document).start().await.unwrap();
+    assert_eq!(echo(&broker, "audit-view-after-join", "TEST").await.0, 200);
+    let audit = broker.audit().unwrap();
+    broker.shutdown();
+    broker.join().await.unwrap();
+
+    // The view is the only holder of the fixture directory now.
+    assert!(audit.path().starts_with(&directory));
+    let records = audit.records();
+    assert!(
+        records
+            .iter()
+            .any(|record| record["agentRequestId"] == "audit-view-after-join"),
+        "{records:?}"
+    );
+    assert!(audit.text().contains("audit-view-after-join"));
+    let clone = audit.clone();
+    drop(audit);
+    assert!(directory.exists(), "clones keep the directory");
+    drop(clone);
+    assert!(!directory.exists());
+}
+
+/// Records the `event` field of events and the `agentRequestId` recorded
+/// on spans.
+#[derive(Clone, Default)]
+struct CapturedFields(Arc<Mutex<Vec<String>>>);
+
+impl CapturedFields {
+    fn contains(&self, entry: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|captured| captured == entry)
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedFields {
+    fn on_record(
+        &self,
+        _span: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        values.record(&mut FieldVisitor {
+            name: "agentRequestId",
+            captured: self,
+        });
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        event.record(&mut FieldVisitor {
+            name: "event",
+            captured: self,
+        });
+    }
+}
+
+struct FieldVisitor<'a> {
+    name: &'static str,
+    captured: &'a CapturedFields,
+}
+
+impl tracing::field::Visit for FieldVisitor<'_> {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == self.name {
+            self.captured
+                .0
+                .lock()
+                .unwrap()
+                .push(format!("{}={value}", self.name));
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        if field.name() == self.name {
+            self.record_str(field, &format!("{value:?}"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn lifecycle_and_connection_events_reach_the_starting_task_s_dispatcher() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let _capture_guard = crate::observability::tracing_capture_test_lock()
+        .lock()
+        .await;
+    // As in the other capture tests: a second live dispatcher makes callsite
+    // registration consult every subscriber rather than whichever thread
+    // registers first, and the rebuild covers callsites registered earlier.
+    let _registration_guard = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let captured = CapturedFields::default();
+    let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(captured.clone()));
+    tracing_core::callsite::rebuild_interest_cache();
+    async {
+        let application = IsolatedBroker::new(composition(), IDENTITY).unwrap();
+        let document = fake_document(application.directory(), "TEST");
+        let broker = application.config_document(document).start().await.unwrap();
+        // Served over TCP by a connection task of the broker's listener.
+        assert_eq!(echo(&broker, "scoped-dispatcher", "TEST").await.0, 200);
+        // Published by the broker's reload task.
+        assert!(broker.reload().await.unwrap().is_success());
+        broker.shutdown();
+        broker.join().await.unwrap();
+    }
+    .with_subscriber(dispatch)
+    .await;
+    assert!(
+        captured.contains("agentRequestId=scoped-dispatcher"),
+        "{:?}",
+        captured.0.lock().unwrap()
+    );
+    assert!(
+        captured.contains("event=config_reload_completed"),
+        "{:?}",
+        captured.0.lock().unwrap()
+    );
+}

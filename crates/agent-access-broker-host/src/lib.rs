@@ -6,6 +6,7 @@ mod application;
 mod build_status;
 mod composition;
 mod handlers;
+mod http_server;
 mod identity;
 mod ingress;
 mod lifecycle;

@@ -144,6 +144,8 @@ dependencies = [
  "futures-util",
  "hmac",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonschema",
  "libc",
  "mime_guess",
@@ -3705,6 +3707,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

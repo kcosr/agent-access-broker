@@ -138,19 +138,23 @@ test-owned path, through the same startup as `serve`: configuration validation,
 state locks, readiness, reload publication, and operation and audit drain. Its
 loopback listeners are bound to ephemeral ports when the fixture is created, so
 a configuration can name their addresses, such as `[mcp] public_url`. It
-installs no process signal handler or global log subscriber.
-`RunningBroker::reload` and `shutdown` stand in for SIGUSR2 and SIGTERM. `join`
-ends HTTP MCP sessions a client left open, as process exit does, and returns a
-drain report once every state lock is released, so a test can restart on the
-same state. `ProviderFixture` is
-a fixture control, not an embedding API: it supplies the provider of a
-selected native kind that the configuration configures, built for each
-generation, while configuration validation, admission and generation ownership
-still apply. `RunningBroker::audit` and `managed_store` give read-only views of
-the fixture's stores, and `portal_service_catalog` exports the grant catalog
-that the portal conformance fixture records. The feature adds construction and
-control APIs only. Release builds must not enable it, and test binaries into
-which Cargo unifies it keep production semantics.
+installs no process signal handler or global log subscriber. The lifecycle's
+tasks, reloads and connections report to the dispatcher of the task that
+starts the broker; tasks that request handlers spawn themselves report to the
+default dispatcher. `RunningBroker::reload` and `shutdown` stand in for SIGUSR2
+and SIGTERM. As in the process, connections still open at the shutdown deadline
+are cut off. `join` ends HTTP MCP sessions a client left open, as process exit
+does, and returns a drain report once every state lock is released, so a test
+can restart on the same state. `ProviderFixture` is a fixture control, not an
+embedding API: it supplies the provider of a selected native kind that the
+configuration configures, built for each generation, while configuration
+validation, admission and generation ownership still apply.
+`RunningBroker::audit` and `managed_store` give read-only views of the
+fixture's stores; the views keep the fixture directory and stay readable after
+`join`. `portal_service_catalog` exports the grant catalog that the portal
+conformance fixture records. The feature adds construction and control APIs
+only. Release builds must not enable it, and test binaries into which Cargo
+unifies it keep production semantics.
 
 Tests that assert `tracing` events call
 `install_trace_capture()`, which installs one capturing dispatcher as the test
