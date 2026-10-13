@@ -7,7 +7,8 @@
 //! part that differs most between databases. Only the SQLite backend answers
 //! queries today.
 
-use crate::{ReasonCode, is_valid_node_id};
+use crate::is_valid_node_id;
+use agent_access_provider::ReasonCode;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, SecondsFormat, Utc};

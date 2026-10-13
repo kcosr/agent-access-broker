@@ -55,7 +55,7 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     routes.push(preview);
     let mut accept = versioned_request();
     accept["properties"]["manifestHash"] = json!({"type":"string","minLength":1,"maxLength":128});
-    accept["properties"]["selections"] = json!({"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":{
+    accept["properties"]["selections"] = json!({"type":"array","maxItems":agent_access_provider::IMPORT_MAX_TOOLS,"items":{
         "type":"object","additionalProperties":false,"required":["source","action","readOnly"],"properties":{
             "source":{"type":"object","minProperties":1},"action":action_name(),
             "label":{"type":["string","null"],"maxLength":256},"readOnly":{"type":"boolean"}
@@ -284,7 +284,7 @@ fn scoped_mcp_readiness() -> Value {
     }})
 }
 fn scoped_mcp_warnings() -> Value {
-    json!({"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":{"type":"object","additionalProperties":false,"required":["toolIndex","proposedAction","codes"],"properties":{
+    json!({"type":"array","maxItems":agent_access_provider::IMPORT_MAX_TOOLS,"items":{"type":"object","additionalProperties":false,"required":["toolIndex","proposedAction","codes"],"properties":{
         "toolIndex":{"type":"integer","minimum":0},"proposedAction":{"type":"string"},
         "codes":{"type":"array","minItems":1,"uniqueItems":true,"items":scoped_mcp_issue_code()}
     }}})
@@ -303,7 +303,7 @@ fn discovery_manifest() -> Value {
     }});
     json!({"type":"object","additionalProperties":false,"required":["protocolVersion","metadata","tools"],"properties":{
         "protocolVersion":{"type":"string"},"metadata":{},
-        "tools":{"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":tool}
+        "tools":{"type":"array","maxItems":agent_access_provider::IMPORT_MAX_TOOLS,"items":tool}
     }})
 }
 fn preview_record() -> Value {

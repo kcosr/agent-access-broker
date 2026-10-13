@@ -14,9 +14,9 @@ use crate::state::{AppState, ReloadableState};
 use agent_access_core::{
     AgentInvokeTokenCaveats, CreateResourceGroupRequest, CreateResourceRequest,
     DeleteResourceRequest, ExecutionContext, PatchResourceGroupRequest, PatchResourceRequest,
-    PolicyReadScope, ReasonCode, ResourceAttributes, ResourceSelection, ResourceSelector,
-    ResourceType,
+    PolicyReadScope, ResourceSelection,
 };
+use agent_access_provider::{ReasonCode, ResourceAttributes, ResourceSelector, ResourceType};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};

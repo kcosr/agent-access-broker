@@ -18,8 +18,9 @@ use agent_access_confluence::{
 };
 use agent_access_core::{
     BrokerConfig, BrokerTokenHasher, BrokerTokensConfig, CredentialConfig, CredentialsConfig,
-    DeploymentConfig, PolicyConfig, PolicyGrantConfig, ResourceSelector, SearchLimitsConfig,
+    DeploymentConfig, PolicyConfig, PolicyGrantConfig,
 };
+use agent_access_provider::{ResourceSelector, SearchLimitsConfig};
 use async_trait::async_trait;
 use base64::Engine as _;
 use std::collections::BTreeMap;
@@ -32,18 +33,18 @@ fn confluence_provider_with_backend<B>(
     config: &BrokerConfig,
     provider_config: ConfluenceProviderConfig,
     backend: Arc<B>,
-) -> agent_access_core::ServiceProvider
+) -> agent_access_provider::ServiceProvider
 where
     B: ConfluenceBackend + 'static,
 {
     let broker_token_hasher =
         BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let backend: Arc<dyn ConfluenceBackend> = backend;
-    agent_access_core::ServiceProvider::new(
+    agent_access_provider::ServiceProvider::new(
         agent_access_confluence::confluence_descriptor(&provider_config),
         Arc::new(ConfluenceProvider::with_backend_and_signing_key(
             provider_config,
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend,
             Arc::new(broker_token_hasher),
         )),
@@ -2745,7 +2746,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         *self.metadata_calls.lock().unwrap() += 1;
         if page_id != self.page.id {
@@ -2761,7 +2762,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -2776,7 +2777,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn search(
         &self,
         request: ConfluenceSearchRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         *self.last_search.lock().unwrap() = Some(request);
         Ok(ConfluenceBackendResponse {
@@ -2789,7 +2790,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "read stub does not create pages".to_string(),
@@ -2799,7 +2800,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "read stub does not update pages".to_string(),
@@ -2810,7 +2811,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "read stub does not add attachments".to_string(),
@@ -2820,7 +2821,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "read stub does not list attachments".to_string(),
@@ -2832,7 +2833,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
         _page_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -2844,7 +2845,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -2920,7 +2921,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let page = self
             .pages
@@ -2939,7 +2940,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -2948,7 +2949,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         page_id: &str,
         get_draft: bool,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
         let (space, status, version) = if get_draft {
             let drafts = self.page_drafts.lock().unwrap();
@@ -2997,7 +2998,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page_ancestors(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
     {
         if !self.pages.lock().unwrap().contains_key(page_id) {
@@ -3031,7 +3032,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page_direct_children(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageChild>>, ConfluenceBackendError> {
         if !self.pages.lock().unwrap().contains_key(page_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3064,7 +3065,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         page_id: &str,
         position: ConfluencePageMovePosition,
         target_page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<String>, ConfluenceBackendError> {
         let pages = self.pages.lock().unwrap();
         if !pages.contains_key(page_id) || !pages.contains_key(target_page_id) {
@@ -3117,7 +3118,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn space_by_key(
         &self,
         space: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         let space = self
             .spaces
@@ -3137,7 +3138,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn space_by_id(
         &self,
         space_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         let space = self
             .spaces
@@ -3156,7 +3157,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn blog_metadata(
         &self,
         blog_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let mut blog = self
             .blogs
@@ -3176,7 +3177,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn blog(
         &self,
         blog_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.blog_metadata(blog_id, credential).await
     }
@@ -3184,7 +3185,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: ConfluenceSearchPage {
@@ -3200,7 +3201,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn search_blogs(
         &self,
         request: ConfluenceSearchRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchBlog>, ConfluenceBackendError> {
         let blogs = self
             .blogs
@@ -3235,7 +3236,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let space = self.space_for_id(&request.space_id)?;
         if space.key != request.space {
@@ -3288,7 +3289,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn update_page(
         &self,
         request: ConfluencePageUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let mut pages = self.pages.lock().unwrap();
         let page = pages
@@ -3316,7 +3317,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn create_page_draft(
         &self,
         request: ConfluenceDraftCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let space = self.space_for_id(&request.space_id)?;
         let mut next = self.next_page_id.lock().unwrap();
@@ -3353,7 +3354,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         page_id: &str,
         _body_format: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let draft = self
             .page_drafts
@@ -3372,7 +3373,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn update_page_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let space = self.space_for_id(&request.space_id)?;
         if request.status == "draft" {
@@ -3482,7 +3483,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn discard_page_draft(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         self.page_drafts
             .lock()
@@ -3501,7 +3502,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn create_blog(
         &self,
         request: ConfluenceBlogCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let mut next = self.next_blog_id.lock().unwrap();
         let id = next.to_string();
@@ -3532,7 +3533,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn update_blog(
         &self,
         request: ConfluenceBlogUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let mut blogs = self.blogs.lock().unwrap();
         let blog = blogs
@@ -3555,7 +3556,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn create_blog_draft(
         &self,
         request: ConfluenceDraftCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let space = self.space_for_id(&request.space_id)?;
         let mut next = self.next_blog_id.lock().unwrap();
@@ -3582,7 +3583,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         blog_id: &str,
         _body_format: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let draft = self
             .blog_drafts
@@ -3601,7 +3602,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn update_blog_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let space = self.space_for_id(&request.space_id)?;
         if request.status == "draft" {
@@ -3707,7 +3708,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn discard_blog_draft(
         &self,
         blog_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         self.blog_drafts
             .lock()
@@ -3726,7 +3727,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         page_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         if !self.pages.lock().unwrap().contains_key(page_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3767,7 +3768,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         blog_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         if !self.blogs.lock().unwrap().contains_key(blog_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3808,7 +3809,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         page_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         if !self.page_drafts.lock().unwrap().contains_key(page_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3849,7 +3850,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         blog_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         if !self.blog_drafts.lock().unwrap().contains_key(blog_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3889,7 +3890,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page_attachments(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         if !self.pages.lock().unwrap().contains_key(page_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -3912,7 +3913,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         if !self.pages.lock().unwrap().contains_key(page_id) {
@@ -3953,7 +3954,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         blog_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         if !self.blogs.lock().unwrap().contains_key(blog_id) {
@@ -3994,7 +3995,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         if !self.page_drafts.lock().unwrap().contains_key(page_id) {
@@ -4035,7 +4036,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         blog_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         if !self.blog_drafts.lock().unwrap().contains_key(blog_id) {
@@ -4074,7 +4075,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn blog_attachments(
         &self,
         blog_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         if !self.blogs.lock().unwrap().contains_key(blog_id) {
             return Err(ConfluenceBackendError::NotFound);
@@ -4096,7 +4097,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         _page_id: &str,
         attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let content = self
@@ -4117,7 +4118,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         _blog_id: &str,
         attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let content = self
@@ -4138,7 +4139,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         _page_id: &str,
         attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let content = self
@@ -4159,7 +4160,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         _blog_id: &str,
         attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let content = self
@@ -4181,7 +4182,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         kind: ConfluenceCommentKind,
         comment_id: &str,
         _body_format: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         let comment = self
             .comments
@@ -4203,7 +4204,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn comments_page(
         &self,
         request: ConfluenceCommentListRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         let comments = self
             .comments
@@ -4242,7 +4243,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         _body_format: Option<&str>,
         max_results: u32,
         _cursor: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         let comments = self
             .comments
@@ -4268,7 +4269,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn add_comment(
         &self,
         request: ConfluenceCommentCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         if let Some(page_id) = request.page_id.as_deref()
             && !self.pages.lock().unwrap().contains_key(page_id)
@@ -4318,7 +4319,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn update_comment(
         &self,
         request: ConfluenceCommentUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         let mut comments = self.comments.lock().unwrap();
         let comment = comments
@@ -4346,7 +4347,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         &self,
         kind: ConfluenceCommentKind,
         comment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         let mut comments = self.comments.lock().unwrap();
         let comment = comments
@@ -4562,9 +4563,9 @@ fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
         cloud_id: None,
         egress_proxy: None,
         allowed_upstream_hosts: vec!["https://example.atlassian.net/wiki/rest/api/**".to_string()],
-        attachments: agent_access_core::AttachmentLimitsConfig {
+        attachments: agent_access_provider::AttachmentLimitsConfig {
             media_types: vec!["text/plain".to_string()],
-            ..agent_access_core::AttachmentLimitsConfig::default()
+            ..agent_access_provider::AttachmentLimitsConfig::default()
         },
         content: agent_access_confluence::ConfluenceContentConfig {
             page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],

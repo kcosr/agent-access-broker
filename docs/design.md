@@ -112,8 +112,9 @@ also includes a same-origin browser portal frontend:
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries
   (`audit_query.rs`), the backend registry (`backends.rs`), the managed
   credential store (`managed_store.rs`), config parsing and validation, and the
-  response envelope types (`lib.rs`). It contains no backend and re-exports the
-  backend contract.
+  response envelope types (`lib.rs`). It contains no backend and does not
+  re-export the backend contract; the host, the binary, and the CLI depend on
+  `agent-access-provider` directly.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.

@@ -12,8 +12,9 @@ use agent_access_conformance::{
     ConformanceConfig,
 };
 use agent_access_core::{
-    BackendRegistry, ConfigError, ProvidersConfig, parse_broker_config_raw, validate_broker_config,
+    BackendRegistry, ProvidersConfig, parse_broker_config_raw, validate_broker_config,
 };
+use agent_access_provider::ConfigError;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{body_bytes, header as header_is, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

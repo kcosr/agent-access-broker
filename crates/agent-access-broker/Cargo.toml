@@ -16,6 +16,7 @@ agent-access-gitlab = { path = "../agent-access-gitlab" }
 agent-access-jira = { path = "../agent-access-jira" }
 agent-access-mcp-upstream = { path = "../agent-access-mcp-upstream" }
 agent-access-openapi-upstream = { path = "../agent-access-openapi-upstream" }
+agent-access-provider = { path = "../agent-access-provider" }
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true

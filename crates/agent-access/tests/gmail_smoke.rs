@@ -351,7 +351,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         let response = client
             .get(format!("{base}/v1/spec/{endpoint}"))
             .bearer_auth(&f.agent_token)
-            .header(agent_access_core::REQUEST_ID_HEADER, "gmail-spec")
+            .header(agent_access_provider::REQUEST_ID_HEADER, "gmail-spec")
             .send()
             .await
             .unwrap();

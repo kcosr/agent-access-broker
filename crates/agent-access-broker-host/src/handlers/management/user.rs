@@ -14,7 +14,8 @@ use crate::handlers::management::credentials::{
     get_credential_for_principal, put_credential_for_principal, verify_credential_for_principal,
 };
 use crate::state::AppState;
-use agent_access_core::{ReasonCode, SelfAgentTokenIssueRequest};
+use agent_access_core::SelfAgentTokenIssueRequest;
+use agent_access_provider::ReasonCode;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};

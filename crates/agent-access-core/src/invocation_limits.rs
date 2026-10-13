@@ -7,9 +7,8 @@
 //! how a rejection is described; the in-memory window itself lives in the
 //! broker's ingress layer.
 
-use crate::{
-    BrokerConfig, ProviderError, ReasonCode, ServiceDescriptor, is_service_name, parse_ttl_seconds,
-};
+use crate::{BrokerConfig, parse_ttl_seconds};
+use agent_access_provider::{ProviderError, ReasonCode, ServiceDescriptor, is_service_name};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

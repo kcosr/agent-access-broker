@@ -2,7 +2,7 @@
 //! the derived query columns, and the broker-built full-text index text.
 
 use super::super::{AuditRecord, StampedAuditRecord};
-use crate::SearchAuthorizationScope;
+use agent_access_provider::SearchAuthorizationScope;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;

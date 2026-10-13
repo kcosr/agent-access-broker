@@ -803,7 +803,10 @@ async fn start_browser_login(
         .extension(ConnectInfo(
             "127.0.0.1:43410".parse::<SocketAddr>().unwrap(),
         ))
-        .header(agent_access_core::REQUEST_ID_HEADER, "oidc-browser-start")
+        .header(
+            agent_access_provider::REQUEST_ID_HEADER,
+            "oidc-browser-start",
+        )
         .header("Host", "broker.example.test");
     if let Some(binding_cookie) = binding_cookie {
         builder = builder.header("Cookie", binding_cookie);
@@ -887,7 +890,7 @@ async fn finish_browser_login_with(
                 .extension(ConnectInfo(
                     "127.0.0.1:43411".parse::<SocketAddr>().unwrap(),
                 ))
-                .header(agent_access_core::REQUEST_ID_HEADER, request_id)
+                .header(agent_access_provider::REQUEST_ID_HEADER, request_id)
                 .header("Host", "broker.example.test")
                 .header("Cookie", binding_cookie)
                 .body(Body::empty())
@@ -950,7 +953,10 @@ async fn microsoft_oidc_browser_happy_path_binds_code_pkce_nonce_cookie_and_reje
                 .extension(ConnectInfo(
                     "127.0.0.1:43412".parse::<SocketAddr>().unwrap(),
                 ))
-                .header(agent_access_core::REQUEST_ID_HEADER, "oidc-happy-session")
+                .header(
+                    agent_access_provider::REQUEST_ID_HEADER,
+                    "oidc-happy-session",
+                )
                 .header("Cookie", browser_session_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1245,7 +1251,10 @@ async fn microsoft_oidc_outages_are_provider_scoped_and_token_outage_is_unavaila
                 .extension(ConnectInfo(
                     "127.0.0.1:43412".parse::<SocketAddr>().unwrap(),
                 ))
-                .header(agent_access_core::REQUEST_ID_HEADER, "oidc-provider-down")
+                .header(
+                    agent_access_provider::REQUEST_ID_HEADER,
+                    "oidc-provider-down",
+                )
                 .header("Host", "broker.example.test")
                 .body(Body::empty())
                 .unwrap(),
@@ -1264,7 +1273,7 @@ async fn microsoft_oidc_outages_are_provider_scoped_and_token_outage_is_unavaila
                     "127.0.0.1:43413".parse::<SocketAddr>().unwrap(),
                 ))
                 .header(
-                    agent_access_core::REQUEST_ID_HEADER,
+                    agent_access_provider::REQUEST_ID_HEADER,
                     "oidc-ready-provider-down",
                 )
                 .body(Body::empty())

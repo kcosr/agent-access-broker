@@ -1,6 +1,7 @@
 //! Canonical broker audit names. Route operations supply the ordinary names;
 //! exceptions and non-catalog protocol events share constants with emitters.
-use agent_access_core::{AuditVisibility, ResourceTypeRegistry, ResponseKind, http_route_specs};
+use agent_access_core::{AuditVisibility, ResponseKind, http_route_specs};
+use agent_access_provider::ResourceTypeRegistry;
 use std::collections::BTreeSet;
 
 pub(crate) const BROKER_STATUS: &str = "status";
@@ -216,7 +217,7 @@ mod tests {
         assert!(
             global
                 .iter()
-                .all(|action| action.len() <= 256 && agent_access_core::is_action_name(action))
+                .all(|action| action.len() <= 256 && agent_access_provider::is_action_name(action))
         );
         assert!(global.contains(&CONFIG_STATUS.to_string()));
         assert!(global.iter().any(|action| action == "admin.tokens.issue"));

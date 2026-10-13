@@ -2,6 +2,7 @@
 use agent_access_broker::{backend_registry, broker_build_status};
 use agent_access_broker_host::build_router;
 use agent_access_core::*;
+use agent_access_provider::{ResourceAttributes, ResourceSelector};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use std::{

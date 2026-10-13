@@ -1,6 +1,10 @@
 use super::*;
 use agent_access_cloudbees_ci::*;
 use agent_access_fake::*;
+use agent_access_provider::{
+    ActionDescriptor, ActionIo, BackendRegistration, GIT_REPOSITORY_RESOURCE, LookupRequirement,
+    OutboundTlsTrustMode, ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
+};
 use base64::Engine as _;
 
 pub(crate) use agent_access_provider::test_support::{TEST_CERT_PEM, test_outbound_tls};
@@ -4751,8 +4755,8 @@ fn resource_scopes_must_bind_registered_types_and_supported_selectors() {
 
     descriptor.resource_scopes.insert(
         "issue".into(),
-        crate::ResourceScopeCapabilities {
-            resource_type: crate::ResourceType::new("jira_issue").unwrap(),
+        agent_access_provider::ResourceScopeCapabilities {
+            resource_type: agent_access_provider::ResourceType::new("jira_issue").unwrap(),
             selectors: vec!["exact".into()],
         },
     );

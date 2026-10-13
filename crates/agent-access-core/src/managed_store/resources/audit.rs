@@ -286,7 +286,7 @@ mod tests {
             selector: None,
             allowed_execution_contexts: None,
             enabled: None,
-            attributes: crate::ResourceAttributes::default(),
+            attributes: agent_access_provider::ResourceAttributes::default(),
             updated_by: "admin".into(),
         }
     }

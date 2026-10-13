@@ -2,12 +2,14 @@
 use super::*;
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
-    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ImportedActionDefinition,
-    ImportedActionStatus, ImportedActionWrite, ImportedCredentialBinding,
-    ImportedCredentialDelivery, ImportedCredentialMode, ImportedCredentialPurpose,
-    ImportedDiscoveryCredential, ImportedInvocationLimit, ImportedSecretWriteRequest,
-    ImportedServiceDefinition, ImportedServiceStatus, ImportedServiceUpdateRequest, ImportsConfig,
-    ManagedPolicyGrantCreateRequest, ProvidersConfig,
+    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ImportedActionStatus,
+    ImportedActionWrite, ImportedSecretWriteRequest, ImportedServiceStatus,
+    ImportedServiceUpdateRequest, ImportsConfig, ManagedPolicyGrantCreateRequest, ProvidersConfig,
+};
+use agent_access_provider::{
+    ImportedActionDefinition, ImportedCredentialBinding, ImportedCredentialDelivery,
+    ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscoveryCredential,
+    ImportedInvocationLimit, ImportedServiceDefinition,
 };
 use axum::{Json, extract::State, http::HeaderMap, routing::post};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

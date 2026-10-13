@@ -225,8 +225,8 @@ use super::super::{
 };
 use crate::{
     AuditConfig, AuditStoreType, DEFAULT_EXECUTION_CONTEXT, ExecutionContext, LimitsConfig,
-    ReasonCode,
 };
+use agent_access_provider::ReasonCode;
 use rusqlite::OpenFlags;
 use serde_json::{Value, json};
 use std::future::Future;
@@ -1225,25 +1225,25 @@ struct CountingProvider {
 }
 
 impl agent_access_provider::test_support::DescribedProvider for CountingProvider {
-    fn descriptor(&self) -> crate::ServiceDescriptor {
+    fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
         agent_access_fake::fake_descriptor()
     }
 }
 
 #[async_trait::async_trait]
-impl crate::Provider for CountingProvider {
+impl agent_access_provider::Provider for CountingProvider {
     fn resolve_scopes(
         &self,
         action: &str,
         inputs: &Value,
-    ) -> Result<crate::ResourceScopes, crate::ProviderError> {
+    ) -> Result<agent_access_provider::ResourceScopes, agent_access_provider::ProviderError> {
         agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
     }
 
     async fn invoke(
         &self,
-        request: crate::ProviderInvocation,
-    ) -> Result<crate::ProviderResult, crate::ProviderError> {
+        request: agent_access_provider::ProviderInvocation,
+    ) -> Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         agent_access_fake::FakeProvider.invoke(request).await
     }

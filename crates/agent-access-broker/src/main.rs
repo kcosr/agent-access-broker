@@ -4,10 +4,10 @@ use agent_access_broker_host::{
     build_reloadable_state, validate_shutdown_timeout,
 };
 use agent_access_core::{
-    AuditStoreType, AuditVerifyReport, ConfigError, StateLockSet, load_broker_config,
-    resolve_node_id, validate_broker_config, validate_broker_config_file,
-    verify_sqlite_audit_database,
+    AuditStoreType, AuditVerifyReport, StateLockSet, load_broker_config, resolve_node_id,
+    validate_broker_config, validate_broker_config_file, verify_sqlite_audit_database,
 };
+use agent_access_provider::ConfigError;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::env;

@@ -1,6 +1,9 @@
 //! Shared managed Google/Gmail wire fixture for broker and real CLI tests.
 use super::{backend_registry, broker_build_status, build_router};
 use agent_access_core::*;
+use agent_access_provider::{
+    OAuthAdapter, OAuthPermissionProfile, OAuthRegistrationConfig, REQUEST_ID_HEADER,
+};
 use axum::{
     Router,
     body::Body,
@@ -138,12 +141,12 @@ default_decision = "deny"
             client_secret_ref: format!("file:{}", client_secret.display()),
             client_auth: Default::default(),
             encoding: Default::default(),
-            rotation: agent_access_core::OAuthRotation::PreserveOld,
+            rotation: agent_access_provider::OAuthRotation::PreserveOld,
             allow_insecure_loopback: true,
             permission_profiles: BTreeMap::from([(
                 "read".into(),
                 OAuthPermissionProfile {
-                    scope_mode: agent_access_core::OAuthScopeMode::Explicit,
+                    scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                     scopes: Some(vec![
                         "openid".into(),
                         agent_access_gmail::GMAIL_SCOPE.into(),

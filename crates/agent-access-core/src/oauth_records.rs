@@ -1,5 +1,12 @@
 //! Development-only typed resource adapter for the independent OAuth test server.
-use crate::*;
+use agent_access_provider::{
+    ActionDescriptor, ClientProfile, CredentialDescriptor, DelegatedAccess,
+    EgressProxyRuntimeConfig, HostError, OAuthRegistrationConfig, Provider, ProviderError,
+    ProviderInvocation, ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes,
+    ResourceType, ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamNetwork, complete_upstream_trace,
+    take_upstream_trace,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -87,7 +94,7 @@ impl OAuthRecordsProvider {
         // Like the registration's authorization server, a loopback records
         // API is reached directly.
         let direct = EgressProxyRuntimeConfig::direct();
-        let network = if crate::is_literal_loopback(&base) {
+        let network = if agent_access_provider::is_literal_loopback(&base) {
             UpstreamNetwork {
                 egress: &direct,
                 ..network

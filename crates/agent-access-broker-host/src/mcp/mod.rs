@@ -451,7 +451,7 @@ fn request_view(request: &Request<Body>) -> Option<McpView> {
         return Some(McpView::Aggregate);
     }
     let service = original.path().strip_prefix("/mcp/")?;
-    agent_access_core::is_service_name(service).then(|| McpView::Service(service.to_owned()))
+    agent_access_provider::is_service_name(service).then(|| McpView::Service(service.to_owned()))
 }
 
 pub(crate) async fn handle(

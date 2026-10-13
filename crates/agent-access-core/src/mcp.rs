@@ -1,6 +1,7 @@
 //! Pure MCP tool projections and discovery shapes shared by HTTP and local stdio adapters.
 //! No transport, credentials, filesystem access, or policy decisions belong here.
-use crate::{ActionIo, ApiActionSpec, ApiCatalog};
+use crate::{ApiActionSpec, ApiCatalog};
+use agent_access_provider::ActionIo;
 use serde_json::{Map, Value, json};
 mod registry;
 pub use registry::*;
@@ -69,7 +70,9 @@ pub fn validate_catalog_action(
     service: &str,
     action: &ApiActionSpec,
 ) -> Result<(), ProjectionError> {
-    if !crate::is_service_name(service) || !crate::is_action_name(&action.action) {
+    if !agent_access_provider::is_service_name(service)
+        || !agent_access_provider::is_action_name(&action.action)
+    {
         return Err(ProjectionError(
             "runtime catalog contains an invalid action identifier",
         ));
@@ -355,14 +358,14 @@ pub fn validate_helper_arguments(
     if arguments
         .get("service")
         .and_then(Value::as_str)
-        .is_some_and(|value| !crate::is_service_name(value))
+        .is_some_and(|value| !agent_access_provider::is_service_name(value))
     {
         return Err(ProjectionError("service name is invalid"));
     }
     if arguments
         .get("action")
         .and_then(Value::as_str)
-        .is_some_and(|value| !crate::is_action_name(value))
+        .is_some_and(|value| !agent_access_provider::is_action_name(value))
     {
         return Err(ProjectionError("action name is invalid"));
     }
@@ -383,7 +386,7 @@ pub fn validate_helper_arguments(
 /// A validated capability value retaining fields unknown to this client version.
 #[derive(Debug)]
 pub struct DiscoveryServiceValue {
-    pub capabilities: crate::ServiceCapabilities,
+    pub capabilities: agent_access_provider::ServiceCapabilities,
     pub raw: Value,
 }
 
@@ -425,8 +428,9 @@ fn parse_discovery_services(value: Value) -> Result<Vec<DiscoveryServiceValue>, 
         .as_array()
         .ok_or(ProjectionError("services response must be an array"))?
         .clone();
-    let capabilities = serde_json::from_value::<Vec<crate::ServiceCapabilities>>(value)
-        .map_err(|_| ProjectionError("services response contains an invalid service"))?;
+    let capabilities =
+        serde_json::from_value::<Vec<agent_access_provider::ServiceCapabilities>>(value)
+            .map_err(|_| ProjectionError("services response contains an invalid service"))?;
     capabilities
         .into_iter()
         .zip(raw_services)
@@ -435,16 +439,17 @@ fn parse_discovery_services(value: Value) -> Result<Vec<DiscoveryServiceValue>, 
 }
 
 pub fn parse_discovery_service(value: Value) -> Result<DiscoveryServiceValue, ProjectionError> {
-    let capabilities = serde_json::from_value::<crate::ServiceCapabilities>(value.clone())
-        .map_err(|_| ProjectionError("service response is invalid"))?;
+    let capabilities =
+        serde_json::from_value::<agent_access_provider::ServiceCapabilities>(value.clone())
+            .map_err(|_| ProjectionError("service response is invalid"))?;
     validate_discovery_service(capabilities, value)
 }
 
 fn validate_discovery_service(
-    capabilities: crate::ServiceCapabilities,
+    capabilities: agent_access_provider::ServiceCapabilities,
     raw: Value,
 ) -> Result<DiscoveryServiceValue, ProjectionError> {
-    if !crate::is_service_name(&capabilities.service) {
+    if !agent_access_provider::is_service_name(&capabilities.service) {
         return Err(ProjectionError(
             "service response contains an invalid service name",
         ));
@@ -452,7 +457,7 @@ fn validate_discovery_service(
     if capabilities
         .actions
         .iter()
-        .any(|action| !crate::is_action_name(&action.action))
+        .any(|action| !agent_access_provider::is_action_name(&action.action))
     {
         return Err(ProjectionError(
             "service response contains an invalid action name",
@@ -465,7 +470,7 @@ fn validate_discovery_service(
 
 pub fn discovery_actions(
     service: DiscoveryServiceValue,
-) -> Result<Vec<(crate::ActionCapabilities, Value)>, ProjectionError> {
+) -> Result<Vec<(agent_access_provider::ActionCapabilities, Value)>, ProjectionError> {
     let raw_actions = service
         .raw
         .get("actions")

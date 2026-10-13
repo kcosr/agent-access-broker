@@ -1,5 +1,6 @@
 //! Stable proposed names. Once accepted, source mappings are immutable records.
-use crate::{ImportedActionStatus, ImportedDiscovery, ImportedServiceRecord, is_action_name};
+use crate::{ImportedActionStatus, ImportedServiceRecord};
+use agent_access_provider::{ImportedDiscovery, is_action_name};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -103,6 +104,11 @@ fn normalize(service: &str, raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::*;
+    use agent_access_provider::{
+        ImportedActionDefinition, ImportedCredentialBinding, ImportedCredentialDelivery,
+        ImportedCredentialMode, ImportedDiscoveredTool, ImportedDiscoveryCredential,
+        ImportedServiceDefinition,
+    };
     use serde_json::json;
     fn record() -> ImportedServiceRecord {
         ImportedServiceRecord {

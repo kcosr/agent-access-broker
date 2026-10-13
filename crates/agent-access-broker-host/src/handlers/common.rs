@@ -4,9 +4,10 @@ use crate::observability;
 use crate::state::{AppState, RuntimeSnapshot};
 use agent_access_core::{
     BrokerResponse, GovernedOperationContext, IdentityContext, InvocationRateLimited,
-    OperationContext, REQUEST_ID_HEADER, ResourceScopes, ResponseEnvelope, SourceContext,
-    new_broker_request_id, result_retry_after_seconds,
+    OperationContext, ResponseEnvelope, SourceContext, new_broker_request_id,
+    result_retry_after_seconds,
 };
+use agent_access_provider::{REQUEST_ID_HEADER, ResourceScopes};
 use axum::Json;
 use axum::http::header::RETRY_AFTER;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -268,8 +269,8 @@ pub(crate) async fn admit_service_invocation(
 }
 
 fn emit_invocation_limited(operation: &OperationContext, rejection: &InvocationRateLimited) {
-    let reason_code = agent_access_core::ReasonCode::RateLimited;
-    let decision = agent_access_core::Decision::Error;
+    let reason_code = agent_access_provider::ReasonCode::RateLimited;
+    let decision = agent_access_provider::Decision::Error;
     observability::record_decision(decision.as_str());
     observability::record_reason_code(reason_code.as_str());
     observability::record_status(reason_code.http_status());
@@ -343,14 +344,18 @@ pub(crate) fn request_id_from_headers(
     else {
         let broker_request_id = new_broker_request_id();
         observability::record_broker_request_id(&broker_request_id);
-        observability::record_decision(agent_access_core::Decision::Deny.as_str());
-        observability::record_reason_code(agent_access_core::ReasonCode::RequestIdMissing.as_str());
-        observability::record_status(agent_access_core::ReasonCode::RequestIdMissing.http_status());
+        observability::record_decision(agent_access_provider::Decision::Deny.as_str());
+        observability::record_reason_code(
+            agent_access_provider::ReasonCode::RequestIdMissing.as_str(),
+        );
+        observability::record_status(
+            agent_access_provider::ReasonCode::RequestIdMissing.http_status(),
+        );
         return Err(Box::new(request_id_error_envelope(
             broker_request_id,
             service,
             action,
-            agent_access_core::ReasonCode::RequestIdMissing,
+            agent_access_provider::ReasonCode::RequestIdMissing,
             "request id is required",
         )));
     };
@@ -363,14 +368,18 @@ pub(crate) fn request_id_from_headers(
     {
         let broker_request_id = new_broker_request_id();
         observability::record_broker_request_id(&broker_request_id);
-        observability::record_decision(agent_access_core::Decision::Deny.as_str());
-        observability::record_reason_code(agent_access_core::ReasonCode::RequestIdInvalid.as_str());
-        observability::record_status(agent_access_core::ReasonCode::RequestIdInvalid.http_status());
+        observability::record_decision(agent_access_provider::Decision::Deny.as_str());
+        observability::record_reason_code(
+            agent_access_provider::ReasonCode::RequestIdInvalid.as_str(),
+        );
+        observability::record_status(
+            agent_access_provider::ReasonCode::RequestIdInvalid.http_status(),
+        );
         return Err(Box::new(request_id_error_envelope(
             broker_request_id,
             service,
             action,
-            agent_access_core::ReasonCode::RequestIdInvalid,
+            agent_access_provider::ReasonCode::RequestIdInvalid,
             "request id is invalid",
         )));
     }
@@ -443,7 +452,7 @@ fn request_id_error_envelope(
     broker_request_id: String,
     service: String,
     action: String,
-    reason_code: agent_access_core::ReasonCode,
+    reason_code: agent_access_provider::ReasonCode,
     message: &str,
 ) -> BrokerResponse<Value> {
     BrokerResponse {
@@ -452,7 +461,7 @@ fn request_id_error_envelope(
         envelope: ResponseEnvelope {
             agent_request_id: String::new(),
             broker_request_id,
-            decision: agent_access_core::Decision::Deny,
+            decision: agent_access_provider::Decision::Deny,
             service,
             action,
             resource_scopes: ResourceScopes::new(),
@@ -472,14 +481,14 @@ pub(crate) fn input_error_envelope(
     broker_request_id: String,
     message: &str,
 ) -> BrokerResponse<Value> {
-    let reason_code = agent_access_core::ReasonCode::InputInvalid;
+    let reason_code = agent_access_provider::ReasonCode::InputInvalid;
     BrokerResponse {
         retry_after_seconds: None,
         status: reason_code.http_status(),
         envelope: ResponseEnvelope {
             agent_request_id,
             broker_request_id,
-            decision: agent_access_core::Decision::Deny,
+            decision: agent_access_provider::Decision::Deny,
             service: String::new(),
             action: String::new(),
             resource_scopes: ResourceScopes::new(),
@@ -502,7 +511,7 @@ pub(crate) fn discovery_unavailable_envelope(agent_request_id: String) -> Broker
         envelope: ResponseEnvelope {
             agent_request_id,
             broker_request_id: new_broker_request_id(),
-            decision: agent_access_core::Decision::Error,
+            decision: agent_access_provider::Decision::Error,
             service: String::new(),
             action: String::new(),
             resource_scopes: ResourceScopes::new(),
@@ -520,14 +529,14 @@ pub(crate) fn not_found_envelope(
     broker_request_id: String,
     service: String,
 ) -> BrokerResponse<Value> {
-    let reason_code = agent_access_core::ReasonCode::ServiceActionDenied;
+    let reason_code = agent_access_provider::ReasonCode::ServiceActionDenied;
     BrokerResponse {
         retry_after_seconds: None,
         status: reason_code.http_status(),
         envelope: ResponseEnvelope {
             agent_request_id,
             broker_request_id,
-            decision: agent_access_core::Decision::Deny,
+            decision: agent_access_provider::Decision::Deny,
             service,
             action: String::new(),
             resource_scopes: ResourceScopes::new(),

@@ -22,9 +22,10 @@ use agent_access_core::{
     GroupMemberRecord, GroupPatchRequest, GroupRecord, GroupWriteRequest, IdentityContext,
     LocalPasswordWriteRequest, LoginMethodRecord, ManagedPolicyGrantRecord, ManagedStoreError,
     OidcLoginMethodLinkRequest, PrincipalAccessPatchRequest, PrincipalPatchRequest,
-    PrincipalRecord, PrincipalRole, PrincipalWriteRequest, ReasonCode, RightGrantRequest,
+    PrincipalRecord, PrincipalRole, PrincipalWriteRequest, RightGrantRequest,
     broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl, parse_ttl_seconds,
 };
+use agent_access_provider::ReasonCode;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};

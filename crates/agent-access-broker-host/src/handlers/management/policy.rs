@@ -5,13 +5,16 @@ use crate::handlers::management::common::{
 };
 use crate::state::AppState;
 use agent_access_core::{
-    ActionCapabilities, BrokerConfig, CredentialDescriptor, DEFAULT_EXECUTION_CONTEXT,
-    ManagedPolicyGrantCreateRequest, ManagedPolicyGrantPatchRequest, ManagedPolicyGrantRecord,
-    ManagedPolicyGrantStatusRequest, ManagedPolicyGrantSubjectAddRequest,
-    ManagedPolicyGrantSubjectRemoveRequest, ManagedPolicyRevision, ManagedStoreError,
-    PolicyGrantConfig, PolicyReadScope, PolicyWriteScope, ReasonCode, ResourceScopeCapabilities,
-    ResourceSelection, ServiceCapabilities, ServicePolicyManagementAssignmentPutRequest,
+    BrokerConfig, DEFAULT_EXECUTION_CONTEXT, ManagedPolicyGrantCreateRequest,
+    ManagedPolicyGrantPatchRequest, ManagedPolicyGrantRecord, ManagedPolicyGrantStatusRequest,
+    ManagedPolicyGrantSubjectAddRequest, ManagedPolicyGrantSubjectRemoveRequest,
+    ManagedPolicyRevision, ManagedStoreError, PolicyGrantConfig, PolicyReadScope, PolicyWriteScope,
+    ResourceSelection, ServicePolicyManagementAssignmentPutRequest,
     ServicePolicyManagementAssignmentRecord,
+};
+use agent_access_provider::{
+    ActionCapabilities, CredentialDescriptor, ReasonCode, ResourceScopeCapabilities,
+    ServiceCapabilities,
 };
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
@@ -125,7 +128,7 @@ struct PolicyActionCatalog {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PolicyScopeCatalog {
-    resource_type: agent_access_core::ResourceType,
+    resource_type: agent_access_provider::ResourceType,
     selectors: Vec<String>,
 }
 

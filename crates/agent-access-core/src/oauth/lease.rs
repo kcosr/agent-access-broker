@@ -1,7 +1,7 @@
 //! An OAuth connection's access lent to one invocation as a delegated
 //! credential.
 use super::{OAuthBinding, OAuthError, OAuthLease, OAuthManager};
-use crate::{
+use agent_access_provider::{
     DelegatedAccess, DelegatedCredential, DelegatedLease, ProviderError, ReasonCode,
     UpstreamRetryAfter, upstream_retry_hint,
 };
@@ -228,7 +228,7 @@ fn oauth_refresh_rate_limited(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Decision;
+    use agent_access_provider::Decision;
 
     #[test]
     fn oauth_recovery_states_have_distinct_invocation_errors() {

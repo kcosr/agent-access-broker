@@ -6,13 +6,15 @@ mod output;
 #[cfg(test)]
 use agent_access_core::ExitPolicy;
 use agent_access_core::{
-    API_CATALOG_VERSION, ActionIo, AgentTokenServiceRestriction, ApiActionSpec, ApiCatalog,
-    CliConfig, CliTlsConfig, ConfigError, CredentialInputField, CredentialInputSchema,
-    HttpRouteSpec, InvokeRequest, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
-    ReadContentFormat, ResourceSelection, ResponseFormat, ResponseOptions, RouteAccess,
-    SEND_SCHEMA_VERSION, cli_exit_code_for_http_status, expand_current_user_home,
-    generic_send_schema, is_loopback_or_localhost, is_service_name, load_cli_config,
-    load_cli_tls_certificates, split_service_action, validate_cli_config, validate_cli_config_file,
+    API_CATALOG_VERSION, AgentTokenServiceRestriction, ApiActionSpec, ApiCatalog, CliConfig,
+    CliTlsConfig, CredentialInputField, CredentialInputSchema, HttpRouteSpec, InvokeRequest,
+    ResourceSelection, RouteAccess, SEND_SCHEMA_VERSION, cli_exit_code_for_http_status,
+    expand_current_user_home, generic_send_schema, load_cli_config, load_cli_tls_certificates,
+    split_service_action, validate_cli_config, validate_cli_config_file,
+};
+use agent_access_provider::{
+    ActionIo, ConfigError, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
+    ReadContentFormat, ResponseFormat, ResponseOptions, is_loopback_or_localhost, is_service_name,
 };
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -6889,7 +6891,8 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 );
                 // Like the Jira and Confluence attachment commands, this typed
                 // wrapper builds its request directly; the broker stays authoritative.
-                let plan = agent_access_core::attachment_upload_plan(&["project", "url"], Some(1));
+                let plan =
+                    agent_access_provider::attachment_upload_plan(&["project", "url"], Some(1));
                 run_upload_with_plan(
                     ctx,
                     "gitlab",
@@ -9829,7 +9832,7 @@ fn validate_discovery_prefix(prefix: Option<&str>) -> Result<()> {
 }
 
 fn validate_action_argument(action: &str) -> Result<()> {
-    if agent_access_core::is_action_name(action) {
+    if agent_access_provider::is_action_name(action) {
         Ok(())
     } else {
         anyhow::bail!("action name is invalid")
@@ -9855,7 +9858,7 @@ fn parse_discovery_service(
 
 fn discovery_actions(
     service: agent_access_core::mcp::DiscoveryServiceValue,
-) -> Result<Vec<(agent_access_core::ActionCapabilities, serde_json::Value)>> {
+) -> Result<Vec<(agent_access_provider::ActionCapabilities, serde_json::Value)>> {
     Ok(agent_access_core::mcp::discovery_actions(service)?)
 }
 
@@ -13986,7 +13989,7 @@ fn parse_token_action_restriction(
     if !is_service_name(service) {
         return Err(format!("token action service name is invalid: {service}"));
     }
-    if !agent_access_core::is_action_name(action) {
+    if !agent_access_provider::is_action_name(action) {
         return Err(format!("token action name is invalid: {action}"));
     }
     if action.starts_with(&format!("{service}.")) {
@@ -14097,7 +14100,7 @@ fn read_prompted_field(prompt_label: &str, field_name: &str, secret: bool) -> Re
 
 fn validate_service_and_name(service: &str, name: &str) {
     require_cli_input(validate_service_argument(service));
-    if !agent_access_core::is_action_name(name) {
+    if !agent_access_provider::is_action_name(name) {
         require_cli_input::<()>(Err(anyhow::anyhow!("credential name is invalid")));
     }
 }
@@ -18461,7 +18464,7 @@ mod tests {
     fn response_capabilities(
         service: &str,
         action: &str,
-    ) -> agent_access_core::ResponseCapabilities {
+    ) -> agent_access_provider::ResponseCapabilities {
         static CONFIG: std::sync::OnceLock<agent_access_core::BrokerConfig> =
             std::sync::OnceLock::new();
         let config = CONFIG.get_or_init(|| {
@@ -18500,7 +18503,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
             .get_kind(service)
             .expect("backend is configured")
             .descriptor();
-        agent_access_core::presentation::response_capabilities(
+        agent_access_provider::presentation::response_capabilities(
             descriptor
                 .action(action)
                 .and_then(|action| action.presentation.as_ref()),
@@ -22124,7 +22127,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn gitlab_send_upload_rejects_multiple_files() {
-        let plan = agent_access_core::attachment_upload_plan(&["project", "url"], Some(1));
+        let plan = agent_access_provider::attachment_upload_plan(&["project", "url"], Some(1));
         let files = ["first.html", "second.html"].map(|path| SendFileDescriptor {
             role: "attachment".to_string(),
             path: PathBuf::from(path),

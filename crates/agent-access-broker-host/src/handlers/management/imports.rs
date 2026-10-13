@@ -7,6 +7,11 @@ use super::common::{
 };
 use crate::state::AppState;
 use agent_access_core::*;
+use agent_access_provider::{
+    ExecutionCredential, ImportedActionDefinition, ImportedCredentialMode,
+    ImportedCredentialPurpose, ImportedDiscovery, ImportedDiscoveryCredential,
+    ImportedServiceDefinition, is_action_name, is_service_name,
+};
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
@@ -1213,6 +1218,7 @@ pub(crate) async fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::ImportedDiscoveredTool;
 
     #[test]
     fn scoped_preview_warnings_are_provisional_and_do_not_change_the_manifest() {

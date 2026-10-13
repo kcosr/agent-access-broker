@@ -42,7 +42,7 @@ impl BrokerMcp {
 }
 
 pub(crate) fn parse_service(value: &str) -> Result<String, String> {
-    if agent_access_core::is_service_name(value) {
+    if agent_access_provider::is_service_name(value) {
         Ok(value.to_owned())
     } else {
         Err("service must be one canonical service ID".into())

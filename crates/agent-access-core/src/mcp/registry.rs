@@ -165,7 +165,7 @@ impl ToolRegistry {
             let service = matching
                 .next()
                 .ok_or(ProjectionError("service view is unavailable"))?;
-            if !crate::is_service_name(selected)
+            if !agent_access_provider::is_service_name(selected)
                 || matching.next().is_some()
                 || service.surface != "invoke"
                 || (service.actions.is_empty()
@@ -446,7 +446,7 @@ impl ScopedMcpReadiness {
 /// `descriptor` must already contain all active actions before caller filtering.
 /// This is infallible: scoped incompatibility never blocks aggregate publication.
 pub fn evaluate_scoped_mcp_readiness(
-    descriptor: &crate::ServiceDescriptor,
+    descriptor: &agent_access_provider::ServiceDescriptor,
     max_bytes: usize,
 ) -> ScopedMcpReadiness {
     let Some(service) = crate::api_service_spec(descriptor, false) else {
@@ -487,7 +487,9 @@ pub fn evaluate_scoped_mcp_readiness(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionDescriptor, ScopedMcpNameSource, ServiceDescriptor, ServiceSurface};
+    use agent_access_provider::{
+        ActionDescriptor, ScopedMcpNameSource, ServiceDescriptor, ServiceSurface,
+    };
 
     fn descriptor() -> ServiceDescriptor {
         let mut action = ActionDescriptor::new("accepted.read", "Read", json!({"type":"object"}));
@@ -618,9 +620,9 @@ mod tests {
     #[test]
     fn aggregate_classifies_http_ineligible_actions_before_filtering() {
         let mut descriptor = colliding_descriptor();
-        descriptor.actions[1].io = crate::ActionIo::RawDownload {
+        descriptor.actions[1].io = agent_access_provider::ActionIo::RawDownload {
             metadata_header: "X-Metadata".into(),
-            metadata_encoding: crate::HeaderEncoding::Base64Json,
+            metadata_encoding: agent_access_provider::HeaderEncoding::Base64Json,
         };
         let mut catalog = catalog(&descriptor, false);
         let registry = ToolRegistry::build(
@@ -862,9 +864,9 @@ mod tests {
         let mut descriptor = descriptor();
         let mut hidden_file = descriptor.actions[0].clone();
         hidden_file.action = "download".into();
-        hidden_file.io = crate::ActionIo::RawDownload {
+        hidden_file.io = agent_access_provider::ActionIo::RawDownload {
             metadata_header: "X-Metadata".into(),
-            metadata_encoding: crate::HeaderEncoding::Base64Json,
+            metadata_encoding: agent_access_provider::HeaderEncoding::Base64Json,
         };
         descriptor.actions.push(hidden_file);
         let readiness = evaluate_scoped_mcp_readiness(&descriptor, STDIO_MAX_CATALOG_BYTES);

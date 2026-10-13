@@ -7,8 +7,9 @@ use crate::handlers::management::common::{
 };
 use agent_access_core::{
     BrokerRuntime, CredentialVerificationInput, CredentialWriteRequest, IdentityContext,
-    ManagedStoreError, ProviderError, ReasonCode, is_action_name, is_service_name,
+    ManagedStoreError,
 };
+use agent_access_provider::{ProviderError, ReasonCode, is_action_name, is_service_name};
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -634,7 +635,7 @@ pub(super) async fn verify_credential_for_principal(
             &verification_candidate.credential,
             &owner_identity,
             input,
-            agent_access_core::CorrelationContext::new(
+            agent_access_provider::CorrelationContext::new(
                 context.request_id.clone(),
                 context.broker_request_id.clone(),
             ),
@@ -798,7 +799,7 @@ mod tests {
 
     #[test]
     fn verification_failure_persistence_records_upstream_throttling() {
-        let error = agent_access_core::upstream_rate_limited("jira", None)
+        let error = agent_access_provider::upstream_rate_limited("jira", None)
             .with_upstream(Some(429), Some(1));
 
         assert!(verification_error_records_failure(&error));

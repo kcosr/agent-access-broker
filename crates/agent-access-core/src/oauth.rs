@@ -21,11 +21,11 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{
-    AuthorizationRequest, BackendRegistry, CodeExchange, CredentialKeyRing,
-    EgressProxyRuntimeConfig, InvocationScope, IssuedRefreshToken, ManagedStore, ManagedStoreError,
-    OAuthCallbackIssuer, OAuthClient, OAuthDialect, OAuthDialectError, OAuthHttp,
-    OAuthPermissionProfile, OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget,
+use crate::{BackendRegistry, CredentialKeyRing, ManagedStore, ManagedStoreError};
+use agent_access_provider::{
+    AuthorizationRequest, CodeExchange, EgressProxyRuntimeConfig, InvocationScope,
+    IssuedRefreshToken, OAuthCallbackIssuer, OAuthClient, OAuthDialect, OAuthDialectError,
+    OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget,
     OutboundTlsConfig, PreparedOutboundTls, ProviderLimits, RefreshReplay, TokenGrant,
     UPSTREAM_RETRY_AFTER_MAX_SECONDS, UpstreamNetwork,
 };
@@ -288,7 +288,7 @@ impl OAuthConfig {
                 registration.allow_insecure_loopback,
             )?;
             let reference = &registration.client_secret_ref;
-            if registration.client_auth == crate::OAuthClientAuth::None {
+            if registration.client_auth == agent_access_provider::OAuthClientAuth::None {
                 if !reference.is_empty() {
                     return Err(OAuthError::Configuration);
                 }
@@ -358,7 +358,7 @@ fn bounded(value: &str, max: usize) -> bool {
 }
 fn checked_url(raw: &str, insecure: bool) -> Result<Url, OAuthError> {
     let url = Url::parse(raw).map_err(|_| OAuthError::Configuration)?;
-    let loopback = crate::is_literal_loopback(&url);
+    let loopback = agent_access_provider::is_literal_loopback(&url);
     if !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -647,13 +647,18 @@ impl OAuthManager {
             dialect
                 .validate_registration(registration)
                 .map_err(|_| OAuthError::Configuration)?;
-            let secret = if registration.client_auth == crate::OAuthClientAuth::None {
+            let secret = if registration.client_auth == agent_access_provider::OAuthClientAuth::None
+            {
                 String::new()
             } else {
-                crate::load_secret_ref_value("OAuth application", &registration.client_secret_ref)
-                    .map_err(|_| OAuthError::ApplicationCredential)?
+                agent_access_provider::load_secret_ref_value(
+                    "OAuth application",
+                    &registration.client_secret_ref,
+                )
+                .map_err(|_| OAuthError::ApplicationCredential)?
             };
-            if registration.client_auth != crate::OAuthClientAuth::None && !bounded(&secret, 16384)
+            if registration.client_auth != agent_access_provider::OAuthClientAuth::None
+                && !bounded(&secret, 16384)
             {
                 return Err(OAuthError::ApplicationCredential);
             }
@@ -1969,7 +1974,9 @@ fn make_lease(
 mod tests {
     use super::*;
     use crate::managed_store::oauth::{test_fixture, test_sql};
-    use crate::{OAuthAdapter, OAuthClientAuth, OAuthRotation, OAuthTokenEncoding, ReasonCode};
+    use agent_access_provider::{
+        OAuthAdapter, OAuthClientAuth, OAuthRotation, OAuthTokenEncoding, ReasonCode,
+    };
     use std::sync::atomic::AtomicUsize;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1977,8 +1984,8 @@ mod tests {
     // Tests core's mode-aware lifecycle without changing the production stub's
     // explicit-scope contract or coupling core to a protocol adapter.
     struct DefaultScopeDialect;
-    static DEFAULT_SCOPE_DIALECT: crate::OAuthDialectRegistration =
-        crate::OAuthDialectRegistration {
+    static DEFAULT_SCOPE_DIALECT: agent_access_provider::OAuthDialectRegistration =
+        agent_access_provider::OAuthDialectRegistration {
             id: "default_scope_fixture",
             development_only: true,
             dialect: &DefaultScopeDialect,
@@ -2062,8 +2069,8 @@ mod tests {
             _http: &OAuthHttp,
             _client: &OAuthClient<'_>,
             _access_token: &str,
-        ) -> Result<crate::ConnectedIdentity, OAuthDialectError> {
-            Ok(crate::ConnectedIdentity {
+        ) -> Result<agent_access_provider::ConnectedIdentity, OAuthDialectError> {
+            Ok(agent_access_provider::ConnectedIdentity {
                 subject: None,
                 display_name: "Example connection".into(),
             })

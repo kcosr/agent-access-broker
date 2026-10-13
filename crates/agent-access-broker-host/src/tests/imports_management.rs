@@ -2,6 +2,7 @@
 use super::imports_foundation::{Fixture, definition, fixture, update};
 use super::*;
 use agent_access_core::*;
+use agent_access_provider::ImportedDiscoveryCredential;
 
 fn admin_token(fixture: &Fixture) -> String {
     admin_token_for(fixture, "admin")

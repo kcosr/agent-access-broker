@@ -27,8 +27,9 @@ pub fn backend_registry() -> BackendRegistry {
     ])
     .expect("linked OAuth dialects register consistently")
     .with_imported_adapters([
-        &agent_access_mcp_upstream::McpAdapter as &dyn agent_access_core::ImportedAdapter,
-        &agent_access_openapi_upstream::OpenApiAdapter as &dyn agent_access_core::ImportedAdapter,
+        &agent_access_mcp_upstream::McpAdapter as &dyn agent_access_provider::ImportedAdapter,
+        &agent_access_openapi_upstream::OpenApiAdapter
+            as &dyn agent_access_provider::ImportedAdapter,
     ])
     .expect("linked imported adapters register consistently")
 }

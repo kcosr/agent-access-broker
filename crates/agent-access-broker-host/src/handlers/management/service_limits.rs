@@ -14,10 +14,8 @@ use super::common::{
     management_write_audit_preflight,
 };
 use crate::state::AppState;
-use agent_access_core::{
-    InvocationLimit, InvocationLimitError, PrincipalServiceLimitWriteRequest, ReasonCode,
-    is_service_name,
-};
+use agent_access_core::{InvocationLimit, InvocationLimitError, PrincipalServiceLimitWriteRequest};
+use agent_access_provider::{ReasonCode, is_service_name};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};

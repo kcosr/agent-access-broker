@@ -8,8 +8,9 @@ use agent_access_cloudbees_ci::{
 use agent_access_core::{
     AuditConfig, BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig,
     IdentityConfig, IdentitySourceConfig, LimitsConfig, PolicyConfig, PolicyGrantConfig,
-    RESULT_METADATA_HEADER, ResourceSelector, StaticPrincipalConfig,
+    StaticPrincipalConfig,
 };
+use agent_access_provider::{RESULT_METADATA_HEADER, ResourceSelector};
 use base64::Engine;
 use common::{resource_catalog, resource_selection};
 use serde_json::{Value, json};

@@ -1,6 +1,11 @@
 //! Personal imported OAuth through real scoped HTTP and stdio MCP connections.
 use super::{BrokerTask, McpProcess};
 use agent_access_core::*;
+use agent_access_provider::{
+    ImportedActionDefinition, ImportedAuthMechanism, ImportedBindingStatus,
+    ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
+    ImportedCredentialPurpose, ImportedDiscoveryCredential, ImportedServiceDefinition,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

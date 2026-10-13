@@ -59,7 +59,9 @@ const GOLDEN_IMPORTED_SLOT: (&str, &str, &str, &str) = (
 );
 
 fn golden_definitions() -> Vec<ImportedServiceDefinition> {
-    use crate::{ImportedAuthMechanism, ImportedBindingStatus, ImportedInvocationLimit};
+    use agent_access_provider::{
+        ImportedAuthMechanism, ImportedBindingStatus, ImportedInvocationLimit,
+    };
     let binding = |owner_mode, mechanism, delivery, status| ImportedCredentialBinding {
         owner_mode,
         mechanism,
@@ -205,18 +207,18 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
     ]
 }
 
-fn golden_discovery() -> crate::ImportedDiscovery {
+fn golden_discovery() -> agent_access_provider::ImportedDiscovery {
     let actions = golden_actions();
-    crate::ImportedDiscovery {
+    agent_access_provider::ImportedDiscovery {
         protocol_version: "openapi-3.1".into(),
         metadata: json!({"title":"Golden Inventory","version":"1"}),
         tools: vec![
-            crate::ImportedDiscoveredTool {
+            agent_access_provider::ImportedDiscoveredTool {
                 definition: actions[0].definition.clone(),
                 unsupported_reason: None,
                 read_only_hint: Some(true),
             },
-            crate::ImportedDiscoveredTool {
+            agent_access_provider::ImportedDiscoveredTool {
                 definition: actions[1].definition.clone(),
                 unsupported_reason: Some("combined security requirements are unsupported".into()),
                 read_only_hint: None,
@@ -409,7 +411,8 @@ fn baseline_imported_rows_remain_readable() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        serde_json::from_value::<crate::ImportedDiscovery>(stored.manifest).unwrap(),
+        serde_json::from_value::<agent_access_provider::ImportedDiscovery>(stored.manifest)
+            .unwrap(),
         golden_discovery()
     );
     assert_eq!(

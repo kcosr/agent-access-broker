@@ -1,5 +1,5 @@
 //! Shared catalog selectors and live resource-group authorization boundaries.
-use crate::{ResourceSelector, ResourceType, ResourceTypeRegistry};
+use agent_access_provider::{ResourceSelector, ResourceType, ResourceTypeRegistry};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -401,7 +401,7 @@ mod tests {
         ResourceDefinition {
             id: id.into(),
             display_name: None,
-            resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
             selector,
             allowed_execution_contexts: contexts.iter().map(|c| (*c).into()).collect(),
             enabled,
@@ -603,7 +603,7 @@ mod tests {
         let catalog = ResourceCatalog::new(&resources, &groups).unwrap();
         let boundary = catalog.resolve(
             &selection(&["special"], &["wide", "special"]),
-            &crate::GIT_REPOSITORY_RESOURCE.id,
+            &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
             "external",
         );
         assert!(boundary.matches("engineering/new"));
@@ -612,7 +612,7 @@ mod tests {
         assert!(!boundary.is_empty());
         let separate = catalog.resolve(
             &selection(&[], &["special"]),
-            &crate::GIT_REPOSITORY_RESOURCE.id,
+            &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
             "external",
         );
         assert!(separate.matches("private/special"));
@@ -636,8 +636,11 @@ mod tests {
             selection(&[], &["empty"]),
             selection(&["missing"], &[]),
         ] {
-            let boundary =
-                catalog.resolve(&selected, &crate::GIT_REPOSITORY_RESOURCE.id, "internal");
+            let boundary = catalog.resolve(
+                &selected,
+                &agent_access_provider::GIT_REPOSITORY_RESOURCE.id,
+                "internal",
+            );
             assert!(boundary.is_empty());
             assert!(!boundary.matches("engineering/repo"));
         }
@@ -754,7 +757,7 @@ resources = { resource_group_ids = ["team"] }
         assert_eq!(config.grants[0].resources.resource_group_ids, ["team"]);
         assert_eq!(
             config.resources[0].resource_type,
-            crate::GIT_REPOSITORY_RESOURCE.id.clone()
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone()
         );
         let json = serde_json::to_value(&config.resources[0]).unwrap();
         assert_eq!(json["resourceType"], "git_repository");
@@ -786,7 +789,10 @@ resources = { resource_group_ids = ["team"] }
     }
     #[test]
     fn canonical_target_validation_rejects_aliases_and_missing_containment() {
-        assert!(crate::GIT_REPOSITORY_RESOURCE.is_canonical_target("engineering/payments"));
+        assert!(
+            agent_access_provider::GIT_REPOSITORY_RESOURCE
+                .is_canonical_target("engineering/payments")
+        );
         for invalid in [
             "",
             "42",
@@ -796,7 +802,7 @@ resources = { resource_group_ids = ["team"] }
             "https://git.example/repo",
             "engineering/a b",
         ] {
-            assert!(!crate::GIT_REPOSITORY_RESOURCE.is_canonical_target(invalid));
+            assert!(!agent_access_provider::GIT_REPOSITORY_RESOURCE.is_canonical_target(invalid));
         }
         assert!(agent_access_jira::JIRA_PROJECT_RESOURCE.is_canonical_target("ENG"));
         assert!(!agent_access_jira::JIRA_PROJECT_RESOURCE.is_canonical_target("eng"));

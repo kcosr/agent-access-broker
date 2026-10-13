@@ -28,25 +28,27 @@ mod resource_management;
 use crate::fs_permissions;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
 use crate::{
-    ActionDescriptor, AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig,
-    BrokerTokenClass, BrokerTokenHasher, BrowserCsrfKey, ConfigError, CredentialConfig,
-    CredentialDescriptor, CredentialKeyRing, DEFAULT_EXECUTION_CONTEXT, Decision,
-    EgressProxyEnvironment, EgressProxyRuntimeConfig, ExecutionContext, GatewayConfig,
-    InitialAdminBootstrapRequest, LocalPasswordHasher, LookupRequirement,
-    ManagedPolicyGrantCreateRequest, ManagedPolicyGrantPatchRequest, ManagedPolicyGrantRecord,
-    ManagedPolicyGrantStatusRequest, ManagedPolicyGrantSubjectAddRequest,
+    AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig, BrokerTokenClass,
+    BrokerTokenHasher, BrowserCsrfKey, CredentialConfig, CredentialKeyRing,
+    DEFAULT_EXECUTION_CONTEXT, ExecutionContext, GatewayConfig, InitialAdminBootstrapRequest,
+    LocalPasswordHasher, ManagedPolicyGrantCreateRequest, ManagedPolicyGrantPatchRequest,
+    ManagedPolicyGrantRecord, ManagedPolicyGrantStatusRequest, ManagedPolicyGrantSubjectAddRequest,
     ManagedPolicyGrantSubjectRemoveRequest, ManagedPolicyMutationResult,
     ManagedPolicySubjectCatalog, ManagedResourceCatalog, ManagedStore, ManagedStoreError,
     ManagedStoreOpenMode, NormalizedPolicyGrant, NormalizedPolicyGrantIssueField,
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
-    PolicyValidationIssue, PolicyWriteScope, ReasonCode, ResourceBoundary, ResourceCatalog,
-    ResourceDefinition, ResourceGroupDefinition, ResourceScopes, ResourceSelection,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry, ResponseEnvelope,
-    ServiceDescriptor, ServiceSurface, api_service_spec, apply_reqwest_proxy,
+    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
+    ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
     credential_mode_available, is_safe_identifier, is_safe_principal,
     normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use agent_access_provider::*;
+use agent_access_provider::{
+    ActionDescriptor, ConfigError, CredentialDescriptor, Decision, EgressProxyEnvironment,
+    EgressProxyRuntimeConfig, LookupRequirement, ReasonCode, ResourceScopes, ResourceSelector,
+    ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry, ServiceDescriptor, ServiceSurface,
+    apply_reqwest_proxy,
+};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use chrono::Utc;
@@ -526,9 +528,9 @@ pub struct InvokeRequest {
     #[serde(default = "empty_json_object")]
     pub inputs: Value,
     #[serde(default)]
-    pub read_content_format: crate::ReadContentFormat,
+    pub read_content_format: agent_access_provider::ReadContentFormat,
     #[serde(default)]
-    pub response_format: crate::ResponseFormat,
+    pub response_format: agent_access_provider::ResponseFormat,
     #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
 }
@@ -537,14 +539,14 @@ impl InvokeRequest {
     pub fn new(inputs: Value) -> Self {
         Self {
             inputs,
-            read_content_format: crate::ReadContentFormat::Native,
-            response_format: crate::ResponseFormat::Json,
+            read_content_format: agent_access_provider::ReadContentFormat::Native,
+            response_format: agent_access_provider::ResponseFormat::Json,
             body_parts: Vec::new(),
         }
     }
 
-    fn response_options(&self) -> crate::ResponseOptions {
-        crate::ResponseOptions {
+    fn response_options(&self) -> agent_access_provider::ResponseOptions {
+        agent_access_provider::ResponseOptions {
             read_content_format: self.read_content_format,
             response_format: self.response_format,
         }
@@ -1201,7 +1203,7 @@ fn preserve_result_metadata_on_error(
 
 fn present_provider_outcome(
     presentation: Option<&ActionPresentation>,
-    options: crate::ResponseOptions,
+    options: agent_access_provider::ResponseOptions,
     max_body_bytes: u64,
     max_result_bytes: u64,
     outcome: Result<ProviderResult, ProviderError>,
@@ -1485,7 +1487,7 @@ pub struct BrokerRuntime {
     browser_csrf_key: Option<BrowserCsrfKey>,
     microsoft_oidc: Option<MicrosoftOidcRuntimeConfig>,
     egress_proxy_environment: Arc<EgressProxyEnvironment>,
-    outbound_tls: crate::PreparedOutboundTls,
+    outbound_tls: agent_access_provider::PreparedOutboundTls,
     audit: AuditSink,
     audit_registry: Arc<AuditRuntimeRegistry>,
     /// The effective node ID; see [`crate::resolve_node_id`].
@@ -1513,7 +1515,7 @@ pub struct PreparedInvocation {
     resource_binding: Option<crate::ResourceAttributeBinding>,
     provider: Arc<dyn Provider>,
     invocation: ProviderInvocation,
-    response_options: crate::ResponseOptions,
+    response_options: agent_access_provider::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -1637,7 +1639,8 @@ impl BrokerRuntime {
     ) -> Result<Self, RuntimeError> {
         validate_broker_config(&config)?;
         preflight_configured_egress_proxies(&config)?;
-        let outbound_tls = crate::PreparedOutboundTls::load(&config.network.outbound_tls)?;
+        let outbound_tls =
+            agent_access_provider::PreparedOutboundTls::load(&config.network.outbound_tls)?;
         let egress_proxy = EgressProxyRuntimeConfig::new(
             Arc::clone(&egress_proxy_environment),
             config.network.egress_proxy.clone(),
@@ -1660,9 +1663,9 @@ impl BrokerRuntime {
                 egress: &egress_proxy,
                 outbound_tls: &outbound_tls,
                 attribution: config.attribution.for_service(&descriptor),
-                stable_signing_key: stable_signing_key
-                    .clone()
-                    .map(|key| crate::service_signing_key(key, &descriptor.service)),
+                stable_signing_key: stable_signing_key.clone().map(|key| {
+                    agent_access_provider::service_signing_key(key, &descriptor.service)
+                }),
             };
             providers.push(ServiceProvider::new(descriptor, backend.build(&host)?));
         }
@@ -1692,7 +1695,8 @@ impl BrokerRuntime {
             .map(BrokerTokenHasher::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
-        let outbound_tls = crate::PreparedOutboundTls::load(&config.network.outbound_tls)?;
+        let outbound_tls =
+            agent_access_provider::PreparedOutboundTls::load(&config.network.outbound_tls)?;
         Self::with_providers_and_identity_reuse(
             config,
             providers,
@@ -1711,7 +1715,7 @@ impl BrokerRuntime {
         egress_proxy_environment: Arc<EgressProxyEnvironment>,
         broker_token_hasher: Option<BrokerTokenHasher>,
         audit_registry: Arc<AuditRuntimeRegistry>,
-        outbound_tls: crate::PreparedOutboundTls,
+        outbound_tls: agent_access_provider::PreparedOutboundTls,
     ) -> Result<Self, RuntimeError> {
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
         validate_broker_config(&config)?;
@@ -2498,7 +2502,7 @@ impl BrokerRuntime {
         self.browser_csrf_key.as_ref()
     }
 
-    pub fn outbound_tls(&self) -> &crate::PreparedOutboundTls {
+    pub fn outbound_tls(&self) -> &agent_access_provider::PreparedOutboundTls {
         &self.outbound_tls
     }
 
@@ -3217,7 +3221,7 @@ impl BrokerRuntime {
     }
 
     /// Resource types this broker understands, for catalogs and clients.
-    pub fn resource_type_metadata(&self) -> Vec<crate::ResourceTypeMetadata> {
+    pub fn resource_type_metadata(&self) -> Vec<agent_access_provider::ResourceTypeMetadata> {
         self.resource_types.metadata()
     }
 
@@ -3866,9 +3870,11 @@ impl BrokerRuntime {
     ) -> Result<(), Box<BrokerResponse<Value>>> {
         let append_mode = prepared.take_gateway_audit_append_mode();
         let result = if upstream_status == 429 {
-            Err(crate::upstream_rate_limited(&prepared.service, None)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_audit(audit))
+            Err(
+                agent_access_provider::upstream_rate_limited(&prepared.service, None)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_audit(audit),
+            )
         } else {
             Ok(ProviderResult {
                 result: json!({"gateway": "completed"}),
@@ -4076,7 +4082,10 @@ impl BrokerRuntime {
         })?;
 
         let upstream_url = git_discovery_verification_url(gateway, repository)?;
-        if !crate::url_allowed_by_patterns(&upstream_url, &gateway.allowed_upstream_hosts) {
+        if !agent_access_provider::url_allowed_by_patterns(
+            &upstream_url,
+            &gateway.allowed_upstream_hosts,
+        ) {
             return Err(ProviderError::error(
                 ReasonCode::GatewayUpstreamDenied,
                 "gateway upstream URL is not allowed",
@@ -4374,7 +4383,7 @@ impl BrokerRuntime {
             )));
         };
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != crate::ResponseOptions::default()
+        if response_options != agent_access_provider::ResponseOptions::default()
             && let Err(error) = agent_access_provider::presentation::validate_response_options(
                 action_descriptor.presentation.as_ref(),
                 response_options,
@@ -6097,7 +6106,7 @@ fn normalize_git_verification_repository(
                 "git credential verification requires repository",
             )
         })?;
-    if !crate::is_repository_selector_path(repository) {
+    if !agent_access_provider::is_repository_selector_path(repository) {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
             "git credential verification repository is invalid",
@@ -6122,7 +6131,7 @@ fn normalize_git_verification_repository(
         *last = stripped.to_string();
     }
     let repository = segments.join("/");
-    if !crate::is_repository_selector_path(&repository) {
+    if !agent_access_provider::is_repository_selector_path(&repository) {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
             "git credential verification repository is invalid",
@@ -6461,7 +6470,7 @@ pub(crate) fn gateway_service_descriptor(
         resource_scopes: BTreeMap::from([(
             "repository".to_string(),
             ResourceScopeCapabilities {
-                resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
                 selectors: vec![
                     "exact".to_string(),
                     "namespace".to_string(),
@@ -9599,10 +9608,10 @@ pub fn split_service_action(value: &str) -> Result<(String, String), String> {
     if service.is_empty() || action.is_empty() {
         return Err("service action must include non-empty service and action".to_string());
     }
-    if !crate::is_service_name(service) {
+    if !agent_access_provider::is_service_name(service) {
         return Err("service action contains an invalid service name".to_string());
     }
-    if !crate::is_action_name(action) {
+    if !agent_access_provider::is_action_name(action) {
         return Err("service action contains an invalid action name".to_string());
     }
     Ok((service.to_string(), action.to_string()))

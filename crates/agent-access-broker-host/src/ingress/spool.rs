@@ -1,4 +1,4 @@
-use agent_access_core::{ProviderError, ReasonCode};
+use agent_access_provider::{ProviderError, ReasonCode};
 use std::collections::BTreeMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};

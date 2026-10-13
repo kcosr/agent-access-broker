@@ -519,7 +519,7 @@ fn audit_commands_reject_a_literal_token_and_file_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generic_send_discovers_and_reads_both_audit_option_routes() {
     let server = MockServer::start().await;
-    let types = agent_access_core::ResourceTypeRegistry::new([]).unwrap();
+    let types = agent_access_provider::ResourceTypeRegistry::new([]).unwrap();
     let routes = agent_access_core::http_route_specs(&types)
         .into_iter()
         .filter(|route| {

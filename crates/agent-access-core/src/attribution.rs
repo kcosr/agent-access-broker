@@ -1,4 +1,4 @@
-use crate::{
+use agent_access_provider::{
     ProviderAttributionConfig, ServiceDescriptor, matching_attribution_capabilities,
     validate_attribution_pattern,
 };
@@ -70,20 +70,23 @@ pub(crate) fn validate_attribution_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AttributionCapability, AttributionRepresentation, AttributionVerb};
+    use agent_access_provider::{
+        AttributionCapability, AttributionRepresentation, AttributionVerb,
+    };
     use serde_json::json;
 
     fn descriptor(actions: &[(&str, Option<AttributionCapability>)]) -> ServiceDescriptor {
         ServiceDescriptor {
             service: "example".to_string(),
             display_name: "Example".to_string(),
-            surface: crate::ServiceSurface::Invoke,
+            surface: agent_access_provider::ServiceSurface::Invoke,
             resource_scopes: BTreeMap::new(),
             actions: actions
                 .iter()
                 .map(|(action, capability)| {
-                    let descriptor = crate::ActionDescriptor::new(*action, "test", json!({}))
-                        .credential_modes(["service"]);
+                    let descriptor =
+                        agent_access_provider::ActionDescriptor::new(*action, "test", json!({}))
+                            .credential_modes(["service"]);
                     match capability {
                         Some(capability) => descriptor.attribution(*capability),
                         None => descriptor,

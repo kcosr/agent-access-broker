@@ -6,10 +6,10 @@ use agent_access_broker_host::build_router;
 use agent_access_core::{
     BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, EXECUTION_CONTEXT_HEADER,
     ExecutionContextConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
-    PolicyConfig, PolicyGrantConfig, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ResourceSelector,
-    StaticPrincipalConfig,
+    PolicyConfig, PolicyGrantConfig, StaticPrincipalConfig,
 };
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
+use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ResourceSelector};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rustls::pki_types::pem::PemObject;

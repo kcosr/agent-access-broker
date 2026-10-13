@@ -1,3 +1,13 @@
+use agent_access_provider::{
+    BackendConfig, ConfigError, CredentialDescriptor, DEFAULT_MAX_HTTP_BODY_BYTES,
+    DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES, DEFAULT_REQUEST_TIMEOUT_MS,
+    DEFAULT_STREAMING_IDLE_TIMEOUT_MS, Decision, EgressProxyConfig, OAuthScopeMode,
+    OutboundTlsConfig, PreparedOutboundTls, ProviderLimits, ReadContentFormat, ReasonCode,
+    ResourceScopes, ResourceSelector, ResourceTypeRegistry, ResponseFormat, ServiceCredentialKinds,
+    ServiceDescriptor, ValidationContext, default_download_max_bytes, is_action_name, is_env_name,
+    is_loopback_or_localhost, is_secret_ref, is_service_name, parse_strict_certificate_pem_bundle,
+    validate_egress_proxy_config, validate_upstream_allowlist,
+};
 use attribution::validate_attribution_config;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -32,7 +42,6 @@ mod state_lock;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use agent_access_provider::*;
 pub use api::*;
 pub use attribution::AttributionConfig;
 pub use audit_query::*;

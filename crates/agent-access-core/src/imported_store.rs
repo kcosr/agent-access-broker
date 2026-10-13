@@ -1,7 +1,7 @@
 //! Transactional imported-service definitions and service-owned encrypted tokens.
 //! No imported credential is represented by a synthetic principal.
 use super::*;
-use crate::{
+use agent_access_provider::{
     IMPORT_MAX_MANIFEST_BYTES, IMPORT_MAX_SERVICES, IMPORT_MAX_TOOLS, IMPORT_PREVIEW_TTL_SECONDS,
     ImportedActionDefinition, ImportedCredentialPurpose, ImportedServiceDefinition,
 };
@@ -333,7 +333,10 @@ impl ManagedStore {
             let changed = old_action
                 .is_none_or(|v| v.definition != action.definition || v.status != action.status);
             let version = old_action.map_or(1, |v| v.version + u64::from(changed));
-            let definition_json = bounded_json(&action.definition, crate::IMPORT_MAX_TOOL_BYTES)?;
+            let definition_json = bounded_json(
+                &action.definition,
+                agent_access_provider::IMPORT_MAX_TOOL_BYTES,
+            )?;
             let hash = sha256_hex(definition_json.as_bytes());
             let source =
                 serde_json::to_string(&action.definition.source).map_err(|_| invalid_data())?;
@@ -443,7 +446,8 @@ fn require_discovery_owner(
     definition: &ImportedServiceDefinition,
     actor: &str,
 ) -> Result<(), ManagedStoreError> {
-    if let crate::ImportedDiscoveryCredential::PerUser { principal } = &definition.discovery
+    if let agent_access_provider::ImportedDiscoveryCredential::PerUser { principal } =
+        &definition.discovery
         && principal != actor
     {
         return Err(ManagedStoreError::RightMissing);
@@ -478,11 +482,11 @@ pub(super) fn admin_oauth_admission(
         return Ok(false);
     };
     Ok(
-        matches!(&record.definition.discovery, crate::ImportedDiscoveryCredential::PerUser { principal } if principal == actor)
+        matches!(&record.definition.discovery, agent_access_provider::ImportedDiscoveryCredential::PerUser { principal } if principal == actor)
             && record.definition.execution_bindings.iter().any(|b| {
                 b.is_supported()
-                    && b.owner_mode == crate::ImportedCredentialMode::PerUser
-                    && b.mechanism == crate::ImportedAuthMechanism::Oauth
+                    && b.owner_mode == agent_access_provider::ImportedCredentialMode::PerUser
+                    && b.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth
             }),
     )
 }
@@ -518,26 +522,26 @@ fn discovery_versions(
             .ok_or(ManagedStoreError::CredentialNotFound)
     };
     match &record.definition.discovery {
-        crate::ImportedDiscoveryCredential::Anonymous => {}
-        crate::ImportedDiscoveryCredential::Execution => {
+        agent_access_provider::ImportedDiscoveryCredential::Anonymous => {}
+        agent_access_provider::ImportedDiscoveryCredential::Execution => {
             versions.insert(
                 "execution".into(),
                 slot(ImportedCredentialPurpose::Execution)?,
             );
         }
-        crate::ImportedDiscoveryCredential::Slot => {
+        agent_access_provider::ImportedDiscoveryCredential::Slot => {
             versions.insert(
                 "discovery".into(),
                 slot(ImportedCredentialPurpose::Discovery)?,
             );
         }
-        crate::ImportedDiscoveryCredential::PerUser { principal } => {
+        agent_access_provider::ImportedDiscoveryCredential::PerUser { principal } => {
             if principal_by_id_without_groups(conn, principal)?.status != "active" {
                 return Err(ManagedStoreError::PrincipalDisabled);
             }
             let oauth = record.definition.execution_bindings.iter().find(|b| {
-                b.owner_mode == crate::ImportedCredentialMode::PerUser
-                    && b.mechanism == crate::ImportedAuthMechanism::Oauth
+                b.owner_mode == agent_access_provider::ImportedCredentialMode::PerUser
+                    && b.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth
             });
             if let Some(binding) = oauth {
                 let registration = binding
@@ -775,7 +779,10 @@ fn service_record(
         serde_json::from_str(&definition).map_err(|_| invalid_data())?;
     // Evolving adapter/config validation must not make retained records unreadable.
     // The runtime marks unsupported records unavailable; administrators can retire them.
-    if service == "broker" || definition.service != service || !crate::is_service_name(service) {
+    if service == "broker"
+        || definition.service != service
+        || !agent_access_provider::is_service_name(service)
+    {
         return Err(invalid_data());
     }
     let status = serde_json::from_value(Value::String(status)).map_err(|_| invalid_data())?;
@@ -1144,7 +1151,7 @@ pub(super) fn validate_structure_with_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use agent_access_provider::{
         ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
         ImportedDiscoveryCredential,
     };
@@ -1662,7 +1669,13 @@ mod tests {
         // Each definition fits its own 256 KiB bound. The aggregate retention
         // allowance independently bounds schema/annotation storage.
         retired.definition.annotations = json!({"payload":"x".repeat(200 * 1024)});
-        assert!(bounded_json(&retired.definition, crate::IMPORT_MAX_TOOL_BYTES).is_ok());
+        assert!(
+            bounded_json(
+                &retired.definition,
+                agent_access_provider::IMPORT_MAX_TOOL_BYTES
+            )
+            .is_ok()
+        );
         let retired = vec![retired; 170];
         assert!(serde_json::to_vec(&retired).unwrap().len() > IMPORT_MAX_RETIRED_ACTION_BYTES);
         assert!(validate_action_capacity(&retired).is_err());

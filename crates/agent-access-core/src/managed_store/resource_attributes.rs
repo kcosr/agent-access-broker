@@ -1,6 +1,6 @@
 //! Private, versioned resource configuration. Plaintext never enters catalog records.
 use super::*;
-use crate::ResourceAttributes;
+use agent_access_provider::ResourceAttributes;
 
 struct AttributeRow {
     resource_id: String,

@@ -321,7 +321,7 @@ impl Handler {
                         .find(|s| s.service == service)
                         .and_then(|s| s.actions.iter().find(|a| a.action == name))
                         .ok_or("Action detail is unavailable in caller catalog; retry discovery")?;
-                    let common: agent_access_core::ActionCapabilities = serde_json::from_value(
+                    let common: agent_access_provider::ActionCapabilities = serde_json::from_value(
                         serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?,
                     )
                     .map_err(|_| "Invalid action schema")?;
@@ -571,11 +571,11 @@ impl ServerHandler for Handler {
 
 fn mcp_resource_type(
     args: &Map<String, Value>,
-) -> Result<Option<agent_access_core::ResourceType>, &'static str> {
+) -> Result<Option<agent_access_provider::ResourceType>, &'static str> {
     args.get("resourceType")
         .and_then(Value::as_str)
         .map(|value| {
-            agent_access_core::ResourceType::new(value).map_err(|_| "resourceType is invalid")
+            agent_access_provider::ResourceType::new(value).map_err(|_| "resourceType is invalid")
         })
         .transpose()
 }

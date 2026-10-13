@@ -5,12 +5,12 @@ use agent_access_core::{
     BrokerTokenClass, BrokerTokenIssueRequest, BrokerTokensConfig, BrowserAuthConfig,
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, LocalPasswordConfig,
     LocalPasswordWriteRequest, ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode,
-    ManagementConfig, OAuthAdapter, OAuthPermissionProfile, OAuthRegistrationConfig,
-    RightGrantRequest,
+    ManagementConfig, RightGrantRequest,
 };
 use agent_access_core::{
     ExecutionContext, GovernedOperationContext, InvokeRequest, OperationContext,
 };
+use agent_access_provider::{OAuthAdapter, OAuthPermissionProfile, OAuthRegistrationConfig};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use wiremock::matchers::{body_string_contains, header as header_is, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -120,7 +120,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
             permission_profiles: BTreeMap::from([(
                 "read".into(),
                 OAuthPermissionProfile {
-                    scope_mode: agent_access_core::OAuthScopeMode::Explicit,
+                    scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                     scopes: Some(vec!["records.read".into(), "offline_access".into()]),
                     audience: "records-api".into(),
                     target: "workspace-one".into(),

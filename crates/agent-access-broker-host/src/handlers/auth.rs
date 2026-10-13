@@ -8,11 +8,12 @@ use crate::observability;
 use crate::state::{AppState, RuntimeSnapshot};
 use agent_access_core::{
     AuditRecord, BrokerConfig, BrokerTokenClass, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL,
-    Decision, ErrorBody, IdentityContext, IdentityFailure, IdentitySourceAudit,
-    LocalPasswordChangeRequest, LocalPasswordVerifyRequest, ManagedStoreError, PolicyReadScope,
-    PrincipalRole, REQUEST_ID_HEADER, ReasonCode, ResourceScopes, RuntimeError, SignInMethods,
-    SourceContext, broker_token_ttl_option_for_ttl, new_broker_request_id, parse_ttl_seconds,
+    ErrorBody, IdentityContext, IdentityFailure, IdentitySourceAudit, LocalPasswordChangeRequest,
+    LocalPasswordVerifyRequest, ManagedStoreError, PolicyReadScope, PrincipalRole, RuntimeError,
+    SignInMethods, SourceContext, broker_token_ttl_option_for_ttl, new_broker_request_id,
+    parse_ttl_seconds,
 };
+use agent_access_provider::{Decision, REQUEST_ID_HEADER, ReasonCode, ResourceScopes};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::header::{CACHE_CONTROL, COOKIE, HOST, ORIGIN, REFERER, SET_COOKIE};

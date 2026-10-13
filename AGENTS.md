@@ -197,7 +197,8 @@ and audit checks through the real `agent-access` binary.
   host services backends use (upstream HTTP clients, egress proxy, outbound
   TLS, upstream allowlists, correlation, upstream trace events, token signing).
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
-  runtime; contains no backend. Re-exports the backend contract.
+  runtime; contains no backend. Crates that use backend-contract items import
+  them from `agent_access_provider` directly, not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP

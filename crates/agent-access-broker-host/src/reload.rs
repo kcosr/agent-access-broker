@@ -8,10 +8,11 @@ use crate::observability;
 use crate::state::{AppState, ReloadableState, RuntimeSnapshot};
 use agent_access_core::{
     AuditConfig, AuditRecord, AuditRuntimeRegistry, AuditStoreType, BackendRegistry, BrokerConfig,
-    BrokerRuntime, ConfigError, Decision, ReasonCode, ResourceScopes, RuntimeError, SourceContext,
-    StateLockSet, audit_file_identity_key, load_broker_config_with_raw, new_broker_request_id,
-    parse_broker_config_raw, resolve_node_id, validate_broker_config,
+    BrokerRuntime, RuntimeError, SourceContext, StateLockSet, audit_file_identity_key,
+    load_broker_config_with_raw, new_broker_request_id, parse_broker_config_raw, resolve_node_id,
+    validate_broker_config,
 };
+use agent_access_provider::{ConfigError, Decision, ReasonCode, ResourceScopes};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};

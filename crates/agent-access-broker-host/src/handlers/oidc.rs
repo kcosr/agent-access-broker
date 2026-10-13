@@ -14,10 +14,11 @@ use agent_access_core::microsoft_oidc::{
     validate_microsoft_oidc_identity,
 };
 use agent_access_core::{
-    AuditRecord, Decision, IdentityContext, ManagedStoreError, OidcCompleteLoginRequest,
-    OidcCompletionOutcome, OidcFlowClaimRequest, OidcFlowCreateRequest, ReasonCode, ResourceScopes,
-    SourceContext, parse_ttl_seconds,
+    AuditRecord, IdentityContext, ManagedStoreError, OidcCompleteLoginRequest,
+    OidcCompletionOutcome, OidcFlowClaimRequest, OidcFlowCreateRequest, SourceContext,
+    parse_ttl_seconds,
 };
+use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
 use axum::extract::{ConnectInfo, RawQuery, State};
 use axum::http::header::{CACHE_CONTROL, COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};

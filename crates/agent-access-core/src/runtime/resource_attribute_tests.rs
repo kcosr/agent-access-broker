@@ -1,9 +1,7 @@
 //! A backend unknown to core exercises the complete private-resource contract.
 use super::*;
-use crate::{
-    BackendConfig, BackendRegistration, BackendRegistry, CreateResourceRequest,
-    PatchResourceRequest, ProvidersConfig,
-};
+use crate::{BackendRegistry, CreateResourceRequest, PatchResourceRequest, ProvidersConfig};
+use agent_access_provider::{BackendConfig, BackendRegistration};
 use async_trait::async_trait;
 use std::sync::Mutex;
 

@@ -1,6 +1,6 @@
 //! The OAuth test provider's dialect: a development authorization server
 //! whose contract the refresh fences were designed against.
-use crate::{
+use agent_access_provider::{
     AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, OAuthCallbackIssuer,
     OAuthClient, OAuthClientAuth, OAuthDialect, OAuthDialectError, OAuthDialectRegistration,
     OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthRotation, OAuthTarget,
@@ -44,7 +44,8 @@ struct TokenResponse {
 #[async_trait]
 impl OAuthDialect for StubDialect {
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String> {
-        if config.client_auth == crate::OAuthClientAuth::None || !config.adapter_settings.is_empty()
+        if config.client_auth == agent_access_provider::OAuthClientAuth::None
+            || !config.adapter_settings.is_empty()
         {
             return Err(
                 "stub requires secret-post/basic client authentication and no adapter settings"
@@ -307,7 +308,7 @@ fn bounded(value: &str, max: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{OAuthAdapter, OAuthClientAuth, OAuthTokenEncoding};
+    use agent_access_provider::{OAuthAdapter, OAuthClientAuth, OAuthTokenEncoding};
     use serde_json::json;
 
     fn registration(rotation: OAuthRotation) -> OAuthRegistrationConfig {

@@ -1,7 +1,8 @@
 //! The shared gate for trusted username and fingerprint identities.
 use super::common::*;
 use crate::state::AppState;
-use agent_access_core::{ManagedStore, ManagedStoreError, ReasonCode};
+use agent_access_core::{ManagedStore, ManagedStoreError};
+use agent_access_provider::ReasonCode;
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},

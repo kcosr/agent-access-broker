@@ -5,9 +5,9 @@ use super::common::{
 };
 use crate::state::AppState;
 use agent_access_core::{
-    CorrelationContext, OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission,
-    OAuthReturnPath, ReasonCode, with_correlation_context,
+    OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission, OAuthReturnPath,
 };
+use agent_access_provider::{CorrelationContext, ReasonCode, with_correlation_context};
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -327,9 +327,9 @@ pub(crate) async fn callback(
     // A top-level provider redirect cannot attach the API correlation header.
     // Generate one only for this browser endpoint; supplied values still pass
     // the normal management validation and every identity/CSRF admission stays intact.
-    if !headers.contains_key(agent_access_core::REQUEST_ID_HEADER) {
+    if !headers.contains_key(agent_access_provider::REQUEST_ID_HEADER) {
         headers.insert(
-            agent_access_core::REQUEST_ID_HEADER,
+            agent_access_provider::REQUEST_ID_HEADER,
             HeaderValue::from_str(&format!(
                 "oauth-{}",
                 agent_access_core::new_broker_request_id()

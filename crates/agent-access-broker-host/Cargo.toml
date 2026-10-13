@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
+agent-access-provider = { path = "../agent-access-provider" }
 aes-gcm = "0.10.3"
 anyhow.workspace = true
 arc-swap.workspace = true

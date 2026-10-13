@@ -325,12 +325,12 @@ fn confluence_provider_config() -> ConfluenceProviderConfig {
             "https://example.atlassian.net/wiki/api/v2/**".to_string(),
             "https://example.atlassian.net/wiki/rest/api/**".to_string(),
         ],
-        attachments: agent_access_core::AttachmentLimitsConfig::default(),
+        attachments: agent_access_provider::AttachmentLimitsConfig::default(),
         content: agent_access_confluence::ConfluenceContentConfig {
             page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],
             ..agent_access_confluence::ConfluenceContentConfig::default()
         },
-        search: agent_access_core::SearchLimitsConfig::default(),
+        search: agent_access_provider::SearchLimitsConfig::default(),
     }
 }
 

@@ -153,23 +153,24 @@ fn imported_local_schema_refs_remain_scoped_in_send_openapi_and_mcp() {
 
 #[test]
 fn resource_attribute_schemas_require_private_fields_only_on_exact_creation() {
-    static RESOURCE: crate::ResourceTypeDescriptor = crate::ResourceTypeDescriptor {
-        action_inputs: None,
-        id: crate::ResourceType::from_static("test_destination"),
-        label: "Destination",
-        plural_label: "Destinations",
-        example: "alerts",
-        canonical: |_| true,
-        namespace: None,
-        attributes: &[crate::ResourceAttributeDescriptor {
-            name: "webhookUrl",
-            label: "Webhook URL",
-            description: "Private destination",
-            required: true,
-            validate: |_| true,
-        }],
-    };
-    let types = crate::ResourceTypeRegistry::new([&RESOURCE]).unwrap();
+    static RESOURCE: agent_access_provider::ResourceTypeDescriptor =
+        agent_access_provider::ResourceTypeDescriptor {
+            action_inputs: None,
+            id: agent_access_provider::ResourceType::from_static("test_destination"),
+            label: "Destination",
+            plural_label: "Destinations",
+            example: "alerts",
+            canonical: |_| true,
+            namespace: None,
+            attributes: &[agent_access_provider::ResourceAttributeDescriptor {
+                name: "webhookUrl",
+                label: "Webhook URL",
+                description: "Private destination",
+                required: true,
+                validate: |_| true,
+            }],
+        };
+    let types = agent_access_provider::ResourceTypeRegistry::new([&RESOURCE]).unwrap();
     let routes = http_route_specs(&types);
     let create = routes
         .iter()
@@ -343,15 +344,15 @@ fn catalog_execution_context_metadata_is_optional_and_typed() {
 
 #[test]
 fn action_projection_preserves_optional_upstream_resource_ownership() {
-    let action = crate::ActionDescriptor::new(
+    let action = agent_access_provider::ActionDescriptor::new(
         "draft.list",
         "List acting-user resources",
         json!({ "type": "object" }),
     )
     .scope("repository")
     .credential_modes(["per_user"])
-    .lookup(crate::LookupRequirement::ScopeResolution)
-    .upstream_resource_ownership(crate::UpstreamResourceOwnership::ActingUser);
+    .lookup(agent_access_provider::LookupRequirement::ScopeResolution)
+    .upstream_resource_ownership(agent_access_provider::UpstreamResourceOwnership::ActingUser);
     let projected = api_action_spec("gitlab", &action).expect("action is valid");
     let value = serde_json::to_value(projected).unwrap();
     assert_eq!(value["upstreamResourceOwnership"], "acting_user");
@@ -370,7 +371,7 @@ fn action_projection_preserves_optional_upstream_resource_ownership() {
 fn gitlab_project_upload_projects_single_file_transport_contract() {
     let action = api_action_spec(
         "gitlab",
-        &crate::ActionDescriptor::new(
+        &agent_access_provider::ActionDescriptor::new(
             "project.upload",
             "Upload a project attachment",
             json!({
@@ -386,8 +387,11 @@ fn gitlab_project_upload_projects_single_file_transport_contract() {
         )
         .scope("repository")
         .credential_modes(["service"])
-        .lookup(crate::LookupRequirement::ScopeResolution)
-        .multipart_upload(crate::attachment_upload_plan(&["project", "url"], Some(1))),
+        .lookup(agent_access_provider::LookupRequirement::ScopeResolution)
+        .multipart_upload(agent_access_provider::attachment_upload_plan(
+            &["project", "url"],
+            Some(1),
+        )),
     )
     .unwrap();
     let ActionIo::MultipartUpload { plan } = &action.io else {
@@ -430,7 +434,7 @@ fn gitlab_project_upload_projects_single_file_transport_contract() {
     );
 }
 
-fn built_in_descriptor(service: &str) -> crate::ServiceDescriptor {
+fn built_in_descriptor(service: &str) -> agent_access_provider::ServiceDescriptor {
     match service {
         "jira" => agent_access_jira::jira_descriptor(
             &toml::from_str(r#"tenant_host = "example.atlassian.net""#).unwrap(),
@@ -521,17 +525,21 @@ fn descriptors_mark_current_upload_and_download_actions() {
 #[test]
 fn service_projection_removes_gateway_metadata() {
     let projected = api_service_spec(
-        &crate::ServiceDescriptor {
+        &agent_access_provider::ServiceDescriptor {
             service: "repo".to_string(),
             display_name: "Repo gateway".to_string(),
-            surface: crate::ServiceSurface::Gateway {
+            surface: agent_access_provider::ServiceSurface::Gateway {
                 kind: "git_http".to_string(),
                 broker_hosts: vec!["git.example.test".to_string()],
             },
             resource_scopes: BTreeMap::new(),
             actions: vec![
-                crate::ActionDescriptor::new("repo.fetch", "Fetch", json!({ "type": "object" }))
-                    .credential_modes(["service"]),
+                agent_access_provider::ActionDescriptor::new(
+                    "repo.fetch",
+                    "Fetch",
+                    json!({ "type": "object" }),
+                )
+                .credential_modes(["service"]),
             ],
             credentials: Default::default(),
             presentation_body_limit: None,
@@ -544,13 +552,13 @@ fn service_projection_removes_gateway_metadata() {
 #[test]
 fn service_projection_marks_sensitive_configured_http_headers() {
     let projected = api_service_spec(
-        &crate::ServiceDescriptor {
+        &agent_access_provider::ServiceDescriptor {
             service: "api".to_string(),
             display_name: "API".to_string(),
-            surface: crate::ServiceSurface::Invoke,
+            surface: agent_access_provider::ServiceSurface::Invoke,
             resource_scopes: BTreeMap::new(),
             actions: vec![
-                crate::ActionDescriptor::new(
+                agent_access_provider::ActionDescriptor::new(
                     "call",
                     "Call",
                     json!({
@@ -2284,8 +2292,11 @@ fn oauth_management_specs_require_browser_auth_and_mark_authorization_url_sensit
 
 #[test]
 fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
-    let base =
-        crate::ActionDescriptor::new("item.view", "Read-shaped name", json!({"type":"object"}));
+    let base = agent_access_provider::ActionDescriptor::new(
+        "item.view",
+        "Read-shaped name",
+        json!({"type":"object"}),
+    );
     let unreviewed = api_action_spec("files", &base).unwrap();
     assert!(!unreviewed.read_only);
     assert!(unreviewed.supports_json_file_output());
@@ -2300,7 +2311,7 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
     assert!(!download.supports_json_file_output());
     let upload = api_action_spec(
         "files",
-        &base.multipart_upload(crate::attachment_upload_plan(&[], None)),
+        &base.multipart_upload(agent_access_provider::attachment_upload_plan(&[], None)),
     )
     .unwrap();
     assert!(upload.supports_json_file_output());
@@ -2344,7 +2355,12 @@ fn read_only_projection_does_not_advertise_broker_local_paths() {
     let mut catalog = empty_catalog(json!({}));
     let action = api_action_spec(
         "files",
-        &crate::ActionDescriptor::new("item.view", "Read", json!({"type":"object"})).read_only(),
+        &agent_access_provider::ActionDescriptor::new(
+            "item.view",
+            "Read",
+            json!({"type":"object"}),
+        )
+        .read_only(),
     )
     .unwrap();
     catalog.services.push(ApiServiceSpec {
@@ -2371,7 +2387,12 @@ fn read_only_projection_does_not_advertise_broker_local_paths() {
 fn send_output_requires_explicit_stdout_and_preserves_literal_dash_paths() {
     let read = api_action_spec(
         "files",
-        &crate::ActionDescriptor::new("item.view", "Read", json!({"type":"object"})).read_only(),
+        &agent_access_provider::ActionDescriptor::new(
+            "item.view",
+            "Read",
+            json!({"type":"object"}),
+        )
+        .read_only(),
     )
     .unwrap();
     let mut specialized = invoke_send_variant("files", &read);
@@ -2645,7 +2666,7 @@ fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
     let mut action = ActionDescriptor::new("accepted.action", "Read", json!({"type":"object"}));
     let builtin = api_action_spec("imported", &action).unwrap();
     assert_eq!(builtin.scoped_mcp_name.as_deref(), Some("accepted.action"));
-    action.scoped_mcp_name_source = crate::ScopedMcpNameSource::Imported {
+    action.scoped_mcp_name_source = agent_access_provider::ScopedMcpNameSource::Imported {
         name: Some("Raw.Tool-Name".into()),
     };
     assert_eq!(
@@ -2660,7 +2681,8 @@ fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
         Some("invalid/source name".into()),
         Some("x".repeat(129)),
     ] {
-        action.scoped_mcp_name_source = crate::ScopedMcpNameSource::Imported { name };
+        action.scoped_mcp_name_source =
+            agent_access_provider::ScopedMcpNameSource::Imported { name };
         let projected = api_action_spec("imported", &action).unwrap();
         assert_eq!(projected.scoped_mcp_name, None);
         let mut wire = serde_json::to_value(&projected).unwrap();

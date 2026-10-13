@@ -10,12 +10,13 @@ use crate::handlers::management::common::{
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
-    ApiCatalog, BrokerResponse, BrokerTokenClass, Decision, EXECUTION_CONTEXT_HEADER, ErrorBody,
+    ApiCatalog, BrokerResponse, BrokerTokenClass, EXECUTION_CONTEXT_HEADER, ErrorBody,
     ExecutionContext, GovernedOperationContext, IdentityContext, OperationContext, PolicyReadScope,
-    PolicyWriteScope, PrincipalRole, ReasonCode, RenderAuthMode, ResourceScopes, ResponseEnvelope,
-    RouteAccess, RouteFeature, SourceContext, empty_catalog, http_route_specs,
-    new_broker_request_id, openapi_from_catalog, send_schema_from_catalog,
+    PolicyWriteScope, PrincipalRole, RenderAuthMode, ResponseEnvelope, RouteAccess, RouteFeature,
+    SourceContext, empty_catalog, http_route_specs, new_broker_request_id, openapi_from_catalog,
+    send_schema_from_catalog,
 };
+use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
 use axum::Json;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::header::{CACHE_CONTROL, VARY};

@@ -1,4 +1,5 @@
-use crate::{BrokerConfig, is_service_name, url_allowed_by_patterns, validate_upstream_base_url};
+use crate::BrokerConfig;
+use agent_access_provider::{is_service_name, url_allowed_by_patterns, validate_upstream_base_url};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use url::Url;

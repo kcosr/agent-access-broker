@@ -547,8 +547,9 @@ pub(crate) async fn admission_failure_response(
         acquire_global_concurrency_guard, check_auth_source_rate_guard, envelope_response,
     };
     use agent_access_core::{
-        IdentityContext, OperationContext, REQUEST_ID_HEADER, SourceContext, new_broker_request_id,
+        IdentityContext, OperationContext, SourceContext, new_broker_request_id,
     };
+    use agent_access_provider::REQUEST_ID_HEADER;
     use axum::response::IntoResponse;
     crate::observability::record_execution_context_failure(failure.reason_code().as_str());
     // Browser, health and MCP requests need not carry an agent request ID. For rejected

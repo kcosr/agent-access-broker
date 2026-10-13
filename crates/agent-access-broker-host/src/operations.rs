@@ -2,9 +2,9 @@
 use crate::handlers::data::AdmittedInvocation;
 use crate::state::AppState;
 use agent_access_core::{
-    BrokerResponse, Decision, ErrorBody, InvocationControl, InvokeRequest, ReasonCode,
-    ResourceScopes, ResponseEnvelope,
+    BrokerResponse, ErrorBody, InvocationControl, InvokeRequest, ResponseEnvelope,
 };
+use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
 use futures_util::FutureExt;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -111,7 +111,7 @@ pub(crate) async fn invoke(
             .runtime
             .governed_operation_error_response(
                 admitted.context,
-                agent_access_core::ProviderError::error(
+                agent_access_provider::ProviderError::error(
                     ReasonCode::ConcurrencyLimited,
                     "broker is shutting down",
                 ),
@@ -196,24 +196,25 @@ mod tests {
         complete: tokio::sync::Semaphore,
     }
     impl agent_access_provider::test_support::DescribedProvider for PausedProvider {
-        fn descriptor(&self) -> agent_access_core::ServiceDescriptor {
+        fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
             agent_access_fake::fake_descriptor()
         }
     }
 
     #[async_trait::async_trait]
-    impl agent_access_core::Provider for PausedProvider {
+    impl agent_access_provider::Provider for PausedProvider {
         fn resolve_scopes(
             &self,
             action: &str,
             inputs: &Value,
-        ) -> Result<ResourceScopes, agent_access_core::ProviderError> {
+        ) -> Result<ResourceScopes, agent_access_provider::ProviderError> {
             agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
         }
         async fn invoke(
             &self,
-            request: agent_access_core::ProviderInvocation,
-        ) -> Result<agent_access_core::ProviderResult, agent_access_core::ProviderError> {
+            request: agent_access_provider::ProviderInvocation,
+        ) -> Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>
+        {
             self.invoked.add_permits(1);
             self.complete.acquire().await.unwrap().forget();
             agent_access_fake::FakeProvider.invoke(request).await

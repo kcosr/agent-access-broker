@@ -24,9 +24,8 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{
-    MicrosoftOidcConfig, is_loopback_or_localhost, load_secret_ref_value, parse_ttl_seconds,
-};
+use crate::{MicrosoftOidcConfig, parse_ttl_seconds};
+use agent_access_provider::{is_loopback_or_localhost, load_secret_ref_value};
 
 pub const MICROSOFT_OIDC_PROVIDER_ID: &str = "microsoft";
 pub const MICROSOFT_OIDC_HOST: &str = "login.microsoftonline.com";
@@ -709,7 +708,9 @@ impl fmt::Debug for MicrosoftOidcHttpClient {
 }
 
 impl MicrosoftOidcHttpClient {
-    pub fn new(outbound_tls: &crate::PreparedOutboundTls) -> Result<Self, MicrosoftOidcHttpError> {
+    pub fn new(
+        outbound_tls: &agent_access_provider::PreparedOutboundTls,
+    ) -> Result<Self, MicrosoftOidcHttpError> {
         let client = outbound_tls
             .apply(reqwest::Client::builder())
             .https_only(true)
@@ -1186,18 +1187,18 @@ mod tests {
             include_bytes!("../tests/fixtures/outbound-tls/ca-a.pem"),
         )
         .unwrap();
-        let config = crate::OutboundTlsConfig {
-            trust: crate::OutboundTlsTrustMode::Custom,
+        let config = agent_access_provider::OutboundTlsConfig {
+            trust: agent_access_provider::OutboundTlsTrustMode::Custom,
             ca_certificate: Some(ca_path.clone()),
         };
-        let snapshot = crate::PreparedOutboundTls::load(&config).unwrap();
+        let snapshot = agent_access_provider::PreparedOutboundTls::load(&config).unwrap();
         // Changing the bundle after preparation must not change this generation.
         fs::write(
             &ca_path,
             include_bytes!("../tests/fixtures/outbound-tls/ca-b.pem"),
         )
         .unwrap();
-        let different_snapshot = crate::PreparedOutboundTls::load(&config).unwrap();
+        let different_snapshot = agent_access_provider::PreparedOutboundTls::load(&config).unwrap();
         fs::remove_file(&ca_path).unwrap();
         let trusted = MicrosoftOidcHttpClient::new(&snapshot).unwrap();
         let untrusted = MicrosoftOidcHttpClient::new(&different_snapshot).unwrap();

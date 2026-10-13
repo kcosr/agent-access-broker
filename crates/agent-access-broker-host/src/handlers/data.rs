@@ -8,12 +8,14 @@ use crate::handlers::common::{
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
-    BrokerBodyPart, BrokerBodyPartSpec, BrokerResponse, Decision, ErrorBody, ExecutionContext,
-    GovernedIdentityFailureContext, GovernedOperationContext, IdentityContext, IdentitySummary,
-    InvokeRequest, OperationContext, ProviderError, ProviderResultStreamSource,
-    RESULT_METADATA_HEADER, ReasonCode, ResourceListQuery, ResourceScopes, ResponseEnvelope,
-    SourceContext, is_action_name, is_service_name, new_broker_request_id,
+    BrokerResponse, ErrorBody, ExecutionContext, GovernedIdentityFailureContext,
+    GovernedOperationContext, IdentityContext, IdentitySummary, InvokeRequest, OperationContext,
+    ResourceListQuery, ResponseEnvelope, SourceContext, new_broker_request_id,
     upload_spool_file_prefix,
+};
+use agent_access_provider::{
+    BrokerBodyPart, BrokerBodyPartSpec, Decision, ProviderError, ProviderResultStreamSource,
+    RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, is_action_name, is_service_name,
 };
 use axum::Json;
 use axum::body::Body;
@@ -509,7 +511,7 @@ async fn service_discovery_response(
         };
         let resource_type = match fields
             .get("resourceType")
-            .map(|value| agent_access_core::ResourceType::new(value.clone()))
+            .map(|value| agent_access_provider::ResourceType::new(value.clone()))
             .transpose()
         {
             Ok(resource_type) => resource_type,
@@ -1564,12 +1566,16 @@ fn raw_accept_entry_enabled(entry: &str) -> bool {
     true
 }
 
-fn action_supports_raw_result(action: Option<&agent_access_core::ActionDescriptor>) -> bool {
-    action
-        .is_some_and(|action| matches!(action.io, agent_access_core::ActionIo::RawDownload { .. }))
+fn action_supports_raw_result(action: Option<&agent_access_provider::ActionDescriptor>) -> bool {
+    action.is_some_and(|action| {
+        matches!(
+            action.io,
+            agent_access_provider::ActionIo::RawDownload { .. }
+        )
+    })
 }
 
-fn action_exports_secrets(action: Option<&agent_access_core::ActionDescriptor>) -> bool {
+fn action_exports_secrets(action: Option<&agent_access_provider::ActionDescriptor>) -> bool {
     action.is_some_and(|action| !action.sensitive_output_pointers.is_empty())
 }
 
@@ -1629,7 +1635,7 @@ fn missing_stream_envelope(response: BrokerResponse<Value>) -> BrokerResponse<Va
         envelope: ResponseEnvelope {
             agent_request_id: response.envelope.agent_request_id,
             broker_request_id: response.envelope.broker_request_id,
-            decision: agent_access_core::Decision::Error,
+            decision: agent_access_provider::Decision::Error,
             service: response.envelope.service,
             action: response.envelope.action,
             resource_scopes: response.envelope.resource_scopes,
@@ -1647,7 +1653,7 @@ fn missing_stream_envelope(response: BrokerResponse<Value>) -> BrokerResponse<Va
 #[cfg(test)]
 mod tests {
     use super::{action_exports_secrets, action_supports_raw_result};
-    use agent_access_core::ActionDescriptor;
+    use agent_access_provider::ActionDescriptor;
     use serde_json::json;
 
     #[test]

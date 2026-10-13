@@ -81,7 +81,7 @@ pub struct CreateResourceRequest {
     pub selector: ResourceSelector,
     pub allowed_execution_contexts: Vec<String>,
     pub enabled: bool,
-    pub attributes: crate::ResourceAttributes,
+    pub attributes: agent_access_provider::ResourceAttributes,
     pub created_by: String,
 }
 
@@ -94,7 +94,7 @@ pub struct PatchResourceRequest {
     pub selector: Option<ResourceSelector>,
     pub allowed_execution_contexts: Option<Vec<String>>,
     pub enabled: Option<bool>,
-    pub attributes: crate::ResourceAttributes,
+    pub attributes: agent_access_provider::ResourceAttributes,
     pub updated_by: String,
 }
 
@@ -1036,11 +1036,11 @@ mod tests {
         CreateResourceRequest {
             id: Some(id.into()),
             display_name: None,
-            resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
             selector,
             allowed_execution_contexts: vec!["internal".into()],
             enabled: true,
-            attributes: crate::ResourceAttributes::default(),
+            attributes: agent_access_provider::ResourceAttributes::default(),
             created_by: "admin".into(),
         }
     }
@@ -1171,7 +1171,7 @@ mod tests {
                 PatchResourceRequest {
                     id: "private".into(),
                     expected_version: 1,
-                    attributes: crate::ResourceAttributes::default(),
+                    attributes: agent_access_provider::ResourceAttributes::default(),
                     display_name: None,
                     resource_type: None,
                     selector: None,
@@ -1292,7 +1292,7 @@ mod tests {
             resources: vec![ResourceDefinition {
                 id: "configured".into(),
                 display_name: None,
-                resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
                 selector: ResourceSelector::All,
                 allowed_execution_contexts: vec!["internal".into()],
                 enabled: true,

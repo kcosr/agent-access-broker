@@ -14,20 +14,23 @@ use crate::{
 use agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE;
 use agent_access_confluence::CONFLUENCE_SPACE_RESOURCE;
 use agent_access_core::{
-    ActionDescriptor, BROKER_REQUEST_ID_HEADER, BrokerBodyPartSpec, BrokerConfig, BrokerRuntime,
-    CredentialConfig, CredentialDescriptor, CredentialWriteRequest, CredentialsConfig,
-    DeploymentConfig, EXECUTION_CONTEXT_HEADER, ExecutionContextConfig, GIT_REPOSITORY_RESOURCE,
-    IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, LimitsConfig, LookupRequirement,
-    PolicyConfig, PolicyGrantConfig, PrincipalPatchRequest, PrincipalWriteRequest, Provider,
-    ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream, REASON_CODE_HEADER,
-    REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ReasonCode, ResourceDefinition, ResourceScopes,
-    ResourceSelection, ResourceSelector, ResourceType, ServiceDescriptor, ServiceSurface,
-    SourceContext, StateLockDomain, StateLockFailureKind, StateLockSet, StaticPrincipalConfig,
-    attachment_upload_plan,
+    BrokerConfig, BrokerRuntime, CredentialConfig, CredentialWriteRequest, CredentialsConfig,
+    DeploymentConfig, EXECUTION_CONTEXT_HEADER, ExecutionContextConfig, IdentityConfig,
+    IdentityGroupConfig, IdentitySourceConfig, LimitsConfig, PolicyConfig, PolicyGrantConfig,
+    PrincipalPatchRequest, PrincipalWriteRequest, REASON_CODE_HEADER, ResourceDefinition,
+    ResourceSelection, SourceContext, StateLockDomain, StateLockFailureKind, StateLockSet,
+    StaticPrincipalConfig,
 };
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use agent_access_gitlab::PositionInputCategory;
 use agent_access_jira::JIRA_PROJECT_RESOURCE;
+use agent_access_provider::{
+    ActionDescriptor, BROKER_REQUEST_ID_HEADER, BrokerBodyPartSpec, CredentialDescriptor,
+    GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError, ProviderInvocation,
+    ProviderResult, ProviderResultStream, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ReasonCode,
+    ResourceScopes, ResourceSelector, ResourceType, ServiceDescriptor, ServiceSurface,
+    attachment_upload_plan,
+};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -147,7 +150,7 @@ fn fixture_resources(contexts: &[&str]) -> Vec<ResourceDefinition> {
 fn backend_presentation(
     service: &str,
     action: &str,
-) -> Option<agent_access_core::ActionPresentation> {
+) -> Option<agent_access_provider::ActionPresentation> {
     static CONFIG: std::sync::OnceLock<agent_access_core::BrokerConfig> =
         std::sync::OnceLock::new();
     let config = CONFIG.get_or_init(|| {
@@ -192,10 +195,10 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
 fn fixture_scope_capabilities(
     scope: &str,
-) -> BTreeMap<String, agent_access_core::ResourceScopeCapabilities> {
+) -> BTreeMap<String, agent_access_provider::ResourceScopeCapabilities> {
     BTreeMap::from([(
         scope.to_string(),
-        agent_access_core::ResourceScopeCapabilities {
+        agent_access_provider::ResourceScopeCapabilities {
             resource_type: match scope {
                 "project" => JIRA_PROJECT_RESOURCE.id.clone(),
                 "space" => CONFLUENCE_SPACE_RESOURCE.id.clone(),
@@ -218,7 +221,7 @@ fn seed_managed_fixture_resources(store: &agent_access_core::ManagedStore) {
                     selector: resource.selector,
                     allowed_execution_contexts: resource.allowed_execution_contexts,
                     enabled: resource.enabled,
-                    attributes: agent_access_core::ResourceAttributes::default(),
+                    attributes: agent_access_provider::ResourceAttributes::default(),
                     created_by: "test".to_string(),
                 },
                 |_, _, _, _| Ok(()),
@@ -1324,12 +1327,12 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -1432,12 +1435,12 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -6222,7 +6225,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             config,
             vec![
                 agent_access_fake::fake_service_provider(),
-                agent_access_core::ServiceProvider::from(Arc::new(
+                agent_access_provider::ServiceProvider::from(Arc::new(
                     TestManagedGitlabCredentialProvider {
                         descriptor: gitlab_descriptor,
                     },
@@ -13658,12 +13661,12 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -13817,13 +13820,13 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
                 "https://example.atlassian.net/wiki/api/v2/**".to_string(),
                 "https://example.atlassian.net/wiki/rest/api/**".to_string(),
             ],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_confluence::ConfluenceContentConfig {
                 page_formats: vec!["storage".to_string()],
                 max_body_bytes: 128,
                 ..agent_access_confluence::ConfluenceContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -13986,7 +13989,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
                 max_body_bytes: 128,
                 ..agent_access_gitlab::GitlabContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -14195,7 +14198,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -14309,7 +14312,7 @@ fn gitlab_review_failure_contract_runtime(audit_path: &Path) -> BrokerRuntime {
             allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -14731,9 +14734,9 @@ impl Provider for TestManagedGitlabCredentialProvider {
     }
     async fn verify_execution_credential(
         &self,
-        credential: &agent_access_core::ExecutionCredential,
-        correlation: &agent_access_core::CorrelationContext,
-    ) -> Result<Option<agent_access_core::ProviderCredentialVerification>, ProviderError> {
+        credential: &agent_access_provider::ExecutionCredential,
+        correlation: &agent_access_provider::CorrelationContext,
+    ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
         assert_eq!(credential.kind, "bearer_token");
         let expected_token = match correlation.agent_request_id.as_str() {
             "managed-token-verify-with-policy" => "mallory-token-rotated",
@@ -14741,11 +14744,13 @@ impl Provider for TestManagedGitlabCredentialProvider {
             request_id => panic!("unexpected credential verification request: {request_id}"),
         };
         assert_eq!(credential.token.as_deref(), Some(expected_token));
-        Ok(Some(agent_access_core::ProviderCredentialVerification {
-            upstream_status: 200,
-            upstream_duration_ms: 1,
-            audit: json!({"provider":"gitlab","operation":"credential.verify"}),
-        }))
+        Ok(Some(
+            agent_access_provider::ProviderCredentialVerification {
+                upstream_status: 200,
+                upstream_duration_ms: 1,
+                audit: json!({"provider":"gitlab","operation":"credential.verify"}),
+            },
+        ))
     }
 }
 
@@ -14831,12 +14836,12 @@ fn managed_jira_verify_config(
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -14964,7 +14969,7 @@ impl Provider for TestJiraParentInvokeProvider {
         &self,
         action: &str,
         inputs: &Value,
-        lookup_credential: Option<&agent_access_core::ExecutionCredential>,
+        lookup_credential: Option<&agent_access_provider::ExecutionCredential>,
     ) -> Result<ResourceScopes, ProviderError> {
         assert_eq!(
             lookup_credential.and_then(|credential| credential.token.as_deref()),
@@ -15755,17 +15760,19 @@ impl Provider for TestCredentialVerificationProvider {
 
     async fn verify_execution_credential(
         &self,
-        credential: &agent_access_core::ExecutionCredential,
-        _correlation: &agent_access_core::CorrelationContext,
-    ) -> Result<Option<agent_access_core::ProviderCredentialVerification>, ProviderError> {
+        credential: &agent_access_provider::ExecutionCredential,
+        _correlation: &agent_access_provider::CorrelationContext,
+    ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
         assert_eq!(credential.kind, "basic_api_token");
         assert_eq!(credential.username.as_deref(), Some("alice@example.com"));
         assert_eq!(credential.token.as_deref(), Some("jira-token"));
-        Ok(Some(agent_access_core::ProviderCredentialVerification {
-            upstream_status: 200,
-            upstream_duration_ms: 1,
-            audit: json!({"provider": "jira", "operation": "credential.verify"}),
-        }))
+        Ok(Some(
+            agent_access_provider::ProviderCredentialVerification {
+                upstream_status: 200,
+                upstream_duration_ms: 1,
+                audit: json!({"provider": "jira", "operation": "credential.verify"}),
+            },
+        ))
     }
 
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15808,9 +15815,9 @@ impl Provider for TestFailingCredentialVerificationProvider {
 
     async fn verify_execution_credential(
         &self,
-        _credential: &agent_access_core::ExecutionCredential,
-        _correlation: &agent_access_core::CorrelationContext,
-    ) -> Result<Option<agent_access_core::ProviderCredentialVerification>, ProviderError> {
+        _credential: &agent_access_provider::ExecutionCredential,
+        _correlation: &agent_access_provider::CorrelationContext,
+    ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
         Err(ProviderError::error(
             ReasonCode::UpstreamUnauthorized,
             "Jira rejected the selected credential",
@@ -15857,9 +15864,9 @@ impl Provider for TestLocalCredentialVerificationFailureProvider {
 
     async fn verify_execution_credential(
         &self,
-        _credential: &agent_access_core::ExecutionCredential,
-        _correlation: &agent_access_core::CorrelationContext,
-    ) -> Result<Option<agent_access_core::ProviderCredentialVerification>, ProviderError> {
+        _credential: &agent_access_provider::ExecutionCredential,
+        _correlation: &agent_access_provider::CorrelationContext,
+    ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
         Err(ProviderError::deny(
             ReasonCode::InputInvalid,
             "credential verification input is invalid",
@@ -16182,15 +16189,15 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig {
+            attachments: agent_access_provider::AttachmentLimitsConfig {
                 media_types: vec!["text/plain".to_string()],
-                ..agent_access_core::AttachmentLimitsConfig::default()
+                ..agent_access_provider::AttachmentLimitsConfig::default()
             },
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -16368,12 +16375,12 @@ fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentationFixtu
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: agent_access_core::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: agent_access_core::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -16637,12 +16644,12 @@ fn spec_token_fixture_with_restrictions(
                 allowed_upstream_hosts: vec![
                     "https://example.atlassian.net/rest/api/3/**".to_string(),
                 ],
-                attachments: agent_access_core::AttachmentLimitsConfig::default(),
+                attachments: agent_access_provider::AttachmentLimitsConfig::default(),
                 content: agent_access_jira::JiraContentConfig {
                     comment_formats: vec!["adf".to_string()],
                     ..agent_access_jira::JiraContentConfig::default()
                 },
-                search: agent_access_core::SearchLimitsConfig::default(),
+                search: agent_access_provider::SearchLimitsConfig::default(),
                 comments: agent_access_jira::JiraCommentsConfig::default(),
                 issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
             });
@@ -16712,12 +16719,12 @@ fn spec_token_fixture_with_restrictions(
                     "https://example.atlassian.net/wiki/api/v2/**".to_string(),
                     "https://example.atlassian.net/wiki/rest/api/**".to_string(),
                 ],
-                attachments: agent_access_core::AttachmentLimitsConfig::default(),
+                attachments: agent_access_provider::AttachmentLimitsConfig::default(),
                 content: agent_access_confluence::ConfluenceContentConfig {
                     page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],
                     ..agent_access_confluence::ConfluenceContentConfig::default()
                 },
-                search: agent_access_core::SearchLimitsConfig::default(),
+                search: agent_access_provider::SearchLimitsConfig::default(),
             });
         let actions = agent_access_confluence::confluence_descriptor(
             config
@@ -16777,7 +16784,7 @@ fn spec_token_fixture_with_restrictions(
                 allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
                 webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                 content: agent_access_gitlab::GitlabContentConfig::default(),
-                search: agent_access_core::SearchLimitsConfig::default(),
+                search: agent_access_provider::SearchLimitsConfig::default(),
             });
         let actions = agent_access_gitlab::gitlab_descriptor(
             config
@@ -17763,12 +17770,12 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
         cloud_id: None,
         egress_proxy: None,
         allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-        attachments: agent_access_core::AttachmentLimitsConfig::default(),
+        attachments: agent_access_provider::AttachmentLimitsConfig::default(),
         content: agent_access_jira::JiraContentConfig {
             comment_formats: vec![],
             ..agent_access_jira::JiraContentConfig::default()
         },
-        search: agent_access_core::SearchLimitsConfig::default(),
+        search: agent_access_provider::SearchLimitsConfig::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
     };
@@ -17815,14 +17822,14 @@ fn confluence_capabilities_advertise_only_effective_content_write_formats() {
             "https://example.atlassian.net/wiki/api/v2/**".to_string(),
             "https://example.atlassian.net/wiki/rest/api/**".to_string(),
         ],
-        attachments: agent_access_core::AttachmentLimitsConfig::default(),
+        attachments: agent_access_provider::AttachmentLimitsConfig::default(),
         content: agent_access_confluence::ConfluenceContentConfig {
             page_formats: vec![],
             blog_formats: vec![],
             comment_formats: vec![],
             max_body_bytes: 2 * 1024 * 1024,
         },
-        search: agent_access_core::SearchLimitsConfig::default(),
+        search: agent_access_provider::SearchLimitsConfig::default(),
     };
 
     let descriptor = agent_access_confluence::confluence_descriptor(&config);

@@ -774,7 +774,7 @@ mod tests {
             execution_contexts: vec![ExecutionContext::new("default").unwrap()],
             resource_scope: Some(ActionResourceScope {
                 scope: "repository".to_string(),
-                resource_type: &crate::GIT_REPOSITORY_RESOURCE,
+                resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
             }),
             boundary,
         }
@@ -899,7 +899,7 @@ mod tests {
             .insert("test".into(), fake_service_credential("env:USER"));
         for (resource_type, scope, first, second) in [
             (
-                &crate::GIT_REPOSITORY_RESOURCE,
+                &agent_access_provider::GIT_REPOSITORY_RESOURCE,
                 "repository",
                 "engineering/first",
                 "engineering/second",

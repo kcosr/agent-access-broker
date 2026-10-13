@@ -6,8 +6,9 @@ mod trusted_user;
 use crate::{
     BrokerTokensConfig, CredentialEncryptionConfig, CredentialEncryptionKeyConfig,
     CredentialsConfig, DeploymentConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
-    LookupRequirement, ManagedStoreConfig, PolicyGrantConfig, StaticPrincipalConfig,
+    ManagedStoreConfig, PolicyGrantConfig, StaticPrincipalConfig,
 };
+use agent_access_provider::LookupRequirement;
 use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
@@ -41,9 +42,12 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
     .unwrap();
     assert_eq!(
         request.read_content_format,
-        crate::ReadContentFormat::Native
+        agent_access_provider::ReadContentFormat::Native
     );
-    assert_eq!(request.response_format, crate::ResponseFormat::Json);
+    assert_eq!(
+        request.response_format,
+        agent_access_provider::ResponseFormat::Json
+    );
 
     let explicit: InvokeRequest = serde_json::from_value(json!({
         "inputs": {},
@@ -51,8 +55,14 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
         "responseFormat": "markdown"
     }))
     .unwrap();
-    assert_eq!(explicit.read_content_format, crate::ReadContentFormat::Text);
-    assert_eq!(explicit.response_format, crate::ResponseFormat::Markdown);
+    assert_eq!(
+        explicit.read_content_format,
+        agent_access_provider::ReadContentFormat::Text
+    );
+    assert_eq!(
+        explicit.response_format,
+        agent_access_provider::ResponseFormat::Markdown
+    );
 
     assert!(
         serde_json::from_value::<InvokeRequest>(json!({
@@ -81,7 +91,7 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
             }),
             InvokeRequest {
                 inputs: json!({"project": "TEST", "message": "hello"}),
-                response_format: crate::ResponseFormat::Markdown,
+                response_format: agent_access_provider::ResponseFormat::Markdown,
                 ..InvokeRequest::new(json!({}))
             },
         )
@@ -145,7 +155,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: crate::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -181,7 +191,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: crate::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -237,7 +247,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
             &["ENG", "OPS", "RESEARCH", "TEST"][..],
         ),
         (
-            crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
             "repository",
             &[
                 "sip/service",
@@ -273,7 +283,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
         resources.push(ResourceDefinition {
             id: format!("repository-namespace-{value}"),
             display_name: None,
-            resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
             selector: ResourceSelector::Namespace {
                 value: value.into(),
             },
@@ -1615,7 +1625,7 @@ async fn invoke_malformed_gitlab_draft_readback(
         egress_proxy: None,
         allowed_upstream_hosts: vec![format!("{}/api/v4/**", server.uri())],
         content: agent_access_gitlab::GitlabContentConfig::default(),
-        search: crate::SearchLimitsConfig::default(),
+        search: agent_access_provider::SearchLimitsConfig::default(),
         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
     };
     let mut config = base_fake_config();
@@ -1949,7 +1959,7 @@ fn fixture_resource_type(scope: &str) -> ResourceType {
         "space" => agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
             .id
             .clone(),
-        "repository" => crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+        "repository" => agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
         "job" => agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
             .id
             .clone(),
@@ -4689,9 +4699,9 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
     let secret_path = write_temp_secret("oauth-readiness-client-secret");
     config.oauth.registrations.insert(
         "stub".into(),
-        crate::OAuthRegistrationConfig {
+        agent_access_provider::OAuthRegistrationConfig {
             adapter_settings: Default::default(),
-            adapter: crate::OAuthAdapter::STUB,
+            adapter: agent_access_provider::OAuthAdapter::STUB,
             base_url: "https://unreachable.example.test".into(),
             redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
             client_id: "readiness-test".into(),
@@ -4702,8 +4712,8 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
             allow_insecure_loopback: false,
             permission_profiles: BTreeMap::from([(
                 "read".into(),
-                crate::OAuthPermissionProfile {
-                    scope_mode: crate::OAuthScopeMode::Explicit,
+                agent_access_provider::OAuthPermissionProfile {
+                    scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                     scopes: Some(vec!["records.read".into(), "offline_access".into()]),
                     audience: "records-api".into(),
                     target: "workspace-one".into(),
@@ -4772,9 +4782,9 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
     config.credentials = Default::default();
     config.policy.grants.clear();
     let secret_path = write_temp_secret("oauth-dialect-client-secret");
-    let registration = crate::OAuthRegistrationConfig {
+    let registration = agent_access_provider::OAuthRegistrationConfig {
         adapter_settings: Default::default(),
-        adapter: crate::OAuthAdapter::STUB,
+        adapter: agent_access_provider::OAuthAdapter::STUB,
         base_url: "https://stub.example.test".into(),
         redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
         client_id: "dialect-test".into(),
@@ -4785,8 +4795,8 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
         allow_insecure_loopback: false,
         permission_profiles: BTreeMap::from([(
             "read".into(),
-            crate::OAuthPermissionProfile {
-                scope_mode: crate::OAuthScopeMode::Explicit,
+            agent_access_provider::OAuthPermissionProfile {
+                scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                 scopes: Some(vec!["records.read".into(), "offline_access".into()]),
                 audience: "records-api".into(),
                 target: "workspace-one".into(),
@@ -4805,7 +4815,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
 
     let mut unknown = config.clone();
     unknown.oauth.registrations.get_mut("stub").unwrap().adapter =
-        crate::OAuthAdapter::new("outlook");
+        agent_access_provider::OAuthAdapter::new("outlook");
     assert!(errors(&unknown).contains(
         "oauth.registrations.stub.adapter `outlook` is not a registered OAuth dialect (expected one of: stub)"
     ));
@@ -4832,7 +4842,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
         .permission_profiles
         .get_mut("read")
         .unwrap();
-    profile.scope_mode = crate::OAuthScopeMode::ServerDefault;
+    profile.scope_mode = agent_access_provider::OAuthScopeMode::ServerDefault;
     profile.scopes = None;
     assert!(errors(&server_default).contains("stub does not support server_default scope mode"));
 
@@ -6927,12 +6937,12 @@ async fn attribution_validation_failure_during_reload_preserves_active_runtime()
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -7179,7 +7189,7 @@ fn repository_candidate(included: Vec<ResourceSelector>) -> PolicyCandidate {
         execution_contexts: vec![default_execution_context()],
         resource_scope: Some(ActionResourceScope {
             scope: "repository".to_string(),
-            resource_type: &crate::GIT_REPOSITORY_RESOURCE,
+            resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
         }),
         boundary: ResourceBoundary {
             included,
@@ -7502,7 +7512,7 @@ fn runtime_can_use_explicit_egress_environment_for_tests() {
 #[test]
 fn runtime_preflights_configured_proxy_secrets_even_when_no_proxy_matches() {
     let mut config = base_fake_config();
-    config.network.egress_proxy = Some(crate::EgressProxyConfig {
+    config.network.egress_proxy = Some(agent_access_provider::EgressProxyConfig {
         url: "https://proxy.example:8443".to_string(),
         username_ref: Some("env:AGENT_ACCESS_MISSING_PROXY_USER".to_string()),
         password_ref: Some("env:AGENT_ACCESS_MISSING_PROXY_PASSWORD".to_string()),
@@ -7543,7 +7553,7 @@ fn runtime_preflights_gateway_proxy_secrets() {
             broker_hosts: vec!["git.example.test".to_string()],
             upstream_base_url: "https://gitlab.example.com".to_string(),
             allowed_upstream_hosts: vec!["https://gitlab.example.com/**".to_string()],
-            egress_proxy: Some(crate::EgressProxyConfig {
+            egress_proxy: Some(agent_access_provider::EgressProxyConfig {
                 url: "https://proxy.example:8443".to_string(),
                 username_ref: Some("env:AGENT_ACCESS_MISSING_GATEWAY_PROXY_USER".to_string()),
                 password_ref: Some("env:AGENT_ACCESS_MISSING_GATEWAY_PROXY_PASSWORD".to_string()),
@@ -7584,7 +7594,7 @@ fn runtime_preflights_gateway_proxy_secrets() {
 #[test]
 fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
     let proxy = || {
-        Some(crate::EgressProxyConfig {
+        Some(agent_access_provider::EgressProxyConfig {
             url: "https://proxy.example:8443".to_string(),
             username_ref: Some("env:AGENT_ACCESS_MISSING_PROVIDER_PROXY_USER".to_string()),
             password_ref: Some("env:AGENT_ACCESS_MISSING_PROVIDER_PROXY_PASSWORD".to_string()),
@@ -7606,7 +7616,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
                             "https://gitlab.example.com/api/v4/**".to_string(),
                         ],
                         content: agent_access_gitlab::GitlabContentConfig::default(),
-                        search: crate::SearchLimitsConfig::default(),
+                        search: agent_access_provider::SearchLimitsConfig::default(),
                         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                     });
             }
@@ -8298,12 +8308,12 @@ fn configure_lookup_trace_jira(config: &mut BrokerConfig) {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -8324,12 +8334,12 @@ fn configure_lookup_trace_confluence(config: &mut BrokerConfig) {
             allowed_upstream_hosts: vec![
                 "https://example.atlassian.net/wiki/rest/api/**".to_string(),
             ],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_confluence::ConfluenceContentConfig {
                 page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],
                 ..agent_access_confluence::ConfluenceContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.credentials.service.clear();
     config.credentials.lookup.clear();
@@ -9005,7 +9015,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
     config.policy.resources.push(crate::ResourceDefinition {
         id: "foreign-repo".into(),
         display_name: None,
-        resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+        resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
         selector: ResourceSelector::Exact {
             value: "foreign/repo".into(),
         },

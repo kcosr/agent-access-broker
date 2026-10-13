@@ -1,6 +1,7 @@
-use crate::{
-    ActionDescriptor, ActionIo, ExecutionContext, MultipartUploadSpec, RESULT_METADATA_HEADER,
-    ServiceDescriptor, ServiceSurface, is_action_name, is_service_name,
+use crate::ExecutionContext;
+use agent_access_provider::{
+    ActionDescriptor, ActionIo, MultipartUploadSpec, RESULT_METADATA_HEADER, ServiceDescriptor,
+    ServiceSurface, is_action_name, is_service_name,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,7 +23,7 @@ pub struct ApiCatalog {
     /// Every resource type this broker understands, whether or not a visible
     /// service uses it.
     #[serde(default)]
-    pub resource_types: Vec<crate::ResourceTypeMetadata>,
+    pub resource_types: Vec<agent_access_provider::ResourceTypeMetadata>,
     pub services: Vec<ApiServiceSpec>,
     pub routes: Vec<HttpRouteSpec>,
     pub send: SendCatalogSpec,
@@ -54,7 +55,7 @@ pub struct ApiServiceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiResourceScopeSpec {
-    pub resource_type: crate::ResourceType,
+    pub resource_type: agent_access_provider::ResourceType,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors: Vec<String>,
 }
@@ -77,7 +78,7 @@ pub struct ApiActionSpec {
     #[serde(default)]
     pub lookup_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upstream_resource_ownership: Option<crate::UpstreamResourceOwnership>,
+    pub upstream_resource_ownership: Option<agent_access_provider::UpstreamResourceOwnership>,
     pub input_schema: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_input_pointers: Vec<String>,
@@ -800,7 +801,9 @@ pub fn generic_send_schema() -> Value {
 
 /// Every HTTP route the broker serves. Resource mutation schemas enumerate
 /// the registered resource types and their selector forms.
-pub fn http_route_specs(resource_types: &crate::ResourceTypeRegistry) -> Vec<HttpRouteSpec> {
+pub fn http_route_specs(
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
+) -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     routes.extend(discovery_route_specs());
     routes.extend(spec_route_specs());
@@ -1433,7 +1436,9 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
     routes
 }
 
-fn resource_policy_route_specs(resource_types: &crate::ResourceTypeRegistry) -> Vec<HttpRouteSpec> {
+fn resource_policy_route_specs(
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
+) -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     for (path, operation) in [
         ("resources", "resources"),
@@ -1572,7 +1577,7 @@ fn policy_grant_schema(patch: bool) -> Value {
 fn resource_mutation_schema(
     group: bool,
     patch: bool,
-    resource_types: &crate::ResourceTypeRegistry,
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
 ) -> Value {
     let type_ids = resource_types
         .ids()
@@ -1611,7 +1616,7 @@ fn resource_mutation_schema(
     };
     let mut schema = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
     if !group {
-        let attribute_schema = |descriptor: &crate::ResourceTypeDescriptor| {
+        let attribute_schema = |descriptor: &agent_access_provider::ResourceTypeDescriptor| {
             let properties = descriptor.attributes.iter().map(|attribute| (
                 attribute.name.to_string(),
                 json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true,"description":attribute.description}),

@@ -22,16 +22,17 @@ use crate::sqlite_support::ValidatedLedger;
 use crate::sqlite_support::{self, SqliteAdmissionError, SqliteMigration, SqliteStoreLabel};
 use crate::{
     AgentInvokeTokenCaveats, BrokerTokensConfig, CredentialEncryptionConfig,
-    CredentialEncryptionKeyConfig, EXECUTION_CONTEXT_MAX_VALUES, ExecutionCredential,
-    ManagedStoreConfig, POLICY_GRANT_MAX_SUBJECTS, ReasonCode, ResourceSelection,
-    is_safe_identifier, is_safe_principal, is_service_name, is_valid_execution_context_value,
-    load_secret_ref_value,
+    CredentialEncryptionKeyConfig, EXECUTION_CONTEXT_MAX_VALUES, ManagedStoreConfig,
+    POLICY_GRANT_MAX_SUBJECTS, ResourceSelection, is_safe_identifier, is_safe_principal,
+    is_valid_execution_context_value,
 };
-use crate::{
-    ResourceCatalog, ResourceDefinition, ResourceGroupDefinition, ResourceSelector, ResourceType,
-};
+use crate::{ResourceCatalog, ResourceDefinition, ResourceGroupDefinition};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
+use agent_access_provider::{
+    ExecutionCredential, ReasonCode, ResourceSelector, ResourceType, is_service_name,
+    load_secret_ref_value,
+};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine;
@@ -4975,13 +4976,14 @@ impl BrokerTokenHasher {
     }
 }
 
-impl crate::StableSigningKey for BrokerTokenHasher {
+impl agent_access_provider::StableSigningKey for BrokerTokenHasher {
     fn hmac_base64url(
         &self,
         context: &[u8],
         payload: &[u8],
-    ) -> Result<String, crate::SigningError> {
-        BrokerTokenHasher::hmac_base64url(self, context, payload).map_err(|_| crate::SigningError)
+    ) -> Result<String, agent_access_provider::SigningError> {
+        BrokerTokenHasher::hmac_base64url(self, context, payload)
+            .map_err(|_| agent_access_provider::SigningError)
     }
 }
 

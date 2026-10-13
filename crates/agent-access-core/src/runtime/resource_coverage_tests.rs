@@ -1,9 +1,8 @@
 //! A backend unknown to core exercises discovery's input projection and
 //! caller coverage: jobs under configured controllers, like CloudBees CI.
 use super::*;
-use crate::{
-    BackendConfig, BackendRegistration, BackendRegistry, ProvidersConfig, ResourceCoverage,
-};
+use crate::{BackendRegistry, ProvidersConfig, ResourceCoverage};
+use agent_access_provider::{BackendConfig, BackendRegistration};
 use async_trait::async_trait;
 
 const SERVICE: &str = "coverage_fixture";

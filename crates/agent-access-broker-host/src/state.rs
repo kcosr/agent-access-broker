@@ -229,7 +229,7 @@ impl fmt::Debug for MicrosoftOidcProviderRuntime {
 impl MicrosoftOidcProviderRuntime {
     fn production(
         config: MicrosoftOidcRuntimeConfig,
-        outbound_tls: &agent_access_core::PreparedOutboundTls,
+        outbound_tls: &agent_access_provider::PreparedOutboundTls,
     ) -> Result<Arc<Self>, ManagedStoreError> {
         let client = MicrosoftOidcHttpClient::new(outbound_tls).map_err(|_| {
             ManagedStoreError::Unavailable(

@@ -1,7 +1,8 @@
 use super::*;
-use crate::{
-    ImportedActionRecord, ImportedCredentialBinding, ImportedCredentialDelivery,
-    ImportedCredentialMode, ImportedDiscoveryCredential,
+use crate::ImportedActionRecord;
+use agent_access_provider::{
+    ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
+    ImportedDiscoveryCredential,
 };
 
 fn record(service: &str, names: &[&str]) -> ImportedServiceRecord {

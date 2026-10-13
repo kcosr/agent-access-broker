@@ -99,7 +99,7 @@ async fn admit_body(
         .source_context(remote, request.headers());
     let mut ids = request
         .headers()
-        .get_all(agent_access_core::REQUEST_ID_HEADER)
+        .get_all(agent_access_provider::REQUEST_ID_HEADER)
         .iter();
     let supplied_id = ids
         .next()

@@ -45,8 +45,8 @@ pub(super) fn result(value: Value, error: bool, limit: usize) -> Result<CallTool
 /// wait, so it becomes the tool error's text: agents often see only text.
 fn rate_limit_message(envelope: &Value) -> Option<String> {
     let reason_code = envelope["reasonCode"].as_str()?;
-    if reason_code != agent_access_core::ReasonCode::RateLimited.as_str()
-        && reason_code != agent_access_core::ReasonCode::UpstreamRateLimited.as_str()
+    if reason_code != agent_access_provider::ReasonCode::RateLimited.as_str()
+        && reason_code != agent_access_provider::ReasonCode::UpstreamRateLimited.as_str()
     {
         return None;
     }
@@ -87,7 +87,7 @@ pub(super) fn broker(
 ) -> CallToolResult {
     let error = response.status >= 400
         || response.envelope.error.is_some()
-        || response.envelope.decision != agent_access_core::Decision::Allow;
+        || response.envelope.decision != agent_access_provider::Decision::Allow;
     let normal = serialize(&response.envelope, limit)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -159,24 +159,26 @@ mod tests {
         stop: Option<InvocationControl>,
     }
     impl agent_access_provider::test_support::DescribedProvider for OutcomeProvider {
-        fn descriptor(&self) -> agent_access_core::ServiceDescriptor {
+        fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
             agent_access_fake::fake_descriptor()
         }
     }
 
     #[async_trait::async_trait]
-    impl agent_access_core::Provider for OutcomeProvider {
+    impl agent_access_provider::Provider for OutcomeProvider {
         fn resolve_scopes(
             &self,
             action: &str,
             inputs: &Value,
-        ) -> Result<agent_access_core::ResourceScopes, agent_access_core::ProviderError> {
+        ) -> Result<agent_access_provider::ResourceScopes, agent_access_provider::ProviderError>
+        {
             agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
         }
         async fn invoke(
             &self,
-            request: agent_access_core::ProviderInvocation,
-        ) -> Result<agent_access_core::ProviderResult, agent_access_core::ProviderError> {
+            request: agent_access_provider::ProviderInvocation,
+        ) -> Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>
+        {
             if let Some(control) = &self.stop {
                 control.force_stop();
                 std::future::pending().await
@@ -282,7 +284,7 @@ credential_mode="service"
             if status == "applied_unverified" {
                 response.status = 502;
                 response.envelope.reason_code =
-                    Some(agent_access_core::ReasonCode::MutationVerificationFailed);
+                    Some(agent_access_provider::ReasonCode::MutationVerificationFailed);
             }
             let result = broker(
                 response.clone(),
@@ -345,11 +347,11 @@ credential_mode="service"
         let (mut response, control) = outcome(false).await;
         let message = "fake is rate limiting requests. Retry later.";
         for reason in [
-            agent_access_core::ReasonCode::UpstreamRateLimited,
-            agent_access_core::ReasonCode::RateLimited,
+            agent_access_provider::ReasonCode::UpstreamRateLimited,
+            agent_access_provider::ReasonCode::RateLimited,
         ] {
             response.status = 429;
-            response.envelope.decision = agent_access_core::Decision::Error;
+            response.envelope.decision = agent_access_provider::Decision::Error;
             response.envelope.reason_code = Some(reason);
             response.envelope.error = Some(agent_access_core::ErrorBody {
                 message: message.into(),
@@ -365,7 +367,7 @@ credential_mode="service"
         }
         // Other errors keep the JSON text copy of the envelope.
         response.status = 502;
-        response.envelope.reason_code = Some(agent_access_core::ReasonCode::UpstreamFailed);
+        response.envelope.reason_code = Some(agent_access_provider::ReasonCode::UpstreamFailed);
         let result = broker(response, &control, 64 * 1024, &[]);
         assert_eq!(
             serde_json::from_str::<Value>(&text(&result)).unwrap(),

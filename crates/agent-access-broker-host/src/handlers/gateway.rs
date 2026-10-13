@@ -10,10 +10,13 @@ use crate::ingress::source::auth_source_key;
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
-    BROKER_REQUEST_ID_HEADER, BrokerResponse, BrokerRuntime, ExecutionContext, ExecutionCredential,
-    GatewayConfig, GatewayGitConfig, GovernedOperationContext, IdentityContext, IdentityFailure,
-    OperationContext, PreparedGatewayOperation, ProviderError, REASON_CODE_HEADER,
-    REQUEST_ID_HEADER, ReasonCode, ResourceScopes, new_broker_request_id, url_allowed_by_patterns,
+    BrokerResponse, BrokerRuntime, ExecutionContext, GatewayConfig, GatewayGitConfig,
+    GovernedOperationContext, IdentityContext, IdentityFailure, OperationContext,
+    PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
+};
+use agent_access_provider::{
+    BROKER_REQUEST_ID_HEADER, ExecutionCredential, ProviderError, REQUEST_ID_HEADER, ReasonCode,
+    ResourceScopes, url_allowed_by_patterns,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -1205,7 +1208,7 @@ fn gateway_upstream_url(
     let repository = resource_scopes
         .get("repository")
         .and_then(|repositories| match repositories.as_slice() {
-            [repository] if agent_access_core::is_canonical_repository_path(repository) => {
+            [repository] if agent_access_provider::is_canonical_repository_path(repository) => {
                 Some(repository)
             }
             _ => None,
@@ -2377,7 +2380,8 @@ fn gateway_upstream_response(
     // Upstream throttling passes through with its status; its wait is
     // forwarded only as bounded whole seconds, never as the raw value.
     if upstream_status == 429
-        && let Some(wait) = agent_access_core::UpstreamRetryAfter::from_headers(upstream_headers)
+        && let Some(wait) =
+            agent_access_provider::UpstreamRetryAfter::from_headers(upstream_headers)
     {
         response.headers_mut().insert(
             axum::http::header::RETRY_AFTER,
@@ -2739,7 +2743,7 @@ fn repository_from_suffix(path: &str, suffix: &[&str]) -> Result<String, Gateway
     let repository = repository_segments.join("/");
     // Classify with the same canonical grammar policy authorizes, so a path
     // no grant could ever match is rejected here rather than after lookup.
-    if !agent_access_core::is_canonical_repository_path(&repository) {
+    if !agent_access_provider::is_canonical_repository_path(&repository) {
         return Err(GatewayClassifyError::rule_not_found(
             "repository path is invalid",
         ));
@@ -3246,7 +3250,7 @@ mod tests {
 
     #[test]
     fn gateway_upstream_throttling_forwards_only_a_bounded_retry_after() {
-        let date = agent_access_core::UpstreamRetryAfter::after_seconds(600)
+        let date = agent_access_provider::UpstreamRetryAfter::after_seconds(600)
             .at()
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
@@ -3868,13 +3872,13 @@ mod tests {
         config.policy.resources.extend([
             gateway_resource(
                 "other",
-                agent_access_core::ResourceSelector::Exact {
+                agent_access_provider::ResourceSelector::Exact {
                     value: "other/tool".to_string(),
                 },
             ),
             gateway_resource(
                 "sip-namespace",
-                agent_access_core::ResourceSelector::Namespace {
+                agent_access_provider::ResourceSelector::Namespace {
                     value: "sip".to_string(),
                 },
             ),
@@ -4776,8 +4780,8 @@ mod tests {
             hash_key_ref: format!("file:{}", hash_key.display()),
             ..Default::default()
         });
-        config.network.outbound_tls = agent_access_core::OutboundTlsConfig {
-            trust: agent_access_core::OutboundTlsTrustMode::Custom,
+        config.network.outbound_tls = agent_access_provider::OutboundTlsConfig {
+            trust: agent_access_provider::OutboundTlsTrustMode::Custom,
             ca_certificate: Some(fixture.join("ca-a.pem")),
         };
         config.policy.grants[0].subjects = vec!["user:gateway-user".into()];
@@ -5792,12 +5796,12 @@ mod tests {
 
     fn gateway_resource(
         id: &str,
-        selector: agent_access_core::ResourceSelector,
+        selector: agent_access_provider::ResourceSelector,
     ) -> agent_access_core::ResourceDefinition {
         agent_access_core::ResourceDefinition {
             id: id.to_string(),
             display_name: None,
-            resource_type: agent_access_core::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
             selector,
             allowed_execution_contexts: vec!["default".to_string()],
             enabled: true,
@@ -5865,7 +5869,7 @@ mod tests {
                 default_decision: "deny".to_string(),
                 resources: vec![gateway_resource(
                     "sip-service",
-                    agent_access_core::ResourceSelector::Exact {
+                    agent_access_provider::ResourceSelector::Exact {
                         value: "sip/service".to_string(),
                     },
                 )],

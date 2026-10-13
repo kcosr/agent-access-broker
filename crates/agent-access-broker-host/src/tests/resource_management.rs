@@ -715,7 +715,7 @@ fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
             },
             allowed_execution_contexts: vec!["default".into()],
             enabled: true,
-            attributes: agent_access_core::ResourceAttributes::from(BTreeMap::from([(
+            attributes: agent_access_provider::ResourceAttributes::from(BTreeMap::from([(
                 "webhookUrl".into(),
                 WEBHOOK_SECRET.into(),
             )])),
@@ -1437,13 +1437,13 @@ async fn resource_catalog_mutation_owner_completes_audit_after_waiter_cancellati
                 runtime.create_managed_resource(agent_access_core::CreateResourceRequest {
                     id: Some("cancelled-repo".into()),
                     display_name: Some("Committed after cancellation".into()),
-                    resource_type: agent_access_core::GIT_REPOSITORY_RESOURCE.id.clone(),
+                    resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id.clone(),
                     selector: ResourceSelector::Exact {
                         value: "audit/cancelled".into(),
                     },
                     allowed_execution_contexts: vec!["default".into()],
                     enabled: true,
-                    attributes: agent_access_core::ResourceAttributes::default(),
+                    attributes: agent_access_provider::ResourceAttributes::default(),
                     created_by: "admin".into(),
                 })?;
             committed_tx.send(()).unwrap();

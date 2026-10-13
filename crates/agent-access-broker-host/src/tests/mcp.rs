@@ -818,7 +818,7 @@ impl Provider for ControlledProvider {
         &self,
         action: &str,
         inputs: &Value,
-        _credential: Option<&agent_access_core::ExecutionCredential>,
+        _credential: Option<&agent_access_provider::ExecutionCredential>,
     ) -> Result<ResourceScopes, ProviderError> {
         if self.pause_before_dispatch {
             self.pause().await;

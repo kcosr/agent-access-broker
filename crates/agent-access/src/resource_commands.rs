@@ -1,5 +1,5 @@
 use super::*;
-use agent_access_core::ResourceType;
+use agent_access_provider::ResourceType;
 
 fn parse_resource_type(value: &str) -> Result<ResourceType, String> {
     ResourceType::new(value)

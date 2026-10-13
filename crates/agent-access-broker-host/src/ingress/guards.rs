@@ -1,4 +1,5 @@
-use agent_access_core::{ProviderError, ReasonCode, SourceContext};
+use agent_access_core::SourceContext;
+use agent_access_provider::{ProviderError, ReasonCode};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};

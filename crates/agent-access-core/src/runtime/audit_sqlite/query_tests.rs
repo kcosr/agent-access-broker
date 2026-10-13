@@ -13,9 +13,10 @@ use super::schema::FileIdentity;
 use super::tests::test_controls;
 use crate::{
     AuditConfig, AuditEventFilters, AuditEventsQuery, AuditListRoute, AuditPosition,
-    AuditQueryError, AuditQueryLimits, AuditStoreType, AuditVisibility, BrokerTokenClass, Decision,
-    LimitsConfig, ReasonCode, parse_audit_list_query,
+    AuditQueryError, AuditQueryLimits, AuditStoreType, AuditVisibility, BrokerTokenClass,
+    LimitsConfig, parse_audit_list_query,
 };
+use agent_access_provider::{Decision, ReasonCode};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};

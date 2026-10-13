@@ -173,7 +173,7 @@ pub(super) fn descriptor(
             .definition
             .execution_bindings
             .iter()
-            .any(|b| b.mechanism == crate::ImportedAuthMechanism::Oauth)
+            .any(|b| b.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth)
         {
             CredentialDescriptor::default()
                 .profile("token", "bearer_token")
@@ -223,9 +223,9 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
 fn oauth_binding_allowed(
     config: &BrokerConfig,
     definition: &ImportedServiceDefinition,
-    binding: &crate::ImportedCredentialBinding,
+    binding: &agent_access_provider::ImportedCredentialBinding,
 ) -> bool {
-    if binding.mechanism != crate::ImportedAuthMechanism::Oauth {
+    if binding.mechanism != agent_access_provider::ImportedAuthMechanism::Oauth {
         return true;
     }
     let Some(registration) = binding
@@ -279,7 +279,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
                 .expect("selected mode");
-            let oauth = binding.mechanism == crate::ImportedAuthMechanism::Oauth;
+            let oauth = binding.mechanism == agent_access_provider::ImportedAuthMechanism::Oauth;
             config.credentials.per_user.insert(
                 service.clone(),
                 CredentialConfig {
@@ -721,7 +721,7 @@ pub(super) fn build_providers(
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     egress_environment: &Arc<EgressProxyEnvironment>,
-    outbound_tls: &crate::PreparedOutboundTls,
+    outbound_tls: &agent_access_provider::PreparedOutboundTls,
 ) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
     let egress = EgressProxyRuntimeConfig::new(
         egress_environment.clone(),
@@ -833,7 +833,7 @@ impl BrokerRuntime {
     pub fn import_binding_available(
         &self,
         definition: &ImportedServiceDefinition,
-        binding: &crate::ImportedCredentialBinding,
+        binding: &agent_access_provider::ImportedCredentialBinding,
     ) -> bool {
         binding.is_supported() && oauth_binding_allowed(&self.config, definition, binding)
     }

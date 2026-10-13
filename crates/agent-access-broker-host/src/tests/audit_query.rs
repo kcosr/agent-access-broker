@@ -2,7 +2,8 @@
 //! visibility tiers, cursor paging and binding, the not-audited success
 //! path, and queries while audit writes fail.
 use super::*;
-use agent_access_core::{AuditQueryLimits, AuditRecord, Decision};
+use agent_access_core::{AuditQueryLimits, AuditRecord};
+use agent_access_provider::Decision;
 
 const ADMIN_EVENTS: &str = "/v1/admin/audit/events";
 const SELF_EVENTS: &str = "/v1/audit/events";

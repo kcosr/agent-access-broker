@@ -1,6 +1,6 @@
 //! The backends a broker build links, and the `[providers]` tables that
 //! configure them.
-use crate::{
+use agent_access_provider::{
     BackendConfig, BackendRegistration, GIT_REPOSITORY_RESOURCE, OAuthDialectRegistration,
     ResourceTypeDescriptor, ResourceTypeRegistry, is_service_name,
 };
@@ -31,7 +31,7 @@ pub struct BackendRegistry {
     registrations: Vec<&'static BackendRegistration>,
     resource_types: ResourceTypeRegistry,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
-    imported_adapters: Vec<&'static dyn crate::ImportedAdapter>,
+    imported_adapters: Vec<&'static dyn agent_access_provider::ImportedAdapter>,
 }
 
 impl BackendRegistry {
@@ -81,7 +81,7 @@ impl BackendRegistry {
 
     pub fn with_imported_adapters(
         mut self,
-        adapters: impl IntoIterator<Item = &'static dyn crate::ImportedAdapter>,
+        adapters: impl IntoIterator<Item = &'static dyn agent_access_provider::ImportedAdapter>,
     ) -> Result<Self, Vec<String>> {
         for adapter in adapters {
             if !is_service_name(adapter.kind()) || self.imported_adapter(adapter.kind()).is_some() {
@@ -94,7 +94,10 @@ impl BackendRegistry {
         Ok(self)
     }
 
-    pub fn imported_adapter(&self, kind: &str) -> Option<&'static dyn crate::ImportedAdapter> {
+    pub fn imported_adapter(
+        &self,
+        kind: &str,
+    ) -> Option<&'static dyn agent_access_provider::ImportedAdapter> {
         self.imported_adapters
             .iter()
             .copied()
@@ -157,7 +160,10 @@ impl BackendRegistry {
         self.registrations.iter().copied()
     }
 
-    pub fn resource_owner(&self, resource_type: &crate::ResourceType) -> Option<&'static str> {
+    pub fn resource_owner(
+        &self,
+        resource_type: &agent_access_provider::ResourceType,
+    ) -> Option<&'static str> {
         self.registrations()
             .find(|registration| {
                 registration

@@ -9,11 +9,14 @@ use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     AgentInvokeTokenCaveats, AgentTokenOptions, AuditRecord, BrokerConfig, BrokerRuntime,
     BrokerTokenClass, CredentialInputSchema, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS,
-    Decision, EffectiveServicePolicyManagementAuthority, ManagedManagementAuthority,
-    PolicyReadScope, PolicyWriteScope, PrincipalRole, ProviderCredentialVerification,
-    ProviderError, ReasonCode, ResourceScopes, ResourceSelection, RuntimeError, SourceContext,
-    broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl, is_action_name,
+    EffectiveServicePolicyManagementAuthority, ManagedManagementAuthority, PolicyReadScope,
+    PolicyWriteScope, PrincipalRole, ResourceSelection, RuntimeError, SourceContext,
+    broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
     new_broker_request_id, parse_ttl_seconds,
+};
+use agent_access_provider::{
+    Decision, ProviderCredentialVerification, ProviderError, ReasonCode, ResourceScopes,
+    is_action_name,
 };
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -2099,7 +2102,7 @@ mod tests {
                 id: "eng".to_string(),
                 display_name: None,
                 resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
-                selector: agent_access_core::ResourceSelector::Exact {
+                selector: agent_access_provider::ResourceSelector::Exact {
                     value: "ENG".to_string(),
                 },
                 allowed_execution_contexts: vec!["internal".to_string()],

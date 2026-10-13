@@ -12,10 +12,11 @@ use agent_access_broker::broker_build_status;
 use agent_access_broker_host::build_router;
 use agent_access_core::{
     BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, IdentityConfig,
-    IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig, ResourceSelector,
+    IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig,
     StaticPrincipalConfig,
 };
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
+use agent_access_provider::ResourceSelector;
 use common::{resource_catalog, resource_selection};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
+agent-access-provider = { path = "../agent-access-provider" }
 anyhow.workspace = true
 base64.workspace = true
 bytes.workspace = true

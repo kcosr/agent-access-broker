@@ -4,11 +4,13 @@ use super::*;
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ImportedActionStatus,
-    ImportedActionWrite, ImportedCatalog, ImportedCredentialBinding, ImportedCredentialDelivery,
-    ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscoveryCredential,
-    ImportedSecretWriteRequest, ImportedServiceDefinition, ImportedServiceStatus,
+    ImportedActionWrite, ImportedCatalog, ImportedSecretWriteRequest, ImportedServiceStatus,
     ImportedServiceUpdateRequest, ImportsConfig, ManagedPolicyGrantCreateRequest,
     ManagedStoreError, ProvidersConfig,
+};
+use agent_access_provider::{
+    ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
+    ImportedCredentialPurpose, ImportedDiscoveryCredential, ImportedServiceDefinition,
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 mod mcp_names;
@@ -505,8 +507,8 @@ async fn unsupported_personal_binding_keeps_precedence_and_ambiguity_fail_closed
         .iter_mut()
         .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
         .unwrap();
-    personal.mechanism = agent_access_core::ImportedAuthMechanism::Oauth;
-    personal.status = agent_access_core::ImportedBindingStatus::Unsupported;
+    personal.mechanism = agent_access_provider::ImportedAuthMechanism::Oauth;
+    personal.status = agent_access_provider::ImportedBindingStatus::Unsupported;
     fixture
         .runtime
         .managed_store()
@@ -721,11 +723,11 @@ fn unavailable_import_semantics_do_not_block_restart_or_cleanup() {
 fn retained_unavailable_oauth_binding_does_not_block_other_import_administration() {
     let fixture = fixture();
     let mut definition = definition();
-    definition.execution_bindings[1] = agent_access_core::ImportedCredentialBinding {
+    definition.execution_bindings[1] = agent_access_provider::ImportedCredentialBinding {
         owner_mode: ImportedCredentialMode::PerUser,
-        mechanism: agent_access_core::ImportedAuthMechanism::Oauth,
+        mechanism: agent_access_provider::ImportedAuthMechanism::Oauth,
         delivery: ImportedCredentialDelivery::Bearer,
-        status: agent_access_core::ImportedBindingStatus::Configured,
+        status: agent_access_provider::ImportedBindingStatus::Configured,
         adapter_id: Some("mcp_oauth".into()),
         registration_id: Some("removed".into()),
         profile: Some("read".into()),
