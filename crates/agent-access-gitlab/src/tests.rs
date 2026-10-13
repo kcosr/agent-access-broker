@@ -1048,6 +1048,20 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         )
         .is_err()
     );
+    let unauthenticated = InvocationBuilder::from(request.clone())
+        .identity(crate::InvocationIdentity::new("agent-1".to_string(), false))
+        .build();
+    assert!(
+        decode(
+            &unauthenticated,
+            &project,
+            "provider-fingerprint",
+            &request_hash,
+            100,
+            now,
+        )
+        .is_err()
+    );
     let mut changed_project = project.clone();
     changed_project.id = 43;
     assert!(
@@ -5881,4 +5895,399 @@ fn position_input_failure_categories_are_closed_and_non_refreshable() {
         }))
         .is_err()
     );
+}
+
+fn provider_for_server(server: &MockServer) -> GitlabProvider {
+    let mut config = config();
+    config.api_base_url = format!("{}/api/v4", server.uri());
+    config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
+    let host = agent_access_provider::test_support::TestHost::default();
+    GitlabProvider::new(config, &host.context()).unwrap()
+}
+
+#[test]
+fn gitlab_rest_is_a_project_scoped_invoke_surface_over_the_host_repository_type() {
+    // GitLab consumes the host-owned repository type and declares none itself.
+    assert!(GITLAB_BACKEND.resource_types().is_empty());
+    let descriptor = gitlab_descriptor(&config());
+    // Native REST is an invoke surface; Git smart HTTP stays with host gateways.
+    assert_eq!(descriptor.surface, ServiceSurface::Invoke);
+    assert_eq!(
+        descriptor.resource_scopes.keys().collect::<Vec<_>>(),
+        ["repository"]
+    );
+    assert_eq!(
+        descriptor.resource_scopes["repository"].resource_type,
+        *GIT_REPOSITORY_RESOURCE.id()
+    );
+    for action in &descriptor.actions {
+        let name = action.action.as_str();
+        assert_eq!(
+            action.resource_scope.as_deref(),
+            Some("repository"),
+            "{name}"
+        );
+        // Searches are ordinary project-scoped calls, not search-contained.
+        assert!(!action.search_contained, "{name}");
+        assert_eq!(action.lookup, LookupRequirement::ScopeResolution, "{name}");
+        for transport in [
+            "clone",
+            "fetch",
+            "push",
+            "upload_pack",
+            "receive_pack",
+            "info_refs",
+        ] {
+            assert!(!name.contains(transport), "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn credential_verification_reads_the_current_user_with_the_selected_bearer_only() {
+    let server = MockServer::start().await;
+    for (token, response) in [
+        (
+            "gitlab-token",
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "id": 314, "username": "service-user" })),
+        ),
+        ("revoked-token", ResponseTemplate::new(401)),
+        ("forbidden-token", ResponseTemplate::new(403)),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/api/v4/user"))
+            .and(wiremock::matchers::header(
+                "authorization",
+                format!("Bearer {token}").as_str(),
+            ))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let provider = provider_for_server(&server);
+    let correlation = crate::CorrelationContext::for_tests();
+    let verified = provider
+        .verify_execution_credential(&test_credential(), &correlation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(verified.upstream_status, 200);
+    assert_eq!(verified.audit["gitlab"]["operation"], "credential.verify");
+    assert_eq!(verified.audit["gitlab"]["userId"], 314);
+    assert_eq!(verified.audit["gitlab"]["username"], "service-user");
+    assert!(!verified.audit.to_string().contains("gitlab-token"));
+    for (token, reason) in [
+        ("revoked-token", ReasonCode::UpstreamUnauthorized),
+        ("forbidden-token", ReasonCode::UpstreamForbidden),
+    ] {
+        let error = provider
+            .verify_execution_credential(&bearer_credential(token), &correlation)
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(error.reason_code(), reason);
+        assert!(!format!("{error:?}").contains(token));
+    }
+    // GitLab execution credentials are bearer tokens; Basic material is
+    // rejected without contacting GitLab.
+    let error = provider
+        .verify_execution_credential(
+            &agent_access_provider::test_support::basic_credential("user", "basic-token"),
+            &correlation,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert!(!format!("{error:?}").contains("basic-token"));
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+const FORK_SUGGESTION_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[tokio::test]
+async fn fork_suggestions_pin_numeric_scope_state_and_recheck_it_before_writing() {
+    let server = MockServer::start().await;
+    for (route, body) in [
+        (
+            "/api/v4/projects/sip%2Fservice",
+            json!({ "id": 42, "path_with_namespace": "sip/service" }),
+        ),
+        (
+            "/api/v4/projects/141",
+            json!({ "id": 141, "path_with_namespace": "fork/service" }),
+        ),
+        (
+            "/api/v4/user",
+            json!({ "id": 314, "username": "service-user" }),
+        ),
+        (
+            "/api/v4/projects/42/merge_requests/5",
+            json!({
+                "id": 500, "iid": 5, "project_id": 42, "source_project_id": 141,
+                "target_project_id": 42, "sha": FORK_SUGGESTION_SHA
+            }),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    let provider = provider_for_server(&server);
+    let action = "merge_request.suggestion.apply";
+    let inputs = json!({
+        "project": "sip/service", "iid": 5, "expectedHeadSha": FORK_SUGGESTION_SHA,
+        "discussionId": "discussion-1", "noteId": 900, "suggestionId": 456
+    });
+
+    // Scope resolution returns the target and source repositories together
+    // and carries both numeric project IDs as typed provider state.
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "gitlab",
+        action,
+        inputs.clone(),
+    )
+    .lookup_credential(test_credential());
+    let (scopes, state) = provider
+        .resolve_scopes(fixture.request())
+        .await
+        .unwrap()
+        .into_parts();
+    let both = ["fork/service", "sip/service"];
+    let repositories = |paths: &[&str]| {
+        ResourceScopes::from([(
+            "repository".to_string(),
+            paths.iter().map(|path| path.to_string()).collect(),
+        )])
+    };
+    assert_eq!(scopes, repositories(&both));
+    assert_eq!(
+        ProviderState::require::<GitlabSuggestionScopePreflight>(state.as_ref()).unwrap(),
+        &GitlabSuggestionScopePreflight {
+            target_project_id: 42,
+            source_project_id: 141,
+        }
+    );
+
+    let invocation = |state: Option<ProviderState>, paths: &[&str]| {
+        let builder = InvocationBuilder::new("gitlab", action)
+            .inputs(inputs.clone())
+            .resources(repositories(paths))
+            .credential(test_credential())
+            .lookup_credential(test_credential());
+        match state {
+            Some(state) => builder.state(state).build(),
+            None => builder.build(),
+        }
+    };
+    // Missing or foreign state fails closed before any upstream request.
+    let before = server.received_requests().await.unwrap().len();
+    for (state, diagnostic) in [
+        (None, "provider_state_missing"),
+        (
+            Some(ProviderState::new("foreign")),
+            "provider_state_type_mismatch",
+        ),
+    ] {
+        let error = provider.invoke(invocation(state, &both)).await.unwrap_err();
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::BrokerProviderContractFailed
+        );
+        assert_eq!(error.internal_diagnostic_code, Some(diagnostic));
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), before);
+
+    // Execution rechecks the pinned target and source IDs against fresh
+    // reads with the execution credential, and the admitted repositories.
+    let preflight = |target_project_id, source_project_id| {
+        ProviderState::new(GitlabSuggestionScopePreflight {
+            target_project_id,
+            source_project_id,
+        })
+    };
+    for (state, paths) in [
+        (preflight(41, 141), &both[..]),
+        (preflight(42, 140), &both[..]),
+        (preflight(42, 141), &["sip/service"][..]),
+    ] {
+        let error = provider
+            .invoke(invocation(Some(state), paths))
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(
+            error.message,
+            "GitLab merge request repository scope changed before suggestion apply"
+        );
+    }
+    // Matching state passes the recheck and reaches the suggestion proof,
+    // whose discussion read this fixture does not serve.
+    let error = provider
+        .invoke(invocation(Some(preflight(42, 141)), &both))
+        .await
+        .unwrap_err();
+    assert_eq!(error.message, "GitLab note was not found or not permitted");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method.as_str() == "GET")
+    );
+}
+
+/// One raw HTTP/1.1 response whose body ends after two of ten declared
+/// bytes, either held open (a stall) or closed (a broken connection).
+fn truncated_download_server(hold: bool) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            match socket.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(read) => request.extend_from_slice(&buffer[..read]),
+            }
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\n\r\nab",
+            )
+            .unwrap();
+        socket.flush().unwrap();
+        if hold {
+            // Longer than any test step; the detached thread ends with the
+            // test binary.
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+    });
+    format!("http://{address}/projects/42/repository/files/private%2Fpath/raw")
+}
+
+#[tokio::test]
+async fn raw_download_streams_fail_late_only_with_code_only_reasons() {
+    use futures_util::StreamExt;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"oversize".to_vec()))
+        .mount(&server)
+        .await;
+    let fetch = |url: String| {
+        let client = client.clone();
+        async move { client.get(url).send().await.unwrap() }
+    };
+    // Only the stall case relies on the idle budget expiring; the others
+    // get a budget no loaded test host exhausts.
+    let (stall, idle) = (
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_secs(10),
+    );
+    let cases = [
+        // More bytes than the download cap.
+        (
+            gitlab_response_stream(
+                fetch(format!("{}/oversize", server.uri())).await,
+                4,
+                idle,
+                None,
+                "text/plain".to_string(),
+            ),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        // Fewer bytes than the response declared.
+        (
+            gitlab_response_stream(
+                fetch(format!("{}/short", server.uri())).await,
+                1024,
+                idle,
+                Some(10),
+                "text/plain".to_string(),
+            ),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            gitlab_response_stream(
+                fetch(truncated_download_server(true)).await,
+                1024,
+                stall,
+                Some(10),
+                "text/plain".to_string(),
+            ),
+            ReasonCode::UpstreamTimeout,
+        ),
+        (
+            gitlab_response_stream(
+                fetch(truncated_download_server(false)).await,
+                1024,
+                idle,
+                Some(10),
+                "text/plain".to_string(),
+            ),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+    ];
+    for (stream, expected) in cases {
+        assert!(stream.is_streaming());
+        let ProviderResultStreamSource::Stream(stream) = stream.source else {
+            panic!("GitLab downloads stream");
+        };
+        let mut stream = stream.lock().unwrap().take().unwrap();
+        let mut failure = None;
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item {
+                failure = Some(error);
+                break;
+            }
+        }
+        let failure = failure.expect("the download fails after its headers");
+        let code = failure.reason_code.standard().unwrap();
+        assert_eq!(code, expected, "{failure:?}");
+        assert!(code.permits_late_stream(), "{code:?}");
+        assert!(!failure.message.contains("private"), "{failure:?}");
+    }
+}
+
+#[tokio::test]
+async fn body_admission_accepts_only_project_upload_and_states_its_disposition() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/sip%2Fservice"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "id": 42, "path_with_namespace": "sip/service" })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut config = config();
+    config.attachments.media_types.push("text/html".to_string());
+    let provider = GitlabProvider::with_backend(config, Arc::new(http_backend(&server)));
+    let other = test_invocation("issue.view", json!({ "project": "sip/service", "iid": 7 }));
+    let error = provider
+        .authorize_body_parts(other.admitted(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let (inputs, _) = upload_fixture();
+    let upload = test_invocation("project.upload", inputs);
+    let admission = provider
+        .authorize_body_parts(upload.admitted(), None)
+        .await
+        .unwrap();
+    assert!(matches!(admission.state(), StateDisposition::Keep));
+    assert_eq!(admission.part_specs().len(), 1);
 }
