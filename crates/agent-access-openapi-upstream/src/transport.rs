@@ -319,18 +319,18 @@ pub(crate) fn auth(
     if let ImportedCredentialDelivery::RawHeader { name } = delivery {
         crate::config::parameter_header(name).map_err(|_| credential_error())?;
     }
-    if credential.kind != "bearer_token" || credential.username.is_some() {
-        return Err(credential_error());
-    }
-    let token = credential
-        .token
-        .as_ref()
-        .filter(|token| {
-            !token.is_empty()
+    let token = match credential.view() {
+        CredentialView::Bearer { token }
+            if !token.is_empty()
                 && token.len() <= 32768
-                && token.bytes().all(|b| (0x21..=0x7e).contains(&b))
-        })
-        .ok_or_else(credential_error)?;
+                && token.bytes().all(|b| (0x21..=0x7e).contains(&b)) =>
+        {
+            token
+        }
+        CredentialView::Bearer { .. } | CredentialView::Basic { .. } => {
+            return Err(credential_error());
+        }
+    };
     let (name, text) = match delivery {
         ImportedCredentialDelivery::Bearer => (
             HeaderName::from_static("authorization"),
@@ -338,7 +338,7 @@ pub(crate) fn auth(
         ),
         ImportedCredentialDelivery::RawHeader { name } => (
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
-            token.clone(),
+            token.to_owned(),
         ),
     };
     let mut value = HeaderValue::from_str(&text).map_err(|_| credential_error())?;

@@ -1,6 +1,6 @@
 use super::*;
 use crate::{ActionIo, Decision, raw_download_io};
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, basic_credential, credential_token};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1001,7 +1001,7 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
     );
     request.resource_scopes =
         ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.credential = Some(credential_with_token("execute-token"));
+    request.execution = ExecutionAccess::Static(credential_with_token("execute-token"));
     request.lookup_credential = Some(credential_with_token("lookup-token"));
 
     let result = provider.invoke(request).await.unwrap();
@@ -1445,7 +1445,7 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
     request.resource_scopes =
         ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
     request.lookup_credential = Some(credential_with_token("lookup-token"));
-    request.credential = Some(credential_with_token("execute-token"));
+    request.execution = ExecutionAccess::Static(credential_with_token("execute-token"));
 
     let error = provider.invoke(request).await.unwrap_err();
 
@@ -1808,7 +1808,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     );
 
     let mut changed_request = request.clone();
-    changed_request.credential_mode = "user".to_string();
+    changed_request.credential_mode = CredentialMode::PerUser;
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &binding, &changed_request)
             .unwrap_err()
@@ -2698,7 +2698,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     );
 
     let mut per_user_request = request.clone();
-    per_user_request.credential_mode = "per_user".to_string();
+    per_user_request.credential_mode = CredentialMode::PerUser;
     per_user_request.identity = identity("agent-one");
     let per_user_payload = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
@@ -4198,8 +4198,8 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
         backend.clone(),
     );
     let mut request = invocation("attachment.list", json!({"pageId": "123456"}));
-    request.credential_mode = "per_user".to_string();
-    request.credential = Some(credential_with_token("per-user-token"));
+    request.credential_mode = CredentialMode::PerUser;
+    request.execution = ExecutionAccess::Static(credential_with_token("per-user-token"));
     request.lookup_credential = Some(credential_with_token("lookup-token"));
 
     provider.invoke(request).await.unwrap();
@@ -5950,9 +5950,7 @@ impl CommentStubConfluenceBackend {
         &self,
         credential: &ExecutionCredential,
     ) -> &BTreeMap<String, ConfluenceComment> {
-        credential
-            .token
-            .as_deref()
+        Some(credential_token(credential))
             .and_then(|token| self.comments_by_token.get(token))
             .unwrap_or(&self.comments)
     }
@@ -5969,7 +5967,7 @@ impl CommentStubConfluenceBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential_token: credential.token.clone(),
+                credential_token: Some(credential_token(credential).to_owned()),
                 object_id,
                 body_format,
             });
@@ -6717,7 +6715,7 @@ impl AttachmentListBackend {
     fn record_credential(&self, operation: &str, credential: &ExecutionCredential) {
         self.credential_observations.lock().unwrap().push((
             operation.to_string(),
-            credential.token.clone().unwrap_or_default(),
+            credential_token(credential).to_owned(),
         ));
     }
 }
@@ -7873,11 +7871,7 @@ fn credential() -> ExecutionCredential {
 }
 
 fn credential_with_token(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("user@example.com".to_string()),
-        token: Some(token.to_string()),
-    }
+    basic_credential("user@example.com", token)
 }
 
 fn attachment_list_page() -> ConfluencePage {

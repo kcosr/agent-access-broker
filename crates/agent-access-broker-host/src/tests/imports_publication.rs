@@ -7,7 +7,7 @@ use agent_access_core::{
     ImportedActionWrite, ImportedSecretDeleteRequest, ImportedSecretWriteRequest,
     ImportedServiceStatus, ImportedServiceUpdateRequest, ManagedPolicyGrantCreateRequest,
 };
-use agent_access_provider::ExecutionCredential;
+use agent_access_provider::test_support::bearer_credential;
 
 async fn invoke(runtime: &BrokerRuntime, token: &str, service: &str) -> (StatusCode, Value) {
     let response = authed_json_request(
@@ -175,11 +175,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
     let wrong_plaintext = reloaded
         .prepare_imported_service_change(
             record,
-            Some(Some(ExecutionCredential {
-                kind: "bearer_token".into(),
-                username: None,
-                token: Some("import-transport-initial".into()),
-            })),
+            Some(Some(bearer_credential("import-transport-initial"))),
         )
         .unwrap();
     assert!(
@@ -203,11 +199,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
     let providers = reloaded
         .prepare_imported_service_change(
             record,
-            Some(Some(ExecutionCredential {
-                kind: "bearer_token".into(),
-                username: None,
-                token: Some("import-transport-rotated".into()),
-            })),
+            Some(Some(bearer_credential("import-transport-rotated"))),
         )
         .unwrap();
     let request = ImportedSecretWriteRequest {

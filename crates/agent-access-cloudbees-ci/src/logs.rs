@@ -479,19 +479,7 @@ impl CloudbeesCiProvider {
             .cursor
             .map(|c| decode_cursor(&self.log_signer, c, &binding, self.log_scan_limit))
             .transpose()?;
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         let number = input.build_number.expect("required build");
         let url = Self::append(job_url, &[&number.to_string(), "consoleText"]);
         let started = Instant::now();
@@ -808,6 +796,7 @@ async fn search(
 mod tests {
     use super::*;
     use crate::tests::{invocation, provider};
+    use agent_access_provider::CredentialMode;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1276,7 +1265,7 @@ mod tests {
             );
         }
         let mut wrong = invocation("build.log.read", input.clone());
-        wrong.credential_mode = "per_user".into();
+        wrong.credential_mode = CredentialMode::PerUser;
         assert_eq!(
             ci.invoke(wrong).await.unwrap_err().reason_code,
             ReasonCode::InputInvalid

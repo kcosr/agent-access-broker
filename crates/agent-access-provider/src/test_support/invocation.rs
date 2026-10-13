@@ -2,9 +2,9 @@
 //! them: an anonymous caller in the `internal` execution context, service
 //! credential mode, no resources or credentials unless supplied.
 use crate::{
-    BrokerBodyPart, CorrelationContext, DelegatedCredential, ExecutionCredential,
-    InvocationIdentity, ProviderInvocation, ProviderState, ResourceAttributes, ResourceScopes,
-    SearchAuthorization,
+    BrokerBodyPart, CorrelationContext, CredentialMode, DelegatedCredential, ExecutionAccess,
+    ExecutionCredential, InvocationIdentity, ProviderInvocation, ProviderState, ResourceAttributes,
+    ResourceScopes, SearchAuthorization,
 };
 use serde_json::{Value, json};
 
@@ -16,11 +16,10 @@ pub struct InvocationBuilder {
     execution_context: String,
     identity: InvocationIdentity,
     correlation: CorrelationContext,
-    credential_mode: String,
+    credential_mode: CredentialMode,
     resources: ResourceScopes,
     search: Option<SearchAuthorization>,
-    credential: Option<ExecutionCredential>,
-    delegated: Option<DelegatedCredential>,
+    execution: ExecutionAccess,
     lookup_credential: Option<ExecutionCredential>,
     body_parts: Vec<BrokerBodyPart>,
     resource_attributes: ResourceAttributes,
@@ -36,11 +35,10 @@ impl InvocationBuilder {
             execution_context: "internal".to_owned(),
             identity: InvocationIdentity::anonymous(),
             correlation: CorrelationContext::for_tests(),
-            credential_mode: "service".to_owned(),
+            credential_mode: CredentialMode::Service,
             resources: ResourceScopes::new(),
             search: None,
-            credential: None,
-            delegated: None,
+            execution: ExecutionAccess::None,
             lookup_credential: None,
             body_parts: Vec::new(),
             resource_attributes: ResourceAttributes::default(),
@@ -68,8 +66,8 @@ impl InvocationBuilder {
         self
     }
 
-    pub fn credential_mode(mut self, credential_mode: &str) -> Self {
-        self.credential_mode = credential_mode.to_owned();
+    pub fn credential_mode(mut self, credential_mode: CredentialMode) -> Self {
+        self.credential_mode = credential_mode;
         self
     }
 
@@ -85,15 +83,16 @@ impl InvocationBuilder {
         self
     }
 
-    /// Static execution credential.
+    /// Static execution credential. Static and delegated material never
+    /// coexist, so this replaces any delegated credential.
     pub fn credential(mut self, credential: ExecutionCredential) -> Self {
-        self.credential = Some(credential);
+        self.execution = ExecutionAccess::Static(credential);
         self
     }
 
-    /// Delegated execution credential.
+    /// Delegated execution credential, replacing any static credential.
     pub fn delegated(mut self, delegated: DelegatedCredential) -> Self {
-        self.delegated = Some(delegated);
+        self.execution = ExecutionAccess::Delegated(delegated);
         self
     }
 
@@ -129,9 +128,8 @@ impl InvocationBuilder {
             resource_scopes: self.resources,
             resource_attributes: self.resource_attributes,
             credential_mode: self.credential_mode,
-            credential: self.credential,
+            execution: self.execution,
             lookup_credential: self.lookup_credential,
-            delegated_credential: self.delegated,
             state: self.state,
             search_authorization: self.search,
         }

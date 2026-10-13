@@ -24,7 +24,9 @@ use agent_access_core::{
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use agent_access_gitlab::PositionInputCategory;
 use agent_access_jira::JIRA_PROJECT_RESOURCE;
-use agent_access_provider::test_support::install_trace_capture;
+use agent_access_provider::test_support::{
+    credential_token, credential_username, install_trace_capture,
+};
 use agent_access_provider::{
     ActionDescriptor, BROKER_REQUEST_ID_HEADER, BodyAdmission, BrokerBodyPartSpec,
     CredentialDescriptor, GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError,
@@ -14777,13 +14779,13 @@ impl Provider for TestManagedGitlabCredentialProvider {
         credential: &agent_access_provider::ExecutionCredential,
         correlation: &agent_access_provider::CorrelationContext,
     ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
-        assert_eq!(credential.kind, "bearer_token");
+        assert_eq!(credential.kind().as_str(), "bearer_token");
         let expected_token = match correlation.agent_request_id.as_str() {
             "managed-token-verify-with-policy" => "mallory-token-rotated",
             "managed-user-verify" => "gitlab-token-user-rotated",
             request_id => panic!("unexpected credential verification request: {request_id}"),
         };
-        assert_eq!(credential.token.as_deref(), Some(expected_token));
+        assert_eq!(credential_token(credential), expected_token);
         Ok(Some(
             agent_access_provider::ProviderCredentialVerification {
                 upstream_status: 200,
@@ -15008,9 +15010,7 @@ impl Provider for TestJiraParentInvokeProvider {
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
         assert_eq!(
-            request
-                .lookup_credential()
-                .and_then(|credential| credential.token.as_deref()),
+            request.lookup_credential().map(credential_token),
             Some("lookup-token")
         );
         self.local_scopes(request.action(), request.inputs())
@@ -15019,10 +15019,7 @@ impl Provider for TestJiraParentInvokeProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("service-token")
         );
         assert_eq!(request.resource_scopes["project"], vec!["PROJ".to_string()]);
@@ -15287,10 +15284,7 @@ impl Provider for TestJiraNormalizedWriteProvider {
         assert_eq!(request.action, "issue.create");
         assert_eq!(request.inputs["contentFormat"], "markdown");
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("service-token")
         );
         let source = request.inputs["content"].as_str().unwrap();
@@ -15411,10 +15405,7 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
         assert_eq!(request.action, "page.create");
         assert_eq!(request.inputs["contentFormat"], "markdown");
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("service-token")
         );
         let source = request.inputs["content"].as_str().unwrap();
@@ -15527,10 +15518,7 @@ impl Provider for TestGitlabNormalizedWriteProvider {
         assert_eq!(request.action, "issue.create");
         assert_eq!(request.inputs["contentFormat"], "plain_text");
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("service-token")
         );
         let source = request.inputs["content"].as_str().unwrap();
@@ -15657,10 +15645,7 @@ impl Provider for TestGitlabReviewFailureProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(request.action, "merge_request.discussion.inline.add");
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("service-token")
         );
         match request.inputs["content"].as_str().unwrap() {
@@ -15848,9 +15833,9 @@ impl Provider for TestCredentialVerificationProvider {
         credential: &agent_access_provider::ExecutionCredential,
         _correlation: &agent_access_provider::CorrelationContext,
     ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
-        assert_eq!(credential.kind, "basic_api_token");
-        assert_eq!(credential.username.as_deref(), Some("alice@example.com"));
-        assert_eq!(credential.token.as_deref(), Some("jira-token"));
+        assert_eq!(credential.kind().as_str(), "basic_api_token");
+        assert_eq!(credential_username(credential), Some("alice@example.com"));
+        assert_eq!(credential_token(credential), "jira-token");
         Ok(Some(
             agent_access_provider::ProviderCredentialVerification {
                 upstream_status: 200,

@@ -134,7 +134,7 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     assert!(!serialized.contains("SYNTHETIC_SECRET"));
     assert!(!serialized.contains("Version 2.3"));
     assert!(!serialized.contains("/powerautomate/"));
-    invocation.credential_mode = "per_user".into();
+    invocation.credential_mode = CredentialMode::PerUser;
     assert!(provider.invoke(invocation).await.is_err());
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

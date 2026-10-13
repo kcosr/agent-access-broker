@@ -3,15 +3,15 @@
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, EgressDeclaration, EgressProxyConfig, EgressRoute, ExecutionCredential,
-    Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
-    ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
-    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
-    current_provider_action, is_service_name, parse_backend_config, upstream_rate_limited,
-    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, EgressRoute,
+    ExecutionCredential, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderLimits, ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
+    RedirectRules, ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest,
+    ScopeResolution, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, UpstreamRetryAfter, ValidationContext,
+    complete_upstream_trace, current_provider_action, is_service_name, parse_backend_config,
+    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -238,19 +238,7 @@ impl CloudbeesCiProvider {
         size_error: fn() -> ProviderError,
         mutation: Option<&Value>,
     ) -> Result<Reply, ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {
@@ -448,19 +436,7 @@ impl CloudbeesCiProvider {
         credential: &ExecutionCredential,
         initial: Url,
     ) -> Result<(reqwest::Response, u64), ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         let base = &controller.base;
         let same_artifact_path = |url: &Url| {
             url.path() == initial.path() || url.path().strip_suffix('/') == Some(initial.path())
@@ -711,7 +687,10 @@ impl Provider for CloudbeesCiProvider {
             .controllers
             .get(&input.controller)
             .expect("validated controller");
-        let credential = request.credential.as_ref().ok_or_else(credential_invalid)?;
+        let credential = request
+            .execution
+            .static_credential()
+            .ok_or_else(credential_invalid)?;
         let job_url = Self::job_url(&controller.base, &input.job);
         match self
             .dispatch(
@@ -1273,6 +1252,18 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
         "safeLocators": safe_locators,
     }))
 }
+/// CloudBees CI authenticates with a non-empty Basic username and API token.
+pub(crate) fn basic_material(
+    credential: &ExecutionCredential,
+) -> Result<(&str, &str), ProviderError> {
+    match credential.view() {
+        CredentialView::Basic { username, token } if !username.is_empty() && !token.is_empty() => {
+            Ok((username, token))
+        }
+        CredentialView::Basic { .. } | CredentialView::Bearer { .. } => Err(credential_invalid()),
+    }
+}
+
 fn credential_invalid() -> ProviderError {
     ProviderError::deny(
         ReasonCode::CredentialInvalid,
@@ -1465,7 +1456,7 @@ pub fn is_cloudbees_ci_resource_path(value: &str, allow_controller_only: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::InvocationBuilder;
+    use agent_access_provider::test_support::{InvocationBuilder, basic_credential};
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1548,11 +1539,7 @@ mod tests {
                 "job".into(),
                 vec!["team-ci/payments/build-api".into()],
             )]))
-            .credential(ExecutionCredential {
-                kind: "basic_api_token".into(),
-                username: Some("automation".into()),
-                token: Some("secret".into()),
-            })
+            .credential(basic_credential("automation", "secret"))
             .build()
     }
 

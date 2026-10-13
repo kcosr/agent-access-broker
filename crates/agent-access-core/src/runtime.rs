@@ -1521,22 +1521,6 @@ pub struct BrokerRuntime {
     config_generation: Option<u64>,
 }
 
-/// The credentials an invocation dispatches with.
-#[derive(Default)]
-struct SelectedCredentials {
-    execution: Option<ExecutionCredential>,
-    delegated: Option<DelegatedCredential>,
-}
-
-impl SelectedCredentials {
-    fn execution(credential: ExecutionCredential) -> Self {
-        Self {
-            execution: Some(credential),
-            delegated: None,
-        }
-    }
-}
-
 pub struct PreparedInvocation {
     resource_binding: Option<crate::ResourceAttributeBinding>,
     provider: Arc<dyn Provider>,
@@ -4070,7 +4054,7 @@ impl BrokerRuntime {
                     correlation.broker_request_id.clone(),
                 );
         }
-        builder = apply_gateway_execution_credential(builder, credential)?;
+        builder = apply_gateway_execution_credential(builder, credential);
         let started = Instant::now();
         let verification_timeout = Duration::from_millis(
             gateway
@@ -4650,17 +4634,18 @@ impl BrokerRuntime {
             }
         };
 
-        let lookup_credential = match self
+        let (lookup_credential, credential_mode) = match self
             .resolve_lookup_credential_if_required(
                 action_descriptor.lookup,
                 &service,
                 &policy,
-                credentials.execution.as_ref(),
+                credentials.static_credential(),
                 &pre_scope_lookup,
             )
             .await
+            .and_then(|lookup| Ok((lookup, admitted_credential_mode(&policy.credential_mode)?)))
         {
-            Ok(credential) => credential,
+            Ok(selected) => selected,
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
@@ -4723,12 +4708,11 @@ impl BrokerRuntime {
             inputs: request.inputs,
             body_parts: request.body_parts,
             resource_scopes: scopes.clone(),
-            credential_mode: policy.credential_mode.clone(),
-            credential: credentials.execution,
+            credential_mode,
+            execution: credentials,
             lookup_credential,
             state: provider_state,
             search_authorization,
-            delegated_credential: credentials.delegated,
         };
         Ok(PreparedInvocation {
             resource_binding,
@@ -4863,7 +4847,7 @@ impl BrokerRuntime {
             }
             // Access lent at preparation may have been revoked, superseded, or
             // expired while the request body was admitted.
-            if let Some(delegated) = &invocation.delegated_credential {
+            if let Some(delegated) = invocation.execution.delegated() {
                 delegated.revalidate().await?;
             }
             if !self.imported_action_available(&service, &action) {
@@ -5150,16 +5134,16 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         correlation: &CorrelationContext,
         pre_scope_lookup: &PreScopeLookup,
-    ) -> Result<SelectedCredentials, ProviderError> {
+    ) -> Result<ExecutionAccess, ProviderError> {
         if matches!(pre_scope_lookup, PreScopeLookup::PerUser(_)) && credential_mode == "service" {
             return Err(policy_planning_drift_error());
         }
         if !descriptor.is_none_or(|descriptor| descriptor.execution_required) {
-            return Ok(SelectedCredentials::default());
+            return Ok(ExecutionAccess::None);
         }
         if credential_mode == "per_user" {
             if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
-                return Ok(SelectedCredentials::execution(credential.clone()));
+                return Ok(ExecutionAccess::Static(credential.clone()));
             }
             if let Some(credential) = self
                 .effective_credentials
@@ -5181,15 +5165,12 @@ impl BrokerRuntime {
                     ),
                 )
                 .await
-                .map(|delegated| SelectedCredentials {
-                    execution: None,
-                    delegated: Some(delegated),
-                });
+                .map(ExecutionAccess::Delegated);
             }
         }
         self.resolve_execution_credential(service, credential_mode, identity)
             .await
-            .map(SelectedCredentials::execution)
+            .map(ExecutionAccess::Static)
     }
 
     async fn acquire_delegated_credential(
@@ -6109,37 +6090,10 @@ fn normalize_git_verification_repository(
 fn apply_gateway_execution_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.kind.as_str() {
-        "bearer_token" => credential
-            .token
-            .as_ref()
-            .map(|token| builder.bearer_auth(token))
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway bearer credential is missing token material",
-                )
-            }),
-        "basic_api_token" => {
-            let username = credential.username.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing username material",
-                )
-            })?;
-            let token = credential.token.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing token material",
-                )
-            })?;
-            Ok(builder.basic_auth(username, Some(token)))
-        }
-        _ => Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "gateway credential kind is not supported",
-        )),
+) -> reqwest::RequestBuilder {
+    match credential.view() {
+        CredentialView::Bearer { token } => builder.bearer_auth(token),
+        CredentialView::Basic { username, token } => builder.basic_auth(username, Some(token)),
     }
 }
 
@@ -7441,6 +7395,17 @@ fn top_policy_band(mut candidates: Vec<PolicyCandidate>) -> Vec<PolicyCandidate>
         .collect()
 }
 
+/// The typed credential mode of an admitted policy decision. Policy only
+/// selects validated, provisioned modes, so another spelling fails closed.
+fn admitted_credential_mode(mode: &str) -> Result<CredentialMode, ProviderError> {
+    mode.parse().map_err(|_| {
+        ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "selected credential mode is not provisioned",
+        )
+    })
+}
+
 fn single_policy_credential_mode(candidates: &[PolicyCandidate]) -> Result<String, ProviderError> {
     let modes = candidates
         .iter()
@@ -7579,31 +7544,17 @@ fn load_materialized_credential(
     token_ref: Option<&str>,
 ) -> Result<ExecutionCredential, ProviderError> {
     match kind {
-        "basic_api_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "username_ref",
-                username_ref,
-            )?),
-            token: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "token_ref",
-                token_ref,
-            )?),
-        }),
-        "bearer_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: None,
-            token: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "token_ref",
-                token_ref,
-            )?),
-        }),
+        "basic_api_token" => {
+            let username =
+                load_credential_secret(service, credential_mode, "username_ref", username_ref)?;
+            let token = load_credential_secret(service, credential_mode, "token_ref", token_ref)?;
+            Ok(agent_access_provider::host::basic_credential(
+                username, token,
+            ))
+        }
+        "bearer_token" => Ok(agent_access_provider::host::bearer_credential(
+            load_credential_secret(service, credential_mode, "token_ref", token_ref)?,
+        )),
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,
             "credential store record has unsupported credential type",

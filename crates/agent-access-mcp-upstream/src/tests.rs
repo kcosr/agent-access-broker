@@ -1,5 +1,5 @@
 use super::*;
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
 use axum::{
     Json, Router,
     extract::State,
@@ -46,11 +46,7 @@ fn definition(endpoint: &str) -> ImportedServiceDefinition {
     }
 }
 fn credential(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".into(),
-        username: None,
-        token: Some(token.into()),
-    }
+    bearer_credential(token)
 }
 fn action() -> ImportedActionDefinition {
     ImportedActionDefinition {
@@ -358,13 +354,13 @@ async fn input_and_credential_rejections_dispatch_nothing() {
         ReasonCode::InputInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.credential = None;
+    request.execution = ExecutionAccess::None;
     assert_eq!(
         provider.invoke(request).await.unwrap_err().reason_code,
         ReasonCode::CredentialInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.credential_mode = "per_user".into();
+    request.credential_mode = CredentialMode::PerUser;
     assert!(provider.invoke(request).await.is_err());
     assert!(fixture.state.recorded.lock().unwrap().is_empty());
 }
@@ -393,7 +389,7 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
         .unwrap();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
-        request.credential_mode = "per_user".into();
+        request.credential_mode = CredentialMode::PerUser;
         provider.invoke(request).await.unwrap();
     }
     let calls = fixture.state.recorded.lock().unwrap();
@@ -815,9 +811,9 @@ fn leased_invocation(
         }),
     });
     let mut request = invocation(json!({"region":"east"}), "unused-static-token");
-    request.credential = None;
-    request.credential_mode = "per_user".into();
-    request.delegated_credential = Some(DelegatedCredential::new(lease.clone()));
+    request.execution = ExecutionAccess::None;
+    request.credential_mode = CredentialMode::PerUser;
+    request.execution = ExecutionAccess::Delegated(DelegatedCredential::new(lease.clone()));
     (request, lease)
 }
 
@@ -840,7 +836,9 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
         let result = McpAdapter
             .discover(
                 &oauth_definition(&fixture.endpoint),
-                &ImportedDiscoveryAuthentication::Delegated(request.delegated_credential.unwrap()),
+                &ImportedDiscoveryAuthentication::Delegated(
+                    request.execution.delegated().cloned().unwrap(),
+                ),
                 None,
                 &host.context(),
             )
@@ -938,7 +936,7 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
             lease.access.lock().unwrap().audience = "https://other.example/mcp".into();
         }
         if failure == "fallback" {
-            request.credential = Some(credential("shared-fallback-is-forbidden"));
+            request.execution = ExecutionAccess::Static(credential("shared-fallback-is-forbidden"));
         }
         let error = provider.invoke(request).await.err().unwrap();
         assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);

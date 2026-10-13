@@ -1,4 +1,5 @@
 mod common;
+use agent_access_provider::test_support::credential_token;
 use common::{resource_catalog, resource_selection};
 
 use agent_access_broker::broker_build_status;
@@ -2858,7 +2859,7 @@ impl StubJiraBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.token.clone(),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }

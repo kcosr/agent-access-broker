@@ -5853,7 +5853,7 @@ pub struct CredentialMetadata {
     pub material_version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CredentialVerificationCandidate {
     pub credential: ExecutionCredential,
     pub target: CredentialVerificationTarget,
@@ -6734,26 +6734,24 @@ fn execution_credential_from_secret(
         ManagedStoreError::InputInvalid(message) => ManagedStoreError::CredentialInvalid(message),
         other => other,
     })?;
+    // Validation above guarantees each kind's non-empty string fields.
+    let field = |name: &str| {
+        secret
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ManagedStoreError::CredentialInvalid(format!("secret.{name} is required"))
+            })
+    };
     match kind {
-        "basic_api_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: secret
-                .get("username")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            token: secret
-                .get("token")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        }),
-        "bearer_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: None,
-            token: secret
-                .get("token")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        }),
+        "basic_api_token" => Ok(agent_access_provider::host::basic_credential(
+            field("username")?,
+            field("token")?,
+        )),
+        "bearer_token" => Ok(agent_access_provider::host::bearer_credential(field(
+            "token",
+        )?)),
         _ => Err(ManagedStoreError::CredentialInvalid(
             "unsupported credential kind".to_string(),
         )),
@@ -8831,6 +8829,7 @@ use sqlite_support::sqlite_sidecar_paths;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::test_support::{credential_token, credential_username};
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
@@ -13058,9 +13057,9 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential.kind, "basic_api_token");
-        assert_eq!(credential.username.as_deref(), Some("alice@example.com"));
-        assert_eq!(credential.token.as_deref(), Some("pat"));
+        assert_eq!(credential.kind().as_str(), "basic_api_token");
+        assert_eq!(credential_username(&credential), Some("alice@example.com"));
+        assert_eq!(credential_token(&credential), "pat");
         let verified = store
             .verify_user_credential(
                 &ring,
@@ -13249,7 +13248,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential.token.as_deref(), Some("new-pat"));
+        assert_eq!(credential_token(&credential), "new-pat");
     }
 
     #[test]
@@ -13361,7 +13360,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential.token.as_deref(), Some("pat"));
+        assert_eq!(credential_token(&credential), "pat");
         let verified = store
             .mark_user_credential_verified_if_current(
                 &verification_candidate.target,
@@ -13672,7 +13671,7 @@ PRAGMA foreign_keys = ON;
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(old_candidate.credential.token.as_deref(), Some("old-pat"));
+        assert_eq!(credential_token(&old_candidate.credential), "old-pat");
         let verified = store
             .mark_user_credential_verified_if_current(
                 &old_candidate.target,
@@ -13745,10 +13744,7 @@ PRAGMA foreign_keys = ON;
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(
-            current_candidate.credential.token.as_deref(),
-            Some("new-pat")
-        );
+        assert_eq!(credential_token(&current_candidate.credential), "new-pat");
         let current_verified = store
             .mark_user_credential_verified_if_current(
                 &current_candidate.target,

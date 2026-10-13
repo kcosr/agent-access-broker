@@ -281,7 +281,7 @@ impl Provider for OpenApiProvider {
         if request.service != self.definition.service
             || !request.resource_scopes.is_empty()
             || !request.body_parts.is_empty()
-            || request.delegated_credential.is_some()
+            || request.execution.delegated().is_some()
         {
             return Err(input_error());
         }
@@ -292,14 +292,17 @@ impl Provider for OpenApiProvider {
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode
+                binding.owner_mode.as_str() == request.credential_mode.as_str()
                     && binding.is_supported()
                     && binding.mechanism == ImportedAuthMechanism::StaticToken
             })
             .ok_or_else(credential_error)?;
         headers.extend(auth(
             &binding.delivery,
-            request.credential.as_ref().ok_or_else(credential_error)?,
+            request
+                .execution
+                .static_credential()
+                .ok_or_else(credential_error)?,
         )?);
         let mut upstream = self
             .client

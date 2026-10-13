@@ -14,6 +14,7 @@ fn gitlab_service(
 
 #[path = "gitlab_smoke/provisioning.rs"]
 mod provisioning;
+use agent_access_provider::test_support::credential_token;
 use common::{resource_catalog, resource_selection};
 
 use agent_access_broker::broker_build_status;
@@ -6853,7 +6854,7 @@ impl StubGitlabBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.token.clone(),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }
@@ -7351,7 +7352,7 @@ impl GitlabBackend for StubGitlabBackend {
             } else {
                 *self.fork_execution_source_project_id.lock().unwrap()
             }
-        } else if credential.token.as_deref() == Some("gitlab-lookup-token") {
+        } else if credential_token(credential) == "gitlab-lookup-token" {
             *self.fork_lookup_source_project_id.lock().unwrap()
         } else {
             *self.fork_execution_source_project_id.lock().unwrap()

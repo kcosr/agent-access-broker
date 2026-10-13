@@ -1,4 +1,6 @@
-use crate::{CorrelationContext, DelegatedCredential, ResourceScopes};
+use crate::{
+    CorrelationContext, CredentialMode, ExecutionAccess, ExecutionCredential, ResourceScopes,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -122,57 +124,32 @@ impl InvocationIdentity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// One admitted invocation. It never serializes: host request and response
+/// DTOs stay separate, so authority can never be silently omitted.
+#[derive(Debug, Clone)]
 pub struct ProviderInvocation {
     /// Execution context selected and authorized by the host, never a tool input.
     pub execution_context: String,
     pub identity: InvocationIdentity,
     pub service: String,
     pub action: String,
-    #[serde(skip)]
     pub correlation: CorrelationContext,
     pub inputs: Value,
-    #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
     pub resource_scopes: ResourceScopes,
     /// Only the admitted exact resource's private attributes, resolved by the host.
-    #[serde(skip)]
     pub resource_attributes: crate::ResourceAttributes,
-    pub credential_mode: String,
-    #[serde(skip)]
-    pub credential: Option<ExecutionCredential>,
-    #[serde(skip)]
+    pub credential_mode: CredentialMode,
+    /// Execution material the host selected: none, static, or a delegated
+    /// lease for services whose descriptor accepts one.
+    pub execution: ExecutionAccess,
+    /// Static lookup material, never a stand-in for execution material.
     pub lookup_credential: Option<ExecutionCredential>,
-    /// The delegated credential the runtime acquired for this invocation,
-    /// for services whose descriptor accepts one.
-    #[serde(skip)]
-    pub delegated_credential: Option<DelegatedCredential>,
     /// Provider-owned state carried from scope resolution or body-part
     /// admission to dispatch. The host never inspects or changes it.
-    #[serde(skip)]
     pub state: Option<crate::ProviderState>,
     /// Broker-admitted search boundary for search-contained actions.
-    #[serde(skip)]
     pub search_authorization: Option<SearchAuthorization>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct ExecutionCredential {
-    pub kind: String,
-    pub username: Option<String>,
-    pub token: Option<String>,
-}
-
-impl std::fmt::Debug for ExecutionCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ExecutionCredential")
-            .field("kind", &self.kind)
-            .field("username", &self.username.as_ref().map(|_| "<redacted>"))
-            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
-            .finish()
-    }
 }
 
 /// Search boundary handed to a provider for a search-contained action. The
@@ -303,5 +280,45 @@ impl SearchAuthorizationScope {
                     .collect(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProviderState, StaticCredentialKind};
+
+    /// Fails to compile when `$ty` implements serde's `Serialize` or
+    /// `DeserializeOwned`: both impls make the item lookup ambiguous.
+    macro_rules! assert_not_serde {
+        ($ty:ty) => {{
+            trait AmbiguousIfSerialize<A> {
+                fn item() {}
+            }
+            impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+            #[allow(dead_code)]
+            struct Serializes;
+            impl<T: ?Sized + serde::Serialize> AmbiguousIfSerialize<Serializes> for T {}
+            let _ = <$ty as AmbiguousIfSerialize<_>>::item;
+
+            trait AmbiguousIfDeserialize<A> {
+                fn item() {}
+            }
+            impl<T: ?Sized> AmbiguousIfDeserialize<()> for T {}
+            #[allow(dead_code)]
+            struct Deserializes;
+            impl<T: ?Sized + serde::de::DeserializeOwned> AmbiguousIfDeserialize<Deserializes> for T {}
+            let _ = <$ty as AmbiguousIfDeserialize<_>>::item;
+        }};
+    }
+
+    #[test]
+    fn live_invocation_values_do_not_serialize() {
+        assert_not_serde!(ProviderInvocation);
+        assert_not_serde!(ExecutionCredential);
+        assert_not_serde!(ExecutionAccess);
+        assert_not_serde!(crate::DelegatedCredential);
+        assert_not_serde!(ProviderState);
+        assert_not_serde!(StaticCredentialKind);
     }
 }

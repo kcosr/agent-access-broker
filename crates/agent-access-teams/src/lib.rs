@@ -320,9 +320,8 @@ impl Provider for TeamsProvider {
         self.local_scopes(&request.action, &request.inputs)?;
         let (destination, body) = payload::prepare(&request.inputs, self.max_bytes)?;
         if request.service != "teams"
-            || request.credential_mode != "service"
-            || request.credential.is_some()
-            || request.delegated_credential.is_some()
+            || request.credential_mode != CredentialMode::Service
+            || !request.execution.is_none()
             || request.resource_scopes.get("destination") != Some(&vec![destination.clone()])
         {
             return Err(ProviderError::deny(

@@ -38,7 +38,7 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
             "gmail-test".into(),
             "gmail-broker-test".into(),
         ))
-        .credential_mode("per_user")
+        .credential_mode(CredentialMode::PerUser)
         .delegated(DelegatedCredential::new(Arc::new(Lease)))
         .build()
 }

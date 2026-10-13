@@ -369,7 +369,7 @@ fn encode_gitlab_page_token(
         project: context.project.path_with_namespace.clone(),
         project_id: context.project.id,
         principal: context.request.identity.principal.clone(),
-        credential_mode: context.request.credential_mode.clone(),
+        credential_mode: context.request.credential_mode.as_str().to_owned(),
         provider_fingerprint: context.provider_fingerprint.to_string(),
         request_hash: context.request_hash.to_string(),
         max_results: context.max_results,
@@ -441,7 +441,7 @@ fn decode_gitlab_page_token(
         || payload.project != context.project.path_with_namespace
         || payload.project_id != context.project.id
         || payload.principal != context.request.identity.principal
-        || payload.credential_mode != context.request.credential_mode
+        || payload.credential_mode != context.request.credential_mode.as_str()
         || payload.provider_fingerprint != context.provider_fingerprint
         || payload.request_hash != context.request_hash
         || payload.max_results != context.max_results
@@ -12077,7 +12077,7 @@ fn capped_max_results(requested: Option<u32>, configured_max: u32) -> Result<u32
 fn execution_credential(
     request: &ProviderInvocation,
 ) -> Result<&ExecutionCredential, ProviderError> {
-    request.credential.as_ref().ok_or_else(|| {
+    request.execution.static_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential mode is not provisioned",
@@ -12446,15 +12446,9 @@ fn gitlab_review_context(
             "GitLab current user identity did not include a valid username",
         ));
     }
-    let credential_binding = match request.credential_mode.as_str() {
-        "service" => "shared",
-        "per_user" => "principal",
-        _ => {
-            return Err(ProviderError::error(
-                ReasonCode::CredentialInvalid,
-                "GitLab credential mode is invalid",
-            ));
-        }
+    let credential_binding = match request.credential_mode {
+        CredentialMode::Service => "shared",
+        CredentialMode::PerUser => "principal",
     };
     Ok((
         actor_id,

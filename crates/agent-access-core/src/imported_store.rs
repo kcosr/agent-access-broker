@@ -994,11 +994,15 @@ impl ManagedStore {
         if row.material_version != expected_material_version {
             return Err(ManagedStoreError::VersionConflict);
         }
-        Ok(ExecutionCredential {
-            kind: row.credential_kind.clone(),
-            username: None,
-            token: Some(decrypt(ring, &row)?),
-        })
+        // Imported secret slots hold only bearer material.
+        if row.credential_kind != "bearer_token" {
+            return Err(ManagedStoreError::CredentialInvalid(
+                "unsupported credential kind".to_string(),
+            ));
+        }
+        Ok(agent_access_provider::host::bearer_credential(decrypt(
+            ring, &row,
+        )?))
     }
 }
 fn secret_row(
@@ -1153,6 +1157,7 @@ mod tests {
         ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
         ImportedDiscoveryCredential,
     };
+    use agent_access_provider::test_support::{credential_token, credential_username};
     use serde_json::json;
     include!("managed_store/imported_store_golden_tests.rs");
     fn fixture() -> (
@@ -1807,17 +1812,17 @@ mod tests {
                 .contains("unique-private-sentinel")
         );
         assert_eq!(
-            store
-                .resolve_imported_secret(
-                    "observability",
-                    ImportedCredentialPurpose::Execution,
-                    version,
-                    &ring
-                )
-                .unwrap()
-                .token
-                .as_deref(),
-            Some("unique-private-sentinel")
+            credential_token(
+                &store
+                    .resolve_imported_secret(
+                        "observability",
+                        ImportedCredentialPurpose::Execution,
+                        version,
+                        &ring
+                    )
+                    .unwrap()
+            ),
+            "unique-private-sentinel"
         );
         assert!(matches!(
             store.resolve_imported_secret(
@@ -1856,17 +1861,17 @@ mod tests {
         assert_eq!(store.active_credential_key_ids().unwrap(), vec!["new"]);
         assert_eq!(store.imported_catalog().unwrap(), retired);
         assert_eq!(
-            store
-                .resolve_imported_secret(
-                    "observability",
-                    ImportedCredentialPurpose::Execution,
-                    version,
-                    &ring
-                )
-                .unwrap()
-                .token
-                .as_deref(),
-            Some("unique-private-sentinel")
+            credential_token(
+                &store
+                    .resolve_imported_secret(
+                        "observability",
+                        ImportedCredentialPurpose::Execution,
+                        version,
+                        &ring
+                    )
+                    .unwrap()
+            ),
+            "unique-private-sentinel"
         );
         assert_eq!(
             count_table(&store.connection.lock().unwrap(), "principals").unwrap(),

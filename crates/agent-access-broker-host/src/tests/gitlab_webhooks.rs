@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::credential_token;
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -279,10 +280,7 @@ impl Provider for BrokerWebhookContractProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(
-            request
-                .credential
-                .as_ref()
-                .and_then(|credential| credential.token.as_deref()),
+            request.execution.static_credential().map(credential_token),
             Some("broker-webhook-service-token")
         );
         match request.action.as_str() {

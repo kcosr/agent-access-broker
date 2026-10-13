@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     ActionIo, GitlabContentConfig, GitlabWebhooksConfig, SearchLimitsConfig, raw_download_io,
 };
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
 use wiremock::matchers::{
     body_json, body_string, method, path, query_param, query_param_is_missing,
 };
@@ -690,11 +690,7 @@ fn webhook_update_carries_disabled_tls_only_to_new_https_destinations() {
 }
 
 fn test_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("gitlab-token".to_string()),
-    }
+    bearer_credential("gitlab-token")
 }
 
 fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
@@ -998,7 +994,7 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
     let mut changed_mode = request.clone();
-    changed_mode.credential_mode = "per_user".to_string();
+    changed_mode.credential_mode = CredentialMode::PerUser;
     assert!(
         decode(
             &changed_mode,
@@ -4751,7 +4747,7 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         })
     );
     let mut per_user = service.clone();
-    per_user.credential_mode = "per_user".to_string();
+    per_user.credential_mode = CredentialMode::PerUser;
     assert_eq!(
         gitlab_review_context(&per_user, &actor).unwrap().1,
         json!({
@@ -4779,14 +4775,6 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         .unwrap_err();
         assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
     }
-    let mut invalid_mode = service;
-    invalid_mode.credential_mode = "other".to_string();
-    assert_eq!(
-        gitlab_review_context(&invalid_mode, &actor)
-            .unwrap_err()
-            .reason_code,
-        ReasonCode::CredentialInvalid
-    );
     assert_eq!(
         acting_reviewer_not_assigned_error().reason_code,
         ReasonCode::VersionConflict

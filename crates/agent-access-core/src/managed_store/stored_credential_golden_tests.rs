@@ -130,12 +130,13 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
             .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
             .unwrap();
         assert_eq!(
-            credential.kind, golden.credential_kind,
+            credential.kind().as_str(),
+            golden.credential_kind,
             "{}",
             golden.service
         );
-        assert_eq!(credential.username.as_deref(), golden.username);
-        assert_eq!(credential.token.as_deref(), Some(golden.token));
+        assert_eq!(credential_username(&credential), golden.username);
+        assert_eq!(credential_token(&credential), golden.token);
     }
 }
 

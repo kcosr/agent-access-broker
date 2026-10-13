@@ -89,10 +89,10 @@ impl Provider for FixtureConfig {
             .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert!(request.credential.is_none());
+        assert!(request.execution.static_credential().is_none());
         let value = request.resource_attributes.get("endpoint").unwrap();
         assert!(!format!("{request:?}").contains(value));
-        assert!(!serde_json::to_string(&request).unwrap().contains(value));
+        assert_invocation_never_serializes();
         self.observed.lock().unwrap().push(value.into());
         Ok(ProviderResult {
             result: json!({"accepted":true}),
@@ -444,4 +444,18 @@ fn private_attribute_type_metadata_is_generic_and_consumers_must_own_the_type() 
             .iter()
             .any(|error| error.contains("defining backend"))
     );
+}
+
+/// Private attributes cannot leak through invocation serialization because
+/// the invocation does not implement `Serialize`: a serializable invocation
+/// makes this item lookup ambiguous and fails to compile.
+fn assert_invocation_never_serializes() {
+    trait AmbiguousIfSerialize<A> {
+        fn item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+    #[allow(dead_code)]
+    struct Serializes;
+    impl<T: ?Sized + serde::Serialize> AmbiguousIfSerialize<Serializes> for T {}
+    let _ = <ProviderInvocation as AmbiguousIfSerialize<_>>::item;
 }

@@ -946,10 +946,9 @@ impl BrokerRuntime {
             ),
             Some(None) => PreparedTransport::Deleted,
             Some(Some(credential)) => {
-                if credential.kind != "bearer_token" || credential.username.is_some() {
+                let CredentialView::Bearer { token } = credential.view() else {
                     return Err(preparation_mismatch());
-                }
-                let token = credential.token.as_ref().ok_or_else(preparation_mismatch)?;
+                };
                 PreparedTransport::ReplacementPending(Sha256::digest(token.as_bytes()).into())
             }
         };

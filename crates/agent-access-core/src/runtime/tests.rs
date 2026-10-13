@@ -1,4 +1,7 @@
 use super::*;
+use agent_access_provider::test_support::{
+    bearer_credential, credential_token, credential_username,
+};
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
 #[path = "trusted_user_tests.rs"]
@@ -1993,7 +1996,7 @@ impl LookupTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.and_then(|credential| credential.token.clone()),
+                token: credential.map(|credential| credential_token(credential).to_owned()),
             });
     }
 }
@@ -2069,7 +2072,7 @@ impl Provider for LookupTraceProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.record("execution_lookup", request.lookup_credential.as_ref());
-        self.record("execution", request.credential.as_ref());
+        self.record("execution", request.execution.static_credential());
         Ok(ProviderResult {
             result: json!({
                 "credentialMode": request.credential_mode,
@@ -2205,7 +2208,7 @@ impl DependencyPolicyTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.and_then(|credential| credential.token.clone()),
+                token: credential.map(|credential| credential_token(credential).to_owned()),
             });
     }
 }
@@ -2285,7 +2288,7 @@ impl Provider for DependencyPolicyTraceProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution", request.credential.as_ref());
+        self.record("execution", request.execution.static_credential());
         Ok(ProviderResult {
             result: json!({"status": "present"}),
             stream: None,
@@ -4936,9 +4939,9 @@ fn local_file_secret_store_resolves_per_user_material() {
     let resolved =
         load_execution_credential("fake", "per_user", &credential, Some(&identity)).unwrap();
 
-    assert_eq!(resolved.kind, "bearer_token");
-    assert_eq!(resolved.username, None);
-    assert_eq!(resolved.token.as_deref(), Some("principal-token"));
+    assert_eq!(resolved.kind().as_str(), "bearer_token");
+    assert_eq!(credential_username(&resolved), None);
+    assert_eq!(credential_token(&resolved), "principal-token");
 }
 
 #[test]
@@ -4969,9 +4972,9 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let resolved =
         load_execution_credential("jira", "per_user", &credential, Some(&principal_identity))
             .unwrap();
-    assert_eq!(resolved.kind, "basic_api_token");
-    assert_eq!(resolved.username.as_deref(), Some("alice@example.com"));
-    assert_eq!(resolved.token.as_deref(), Some("alice-token"));
+    assert_eq!(resolved.kind().as_str(), "basic_api_token");
+    assert_eq!(credential_username(&resolved), Some("alice@example.com"));
+    assert_eq!(credential_token(&resolved), "alice-token");
 
     let subject_identity = IdentityContext {
         caller_id: None,
@@ -4985,9 +4988,9 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let resolved =
         load_execution_credential("jira", "per_user", &credential, Some(&subject_identity))
             .unwrap();
-    assert_eq!(resolved.kind, "basic_api_token");
-    assert_eq!(resolved.username.as_deref(), Some("subject@example.com"));
-    assert_eq!(resolved.token.as_deref(), Some("subject-token"));
+    assert_eq!(resolved.kind().as_str(), "basic_api_token");
+    assert_eq!(credential_username(&resolved), Some("subject@example.com"));
+    assert_eq!(credential_token(&resolved), "subject-token");
 }
 
 #[test]
@@ -5306,11 +5309,7 @@ async fn git_gateway_credential_verify_uses_upload_pack_discovery() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let verification = runtime
         .verify_execution_credential(
@@ -5392,11 +5391,7 @@ async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5468,11 +5463,7 @@ async fn git_gateway_credential_verify_reports_upstream_throttling() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5560,11 +5551,7 @@ async fn git_gateway_credential_verify_rejects_malformed_discovery_body() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5736,11 +5723,7 @@ async fn git_gateway_credential_verify_requires_per_user_policy() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5825,8 +5808,8 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
     assert_eq!(prepared.service, "gitlab_git");
     assert_eq!(prepared.action, "repo.fetch");
     assert_eq!(prepared.credential_mode, "service");
-    assert_eq!(prepared.credential.kind, "bearer_token");
-    assert_eq!(prepared.credential.token.as_deref(), Some("git-token"));
+    assert_eq!(prepared.credential.kind().as_str(), "bearer_token");
+    assert_eq!(credential_token(&prepared.credential), "git-token");
     assert_eq!(prepared.matched_grant.subject, "user:agent-one");
 
     runtime
@@ -8140,11 +8123,7 @@ fn git_verify_runtime_for_upstream(
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
     (runtime, identity, credential)
 }
 

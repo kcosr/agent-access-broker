@@ -1,5 +1,7 @@
 use super::*;
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{
+    InvocationBuilder, basic_credential, bearer_credential, credential_token, credential_username,
+};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
@@ -434,9 +436,9 @@ impl StubJiraBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                kind: credential.kind.clone(),
-                username: credential.username.clone(),
-                token: credential.token.clone(),
+                kind: credential.kind().as_str().to_owned(),
+                username: credential_username(credential).map(str::to_owned),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }
@@ -2637,7 +2639,7 @@ async fn issue_dependency_add_creates_cross_project_outward_link_and_verifies_re
                     "blockingIssue": "ENG-1",
                     "blockedIssue": "OPS-2"
                 }))
-                .credential_mode("per_user")
+                .credential_mode(CredentialMode::PerUser)
                 .resources(BTreeMap::from([(
                     "project".to_string(),
                     vec!["ENG".to_string(), "OPS".to_string()],
@@ -3069,7 +3071,7 @@ async fn issue_parent_set_creates_cross_project_parent_and_verifies_readback() {
                     "issue": "ENG-2",
                     "parentIssue": "OPS-100"
                 }))
-                .credential_mode("per_user")
+                .credential_mode(CredentialMode::PerUser)
                 .resources(BTreeMap::from([(
                     "project".to_string(),
                     vec!["ENG".to_string(), "OPS".to_string()],
@@ -6957,11 +6959,7 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     );
     assert_eq!(
         backend
-            .api_base(&ExecutionCredential {
-                kind: "bearer_token".to_string(),
-                username: None,
-                token: Some("token".to_string()),
-            })
+            .api_base(&bearer_credential("token"))
             .unwrap()
             .as_str(),
         "https://api.atlassian.com/ex/jira/11111111-1111-1111-1111-111111111111/rest/api/3/"
@@ -8505,27 +8503,15 @@ fn adf_table() -> Value {
 }
 
 fn test_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("service@example.com".to_string()),
-        token: Some("token".to_string()),
-    }
+    basic_credential("service@example.com", "token")
 }
 
 fn test_per_user_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("per-user@example.com".to_string()),
-        token: Some("per-user-token".to_string()),
-    }
+    basic_credential("per-user@example.com", "per-user-token")
 }
 
 fn test_lookup_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("lookup@example.com".to_string()),
-        token: Some("lookup-token".to_string()),
-    }
+    basic_credential("lookup@example.com", "lookup-token")
 }
 
 fn search_preflight<const N: usize>(
@@ -8557,7 +8543,7 @@ fn per_user_invocation(
             "project".to_string(),
             vec!["PROJ".to_string()],
         )]))
-        .credential_mode("per_user")
+        .credential_mode(CredentialMode::PerUser)
         .credential(test_per_user_credential())
         .lookup_credential(test_lookup_credential());
     if action == "search" {

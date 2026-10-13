@@ -1004,7 +1004,7 @@ impl HttpConfluenceBackend {
         &self,
         credential: &ExecutionCredential,
     ) -> Result<&ConfluenceHttpClients, ConfluenceBackendError> {
-        if credential.kind == "bearer_token" {
+        if credential.kind() == StaticCredentialKind::BearerToken {
             self.gateway_clients.as_ref().ok_or_else(|| {
                 ConfluenceBackendError::Protocol(
                     "bearer Confluence credentials require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
@@ -1178,7 +1178,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("current_user"),
         )
@@ -1209,7 +1209,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .header("X-Atlassian-Token", "nocheck")
                 .multipart(form),
@@ -1255,7 +1255,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.metadata"),
         )
@@ -1287,7 +1287,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.hierarchy"),
         )
@@ -1320,7 +1320,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             let client = self.request_client(credential)?;
             let response = send_confluence_request(
                 client,
-                authenticated_request(client.request(Method::GET, url.clone()), credential)?
+                authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
                 UpstreamCall {
                     operation: "page.ancestors",
@@ -1377,7 +1377,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             let client = self.request_client(credential)?;
             let response = send_confluence_request(
                 client,
-                authenticated_request(client.request(Method::GET, url.clone()), credential)?
+                authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
                 UpstreamCall {
                     operation: "page.direct_children",
@@ -1435,7 +1435,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.move"),
         )
@@ -1477,7 +1477,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.get"),
         )
@@ -1508,7 +1508,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("space.lookup.key"),
         )
@@ -1536,7 +1536,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("space.lookup.id"),
         )
@@ -1564,7 +1564,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.metadata"),
         )
@@ -1593,7 +1593,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.scope"),
         )
@@ -1622,7 +1622,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.get"),
         )
@@ -1662,7 +1662,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("search"),
         )
@@ -1700,7 +1700,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.search"),
         )
@@ -1731,7 +1731,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&page_create_request_body(&request)),
             UpstreamCall::new("page.create"),
@@ -1760,7 +1760,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&content_request_body(
                     request.page_id,
@@ -1797,7 +1797,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&draft_create_request_body(&request)),
             UpstreamCall::new("page.draft.create"),
@@ -1834,7 +1834,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.draft.get"),
         )
@@ -1862,7 +1862,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&draft_update_request_body(&request)),
             UpstreamCall::new(if request.status == "current" {
@@ -1896,7 +1896,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::DELETE, url.clone()), credential)?
+            authenticated_request(client.request(Method::DELETE, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.draft.discard"),
         )
@@ -1923,7 +1923,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&blog_create_request_body(&request)),
             UpstreamCall::new("blog.create"),
@@ -1952,7 +1952,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&blog_update_request_body(&request)),
             UpstreamCall::new("blog.update"),
@@ -1981,7 +1981,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&draft_create_request_body(&request)),
             UpstreamCall::new("blog.draft.create"),
@@ -2018,7 +2018,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.draft.get"),
         )
@@ -2046,7 +2046,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&draft_update_request_body(&request)),
             UpstreamCall::new(if request.status == "current" {
@@ -2080,7 +2080,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::DELETE, url.clone()), credential)?
+            authenticated_request(client.request(Method::DELETE, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.draft.discard"),
         )
@@ -2110,7 +2110,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .header("X-Atlassian-Token", "nocheck")
                 .multipart(form),
@@ -2158,7 +2158,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .header("X-Atlassian-Token", "nocheck")
                 .multipart(form),
@@ -2206,7 +2206,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .header("X-Atlassian-Token", "nocheck")
                 .multipart(form),
@@ -2256,7 +2256,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             let client = self.request_client(credential)?;
             let response = send_confluence_request(
                 client,
-                authenticated_request(client.request(Method::GET, url.clone()), credential)?
+                authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
                 UpstreamCall {
                     operation: "attachment.list",
@@ -2316,7 +2316,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("attachment.page"),
         )
@@ -2372,7 +2372,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             let client = self.request_client(credential)?;
             let response = send_confluence_request(
                 client,
-                authenticated_request(client.request(Method::GET, url.clone()), credential)?
+                authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
                 UpstreamCall {
                     operation: "blog.attachment.lookup",
@@ -2430,7 +2430,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("blog.attachment.page"),
         )
@@ -2492,7 +2492,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("page.draft.attachment.list"),
         )
@@ -2614,7 +2614,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.get"),
         )
@@ -2668,7 +2668,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.list"),
         )
@@ -2723,7 +2723,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            authenticated_request(client.request(Method::GET, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.reply.list"),
         )
@@ -2763,7 +2763,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            authenticated_request(client.request(Method::POST, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&comment_create_request_body(&request)),
             UpstreamCall::new("comment.add"),
@@ -2796,7 +2796,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            authenticated_request(client.request(Method::PUT, url.clone()), credential)
                 .header("Accept", "application/json")
                 .json(&comment_update_request_body(&request)),
             UpstreamCall::new("comment.update"),
@@ -2829,7 +2829,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
             client,
-            authenticated_request(client.request(Method::DELETE, url.clone()), credential)?
+            authenticated_request(client.request(Method::DELETE, url.clone()), credential)
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.delete"),
         )
@@ -2986,7 +2986,7 @@ impl HttpConfluenceBackend {
         credential: &ExecutionCredential,
     ) -> Result<reqwest::Response, ConfluenceBackendError> {
         let client = self.stream_client(credential)?;
-        let authorization = confluence_authorization(credential)?;
+        let authorization = AtlassianAuthorization::new(credential);
         client
             .get_following_redirects(
                 url,
@@ -3009,21 +3009,8 @@ impl HttpConfluenceBackend {
 pub(crate) fn authenticated_request(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ConfluenceBackendError> {
-    Ok(confluence_authorization(credential)?.apply(builder))
-}
-
-pub(crate) fn confluence_authorization(
-    credential: &ExecutionCredential,
-) -> Result<AtlassianAuthorization<'_>, ConfluenceBackendError> {
-    AtlassianAuthorization::new(credential).map_err(|error| {
-        ConfluenceBackendError::Protocol(match error {
-            AtlassianCredentialError::UnsupportedKind => {
-                "unsupported Confluence credential kind".to_string()
-            }
-            error => error.to_string(),
-        })
-    })
+) -> reqwest::RequestBuilder {
+    AtlassianAuthorization::new(credential).apply(builder)
 }
 
 /// Sends through `client`, mapping transport failures to Confluence errors.

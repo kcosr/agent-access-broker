@@ -356,7 +356,7 @@ impl Provider for OAuthRecordsProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.local_scopes(&request.action, &request.inputs)?;
-        let delegated = request.delegated_credential.as_ref().ok_or_else(|| {
+        let delegated = request.execution.delegated().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "OAuth records need the caller's delegated OAuth connection",

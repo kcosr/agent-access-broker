@@ -259,7 +259,7 @@ impl GmailProvider {
         invocation: &ProviderInvocation,
         budget: &mut RequestBudget,
     ) -> Result<Value, ProviderError> {
-        let credential = invocation.delegated_credential.as_ref().ok_or_else(|| {
+        let credential = invocation.execution.delegated().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "Connect your Gmail account first",

@@ -11,7 +11,7 @@ use agent_access_core::imports::{
     ImportedDiscoveryCredential, ImportedServiceDefinition,
 };
 use agent_access_core::*;
-use agent_access_provider::{ExecutionCredential, is_action_name, is_service_name};
+use agent_access_provider::{is_action_name, is_service_name};
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
@@ -665,11 +665,7 @@ async fn change(
                     if record.status == ImportedServiceStatus::Retired {
                         return Err(invalid("retired imports cannot receive credentials"));
                     }
-                    let token = ExecutionCredential {
-                        kind: "bearer_token".into(),
-                        username: None,
-                        token: Some(body.token.clone()),
-                    };
+                    let token = agent_access_provider::host::bearer_credential(body.token.clone());
                     // The placeholder only signals presence; the store assigns the material version.
                     record.slot_versions.insert(purpose, "pending".into());
                     let override_token =

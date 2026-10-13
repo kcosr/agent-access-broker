@@ -13,15 +13,16 @@ use agent_access_provider::presentation::{
 };
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BodyAdmission, BrokerBodyPart,
-    BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor, EgressDeclaration,
-    EgressProxyConfig, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
-    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
-    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, ServiceSurface, StateDisposition, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
-    complete_upstream_trace, file_upload_body, parse_backend_config, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor, CredentialView,
+    EgressDeclaration, EgressProxyConfig, NamespaceSelectorDescriptor, Provider,
+    ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
+    ProviderStreamError, ReasonCode, ResourceAttributeDescriptor, ResourceAttributes,
+    ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface,
+    StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    ValidationContext, attachment_upload_plan, complete_upstream_trace, file_upload_body,
+    parse_backend_config, take_upstream_trace, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -514,16 +515,17 @@ impl ConformanceProvider {
     }
 
     fn token(request: &ProviderInvocation) -> Result<&str, ProviderError> {
-        request
-            .credential
-            .as_ref()
-            .and_then(|credential| credential.token.as_deref())
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialNotProvisioned,
-                    "conformance needs a bearer token",
-                )
-            })
+        match request
+            .execution
+            .static_credential()
+            .map(|credential| credential.view())
+        {
+            Some(CredentialView::Bearer { token }) => Ok(token),
+            _ => Err(ProviderError::deny(
+                ReasonCode::CredentialNotProvisioned,
+                "conformance needs a bearer token",
+            )),
+        }
     }
 
     /// Reads a JSON response within the response limit, each chunk within
@@ -969,9 +971,11 @@ impl Provider for ConformanceProvider {
 mod tests {
     use super::*;
     use agent_access_provider::presentation::response_capabilities;
-    use agent_access_provider::test_support::{InvocationBuilder, TestHost, install_trace_capture};
+    use agent_access_provider::test_support::{
+        InvocationBuilder, TestHost, bearer_credential, install_trace_capture,
+    };
     use agent_access_provider::{
-        ActionIo, CorrelationContext, ExecutionCredential, ProviderLimits, with_provider_context,
+        ActionIo, CorrelationContext, ProviderLimits, with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
@@ -1037,11 +1041,7 @@ mod tests {
         InvocationBuilder::new(SERVICE, action)
             .inputs(inputs)
             .resources(resource_scopes)
-            .credential(ExecutionCredential {
-                kind: "bearer_token".into(),
-                username: None,
-                token: Some("token".into()),
-            })
+            .credential(bearer_credential("token"))
             .body_parts(body_parts)
             .build()
     }

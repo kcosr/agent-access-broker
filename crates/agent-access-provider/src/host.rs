@@ -214,3 +214,13 @@ pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
         lookup_credential,
     }
 }
+
+/// A `basic_api_token` credential from the host's validated material.
+pub fn basic_credential(username: String, token: String) -> ExecutionCredential {
+    ExecutionCredential::basic(username, token)
+}
+
+/// A `bearer_token` credential from the host's validated material.
+pub fn bearer_credential(token: String) -> ExecutionCredential {
+    ExecutionCredential::bearer(token)
+}

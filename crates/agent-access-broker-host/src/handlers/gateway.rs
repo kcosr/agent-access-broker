@@ -15,8 +15,8 @@ use agent_access_core::{
     PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
 };
 use agent_access_provider::{
-    BROKER_REQUEST_ID_HEADER, ExecutionCredential, ProviderError, REQUEST_ID_HEADER, ReasonCode,
-    ResourceScopes, url_allowed_by_patterns,
+    BROKER_REQUEST_ID_HEADER, CredentialView, ExecutionCredential, ProviderError,
+    REQUEST_ID_HEADER, ReasonCode, ResourceScopes, url_allowed_by_patterns,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -1006,15 +1006,7 @@ async fn forward_prepared_git_http(
                 prepared.correlation.broker_request_id.clone(),
             );
     }
-    builder = match apply_gateway_credential(builder, &prepared.credential) {
-        Ok(builder) => builder,
-        Err(error) => {
-            let response = runtime
-                .fail_prepared_gateway_operation(prepared, error)
-                .await;
-            return gateway_runtime_response(response);
-        }
-    };
+    builder = apply_gateway_credential(builder, &prepared.credential);
 
     if let Err(response) = runtime
         .start_prepared_gateway_operation(
@@ -2125,37 +2117,10 @@ fn apply_single_request_header(
 fn apply_gateway_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.kind.as_str() {
-        "bearer_token" => credential
-            .token
-            .as_ref()
-            .map(|token| builder.bearer_auth(token))
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway bearer credential is missing token material",
-                )
-            }),
-        "basic_api_token" => {
-            let username = credential.username.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing username material",
-                )
-            })?;
-            let token = credential.token.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing token material",
-                )
-            })?;
-            Ok(builder.basic_auth(username, Some(token)))
-        }
-        _ => Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "gateway credential kind is not supported",
-        )),
+) -> reqwest::RequestBuilder {
+    match credential.view() {
+        CredentialView::Bearer { token } => builder.bearer_auth(token),
+        CredentialView::Basic { username, token } => builder.basic_auth(username, Some(token)),
     }
 }
 
@@ -3333,13 +3298,8 @@ mod tests {
         .unwrap();
         let request = apply_gateway_credential(
             builder,
-            &ExecutionCredential {
-                kind: "bearer_token".to_string(),
-                username: None,
-                token: Some("upstream-token".to_string()),
-            },
+            &agent_access_provider::test_support::bearer_credential("upstream-token"),
         )
-        .unwrap()
         .build()
         .unwrap();
 

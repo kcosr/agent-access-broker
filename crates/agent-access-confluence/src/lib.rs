@@ -14,9 +14,7 @@ pub use config::*;
 use cql::*;
 use validation::*;
 
-use agent_access_atlassian::{
-    AtlassianAuthorization, AtlassianCredentialError, validate_atlassian_gateway_credential,
-};
+use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
 use agent_access_content::{
     ContentWriteError, markdown_to_confluence_storage_bounded,
     plain_text_to_confluence_storage_bounded,
@@ -290,8 +288,8 @@ impl ConfluenceDraftHandlePayload {
         request: &ProviderInvocation,
         tenant_host: &str,
     ) -> Self {
-        let principal =
-            (request.credential_mode == "per_user").then(|| request.identity.principal.clone());
+        let principal = (request.credential_mode == CredentialMode::PerUser)
+            .then(|| request.identity.principal.clone());
         Self {
             v: 2,
             service: "confluence".to_string(),
@@ -305,7 +303,7 @@ impl ConfluenceDraftHandlePayload {
             space_id: content.space_id.clone(),
             tenant_host: tenant_host.to_string(),
             origin,
-            credential_mode: request.credential_mode.clone(),
+            credential_mode: request.credential_mode.as_str().to_owned(),
             principal,
             signing_key_class: "broker_token_hash_key".to_string(),
         }
@@ -360,7 +358,7 @@ impl ConfluenceDraftHandlePayload {
         tenant_host: &str,
     ) -> Result<(), ProviderError> {
         self.validate_unbound(expected_type, expected_id, tenant_host)?;
-        if self.credential_mode != request.credential_mode {
+        if self.credential_mode != request.credential_mode.as_str() {
             return Err(invalid_draft_handle_error());
         }
         match self.credential_mode.as_str() {
@@ -514,7 +512,7 @@ impl ConfluenceDraftAttachmentListTokenPayload {
             || self.base_version != handle.base_version
             || self.credential_mode != handle.credential_mode
             || self.principal != handle.principal
-            || self.credential_mode != request.credential_mode
+            || self.credential_mode != request.credential_mode.as_str()
         {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -631,7 +629,7 @@ impl ConfluenceAttachmentListTokenPayload {
             page_id: page.id.clone(),
             space: page.space.clone(),
             principal: request.identity.principal.clone(),
-            credential_mode: request.credential_mode.clone(),
+            credential_mode: request.credential_mode.as_str().to_owned(),
             next_position,
             issued_at: issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
             expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -649,7 +647,7 @@ impl ConfluenceAttachmentListTokenPayload {
             || self.page_id != page.id
             || self.space != page.space
             || self.principal != request.identity.principal
-            || self.credential_mode != request.credential_mode
+            || self.credential_mode != request.credential_mode.as_str()
         {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -762,7 +760,7 @@ impl ConfluenceBlogAttachmentListTokenPayload {
             space: blog.space.clone(),
             space_id: blog.space_id.clone(),
             principal: request.identity.principal.clone(),
-            credential_mode: request.credential_mode.clone(),
+            credential_mode: request.credential_mode.as_str().to_owned(),
             next_position,
             issued_at: issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
             expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -781,7 +779,7 @@ impl ConfluenceBlogAttachmentListTokenPayload {
             || self.space != blog.space
             || self.space_id != blog.space_id
             || self.principal != request.identity.principal
-            || self.credential_mode != request.credential_mode
+            || self.credential_mode != request.credential_mode.as_str()
         {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -1062,7 +1060,7 @@ impl ConfluenceCommentListTokenPayload {
             comment_id: binding.comment_id.clone(),
             space: binding.space.clone(),
             principal: request.identity.principal.clone(),
-            credential_mode: request.credential_mode.clone(),
+            credential_mode: request.credential_mode.as_str().to_owned(),
             body_format: binding.body_format.clone(),
             resolution_status: binding.resolution_status.clone(),
             sort: binding.sort.clone(),
@@ -1087,7 +1085,7 @@ impl ConfluenceCommentListTokenPayload {
             || self.comment_id != binding.comment_id
             || self.space != binding.space
             || self.principal != request.identity.principal
-            || self.credential_mode != request.credential_mode
+            || self.credential_mode != request.credential_mode.as_str()
             || self.body_format != binding.body_format
             || self.resolution_status != binding.resolution_status
             || self.sort != binding.sort
@@ -8769,7 +8767,7 @@ impl ConfluenceProvider {
 fn invocation_credential(
     request: &ProviderInvocation,
 ) -> Result<&ExecutionCredential, ProviderError> {
-    request.credential.as_ref().ok_or_else(|| {
+    request.execution.static_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential material is unavailable",

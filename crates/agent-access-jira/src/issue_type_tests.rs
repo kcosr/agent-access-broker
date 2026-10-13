@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::{credential_token, credential_username};
 
 fn invocation(inputs: Value) -> ProviderInvocation {
     let mut invocation = issue_create_invocation(inputs);
@@ -89,16 +90,16 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
 async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_without_auditing_text()
  {
     for (mode, credential) in [
-        ("service", test_credential()),
-        ("per_user", test_per_user_credential()),
+        (CredentialMode::Service, test_credential()),
+        (CredentialMode::PerUser, test_per_user_credential()),
     ] {
         let backend = Arc::new(StubJiraBackend::default());
         *backend.issue_type_page.lock().unwrap() = Some(page(0, 2));
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
         let mut request = invocation(json!({"project":"PROJ"}));
-        request.credential_mode = mode.to_string();
-        request.credential = Some(credential.clone());
+        request.credential_mode = mode;
+        request.execution = ExecutionAccess::Static(credential.clone());
         let response = provider.invoke(request).await.unwrap();
         assert_eq!(
             response.result,
@@ -129,12 +130,18 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         let observations = backend.credential_observations.lock().unwrap();
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0].operation, "issue_types");
-        assert_eq!(observations[0].token, credential.token);
-        assert_eq!(observations[0].username, credential.username);
+        assert_eq!(
+            observations[0].token.as_deref(),
+            Some(credential_token(&credential))
+        );
+        assert_eq!(
+            observations[0].username.as_deref(),
+            credential_username(&credential)
+        );
         assert_eq!(response.upstream_status, Some(200));
         assert_eq!(response.upstream_duration_ms, Some(7));
         let audit = response.audit.unwrap();
-        assert_eq!(audit["credentialMode"], mode);
+        assert_eq!(audit["credentialMode"], mode.as_str());
         assert_eq!(audit["issueTypeCount"], 1);
         let metadata = format!("{audit} {:?}", response.object_ids);
         assert!(!metadata.contains("sentinel"));

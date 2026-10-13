@@ -289,22 +289,25 @@ impl Provider for McpProvider {
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode && binding.is_supported()
+                binding.owner_mode.as_str() == request.credential_mode.as_str()
+                    && binding.is_supported()
             })
             .ok_or_else(credential_error)?;
         let action = self.actions.get(&request.action).ok_or_else(input_error)?;
         let auth = match binding.mechanism {
-            ImportedAuthMechanism::StaticToken if request.delegated_credential.is_none() => {
+            ImportedAuthMechanism::StaticToken if request.execution.delegated().is_none() => {
                 auth_headers(
                     &self.definition,
                     &binding.delivery,
-                    request.credential.as_ref().ok_or_else(credential_error)?,
+                    request
+                        .execution
+                        .static_credential()
+                        .ok_or_else(credential_error)?,
                     self.transport_credential.as_ref(),
                 )?
             }
             ImportedAuthMechanism::Oauth
-                if request.credential.is_none()
-                    && request.delegated_credential.is_some()
+                if request.execution.delegated().is_some()
                     && binding.owner_mode == ImportedCredentialMode::PerUser
                     && binding.delivery == ImportedCredentialDelivery::Bearer
                     && !self.definition.transport_auth =>
@@ -327,8 +330,9 @@ impl Provider for McpProvider {
             self.wire.clone(),
             auth,
             request
-                .delegated_credential
-                .clone()
+                .execution
+                .delegated()
+                .cloned()
                 .map(|credential| (credential, self.definition.endpoint.clone())),
             Some(call),
             self.timeout,
@@ -418,16 +422,9 @@ fn auth_headers(
     transport: Option<&ExecutionCredential>,
 ) -> Result<HeaderMap, ProviderError> {
     delivery.validate().map_err(|_| credential_error())?;
-    let token = |credential: &ExecutionCredential| {
-        if credential.kind != "bearer_token" || credential.username.is_some() {
-            return Err(credential_error());
-        }
-        credential
-            .token
-            .as_ref()
-            .filter(|value| valid_token(value))
-            .cloned()
-            .ok_or_else(credential_error)
+    let token = |credential: &ExecutionCredential| match credential.view() {
+        CredentialView::Bearer { token } if valid_token(token) => Ok(token.to_owned()),
+        CredentialView::Bearer { .. } | CredentialView::Basic { .. } => Err(credential_error()),
     };
     let mut auth = HeaderMap::new();
     let token = token(execution)?;
@@ -448,15 +445,10 @@ fn auth_headers(
         if matches!(delivery, ImportedCredentialDelivery::Bearer) {
             return Err(credential_error());
         }
-        let transport = transport.ok_or_else(credential_error)?;
-        if transport.kind != "bearer_token" || transport.username.is_some() {
-            return Err(credential_error());
-        }
-        let token = transport
-            .token
-            .as_ref()
-            .filter(|v| valid_token(v))
-            .ok_or_else(credential_error)?;
+        let token = match transport.map(ExecutionCredential::view) {
+            Some(CredentialView::Bearer { token }) if valid_token(token) => token,
+            _ => return Err(credential_error()),
+        };
         let mut value =
             HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| credential_error())?;
         value.set_sensitive(true);

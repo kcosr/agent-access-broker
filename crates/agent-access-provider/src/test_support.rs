@@ -5,10 +5,10 @@ use crate::host::{
     UpstreamClientFactoryError, scope_request,
 };
 use crate::{
-    BuildContext, ClientProfile, CorrelationContext, EgressDeclaration, EgressProxySource,
-    EgressRoute, ExecutionCredential, InvocationIdentity, OpaqueTokenSigner, Provider,
-    ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor, ServiceProvider,
-    SigningError, StableSigningKey, is_literal_loopback,
+    BuildContext, ClientProfile, CorrelationContext, CredentialView, EgressDeclaration,
+    EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity, OpaqueTokenSigner,
+    Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor,
+    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
 };
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value;
@@ -202,6 +202,32 @@ fn test_tls() -> &'static Arc<rustls::ClientConfig> {
         tls.alpn_protocols = vec![b"http/1.1".to_vec()];
         Arc::new(tls)
     })
+}
+
+/// A `basic_api_token` credential for tests.
+pub fn basic_credential(username: &str, token: &str) -> ExecutionCredential {
+    ExecutionCredential::basic(username.to_owned(), token.to_owned())
+}
+
+/// A `bearer_token` credential for tests.
+pub fn bearer_credential(token: &str) -> ExecutionCredential {
+    ExecutionCredential::bearer(token.to_owned())
+}
+
+/// The token of either credential kind, for test assertions about which
+/// credential reached a fake upstream.
+pub fn credential_token(credential: &ExecutionCredential) -> &str {
+    match credential.view() {
+        CredentialView::Basic { token, .. } | CredentialView::Bearer { token } => token,
+    }
+}
+
+/// The username of a `basic_api_token` credential, for test assertions.
+pub fn credential_username(credential: &ExecutionCredential) -> Option<&str> {
+    match credential.view() {
+        CredentialView::Basic { username, .. } => Some(username),
+        CredentialView::Bearer { .. } => None,
+    }
 }
 
 /// A stable signing key of `byte` repeated, for handles and cursors that

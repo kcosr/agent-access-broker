@@ -1,5 +1,5 @@
 use super::*;
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
 use axum::{
     Router,
     body::Bytes,
@@ -131,11 +131,7 @@ fn definition(endpoint: &str, document: &str) -> ImportedServiceDefinition {
     }
 }
 fn credential(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".into(),
-        username: None,
-        token: Some(token.into()),
-    }
+    bearer_credential(token)
 }
 fn invocation(inputs: Value) -> ProviderInvocation {
     InvocationBuilder::new("example", "item.update")
@@ -358,13 +354,13 @@ async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
         assert!(provider.invoke(invocation(value)).await.is_err());
     }
     let mut call = invocation(input());
-    call.credential_mode = "per_user".into();
-    call.credential = None;
+    call.credential_mode = CredentialMode::PerUser;
+    call.execution = ExecutionAccess::None;
     assert!(provider.invoke(call).await.is_err());
     assert_eq!(fixture.call_count(), 0);
     let mut call = invocation(input());
-    call.credential_mode = "per_user".into();
-    call.credential = Some(credential("alice-secret"));
+    call.credential_mode = CredentialMode::PerUser;
+    call.execution = ExecutionAccess::Static(credential("alice-secret"));
     provider.invoke(call).await.unwrap();
     assert_eq!(
         fixture.state.calls.lock().unwrap()[0].headers["authorization"],

@@ -15,9 +15,7 @@ pub use config::*;
 use jql::*;
 use validation::*;
 
-use agent_access_atlassian::{
-    AtlassianAuthorization, AtlassianCredentialError, validate_atlassian_gateway_credential,
-};
+use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
 #[allow(unused_imports)]
@@ -2053,7 +2051,7 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = request.credential.as_ref().ok_or_else(|| {
+        let credential = request.execution.static_credential().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "selected credential material is unavailable",
@@ -5001,7 +4999,7 @@ fn parse_verify_inputs(inputs: &Value) -> Result<VerifyInputs, ProviderError> {
 fn invocation_credential(
     request: &ProviderInvocation,
 ) -> Result<&ExecutionCredential, ProviderError> {
-    request.credential.as_ref().ok_or_else(|| {
+    request.execution.static_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential material is unavailable",

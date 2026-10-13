@@ -1107,9 +1107,9 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
         .build(&def, &[action()], None, &host.context())
         .unwrap();
     let mut alice = invocation(json!({"region":"east"}), "alice-private-token");
-    alice.credential_mode = "per_user".into();
+    alice.credential_mode = CredentialMode::PerUser;
     let mut bob = invocation(json!({"region":"west"}), "bob-private-token");
-    bob.credential_mode = "per_user".into();
+    bob.credential_mode = CredentialMode::PerUser;
     bob.identity.principal = "bob".into();
     let (discovery, alice, bob) = tokio::join!(
         fixture.discover(),
@@ -1518,7 +1518,9 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
         let outcome = McpAdapter
             .discover(
                 &oauth_definition(&fixture.endpoint),
-                &ImportedDiscoveryAuthentication::Delegated(request.delegated_credential.unwrap()),
+                &ImportedDiscoveryAuthentication::Delegated(
+                    request.execution.delegated().cloned().unwrap(),
+                ),
                 None,
                 &test_host().context(),
             )
@@ -1578,12 +1580,13 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
         for change_audience in [false, true] {
             let fixture = CompatFixture::new(Plan::default()).await;
             let (mut request, lease) = leased_invocation(&fixture.endpoint, false);
-            request.delegated_credential =
-                Some(DelegatedCredential::new(Arc::new(ChangingBindingLease {
+            request.execution = ExecutionAccess::Delegated(DelegatedCredential::new(Arc::new(
+                ChangingBindingLease {
                     inner: lease.clone(),
                     after,
                     change_audience,
-                })));
+                },
+            )));
             let provider = McpAdapter
                 .build(
                     &oauth_definition(&fixture.endpoint),

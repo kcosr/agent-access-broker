@@ -77,10 +77,10 @@ as Git smart HTTP and classifies it into the same service/action/scope policy
 model before upstream credentials are selected.
 
 The execution credential exists only inside the `ProviderInvocation` handed to a
-provider for a single call. It is never placed in the response to the caller, and
-its `Debug` representation redacts the username and token (`ExecutionCredential`
-prints `username` and `token` as `<redacted>`). The same redaction applies to
-proxy credentials (`EgressProxyConfig`).
+provider for a single call. It is never placed in the response to the caller,
+never serializes, and its `Debug` representation shows only the credential kind
+(`ExecutionCredential { kind: "bearer_token", .. }`). The same redaction applies
+to proxy credentials (`EgressProxyConfig`).
 
 Execution credentials are resolved only **after** identity admission, scope
 resolution, deny-by-default policy authorization, and credential-mode selection
@@ -1013,7 +1013,15 @@ this path with its admitted resource's signed endpoint.
 
 - `basic_api_token` loads `username_ref` + `token_ref`.
 - `bearer_token` loads `token_ref` only.
-- `ExecutionCredential` redacts both username and token in `Debug`.
+- The runtime and test support are the only constructors of
+  `ExecutionCredential`, so each kind always carries its required material.
+  Providers read it through a typed view (`Basic { username, token }` or
+  `Bearer { token }`); `Debug` shows only the kind, and it never serializes.
+- A provider receives `ExecutionAccess`: `None` (a backend declaring no
+  execution credential), `Static`, or `Delegated`. Static and delegated material
+  never coexist, and the separate lookup credential is static only and never
+  stands in for execution material. The selected credential mode reaches the
+  provider as the typed `CredentialMode` (`service` or `per_user` on the wire).
 
 **`per_user` `secret_store`** (provider `local_file`) requires an authenticated
 identity and matches the exact principal first, then the exact
@@ -1034,7 +1042,7 @@ it under the service's display name, so it names no service itself. After policy
 admits the invocation, the runtime acquires the caller's current access from
 the OAuth manager (refreshing it when due) inside the invocation's correlation
 context, so a denied invocation never obtains or refreshes upstream access. The
-provider receives it as `ProviderInvocation::delegated_credential`, a lease it
+provider receives it as `ExecutionAccess::Delegated`, a lease it
 can read (`access()`: token, target, audience, version, expiry) and, after an
 upstream 401, replace once (`recover_after_unauthorized`). Immediately before
 dispatch the runtime revalidates the lease: access revoked, disconnected, or

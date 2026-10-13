@@ -390,19 +390,7 @@ impl CloudbeesCiProvider {
         content_type: &str,
         filename: String,
     ) -> Result<ProviderResult, ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {

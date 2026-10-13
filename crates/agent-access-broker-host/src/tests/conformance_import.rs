@@ -2,6 +2,7 @@
 //! Only test registries select it; the broker binary never links it.
 use agent_access_core::BackendRegistry;
 use agent_access_core::imports::*;
+use agent_access_provider::test_support::credential_token;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -75,20 +76,15 @@ impl ImportedAdapter for ConformanceImportAdapter {
                 .map_err(ProviderBuildError::invalid)?;
         }
         let transport_authority = if definition.transport_auth {
-            Some(
-                match transport
-                    .as_ref()
-                    .and_then(|credential| credential.token.as_deref())
-                {
-                    Some("import-transport-initial") => "initial",
-                    Some("import-transport-rotated") => "rotated",
-                    _ => {
-                        return Err(ProviderBuildError::invalid(
-                            "conformance transport credential is unavailable",
-                        ));
-                    }
-                },
-            )
+            Some(match transport.as_ref().map(credential_token) {
+                Some("import-transport-initial") => "initial",
+                Some("import-transport-rotated") => "rotated",
+                _ => {
+                    return Err(ProviderBuildError::invalid(
+                        "conformance transport credential is unavailable",
+                    ));
+                }
+            })
         } else {
             None
         };
@@ -148,7 +144,7 @@ impl Provider for ImportedConformanceProvider {
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.local_scopes(&request.action, &request.inputs)?;
-        let token = request.credential.as_ref().and_then(|c| c.token.as_deref());
+        let token = request.execution.static_credential().map(credential_token);
         // Tokens are synthetic test sentinels; responses never expose material.
         let authority = match token {
             Some("import-service-token") => "service",
