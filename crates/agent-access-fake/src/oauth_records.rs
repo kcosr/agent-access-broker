@@ -181,15 +181,14 @@ impl OAuthRecordsProvider {
         // this registration is development-only and the deployment enables
         // it; it rejects the client otherwise.
         let client = UpstreamClient::build(
-            UpstreamClientSpec {
-                label: "providers.oauth_stub",
-                provider: "oauth_stub",
+            UpstreamClientSpec::new(
+                "providers.oauth_stub",
+                "oauth_stub",
                 base,
-                egress: EgressDeclaration::LiteralLoopback,
-                allowed_upstream_hosts: &[format!("{base}**")],
-                profile: ClientProfile::Request,
-                status_reasons: &[],
-            },
+                EgressDeclaration::LiteralLoopback,
+                &[format!("{base}**")],
+                ClientProfile::Request,
+            ),
             clients,
         )?;
         Ok(Self {
@@ -213,10 +212,7 @@ impl OAuthRecordsProvider {
         self.client
             .send(
                 request,
-                UpstreamCall {
-                    operation: "records.read",
-                    attempt,
-                },
+                UpstreamCall::new("records.read").with_attempt(attempt),
             )
             .await
             .map_err(|error| {

@@ -345,15 +345,14 @@ async fn transport(server: &MockServer) -> HttpTransport {
     let base = Url::parse(&format!("{}/", server.uri())).unwrap();
     let limits = ProviderLimits::default().with_request_timeout_ms(200);
     let client = UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "teams.test",
-            provider: "teams",
-            base: &base,
-            egress: EgressDeclaration::Ordinary(None),
-            allowed_upstream_hosts: &[format!("{}/**", server.uri())],
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
+        UpstreamClientSpec::new(
+            "teams.test",
+            "teams",
+            &base,
+            EgressDeclaration::Ordinary(None),
+            &[format!("{}/**", server.uri())],
+            ClientProfile::SingleAttempt,
+        ),
         &agent_access_provider::test_support::TestHost::with_limits(limits),
     )
     .unwrap();

@@ -265,15 +265,14 @@ mod tests {
     ) -> Result<UpstreamClient, ProviderBuildError> {
         let base = Url::parse(base).unwrap();
         UpstreamClient::build(
-            UpstreamClientSpec {
+            UpstreamClientSpec::new(
                 label,
                 provider,
-                base: &base,
+                &base,
                 egress,
-                allowed_upstream_hosts: &[format!("{base}**")],
-                profile: ClientProfile::Request,
-                status_reasons: &[],
-            },
+                &[format!("{base}**")],
+                ClientProfile::Request,
+            ),
             &network.client_factory(caller),
         )
     }

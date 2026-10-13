@@ -175,15 +175,14 @@ impl BackendConfig for TeamsConfig {
         let mut clients = BTreeMap::new();
         for base in origins {
             let client = UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.teams",
-                    provider: "teams",
-                    base: &base,
-                    egress: EgressDeclaration::Ordinary(self.egress_proxy.as_ref()),
-                    allowed_upstream_hosts: &self.allowed_upstream_hosts,
-                    profile: ClientProfile::SingleAttempt,
-                    status_reasons: &[],
-                },
+                UpstreamClientSpec::new(
+                    "providers.teams",
+                    "teams",
+                    &base,
+                    EgressDeclaration::Ordinary(self.egress_proxy.as_ref()),
+                    &self.allowed_upstream_hosts,
+                    ClientProfile::SingleAttempt,
+                ),
                 host.clients(),
             )?;
             clients.insert(base.origin().ascii_serialization(), client);

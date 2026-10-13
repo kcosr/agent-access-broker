@@ -93,15 +93,14 @@ impl CloudbeesCiProvider {
             let label = format!("providers.cloudbees_ci.controllers.{alias}");
             let client = |profile| {
                 UpstreamClient::build(
-                    UpstreamClientSpec {
-                        label: &label,
-                        provider: "cloudbees_ci",
-                        base: &base,
-                        egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                        allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                    UpstreamClientSpec::new(
+                        &label,
+                        "cloudbees_ci",
+                        &base,
+                        EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                        &config.allowed_upstream_hosts,
                         profile,
-                        status_reasons: &[],
-                    },
+                    ),
                     clients,
                 )
             };
@@ -453,16 +452,13 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 initial.clone(),
-                RedirectRules {
-                    max_redirects: 3,
-                    deadline: self.request_timeout,
-                    correlate_other_origins: false,
-                    vet: &vet,
-                    decorate: &|request| {
-                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                    },
-                    authorize: &|request| request.basic_auth(username, Some(token)),
-                },
+                RedirectRules::new(3, self.request_timeout, &|request| {
+                    request.basic_auth(username, Some(token))
+                })
+                .with_vet(&vet)
+                .with_decorate(&|request| {
+                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                }),
                 "build.artifact.download",
             )
             .await

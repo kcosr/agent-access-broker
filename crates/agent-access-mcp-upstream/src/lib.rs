@@ -153,15 +153,14 @@ fn make_wire(
     let endpoint = Url::parse(&definition.endpoint)
         .map_err(|_| ProviderBuildError::invalid("invalid imported endpoint"))?;
     let client = UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "imports.mcp_http",
-            provider: "mcp_http",
-            base: &endpoint,
-            egress: EgressDeclaration::Ordinary(None),
-            allowed_upstream_hosts: std::slice::from_ref(&definition.endpoint),
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
+        UpstreamClientSpec::new(
+            "imports.mcp_http",
+            "mcp_http",
+            &endpoint,
+            EgressDeclaration::Ordinary(None),
+            std::slice::from_ref(&definition.endpoint),
+            ClientProfile::SingleAttempt,
+        ),
         host.clients(),
     )?;
     Ok(WireClient {

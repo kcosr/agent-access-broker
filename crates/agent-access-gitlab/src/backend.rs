@@ -2121,15 +2121,14 @@ impl HttpGitlabBackend {
         })?;
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.gitlab.egress_proxy",
-                    provider: "gitlab",
-                    base: &api_base,
-                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                UpstreamClientSpec::new(
+                    "providers.gitlab.egress_proxy",
+                    "gitlab",
+                    &api_base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[],
-                },
+                ),
                 clients,
             )
         };

@@ -54,15 +54,14 @@ impl BackendConfig for LoopbackFixture {
     fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         let base = Url::parse("http://127.0.0.1:9/").unwrap();
         UpstreamClient::build(
-            UpstreamClientSpec {
-                label: "oauth.registrations.stub",
-                provider: "oauth",
-                base: &base,
-                egress: EgressDeclaration::LiteralLoopback,
-                allowed_upstream_hosts: &[format!("{base}**")],
-                profile: ClientProfile::Request,
-                status_reasons: &[],
-            },
+            UpstreamClientSpec::new(
+                "oauth.registrations.stub",
+                "oauth",
+                &base,
+                EgressDeclaration::LiteralLoopback,
+                &[format!("{base}**")],
+                ClientProfile::Request,
+            ),
             host.clients(),
         )?;
         Ok(Arc::new(agent_access_fake::FakeProvider))

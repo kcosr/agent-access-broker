@@ -448,22 +448,21 @@ impl OAuthHttp {
                 ));
             }
             UpstreamClient::build(
-                UpstreamClientSpec {
+                UpstreamClientSpec::new(
                     label,
                     provider,
                     base,
-                    egress: if loopback {
+                    if loopback {
                         EgressDeclaration::LiteralLoopback
                     } else {
                         EgressDeclaration::Ordinary(None)
                     },
                     allowed_upstream_hosts,
-                    profile: ClientProfile::Bounded {
+                    ClientProfile::Bounded {
                         total: OAUTH_REQUEST_TIMEOUT,
                         connect: OAUTH_CONNECT_TIMEOUT,
                     },
-                    status_reasons: &[],
-                },
+                ),
                 clients,
             )
         };

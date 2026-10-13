@@ -143,15 +143,14 @@ impl GmailProvider {
     ) -> Result<Self, ProviderBuildError> {
         Ok(Self {
             client: UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.gmail",
-                    provider: "gmail",
-                    base: &base,
-                    egress: EgressDeclaration::Ordinary(None),
-                    allowed_upstream_hosts: &[format!("{base}**")],
-                    profile: ClientProfile::Request,
-                    status_reasons: &[],
-                },
+                UpstreamClientSpec::new(
+                    "providers.gmail",
+                    "gmail",
+                    &base,
+                    EgressDeclaration::Ordinary(None),
+                    &[format!("{base}**")],
+                    ClientProfile::Request,
+                ),
                 clients,
             )?,
             max_bytes: limits.max_upstream_response_bytes.min(MAX_BYTES),
@@ -188,10 +187,7 @@ impl GmailProvider {
                 .client
                 .send(
                     request,
-                    UpstreamCall {
-                        operation: action,
-                        attempt,
-                    },
+                    UpstreamCall::new(action).with_attempt(attempt),
                 )
                 .await
                 .map_err(|e| {

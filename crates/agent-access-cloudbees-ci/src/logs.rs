@@ -480,14 +480,13 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 url.clone(),
-                RedirectRules {
-                    max_redirects: 0,
-                    deadline: deadline.saturating_duration_since(tokio::time::Instant::now()),
-                    correlate_other_origins: false,
-                    vet: &|candidate| *candidate == url,
-                    decorate: &|r| r.header(reqwest::header::ACCEPT_ENCODING, "identity"),
-                    authorize: &|r| r.basic_auth(username, Some(token)),
-                },
+                RedirectRules::new(
+                    0,
+                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                    &|r| r.basic_auth(username, Some(token)),
+                )
+                .with_vet(&|candidate| *candidate == url)
+                .with_decorate(&|r| r.header(reqwest::header::ACCEPT_ENCODING, "identity")),
                 "build.log.read",
             )
             .await

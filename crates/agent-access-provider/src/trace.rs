@@ -1,9 +1,10 @@
 //! Upstream request trace events.
 use crate::contract::{ContractViolation, HookContext};
 use crate::correlation::current_hook_context;
-use crate::{ProviderReason, ReasonCode, current_provider_action};
+use crate::{ProviderReason, ReasonCode, UpstreamCall, current_provider_action};
 
 /// One completed upstream HTTP request, reported by a backend.
+#[non_exhaustive]
 pub struct UpstreamTrace<'a> {
     pub provider: &'a str,
     pub upstream_operation: &'a str,
@@ -20,6 +21,50 @@ pub struct UpstreamTrace<'a> {
     /// `broker_provider_contract_failed`.
     pub reason_code: Option<ProviderReason>,
     pub path_template: Option<&'a str>,
+}
+
+impl<'a> UpstreamTrace<'a> {
+    /// `provider`'s `method` request for `call` to `upstream_origin`, which
+    /// completed after `duration_ms` over the `egress_proxy_mode` route. It
+    /// records no status, reason or path template until the builders below
+    /// add them.
+    pub fn new(
+        provider: &'a str,
+        call: UpstreamCall<'a>,
+        upstream_origin: &'a str,
+        method: &'a str,
+        egress_proxy_mode: &'a str,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            provider,
+            upstream_operation: call.operation,
+            upstream_origin,
+            method,
+            status: None,
+            duration_ms,
+            attempt: call.attempt,
+            egress_proxy_mode,
+            reason_code: None,
+            path_template: None,
+        }
+    }
+
+    pub fn with_status(mut self, status: Option<u16>) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// The provider's classification of the request, checked against its hook.
+    pub fn with_reason_code(mut self, reason_code: Option<ProviderReason>) -> Self {
+        self.reason_code = reason_code;
+        self
+    }
+
+    pub fn with_path_template(mut self, path_template: Option<&'a str>) -> Self {
+        self.path_template = path_template;
+        self
+    }
 }
 
 /// Emits the `upstream_request_completed` event under this crate's log

@@ -299,15 +299,14 @@ pub(crate) fn client(
     host: &BuildContext<'_>,
 ) -> Result<Arc<UpstreamClient>, ProviderBuildError> {
     Ok(Arc::new(UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "imports.openapi_http",
-            provider: "openapi_http",
-            base: endpoint,
-            egress: EgressDeclaration::Ordinary(None),
-            allowed_upstream_hosts: allowed,
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
+        UpstreamClientSpec::new(
+            "imports.openapi_http",
+            "openapi_http",
+            endpoint,
+            EgressDeclaration::Ordinary(None),
+            allowed,
+            ClientProfile::SingleAttempt,
+        ),
         host.clients(),
     )?))
 }

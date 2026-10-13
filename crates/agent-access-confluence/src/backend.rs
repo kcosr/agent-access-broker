@@ -1087,15 +1087,15 @@ impl ConfluenceHttpClients {
     ) -> Result<Self, ProviderBuildError> {
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
+                UpstreamClientSpec::new(
                     label,
-                    provider: "confluence",
-                    base: &api_base,
-                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                    "confluence",
+                    &api_base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[(409, ReasonCode::VersionConflict)],
-                },
+                )
+                .with_status_reasons(&[(409, ReasonCode::VersionConflict)]),
                 clients,
             )
         };
@@ -1322,10 +1322,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "page.ancestors",
-                    attempt: attempt as u32,
-                },
+                UpstreamCall::new("page.ancestors").with_attempt(attempt as u32),
             )
             .await?;
             last_status = response.status().as_u16();
@@ -1379,10 +1376,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "page.direct_children",
-                    attempt: attempt as u32,
-                },
+                UpstreamCall::new("page.direct_children").with_attempt(attempt as u32),
             )
             .await?;
             last_status = response.status().as_u16();
@@ -2258,10 +2252,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "attachment.list",
-                    attempt,
-                },
+                UpstreamCall::new("attachment.list").with_attempt(attempt),
             )
             .await?;
             let status = response.status().as_u16();
@@ -2374,10 +2365,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "blog.attachment.lookup",
-                    attempt,
-                },
+                UpstreamCall::new("blog.attachment.lookup").with_attempt(attempt),
             )
             .await?;
             let status = response.status().as_u16();
@@ -2999,15 +2987,13 @@ impl HttpConfluenceBackend {
         client
             .get_following_redirects(
                 url,
-                RedirectRules {
-                    max_redirects: 5,
-                    deadline: Duration::from_millis(self.limits.request_timeout_ms),
-                    // Atlassian media hosts join broker logs by these headers.
-                    correlate_other_origins: true,
-                    vet: &|_| true,
-                    decorate: &|request| request,
-                    authorize: &|request| authorization.apply(request),
-                },
+                RedirectRules::new(
+                    5,
+                    Duration::from_millis(self.limits.request_timeout_ms),
+                    &|request| authorization.apply(request),
+                )
+                // Atlassian media hosts join broker logs by these headers.
+                .correlating_other_origins(),
                 "attachment.download",
             )
             .await

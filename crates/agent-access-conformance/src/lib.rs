@@ -468,15 +468,14 @@ impl ConformanceProvider {
             .map_err(|_| ProviderBuildError::invalid(format!("{LABEL}.base_url is invalid")))?;
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: LABEL,
-                    provider: SERVICE,
-                    base: &base,
-                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                UpstreamClientSpec::new(
+                    LABEL,
+                    SERVICE,
+                    &base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[],
-                },
+                ),
                 host.clients(),
             )
         };

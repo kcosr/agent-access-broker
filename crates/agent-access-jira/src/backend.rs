@@ -798,15 +798,14 @@ impl JiraHttpClients {
     ) -> Result<Self, ProviderBuildError> {
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
+                UpstreamClientSpec::new(
                     label,
-                    provider: "jira",
-                    base: &api_base,
-                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                    "jira",
+                    &api_base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[],
-                },
+                ),
                 clients,
             )
         };
@@ -1780,15 +1779,13 @@ impl HttpJiraBackend {
         client
             .get_following_redirects(
                 url,
-                RedirectRules {
-                    max_redirects: 5,
-                    deadline: Duration::from_millis(self.limits.request_timeout_ms),
-                    // Atlassian media hosts join broker logs by these headers.
-                    correlate_other_origins: true,
-                    vet: &|_| true,
-                    decorate: &|request| request,
-                    authorize: &|request| authorization.apply(request),
-                },
+                RedirectRules::new(
+                    5,
+                    Duration::from_millis(self.limits.request_timeout_ms),
+                    &|request| authorization.apply(request),
+                )
+                // Atlassian media hosts join broker logs by these headers.
+                .correlating_other_origins(),
                 "attachment.download",
             )
             .await

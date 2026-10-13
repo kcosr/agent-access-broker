@@ -1291,53 +1291,52 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
     });
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "jira",
-        upstream_operation: "attachment.download",
-        upstream_origin: "https://example.atlassian.net",
-        method: "GET",
-        status: Some(302),
-        duration_ms: 3,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: None,
-    });
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "jira",
-        upstream_operation: "issue.get",
-        upstream_origin: "https://example.atlassian.net",
-        method: "GET",
-        status: Some(404),
-        duration_ms: 4,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: None,
-    });
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "configured_http",
-        upstream_operation: "issues.list",
-        upstream_origin: "https://api.example.test",
-        method: "GET",
-        status: Some(500),
-        duration_ms: 5,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: Some("/repos/{owner}/{repo}/issues"),
-    });
-    let classified = |duration_ms| UpstreamTrace {
-        provider: "configured_http",
-        upstream_operation: "issues.list",
-        upstream_origin: "https://api.example.test",
-        method: "GET",
-        status: Some(200),
-        duration_ms,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: Some(ReasonCode::UpstreamProtocolFailed.into()),
-        path_template: Some("/repos/{owner}/{repo}/issues"),
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "jira",
+            UpstreamCall::new("attachment.download"),
+            "https://example.atlassian.net",
+            "GET",
+            "direct",
+            3,
+        )
+        .with_status(Some(302)),
+    );
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "jira",
+            UpstreamCall::new("issue.get"),
+            "https://example.atlassian.net",
+            "GET",
+            "direct",
+            4,
+        )
+        .with_status(Some(404)),
+    );
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "configured_http",
+            UpstreamCall::new("issues.list"),
+            "https://api.example.test",
+            "GET",
+            "direct",
+            5,
+        )
+        .with_status(Some(500))
+        .with_path_template(Some("/repos/{owner}/{repo}/issues")),
+    );
+    let classified = |duration_ms| {
+        UpstreamTrace::new(
+            "configured_http",
+            UpstreamCall::new("issues.list"),
+            "https://api.example.test",
+            "GET",
+            "direct",
+            duration_ms,
+        )
+        .with_status(Some(200))
+        .with_reason_code(Some(ReasonCode::UpstreamProtocolFailed.into()))
+        .with_path_template(Some("/repos/{owner}/{repo}/issues"))
     };
     // A provider's own classification is checked against its hook.
     tokio::runtime::Builder::new_current_thread()

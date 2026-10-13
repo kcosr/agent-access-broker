@@ -44,24 +44,60 @@ pub enum ClientProfile {
     Bounded { total: Duration, connect: Duration },
 }
 
-/// What a backend declares about one upstream client.
+/// What a backend declares about one upstream client, which
+/// [`UpstreamClient::build`] reads.
+#[non_exhaustive]
 pub struct UpstreamClientSpec<'a> {
-    /// Configuration path naming the client in diagnostics, such as
-    /// `providers.jira.egress_proxy`.
-    pub label: &'a str,
-    /// The `provider` recorded on trace events.
-    pub provider: &'static str,
-    /// The service's base URL. Its origin is the only one that receives
-    /// correlation headers and credentials.
-    pub base: &'a Url,
-    /// The route the client needs; the host selects and may deny it.
-    pub egress: EgressDeclaration<'a>,
-    /// URL patterns every request, including each redirect hop, must match.
-    pub allowed_upstream_hosts: &'a [String],
-    pub profile: ClientProfile,
+    label: &'a str,
+    provider: &'static str,
+    base: &'a Url,
+    egress: EgressDeclaration<'a>,
+    allowed_upstream_hosts: &'a [String],
+    profile: ClientProfile,
+    status_reasons: &'static [(u16, ReasonCode)],
+}
+
+impl<'a> UpstreamClientSpec<'a> {
+    /// A client for the service at `base`:
+    ///
+    /// - `label` is the configuration path naming the client in
+    ///   diagnostics, such as `providers.jira.egress_proxy`;
+    /// - `provider` is recorded on trace events;
+    /// - `base`'s origin is the only one that receives correlation headers
+    ///   and credentials;
+    /// - `egress` is the route the client needs, which the host selects and
+    ///   may deny;
+    /// - every request, including each redirect hop, must match one of
+    ///   `allowed_upstream_hosts`;
+    /// - `profile` bounds time and retries.
+    ///
+    /// Its traces record no reason for an unclassified status until
+    /// [`Self::with_status_reasons`] declares some.
+    pub fn new(
+        label: &'a str,
+        provider: &'static str,
+        base: &'a Url,
+        egress: EgressDeclaration<'a>,
+        allowed_upstream_hosts: &'a [String],
+        profile: ClientProfile,
+    ) -> Self {
+        Self {
+            label,
+            provider,
+            base,
+            egress,
+            allowed_upstream_hosts,
+            profile,
+            status_reasons: &[],
+        }
+    }
+
     /// Reason codes a trace records for these statuses when the caller
     /// classifies the response with none, such as 409 for a version conflict.
-    pub status_reasons: &'static [(u16, ReasonCode)],
+    pub fn with_status_reasons(mut self, status_reasons: &'static [(u16, ReasonCode)]) -> Self {
+        self.status_reasons = status_reasons;
+        self
+    }
 }
 
 /// Why an upstream request produced no usable response.
@@ -96,6 +132,7 @@ impl UpstreamError {
 }
 
 /// Names one upstream request in its trace event.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct UpstreamCall<'a> {
     pub operation: &'a str,
@@ -104,11 +141,19 @@ pub struct UpstreamCall<'a> {
 }
 
 impl<'a> UpstreamCall<'a> {
+    /// The first attempt of `operation`.
     pub fn new(operation: &'a str) -> Self {
         Self {
             operation,
             attempt: 1,
         }
+    }
+
+    /// A later attempt: 1 is the first request, and redirect hops and
+    /// retries count up.
+    pub fn with_attempt(mut self, attempt: u32) -> Self {
+        self.attempt = attempt;
+        self
     }
 }
 
@@ -116,21 +161,70 @@ impl<'a> UpstreamCall<'a> {
 pub type UploadProgress = watch::Receiver<tokio::time::Instant>;
 
 /// How [`UpstreamClient::get_following_redirects`] walks a redirect chain.
+#[non_exhaustive]
 pub struct RedirectRules<'a> {
-    /// Redirects followed after the first request; one more is an error.
-    pub max_redirects: u32,
-    /// Deadline for each hop's response headers.
-    pub deadline: Duration,
-    /// Whether hops to other origins carry the invocation's correlation
+    max_redirects: u32,
+    deadline: Duration,
+    correlate_other_origins: bool,
+    vet: &'a (dyn Fn(&Url) -> bool + Sync),
+    decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+}
+
+impl<'a> RedirectRules<'a> {
+    /// Follows at most `max_redirects` redirects after the first request
+    /// (one more is an error), waits at most `deadline` for each hop's
+    /// response headers, and applies `authorize`'s credentials only to hops
+    /// on the service's own origin.
+    ///
+    /// Hops to other origins carry no correlation headers, every hop is
+    /// sent as built, and the chain needs only the allowlist and the absence
+    /// of embedded credentials, until the builders below change that.
+    pub fn new(
+        max_redirects: u32,
+        deadline: Duration,
+        authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    ) -> Self {
+        Self {
+            max_redirects,
+            deadline,
+            correlate_other_origins: false,
+            vet: &accept_every_hop,
+            decorate: &undecorated_hop,
+            authorize,
+        }
+    }
+
+    /// Hops to other origins also carry the invocation's correlation
     /// headers. Hops to the service's own origin always do.
-    pub correlate_other_origins: bool,
-    /// Additional backend checks each URL in the chain must pass, on top of
-    /// the allowlist and the absence of embedded credentials.
-    pub vet: &'a (dyn Fn(&Url) -> bool + Sync),
+    pub fn correlating_other_origins(mut self) -> Self {
+        self.correlate_other_origins = true;
+        self
+    }
+
+    /// An additional backend check each URL in the chain must pass, on top
+    /// of the allowlist and the absence of embedded credentials.
+    pub fn with_vet(mut self, vet: &'a (dyn Fn(&Url) -> bool + Sync)) -> Self {
+        self.vet = vet;
+        self
+    }
+
     /// Headers every hop carries.
-    pub decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
-    /// Credentials, applied only to hops on the service's own origin.
-    pub authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    pub fn with_decorate(
+        mut self,
+        decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    ) -> Self {
+        self.decorate = decorate;
+        self
+    }
+}
+
+fn accept_every_hop(_: &Url) -> bool {
+    true
+}
+
+fn undecorated_hop(request: RequestBuilder) -> RequestBuilder {
+    request
 }
 
 /// An HTTP client for one upstream service.
@@ -301,10 +395,7 @@ impl UpstreamClient {
                 .send_with_deadline(
                     request,
                     rules.deadline,
-                    UpstreamCall {
-                        operation,
-                        attempt: hop + 1,
-                    },
+                    UpstreamCall::new(operation).with_attempt(hop + 1),
                 )
                 .await?;
             if !response.status().is_redirection() {
@@ -476,18 +567,16 @@ impl TraceEvent {
     /// Records the trace with a classification this crate made itself, such
     /// as a transport failure's.
     fn emit_classified(&self, reason_code: Option<ProviderReason>) {
-        let trace = UpstreamTrace {
-            provider: self.provider,
-            upstream_operation: &self.operation,
-            upstream_origin: &self.origin,
-            method: &self.method,
-            status: self.status,
-            duration_ms: self.started.elapsed().as_millis() as u64,
-            attempt: self.attempt,
-            egress_proxy_mode: self.egress_proxy_mode,
-            reason_code,
-            path_template: None,
-        };
+        let trace = UpstreamTrace::new(
+            self.provider,
+            UpstreamCall::new(&self.operation).with_attempt(self.attempt),
+            &self.origin,
+            &self.method,
+            self.egress_proxy_mode,
+            self.started.elapsed().as_millis() as u64,
+        )
+        .with_status(self.status)
+        .with_reason_code(reason_code);
         self.span.in_scope(|| {
             emit_upstream_request_completed_for(trace, &self.service, &self.action);
         });
@@ -581,15 +670,15 @@ mod tests {
 
     fn client(base: &str, allowed: &[String], profile: ClientProfile) -> UpstreamClient {
         UpstreamClient::build(
-            UpstreamClientSpec {
-                label: "providers.example",
-                provider: "example",
-                base: &Url::parse(base).unwrap(),
-                egress: EgressDeclaration::Ordinary(None),
-                allowed_upstream_hosts: allowed,
+            UpstreamClientSpec::new(
+                "providers.example",
+                "example",
+                &Url::parse(base).unwrap(),
+                EgressDeclaration::Ordinary(None),
+                allowed,
                 profile,
-                status_reasons: &[(409, ReasonCode::VersionConflict)],
-            },
+            )
+            .with_status_reasons(&[(409, ReasonCode::VersionConflict)]),
             &crate::test_support::TestHost::default(),
         )
         .unwrap()
@@ -603,14 +692,11 @@ mod tests {
     }
 
     fn rules<'a>(max_redirects: u32, vet: &'a (dyn Fn(&Url) -> bool + Sync)) -> RedirectRules<'a> {
-        RedirectRules {
-            max_redirects,
-            deadline: Duration::from_secs(5),
-            correlate_other_origins: false,
-            vet,
-            decorate: &|request| request.header("X-Every-Hop", "yes"),
-            authorize: &|request| request.bearer_auth("service-secret"),
-        }
+        RedirectRules::new(max_redirects, Duration::from_secs(5), &|request| {
+            request.bearer_auth("service-secret")
+        })
+        .with_vet(vet)
+        .with_decorate(&|request| request.header("X-Every-Hop", "yes"))
     }
 
     #[tokio::test]
