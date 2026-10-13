@@ -287,6 +287,38 @@ response or when the response is dropped. Backends keep their own protocol:
 URLs, authentication schemes, status and body handling, and any extra checks
 on redirect targets.
 
+### Continuation tokens
+
+A native action that returns a resumable cursor, page token or handle seals it
+with the SDK's continuation envelope (`ContinuationFamily`,
+`ContinuationBinding`, `ContinuationSigner`). A provider declares each token
+family once: its service and purpose, a version, an explicit payload cap, an
+optional expiry, and a signing lifetime:
+
+- **generation**: a key generated with the provider instance, so a reload or
+  restart invalidates the tokens even when a stable key is configured;
+- **stable when configured**: the service-scoped stable key derived from
+  `broker_tokens.hash_key_ref` when one is configured, otherwise the
+  generation key;
+- **durable**: only the stable key; sealing or opening fails without one.
+
+A token is bound to the admitted service and action (a handle family may span
+the service's actions), the host-selected execution context, the credential
+mode, the principal (a family that deliberately shares service-mode tokens
+binds it only in per-user mode), the provider's configuration fingerprint, and
+the resource identifiers and normalized query, filter and output settings the
+provider adds. Delegated families also bind the lease's `DelegatedBindingId`,
+target and audience, which routine token refresh keeps. The binding is a
+canonical, length-delimited encoding whose digest enters the HMAC context with
+the service, purpose and version; the token itself carries only the version,
+the expiry, the provider payload and the MAC. Any other binding, purpose, key
+or version rejects the token, and obsolete versions are never decoded. The
+encoded size cap is derived exactly from the payload cap; an oversized payload
+or token is an error, never truncated. The effective grant boundary is not
+bound: the host authorizes every continuation under current policy and the
+provider re-applies its containment and result checks. Each provider's
+documentation states its families' bindings and lifetimes.
+
 ### Adding a backend
 
 A backend is a crate that depends only on `agent-access-provider` and exports
@@ -317,6 +349,7 @@ only host change. The crate supplies:
   body-part admission over the admitted request, and invocation through
   `UpstreamClient`s, returning JSON or a bounded stream. Delegated leases expose
   an opaque `DelegatedBindingId` for binding signed tokens to the connection.
+  Resumable cursors and handles use [continuation tokens](#continuation-tokens).
 - **Domain reasons** (optional): `ProviderReasonDefinition` statics listed on
   the registration, each with a code under the kind's prefix and a fixed
   decision and HTTP status. Failures report them with

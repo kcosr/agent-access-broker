@@ -65,8 +65,9 @@ actions and exposes typed wrappers for supported services.
   or record credential use/verification. Keep management and setup previews
   independent so missing credentials cannot prevent onboarding.
 - Backend invocation context comes from the host-authorized execution context,
-  never a tool input. Bind resumable provider cursors to that context and current
-  principal/resource/query settings; reauthorize every continuation.
+  never a tool input. Seal resumable provider cursors with the SDK continuation
+  envelope, bound to that context and current principal/resource/query settings;
+  reauthorize every continuation.
 - Backend actions default to `read_only = false`; explicitly opt reviewed reads
   in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
   classifies upstream effects for grant selection; it does not gate local output.
@@ -204,7 +205,8 @@ and audit checks through the real `agent-access` binary.
   reason codes, the OAuth dialect and delegated-credential contracts, and the
   host services backends use (upstream HTTP clients built through the host's
   client factory, egress declarations and sanitized routes, upstream
-  allowlists, correlation, upstream trace events, token signing). Its `host`
+  allowlists, correlation, upstream trace events, token signing and
+  continuation envelopes). Its `host`
   module is the construction interface core implements (`BuildContext`,
   `UpstreamClientFactory`) and the only constructor of host-owned values
   (scope requests, static execution credentials, delegated binding

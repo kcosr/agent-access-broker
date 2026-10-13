@@ -597,6 +597,16 @@ Agent Access Broker applies these controls in the request path:
   path).
 - **Broker-owned query parsing**: Jira JQL and Confluence CQL are parsed into a
   broker AST, re-emitted canonically, scoped by policy, and result-validated.
+- **Provider continuation tokens**: cursors, page tokens and handles sealed with
+  the provider SDK's continuation envelope are HMAC-signed and bound to the
+  service, purpose and version, the host-selected execution context, the
+  credential mode, the caller, the provider configuration and the request's
+  resources and normalized settings. The binding enters only the MAC, never the
+  token, so a token reveals no bound value and fails under any other binding.
+  Tokens carry no authority: each continuation is authorized again under
+  current policy and the provider re-applies its containment checks, so a grant
+  change takes effect on the next page. Process-local keys make tokens expire
+  on reload or restart; durable handles require the configured stable key.
 - **Credential containment**: agents never receive broker-held execution
   credentials. Deliberate GitLab token issuance/rotation returns a new token as
   explicitly sensitive output; it does not reveal the broker execution credential.

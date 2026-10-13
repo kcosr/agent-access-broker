@@ -111,6 +111,14 @@ All notable changes to this project are documented in this file.
 - Release qualification runs a required `crate-boundaries` gate
   (`node scripts/check-crate-boundaries.mjs`). Every workspace crate declares a
   role, and the check rejects dependencies that cross the role boundaries.
+- The provider SDK provides signed continuation envelopes for resumable
+  cursors, page tokens and handles: `ContinuationFamily` declares a token
+  family (service, purpose, version, payload cap, expiry and a generation,
+  stable-when-configured or durable signing lifetime), `ContinuationBinding`
+  binds the admitted context, configuration, resources and normalized settings
+  through the MAC context only, `ContinuationSigner` seals and opens tokens,
+  and `ContinuationError` reports rejected tokens separately from signing
+  failures.
 
 ### Changed
 

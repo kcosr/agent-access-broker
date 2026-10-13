@@ -4,7 +4,8 @@
 //! invocations through the [`Provider`] trait, and reaches upstream systems
 //! through the host services defined here: upstream clients the host
 //! constructs (TLS trust and egress routing stay inside the host), upstream
-//! allowlists, correlation headers, trace events, and stable token signing.
+//! allowlists, correlation headers, trace events, stable token signing and
+//! signed continuation envelopes.
 //! The broker owns identity, policy, credentials, audit, limits and network
 //! construction; backends see only the narrow views in this crate. The
 //! [`host`] module is the construction interface the broker host implements.
@@ -14,6 +15,7 @@ mod attribution;
 mod backend;
 mod capabilities;
 mod config;
+mod continuation;
 mod correlation;
 mod credential;
 mod delegated;
@@ -48,6 +50,10 @@ pub use attribution::*;
 pub use backend::*;
 pub use capabilities::*;
 pub use config::*;
+pub use continuation::{
+    ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
+    ContinuationOwner, ContinuationSigner,
+};
 pub use correlation::*;
 pub use credential::*;
 pub use delegated::*;
