@@ -290,24 +290,20 @@ impl Provider for BrokerWebhookContractProvider {
         match request.action() {
             "webhook.create" => {
                 assert_eq!(request.inputs()["token"], WEBHOOK_SECRET_SENTINEL);
-                Ok(ProviderResult {
-                    result: json!({
-                        "mutationStatus": "applied",
-                        "retrySafe": false,
-                        "webhookId": 42
-                    }),
-                    stream: None,
-                    audit: Some(json!({
-                        "provider": "gitlab",
-                        "operation": "webhook.create",
-                        "repository": "sip/service",
-                        "webhookId": 42,
-                        "urlChanged": true
-                    })),
-                    upstream_status: Some(201),
-                    upstream_duration_ms: Some(8),
-                    object_ids: Some(json!({ "webhookId": 42 })),
-                })
+                Ok(ProviderResult::new(json!({
+                    "mutationStatus": "applied",
+                    "retrySafe": false,
+                    "webhookId": 42
+                }))
+                .with_audit(json!({
+                    "provider": "gitlab",
+                    "operation": "webhook.create",
+                    "repository": "sip/service",
+                    "webhookId": 42,
+                    "urlChanged": true
+                }))
+                .with_upstream(Some(201), Some(8))
+                .with_object_ids(json!({ "webhookId": 42 })))
             }
             "webhook.update" => Err(ProviderError::error(
                 ReasonCode::MutationVerificationFailed,

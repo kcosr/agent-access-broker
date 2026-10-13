@@ -8,6 +8,23 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+/// A successful outcome: its JSON result or a streamed body, with optional
+/// audit data and upstream facts.
+///
+/// The public fields are the data the host reads. Build a result with
+/// [`Self::new`] and the `with_*` methods:
+///
+/// ```
+/// use agent_access_provider::ProviderResult;
+/// use serde_json::json;
+///
+/// let result = ProviderResult::new(json!({"id": "42"}))
+///     .with_audit(json!({"operation": "item.view"}))
+///     .with_upstream(Some(200), Some(12));
+/// assert_eq!(result.upstream_status, Some(200));
+/// assert!(result.stream.is_none());
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderResult {
@@ -24,6 +41,45 @@ pub struct ProviderResult {
     pub object_ids: Option<Value>,
 }
 
+impl ProviderResult {
+    /// A result carrying `result`, with no streamed body, audit data or
+    /// upstream facts.
+    pub fn new(result: Value) -> Self {
+        Self {
+            result,
+            stream: None,
+            audit: None,
+            upstream_status: None,
+            upstream_duration_ms: None,
+            object_ids: None,
+        }
+    }
+
+    /// Streams `stream` as the response body; `result` becomes its metadata.
+    pub fn with_stream(mut self, stream: ProviderResultStream) -> Self {
+        self.stream = Some(stream);
+        self
+    }
+
+    pub fn with_audit(mut self, audit: Value) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    pub fn with_upstream(mut self, status: Option<u16>, duration_ms: Option<u64>) -> Self {
+        self.upstream_status = status;
+        self.upstream_duration_ms = duration_ms;
+        self
+    }
+
+    pub fn with_object_ids(mut self, object_ids: Value) -> Self {
+        self.object_ids = Some(object_ids);
+        self
+    }
+}
+
+/// A result body: its content type and its bytes, in memory or streamed.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderResultStream {
     pub content_type: String,
@@ -153,6 +209,7 @@ pub type ProviderByteStream =
 /// codes come from the late-stream subset
 /// ([`ReasonCode::permits_late_stream`]); a backend may also use one of its
 /// registered domain reasons.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{reason_code:?}: {message}")]
 pub struct ProviderStreamError {
@@ -363,9 +420,22 @@ impl ProviderError {
     }
 }
 
+/// A credential verification an upstream answered: its status, duration and
+/// audit data.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCredentialVerification {
     pub upstream_status: u16,
     pub upstream_duration_ms: u64,
     pub audit: Value,
+}
+
+impl ProviderCredentialVerification {
+    pub fn new(upstream_status: u16, upstream_duration_ms: u64, audit: Value) -> Self {
+        Self {
+            upstream_status,
+            upstream_duration_ms,
+            audit,
+        }
+    }
 }

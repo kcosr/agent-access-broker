@@ -549,17 +549,13 @@ impl CloudbeesCiProvider {
                 audit["buildSelector"] = json!(selector);
             }
         }
-        ProviderResult {
-            result: value,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(reply.status.as_u16()),
-            upstream_duration_ms: Some(reply.duration_ms),
-            object_ids: Some(json!({
+        ProviderResult::new(value)
+            .with_audit(audit)
+            .with_upstream(Some(reply.status.as_u16()), Some(reply.duration_ms))
+            .with_object_ids(json!({
                 "job": format!("{}/{}", input.controller, input.job),
                 "buildNumber": input.build_number, "queueId": queue_id,
-            })),
-        }
+            }))
     }
 }
 

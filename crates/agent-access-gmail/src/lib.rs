@@ -440,14 +440,12 @@ impl Provider for GmailProvider {
                 error.upstream_duration_ms = Some(started.elapsed().as_millis() as u64);
                 error
             })?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: budget.last_status,
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids,
-        })
+        let mut provider_result = ProviderResult::new(result).with_audit(audit).with_upstream(
+            budget.last_status,
+            Some(started.elapsed().as_millis() as u64),
+        );
+        provider_result.object_ids = object_ids;
+        Ok(provider_result)
     }
 }
 fn valid_id(s: &str) -> bool {

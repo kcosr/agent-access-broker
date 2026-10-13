@@ -541,10 +541,10 @@ impl Provider for GitlabProvider {
             .current_user(credential)
             .await
             .map_err(gitlab_backend_error)?;
-        Ok(Some(ProviderCredentialVerification {
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-            audit: json!({
+        Ok(Some(ProviderCredentialVerification::new(
+            response.status,
+            response.duration_ms,
+            json!({
                 "gitlab": {
                     "operation": "credential.verify",
                     "userId": response.value.id,
@@ -552,7 +552,7 @@ impl Provider for GitlabProvider {
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 }
             }),
-        }))
+        )))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -4194,10 +4194,9 @@ impl GitlabProvider {
         } else {
             stream
         };
-        Ok(ProviderResult {
-            result: result.clone(),
-            stream: Some(stream),
-            audit: Some(json!({
+        Ok(ProviderResult::new(result.clone())
+            .with_stream(stream)
+            .with_audit(json!({
                 "gitlab": {
                     "operation": "merge_request.diff.raw.download",
                     "project": project.path_with_namespace,
@@ -4208,13 +4207,11 @@ impl GitlabProvider {
                     "size": size,
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 }
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "mergeRequest": format!("{}!{}", project.path_with_namespace, inputs.iid)
-            })),
-        })
+            })))
     }
 
     async fn review_read_project(
@@ -5069,16 +5066,9 @@ impl GitlabProvider {
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }
         });
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result).with_stream(stream).with_audit(audit).with_upstream(Some(response.status), Some(response.duration_ms)).with_object_ids(json!({
                 "file": format!("{}:{}:{}", project.path_with_namespace, inputs.ref_name, inputs.path)
-            })),
-        })
+            })))
     }
 
     async fn invoke_file_create(
@@ -5743,14 +5733,11 @@ impl GitlabProvider {
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }
         });
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({ "job": gitlab_job_object_id(&project, metadata.id) })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({ "job": gitlab_job_object_id(&project, metadata.id) })))
     }
 
     async fn invoke_job_retry(
@@ -13587,10 +13574,8 @@ fn gitlab_result(
     result: Value,
     egress_proxy: Value,
 ) -> ProviderResult {
-    ProviderResult {
-        result,
-        stream: None,
-        audit: Some(json!({
+    let mut provider_result = ProviderResult::new(result)
+        .with_audit(json!({
             "gitlab": {
                 "operation": operation,
                 "project": project.path_with_namespace,
@@ -13598,11 +13583,10 @@ fn gitlab_result(
                 "projectId": project.id,
                 "egressProxy": egress_proxy,
             }
-        })),
-        upstream_status: Some(upstream_status),
-        upstream_duration_ms: Some(upstream_duration_ms),
-        object_ids,
-    }
+        }))
+        .with_upstream(Some(upstream_status), Some(upstream_duration_ms));
+    provider_result.object_ids = object_ids;
+    provider_result
 }
 
 fn gitlab_result_with_request_body_audit(

@@ -588,14 +588,10 @@ impl ConformanceProvider {
         status: u16,
         started: Instant,
     ) -> ProviderResult {
-        ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({"provider": SERVICE, "operation": action, "item": item})),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids: Some(json!({"item": item})),
-        }
+        ProviderResult::new(result)
+            .with_audit(json!({"provider": SERVICE, "operation": action, "item": item}))
+            .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64))
+            .with_object_ids(json!({"item": item}))
     }
 
     /// Sends one ping with the endpoint's private key. The runtime resolved
@@ -642,16 +638,9 @@ impl ConformanceProvider {
                     })
             })
             .await?;
-        Ok(ProviderResult {
-            result: json!({"endpoint": inputs.endpoint, "receipt": receipt}),
-            stream: None,
-            audit: Some(
+        Ok(ProviderResult::new(json!({"endpoint": inputs.endpoint, "receipt": receipt})).with_audit(
                 json!({"provider": SERVICE, "operation": "endpoint.ping", "endpoint": inputs.endpoint}),
-            ),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids: Some(json!({"endpoint": inputs.endpoint})),
-        })
+            ).with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)).with_object_ids(json!({"endpoint": inputs.endpoint})))
     }
 
     async fn view(

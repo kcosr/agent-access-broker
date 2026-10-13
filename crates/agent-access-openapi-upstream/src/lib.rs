@@ -436,14 +436,9 @@ impl Provider for OpenApiProvider {
                     result["mutationStatus"] = json!("applied_unverified");
                     result["retrySafe"] = json!(false);
                 }
-                Ok(ProviderResult {
-                    result,
-                    stream: None,
-                    audit: Some(audit),
-                    upstream_status: status,
-                    upstream_duration_ms: Some(elapsed),
-                    object_ids: None,
-                })
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(status, Some(elapsed)))
             }
             Err(mut error) => {
                 if !action.definition.read_only {

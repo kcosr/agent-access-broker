@@ -113,25 +113,19 @@ impl Provider for FakeProvider {
             .and_then(|values| values.first())
             .cloned()
             .unwrap_or_default();
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action(),
-                "project": project,
-                "message": message,
-                "credentialMode": request.credential_mode(),
-                "principal": request.identity().principal,
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-                "messageLength": message.len(),
-            })),
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+            "project": project,
+            "message": message,
+            "credentialMode": request.credential_mode(),
+            "principal": request.identity().principal,
+        }))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+            "messageLength": message.len(),
+        })))
     }
 }
 

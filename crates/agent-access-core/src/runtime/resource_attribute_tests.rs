@@ -92,14 +92,7 @@ impl Provider for FixtureConfig {
         assert!(!format!("{request:?}").contains(value));
         assert_invocation_never_serializes();
         self.observed.lock().unwrap().push(value.into());
-        Ok(ProviderResult {
-            result: json!({"accepted":true}),
-            stream: None,
-            audit: None,
-            upstream_status: Some(202),
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"accepted":true})).with_upstream(Some(202), None))
     }
 }
 

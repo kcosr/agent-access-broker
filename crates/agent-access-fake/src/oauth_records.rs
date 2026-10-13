@@ -390,14 +390,9 @@ impl Provider for OAuthRecordsProvider {
         }
         let status = response.status().as_u16();
         let result = self.read_body(response).await?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({"provider":"oauth_stub","operation":request.action()})),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({"provider":"oauth_stub","operation":request.action()}))
+            .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)))
     }
 }
 

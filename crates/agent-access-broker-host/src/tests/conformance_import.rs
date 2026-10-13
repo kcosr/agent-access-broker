@@ -192,14 +192,7 @@ impl Provider for ImportedConformanceProvider {
                 ));
             }
         };
-        Ok(ProviderResult {
-            result: json!({"upstreamMcp":{"principal":request.identity().principal,"credentialMode":request.credential_mode(),"authority":authority,"transportAuthority":self.transport_authority,"message":request.inputs()["message"]}}),
-            stream: None,
-            audit: None,
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(0),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"upstreamMcp":{"principal":request.identity().principal,"credentialMode":request.credential_mode(),"authority":authority,"transportAuthority":self.transport_authority,"message":request.inputs()["message"]}})).with_upstream(Some(200), Some(0)))
     }
 }
 

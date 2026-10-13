@@ -964,15 +964,15 @@ impl Provider for JiraProvider {
             .current_user(credential)
             .await
             .map_err(jira_backend_error)?;
-        Ok(Some(ProviderCredentialVerification {
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-            audit: json!({
+        Ok(Some(ProviderCredentialVerification::new(
+            response.status,
+            response.duration_ms,
+            json!({
                 "provider": "jira",
                 "operation": "credential.verify",
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }),
-        }))
+        )))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -1058,10 +1058,8 @@ impl JiraProvider {
             "nextStartAt": next_start_at,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue_type.list",
                 "project": inputs.project,
@@ -1070,11 +1068,9 @@ impl JiraProvider {
                 "issueTypeCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({ "project": inputs.project })),
-        })
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({ "project": inputs.project })))
     }
 
     async fn invoke_issue_view(
@@ -1119,24 +1115,23 @@ impl JiraProvider {
         validate_returned_issue_description(&issue, &self.config)?;
         let result = issue_view_result(&issue, &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.view",
                 "issueKey": issue.key,
                 "project": issue.project,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": issue.id,
                 "issueKey": issue.key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_issue_create(
@@ -1345,14 +1340,10 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(upstream_status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_create_object_ids(Some(&created))),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+            .with_object_ids(issue_create_object_ids(Some(&created))))
     }
 
     async fn invoke_issue_child_create(
@@ -1668,14 +1659,10 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(upstream_status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_child_create_object_ids(Some(&created), &parent)),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)))
     }
 
     async fn invoke_issue_update(
@@ -1769,21 +1756,20 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(update_response.status),
-            upstream_duration_ms: Some(
-                metadata_response.duration_ms
-                    + update_response.duration_ms
-                    + readback_response.duration_ms,
-            ),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(update_response.status),
+                Some(
+                    metadata_response.duration_ms
+                        + update_response.duration_ms
+                        + readback_response.duration_ms,
+                ),
+            )
+            .with_object_ids(json!({
                 "issueId": issue.id,
                 "issueKey": issue.key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_issue_parent_set(
@@ -1896,10 +1882,8 @@ impl JiraProvider {
             "verification": { "status": "matched" },
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.parent.set",
                 "issueKey": issue.key.as_str(),
@@ -1909,11 +1893,9 @@ impl JiraProvider {
                 "verificationStatus": "matched",
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(update_response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_parent_set_object_ids(&issue, &parent)),
-        })
+            }))
+            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)))
     }
 
     async fn invoke_issue_dependency_add(
@@ -2023,10 +2005,8 @@ impl JiraProvider {
             "verification": { "status": "matched" },
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.dependency.add",
                 "status": "present",
@@ -2038,11 +2018,9 @@ impl JiraProvider {
                 "verificationStatus": "matched",
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(create_response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_dependency_object_ids(&blocking, &blocked)),
-        })
+            }))
+            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
+            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)))
     }
 
     async fn invoke_search(
@@ -2120,10 +2098,8 @@ impl JiraProvider {
 
         let result = search_result(&response.value, &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "search",
                 "requestedProjects": requested,
@@ -2140,18 +2116,16 @@ impl JiraProvider {
                 "resultCount": response.value.issues.len(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "issueKeys": response
                     .value
                     .issues
                     .iter()
                     .map(|issue| issue.key.clone())
                     .collect::<Vec<_>>(),
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_list(
@@ -2201,10 +2175,8 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.list",
                 "issueKey": metadata.key,
@@ -2215,15 +2187,16 @@ impl JiraProvider {
                 "commentCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(list_response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + list_response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(list_response.status),
+                Some(metadata_response.duration_ms + list_response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentIds": comment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_view(
@@ -2250,10 +2223,8 @@ impl JiraProvider {
             "comment": comment_result(&response.value),
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.view",
                 "issueKey": metadata.key,
@@ -2261,15 +2232,16 @@ impl JiraProvider {
                 "commentId": response.value.id,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_add(
@@ -2326,18 +2298,17 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_reply(
@@ -2425,19 +2396,15 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
                 "parentCommentId": effective_parent_comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_update(
@@ -2512,18 +2479,14 @@ impl JiraProvider {
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_delete(
@@ -2549,10 +2512,8 @@ impl JiraProvider {
             "status": "deleted",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.delete",
                 "issueKey": metadata.key,
@@ -2560,15 +2521,16 @@ impl JiraProvider {
                 "commentId": inputs.comment_id,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_list(
@@ -2608,10 +2570,8 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.list",
                 "issueKey": metadata.key,
@@ -2620,17 +2580,16 @@ impl JiraProvider {
                 "propertyCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_get(
@@ -2665,10 +2624,8 @@ impl JiraProvider {
             "value": response.value,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.get",
                 "issueKey": metadata.key,
@@ -2677,18 +2634,17 @@ impl JiraProvider {
                 "propertyKey": property_key,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_set(
@@ -2727,10 +2683,8 @@ impl JiraProvider {
             "status": "set",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.set",
                 "issueKey": metadata.key,
@@ -2739,18 +2693,17 @@ impl JiraProvider {
                 "propertyKey": property_key,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_delete(
@@ -2788,10 +2741,8 @@ impl JiraProvider {
             "status": "deleted",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.delete",
                 "issueKey": metadata.key,
@@ -2800,18 +2751,17 @@ impl JiraProvider {
                 "propertyKey": property_key,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_add(
@@ -2971,14 +2921,10 @@ impl JiraProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_attachment_download(
@@ -3054,18 +3000,15 @@ impl JiraProvider {
         if let Some(sha256) = result.get("sha256").cloned() {
             audit["sha256"] = sha256;
         }
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_list(
@@ -3127,10 +3070,8 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "attachment.list",
                 "issueKey": metadata.key,
@@ -3138,15 +3079,16 @@ impl JiraProvider {
                 "attachmentCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(list_response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + list_response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(list_response.status),
+                Some(metadata_response.duration_ms + list_response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_verify(
@@ -3229,10 +3171,8 @@ impl JiraProvider {
             "project": metadata.project,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "verify",
                 "issueKey": metadata.key,
@@ -3240,16 +3180,14 @@ impl JiraProvider {
                 "checked": checked,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.expect_comment_id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     async fn confirm_issue_project(

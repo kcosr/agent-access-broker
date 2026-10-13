@@ -14836,11 +14836,11 @@ impl Provider for TestManagedGitlabCredentialProvider {
         };
         assert_eq!(credential_token(credential), expected_token);
         Ok(Some(
-            agent_access_provider::ProviderCredentialVerification {
-                upstream_status: 200,
-                upstream_duration_ms: 1,
-                audit: json!({"provider":"gitlab","operation":"credential.verify"}),
-            },
+            agent_access_provider::ProviderCredentialVerification::new(
+                200,
+                1,
+                json!({"provider":"gitlab","operation":"credential.verify"}),
+            ),
         ))
     }
 }
@@ -15083,50 +15083,8 @@ impl Provider for TestJiraParentInvokeProvider {
                 request.resource_scopes().unwrap()["issue"],
                 vec!["PROJ-100".to_string()]
             );
-            return Ok(ProviderResult {
-                result: json!({
-                    "operation": "issue.child.create",
-                    "issue": {
-                        "id": "10002",
-                        "key": "PROJ-2",
-                        "project": "PROJ",
-                        "webUrl": "https://example.atlassian.net/browse/PROJ-2"
-                    },
-                    "parentIssue": {
-                        "id": "10100",
-                        "key": "PROJ-100",
-                        "project": "PROJ",
-                        "webUrl": "https://example.atlassian.net/browse/PROJ-100"
-                    },
-                    "verification": { "status": "matched" }
-                }),
-                stream: None,
-                audit: Some(json!({
-                    "provider": "jira",
-                    "operation": "issue.child.create",
-                    "issueKey": "PROJ-2",
-                    "project": "PROJ",
-                    "parentIssueKey": "PROJ-100",
-                    "parentProject": "PROJ",
-                    "verificationStatus": "matched",
-                })),
-                upstream_status: Some(201),
-                upstream_duration_ms: Some(19),
-                object_ids: Some(json!({
-                    "issueId": "10002",
-                    "issueKey": "PROJ-2",
-                    "parentIssueId": "10100",
-                    "parentIssueKey": "PROJ-100",
-                })),
-            });
-        }
-        assert_eq!(
-            request.resource_scopes().unwrap()["issue"],
-            vec!["PROJ-2".to_string(), "PROJ-100".to_string()]
-        );
-        Ok(ProviderResult {
-            result: json!({
-                "operation": "issue.parent.set",
+            return Ok(ProviderResult::new(json!({
+                "operation": "issue.child.create",
                 "issue": {
                     "id": "10002",
                     "key": "PROJ-2",
@@ -15140,26 +15098,60 @@ impl Provider for TestJiraParentInvokeProvider {
                     "webUrl": "https://example.atlassian.net/browse/PROJ-100"
                 },
                 "verification": { "status": "matched" }
-            }),
-            stream: None,
-            audit: Some(json!({
+            }))
+            .with_audit(json!({
                 "provider": "jira",
-                "operation": "issue.parent.set",
+                "operation": "issue.child.create",
                 "issueKey": "PROJ-2",
                 "project": "PROJ",
                 "parentIssueKey": "PROJ-100",
                 "parentProject": "PROJ",
                 "verificationStatus": "matched",
-            })),
-            upstream_status: Some(204),
-            upstream_duration_ms: Some(17),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(201), Some(19))
+            .with_object_ids(json!({
                 "issueId": "10002",
                 "issueKey": "PROJ-2",
                 "parentIssueId": "10100",
                 "parentIssueKey": "PROJ-100",
-            })),
-        })
+            })));
+        }
+        assert_eq!(
+            request.resource_scopes().unwrap()["issue"],
+            vec!["PROJ-2".to_string(), "PROJ-100".to_string()]
+        );
+        Ok(ProviderResult::new(json!({
+            "operation": "issue.parent.set",
+            "issue": {
+                "id": "10002",
+                "key": "PROJ-2",
+                "project": "PROJ",
+                "webUrl": "https://example.atlassian.net/browse/PROJ-2"
+            },
+            "parentIssue": {
+                "id": "10100",
+                "key": "PROJ-100",
+                "project": "PROJ",
+                "webUrl": "https://example.atlassian.net/browse/PROJ-100"
+            },
+            "verification": { "status": "matched" }
+        }))
+        .with_audit(json!({
+            "provider": "jira",
+            "operation": "issue.parent.set",
+            "issueKey": "PROJ-2",
+            "project": "PROJ",
+            "parentIssueKey": "PROJ-100",
+            "parentProject": "PROJ",
+            "verificationStatus": "matched",
+        }))
+        .with_upstream(Some(204), Some(17))
+        .with_object_ids(json!({
+            "issueId": "10002",
+            "issueKey": "PROJ-2",
+            "parentIssueId": "10100",
+            "parentIssueKey": "PROJ-100",
+        })))
     }
 }
 
@@ -15245,31 +15237,27 @@ impl Provider for TestJiraReadPresentationProvider {
             .with_object_ids(json!({ "issueKey": "PROJ-7" })));
         }
         assert_eq!(request.action(), "issue.view");
-        Ok(ProviderResult {
-            result: json!({
-                "id": "10007",
-                "key": "PROJ-7",
-                "project": "PROJ",
-                "summary": "Normalized read fixture",
-                "description": {
-                    "type": "doc",
-                    "version": 1,
+        Ok(ProviderResult::new(json!({
+            "id": "10007",
+            "key": "PROJ-7",
+            "project": "PROJ",
+            "summary": "Normalized read fixture",
+            "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                    "type": "paragraph",
                     "content": [{
-                        "type": "paragraph",
-                        "content": [{
-                            "type": "text",
-                            "text": JIRA_READ_NATIVE_SENTINEL
-                        }]
+                        "type": "text",
+                        "text": JIRA_READ_NATIVE_SENTINEL
                     }]
-                },
-                "webUrl": "https://example.atlassian.net/browse/PROJ-7"
-            }),
-            stream: None,
-            audit: Some(safe_audit),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(5),
-            object_ids: Some(json!({ "issueId": "10007", "issueKey": "PROJ-7" })),
-        })
+                }]
+            },
+            "webUrl": "https://example.atlassian.net/browse/PROJ-7"
+        }))
+        .with_audit(safe_audit)
+        .with_upstream(Some(200), Some(5))
+        .with_object_ids(json!({ "issueId": "10007", "issueKey": "PROJ-7" })))
     }
 }
 
@@ -15371,28 +15359,24 @@ impl Provider for TestJiraNormalizedWriteProvider {
             converted_native_body["content"][0]["content"][0]["text"],
             JIRA_WRITE_NATIVE_SENTINEL
         );
-        Ok(ProviderResult {
-            result: json!({
-                "operation": "issue.create",
-                "issue": {
-                    "id": "10117",
-                    "key": "PROJ-17",
-                    "project": "PROJ"
-                }
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider": "jira",
-                "operation": "issue.create",
-                "project": "PROJ",
-                "issueKey": "PROJ-17",
-                "contentFormat": "markdown",
-                "nativeFormat": "adf"
-            })),
-            upstream_status: Some(201),
-            upstream_duration_ms: Some(9),
-            object_ids: Some(json!({ "issueId": "10117", "issueKey": "PROJ-17" })),
-        })
+        Ok(ProviderResult::new(json!({
+            "operation": "issue.create",
+            "issue": {
+                "id": "10117",
+                "key": "PROJ-17",
+                "project": "PROJ"
+            }
+        }))
+        .with_audit(json!({
+            "provider": "jira",
+            "operation": "issue.create",
+            "project": "PROJ",
+            "issueKey": "PROJ-17",
+            "contentFormat": "markdown",
+            "nativeFormat": "adf"
+        }))
+        .with_upstream(Some(201), Some(9))
+        .with_object_ids(json!({ "issueId": "10117", "issueKey": "PROJ-17" })))
     }
 }
 
@@ -15487,30 +15471,26 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
         assert_eq!(source, CONFLUENCE_WRITE_SOURCE_SENTINEL);
         let converted_native_body = format!("<p>{CONFLUENCE_WRITE_NATIVE_SENTINEL}</p>");
         assert!(converted_native_body.contains(CONFLUENCE_WRITE_NATIVE_SENTINEL));
-        Ok(ProviderResult {
-            result: json!({
-                "operation": "page.create",
-                "page": {
-                    "id": "9017",
-                    "space": "ENG",
-                    "title": "Tracing redaction regression"
-                }
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider": "confluence",
-                "operation": "page.create",
+        Ok(ProviderResult::new(json!({
+            "operation": "page.create",
+            "page": {
+                "id": "9017",
                 "space": "ENG",
-                "pageId": "9017",
-                "contentFormat": "markdown",
-                "nativeFormat": "storage",
-                "sourceBytes": source.len(),
-                "nativeBytes": converted_native_body.len()
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(11),
-            object_ids: Some(json!({ "pageId": "9017" })),
-        })
+                "title": "Tracing redaction regression"
+            }
+        }))
+        .with_audit(json!({
+            "provider": "confluence",
+            "operation": "page.create",
+            "space": "ENG",
+            "pageId": "9017",
+            "contentFormat": "markdown",
+            "nativeFormat": "storage",
+            "sourceBytes": source.len(),
+            "nativeBytes": converted_native_body.len()
+        }))
+        .with_upstream(Some(200), Some(11))
+        .with_object_ids(json!({ "pageId": "9017" })))
     }
 }
 
@@ -15603,30 +15583,26 @@ impl Provider for TestGitlabNormalizedWriteProvider {
         assert_eq!(source, GITLAB_WRITE_SOURCE_SENTINEL);
         let converted_native_body = format!("\\{GITLAB_WRITE_NATIVE_SENTINEL}");
         assert!(converted_native_body.contains(GITLAB_WRITE_NATIVE_SENTINEL));
-        Ok(ProviderResult {
-            result: json!({
-                "operation": "issue.create",
-                "issue": {
-                    "iid": 17,
-                    "project": "sip/service",
-                    "title": "Tracing redaction regression"
-                }
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider": "gitlab",
-                "operation": "issue.create",
-                "repository": "sip/service",
-                "issueIid": 17,
-                "contentFormat": "plain_text",
-                "nativeFormat": "markdown",
-                "sourceBytes": source.len(),
-                "nativeBytes": converted_native_body.len()
-            })),
-            upstream_status: Some(201),
-            upstream_duration_ms: Some(10),
-            object_ids: Some(json!({ "issueIid": 17 })),
-        })
+        Ok(ProviderResult::new(json!({
+            "operation": "issue.create",
+            "issue": {
+                "iid": 17,
+                "project": "sip/service",
+                "title": "Tracing redaction regression"
+            }
+        }))
+        .with_audit(json!({
+            "provider": "gitlab",
+            "operation": "issue.create",
+            "repository": "sip/service",
+            "issueIid": 17,
+            "contentFormat": "plain_text",
+            "nativeFormat": "markdown",
+            "sourceBytes": source.len(),
+            "nativeBytes": converted_native_body.len()
+        }))
+        .with_upstream(Some(201), Some(10))
+        .with_object_ids(json!({ "issueIid": 17 })))
     }
 }
 
@@ -15813,23 +15789,19 @@ impl Provider for TestGitlabSuggestionApplyProvider {
             request.inputs()["commitMessage"],
             GITLAB_SUGGESTION_COMMIT_SECRET_SENTINEL
         );
-        Ok(ProviderResult {
-            result: json!({
-                "mutationStatus":"applied",
-                "retrySafe":false,
-                "suggestionIds":[456]
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider":"gitlab","operation":"merge_request.suggestion.apply",
-                "repository":"sip/service","mergeRequestIid":5,"suggestionCount":1
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(5),
-            object_ids: Some(json!({
-                "mergeRequestIid":5,"suggestionIds":[456]
-            })),
-        })
+        Ok(ProviderResult::new(json!({
+            "mutationStatus":"applied",
+            "retrySafe":false,
+            "suggestionIds":[456]
+        }))
+        .with_audit(json!({
+            "provider":"gitlab","operation":"merge_request.suggestion.apply",
+            "repository":"sip/service","mergeRequestIid":5,"suggestionCount":1
+        }))
+        .with_upstream(Some(200), Some(5))
+        .with_object_ids(json!({
+            "mergeRequestIid":5,"suggestionIds":[456]
+        })))
     }
 }
 
@@ -15904,11 +15876,11 @@ impl Provider for TestCredentialVerificationProvider {
         assert_eq!(credential_username(credential), Some("alice@example.com"));
         assert_eq!(credential_token(credential), "jira-token");
         Ok(Some(
-            agent_access_provider::ProviderCredentialVerification {
-                upstream_status: 200,
-                upstream_duration_ms: 1,
-                audit: json!({"provider": "jira", "operation": "credential.verify"}),
-            },
+            agent_access_provider::ProviderCredentialVerification::new(
+                200,
+                1,
+                json!({"provider": "jira", "operation": "credential.verify"}),
+            ),
         ))
     }
 
@@ -16230,19 +16202,12 @@ impl Provider for TestMultipartProvider {
                 & 0o777;
             result["tempFileMode"] = json!(format!("{mode:o}"));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
-                "provider": "upload",
-                "operation": "upload",
-                "bytesInMemory": part.bytes.len(),
-                "tempFileBacked": true,
-            })),
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(result).with_audit(json!({
+            "provider": "upload",
+            "operation": "upload",
+            "bytesInMemory": part.bytes.len(),
+            "tempFileBacked": true,
+        })))
     }
 }
 
@@ -16327,27 +16292,25 @@ impl Provider for TestDownloadProvider {
                 ProviderResultStream::from_bytes("text/plain", b"download bytes".to_vec())
             }
         });
-        Ok(ProviderResult {
-            result: json!({
-                "project": project,
-                "filename": "evidence.txt",
-                "contentType": "text/plain",
-                "size": 14,
-                "sha256": "metadata-only",
-            }),
-            stream,
-            audit: Some(json!({
-                "provider": "download",
-                "operation": "attachment.download",
-                "filename": "evidence.txt",
-                "size": 14,
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: Some(json!({
-                "attachmentId": "att1",
-            })),
-        })
+        let mut provider_result = ProviderResult::new(json!({
+            "project": project,
+            "filename": "evidence.txt",
+            "contentType": "text/plain",
+            "size": 14,
+            "sha256": "metadata-only",
+        }))
+        .with_audit(json!({
+            "provider": "download",
+            "operation": "attachment.download",
+            "filename": "evidence.txt",
+            "size": 14,
+        }))
+        .with_upstream(Some(200), Some(1))
+        .with_object_ids(json!({
+            "attachmentId": "att1",
+        }));
+        provider_result.stream = stream;
+        Ok(provider_result)
     }
 }
 

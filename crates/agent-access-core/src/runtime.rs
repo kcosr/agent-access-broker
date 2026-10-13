@@ -4091,14 +4091,9 @@ impl BrokerRuntime {
                     .with_audit(audit),
             )
         } else {
-            Ok(ProviderResult {
-                result: json!({"gateway": "completed"}),
-                stream: None,
-                audit: Some(audit),
-                upstream_status: Some(upstream_status),
-                upstream_duration_ms: Some(upstream_duration_ms),
-                object_ids: None,
-            })
+            Ok(ProviderResult::new(json!({"gateway": "completed"}))
+                .with_audit(audit)
+                .with_upstream(Some(upstream_status), Some(upstream_duration_ms)))
         };
         let response = self
             .finalize_with_append_mode(prepared.finalize_context, result, append_mode)
@@ -4382,11 +4377,11 @@ impl BrokerRuntime {
                 .with_upstream(Some(upstream_status), Some(duration_ms))
                 .with_audit(audit));
             }
-            return Ok(ProviderCredentialVerification {
+            return Ok(ProviderCredentialVerification::new(
                 upstream_status,
-                upstream_duration_ms: duration_ms,
+                duration_ms,
                 audit,
-            });
+            ));
         }
         let duration_ms = elapsed_millis(started);
         let error = if upstream_status == 429 {

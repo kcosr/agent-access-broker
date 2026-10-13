@@ -269,12 +269,13 @@ impl Provider for McpProvider {
             self.transport_credential.as_ref(),
         )?;
         agent_access_provider::host::with_correlation_context(correlation.clone(), async {
-            let discovered = discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
-            Ok(Some(ProviderCredentialVerification {
-                upstream_status: 200,
-                upstream_duration_ms: started.elapsed().as_millis() as u64,
-                audit: json!({"adapterKind":"mcp_http", "protocolVersion":discovered.protocol_version}),
-            }))
+            let discovered =
+                discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
+            Ok(Some(ProviderCredentialVerification::new(
+                200,
+                started.elapsed().as_millis() as u64,
+                json!({"adapterKind":"mcp_http", "protocolVersion":discovered.protocol_version}),
+            )))
         })
         .await
     }
@@ -376,14 +377,9 @@ impl Provider for McpProvider {
                     result["mutationStatus"] = json!("applied_unverified");
                     result["retrySafe"] = json!(false);
                 }
-                Ok(ProviderResult {
-                    result,
-                    stream: None,
-                    audit: Some(audit),
-                    upstream_status: state.status,
-                    upstream_duration_ms: Some(elapsed),
-                    object_ids: None,
-                })
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(state.status, Some(elapsed)))
             }
             Err(mut error) => {
                 if !action.definition.read_only {

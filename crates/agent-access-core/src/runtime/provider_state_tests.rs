@@ -117,14 +117,7 @@ impl Provider for StateProvider {
         if let Requirement::AdmissionState = self.requirement {
             ProviderState::require::<AdmissionState>(request.state())?;
         }
-        Ok(ProviderResult {
-            result: json!({"state": received}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"state": received})))
     }
 }
 

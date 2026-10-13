@@ -574,31 +574,27 @@ impl Provider for TestConfluenceReadPresentationProvider {
                 }
             })
         };
-        Ok(ProviderResult {
-            result: json!({
-                "id": "1007",
-                "title": "Normalized Confluence fixture",
-                "space": "ENG",
-                "spaceUrl": "https://example.atlassian.net/wiki/spaces/ENG",
-                "version": 7,
-                "createdAt": "2026-08-20T12:00:00Z",
-                "updatedAt": "2026-08-29T12:00:00Z",
-                "createdBy": {
-                    "displayName": "Fixture Author",
-                    "accountId": "author-account-id"
-                },
-                "updatedBy": {
-                    "displayName": "Fixture Editor",
-                    "accountId": "editor-account-id"
-                },
-                "body": body,
-                "webUrl": "https://example.atlassian.net/wiki/spaces/ENG/pages/1007"
-            }),
-            stream: None,
-            audit: Some(safe_audit),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(6),
-            object_ids: Some(json!({ "pageId": "1007" })),
-        })
+        Ok(ProviderResult::new(json!({
+            "id": "1007",
+            "title": "Normalized Confluence fixture",
+            "space": "ENG",
+            "spaceUrl": "https://example.atlassian.net/wiki/spaces/ENG",
+            "version": 7,
+            "createdAt": "2026-08-20T12:00:00Z",
+            "updatedAt": "2026-08-29T12:00:00Z",
+            "createdBy": {
+                "displayName": "Fixture Author",
+                "accountId": "author-account-id"
+            },
+            "updatedBy": {
+                "displayName": "Fixture Editor",
+                "accountId": "editor-account-id"
+            },
+            "body": body,
+            "webUrl": "https://example.atlassian.net/wiki/spaces/ENG/pages/1007"
+        }))
+        .with_audit(safe_audit)
+        .with_upstream(Some(200), Some(6))
+        .with_object_ids(json!({ "pageId": "1007" })))
     }
 }

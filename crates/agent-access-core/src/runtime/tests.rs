@@ -2097,16 +2097,9 @@ impl Provider for LookupTraceProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.record("execution_lookup", request.lookup_credential());
         self.record("execution", request.execution().static_credential());
-        Ok(ProviderResult {
-            result: json!({
-                "credentialMode": request.credential_mode(),
-            }),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "credentialMode": request.credential_mode(),
+        })))
     }
 }
 
@@ -2174,14 +2167,7 @@ impl Provider for SearchPreflightTraceProvider {
             .lock()
             .unwrap()
             .push(json!({"scopeType": search.scope_type, "scope": search.scope}));
-        Ok(ProviderResult {
-            result: json!({"issues": []}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"issues": []})))
     }
 }
 
@@ -2312,14 +2298,7 @@ impl Provider for DependencyPolicyTraceProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.record("execution", request.execution().static_credential());
-        Ok(ProviderResult {
-            result: json!({"status": "present"}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"status": "present"})))
     }
 }
 
@@ -3646,20 +3625,14 @@ impl Provider for MissingStreamHandleProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action(),
-            }),
-            stream: Some(ProviderResultStream {
-                content_type: "text/plain".to_string(),
-                source: ProviderResultStreamSource::Stream(Arc::new(Mutex::new(None))),
-            }),
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        // A stream whose body was already taken.
+        let mut stream = ProviderResultStream::from_bytes("text/plain", Vec::new());
+        stream.source = ProviderResultStreamSource::Stream(Arc::new(Mutex::new(None)));
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(stream))
     }
 }
 
@@ -3688,20 +3661,16 @@ impl Provider for FailingStreamProvider {
                 "provider stream failed",
             )),
         ]);
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action(),
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -3727,20 +3696,16 @@ impl Provider for CompletedStreamProvider {
             Ok(Bytes::from_static(b"prefix")),
             Ok(Bytes::from_static(b"-suffix")),
         ]);
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action(),
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -3764,20 +3729,16 @@ impl Provider for PendingStreamProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         let stream = futures_util::stream::once(async { Ok(Bytes::from_static(b"prefix")) })
             .chain(futures_util::stream::pending());
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action(),
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -7879,18 +7840,11 @@ impl Provider for CorrelationCaptureProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({
-                "agentRequestId": request.correlation().agent_request_id,
-                "brokerRequestId": request.correlation().broker_request_id,
-                "executionContext": request.execution_context(),
-            }),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "agentRequestId": request.correlation().agent_request_id,
+            "brokerRequestId": request.correlation().broker_request_id,
+            "executionContext": request.execution_context(),
+        })))
     }
 }
 
@@ -7938,14 +7892,7 @@ impl Provider for BodyPartCorrelationCaptureProvider {
     }
 
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({})))
     }
 }
 

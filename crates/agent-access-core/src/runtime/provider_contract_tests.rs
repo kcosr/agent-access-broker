@@ -100,14 +100,10 @@ impl Provider for OutcomeProvider {
                 futures_util::stream::iter([Ok(Bytes::from_static(b"prefix")), Err(failure)]),
             )
         });
-        Ok(ProviderResult {
-            result: json!({"provider": "fake"}),
-            stream,
-            audit: None,
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        let mut provider_result =
+            ProviderResult::new(json!({"provider": "fake"})).with_upstream(Some(200), Some(1));
+        provider_result.stream = stream;
+        Ok(provider_result)
     }
 }
 

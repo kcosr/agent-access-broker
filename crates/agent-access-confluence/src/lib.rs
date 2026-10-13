@@ -2717,15 +2717,15 @@ impl Provider for ConfluenceProvider {
             .current_user(credential)
             .await
             .map_err(confluence_backend_error)?;
-        Ok(Some(ProviderCredentialVerification {
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-            audit: json!({
+        Ok(Some(ProviderCredentialVerification::new(
+            response.status,
+            response.duration_ms,
+            json!({
                 "provider": "confluence",
                 "operation": "credential.verify",
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }),
-        }))
+        )))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3274,12 +3274,8 @@ impl ConfluenceProvider {
             next_page_token,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            object_ids: Some(comment_list_object_ids(
-                &response.value.comments,
-                &container,
-            )),
-            audit: Some(comment_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(comment_audit(
                 &request,
                 &container,
                 action,
@@ -3290,12 +3286,12 @@ impl ConfluenceProvider {
                     has_more,
                 }),
                 self.backend.egress_proxy_audit(credential),
-            )),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-        })
+            ))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(comment_list_object_ids(
+                &response.value.comments,
+                &container,
+            )))
     }
 
     async fn invoke_comment_view(
@@ -3329,10 +3325,8 @@ impl ConfluenceProvider {
             "comment": comment_result(&execution_evidence.target, action, &execution_evidence.container, body_format.as_deref())?,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(comment_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(comment_audit(
                 &request,
                 &execution_evidence.container,
                 action,
@@ -3340,14 +3334,15 @@ impl ConfluenceProvider {
                 body_format.as_deref(),
                 None,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            upstream_status: execution_evidence.upstream_status,
-            upstream_duration_ms: Some(execution_evidence.upstream_duration_ms),
-            object_ids: Some(comment_object_ids(
+            ))
+            .with_upstream(
+                execution_evidence.upstream_status,
+                Some(execution_evidence.upstream_duration_ms),
+            )
+            .with_object_ids(comment_object_ids(
                 &execution_evidence.target,
                 &execution_evidence.container,
-            )),
-        })
+            )))
     }
 
     async fn invoke_comment_add(
@@ -3406,14 +3401,10 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            object_ids: Some(comment_object_ids(&response.value, &container)),
-            audit: Some(audit),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(comment_object_ids(&response.value, &container)))
     }
 
     async fn invoke_comment_update(
@@ -3530,23 +3521,22 @@ impl ConfluenceProvider {
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         audit["previousVersion"] = json!(inputs.base_version);
         audit["version"] = json!(next_version);
-        Ok(ProviderResult {
-            object_ids: Some(comment_object_ids(
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    evidence
+                        .upstream_duration_ms
+                        .saturating_add(execution_evidence.upstream_duration_ms)
+                        .saturating_add(response.duration_ms)
+                        .saturating_add(updated_evidence.upstream_duration_ms),
+                ),
+            )
+            .with_object_ids(comment_object_ids(
                 &updated_evidence.target,
                 &updated_evidence.container,
-            )),
-            audit: Some(audit),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                evidence
-                    .upstream_duration_ms
-                    .saturating_add(execution_evidence.upstream_duration_ms)
-                    .saturating_add(response.duration_ms)
-                    .saturating_add(updated_evidence.upstream_duration_ms),
-            ),
-        })
+            )))
     }
 
     async fn invoke_comment_delete(
@@ -3582,12 +3572,8 @@ impl ConfluenceProvider {
             "space": execution_evidence.container.space(),
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            object_ids: Some(comment_object_ids(
-                &execution_evidence.target,
-                &execution_evidence.container,
-            )),
-            audit: Some(comment_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(comment_audit(
                 &request,
                 &execution_evidence.container,
                 action,
@@ -3595,17 +3581,20 @@ impl ConfluenceProvider {
                 None,
                 None,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                evidence
-                    .upstream_duration_ms
-                    .saturating_add(execution_evidence.upstream_duration_ms)
-                    .saturating_add(response.duration_ms),
-            ),
-        })
+            ))
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    evidence
+                        .upstream_duration_ms
+                        .saturating_add(execution_evidence.upstream_duration_ms)
+                        .saturating_add(response.duration_ms),
+                ),
+            )
+            .with_object_ids(comment_object_ids(
+                &execution_evidence.target,
+                &execution_evidence.container,
+            )))
     }
 
     async fn invoke_comment_reply_list(
@@ -3698,12 +3687,8 @@ impl ConfluenceProvider {
             next_page_token,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            object_ids: Some(comment_list_object_ids(
-                &response.value.comments,
-                &execution_evidence.container,
-            )),
-            audit: Some(comment_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(comment_audit(
                 &request,
                 &execution_evidence.container,
                 action,
@@ -3714,16 +3699,19 @@ impl ConfluenceProvider {
                     has_more,
                 }),
                 self.backend.egress_proxy_audit(credential),
-            )),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                execution_evidence
-                    .upstream_duration_ms
-                    .saturating_add(response.duration_ms),
-            ),
-        })
+            ))
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    execution_evidence
+                        .upstream_duration_ms
+                        .saturating_add(response.duration_ms),
+                ),
+            )
+            .with_object_ids(comment_list_object_ids(
+                &response.value.comments,
+                &execution_evidence.container,
+            )))
     }
 
     async fn invoke_comment_reply_add(
@@ -3809,22 +3797,21 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            object_ids: Some(comment_object_ids(
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    execution_evidence
+                        .upstream_duration_ms
+                        .saturating_add(response.duration_ms)
+                        .saturating_add(created_duration_ms),
+                ),
+            )
+            .with_object_ids(comment_object_ids(
                 &created_comment,
                 &execution_evidence.container,
-            )),
-            audit: Some(audit),
-            result,
-            stream: None,
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                execution_evidence
-                    .upstream_duration_ms
-                    .saturating_add(response.duration_ms)
-                    .saturating_add(created_duration_ms),
-            ),
-        })
+            )))
     }
 
     async fn invoke_page_view(
@@ -3855,10 +3842,8 @@ impl ConfluenceProvider {
         )?;
         let result = page_view_result(&page, &self.config.content.page_formats, &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "page.view",
                 "pageId": page.id,
@@ -3866,13 +3851,11 @@ impl ConfluenceProvider {
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "pageId": page.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_search(
@@ -3929,10 +3912,8 @@ impl ConfluenceProvider {
 
         let result = search_result(&response.value, &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "search",
                 "requestedSpaces": requested,
@@ -3951,18 +3932,16 @@ impl ConfluenceProvider {
                 "resultCount": response.value.pages.len(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "pageIds": response
                     .value
                     .pages
                     .iter()
                     .map(|page| page.id.clone())
                     .collect::<Vec<_>>(),
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_create(
@@ -4161,19 +4140,20 @@ impl ConfluenceProvider {
         });
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                space_response.duration_ms + response.duration_ms + readback_response.duration_ms,
-            ),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    space_response.duration_ms
+                        + response.duration_ms
+                        + readback_response.duration_ms,
+                ),
+            )
+            .with_object_ids(json!({
                 "pageId": page.id,
                 "parentPageId": effective_parent_page_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_move(
@@ -4544,20 +4524,16 @@ impl ConfluenceProvider {
         if let Some(target_child_position) = target_child_position {
             audit["targetChildPosition"] = json!(target_child_position);
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(move_response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "pageId": page.id,
                 "targetPageId": target.id,
                 "parentPageId": effective_parent_page_id,
                 "previousParentId": previous_parent_id,
                 "previousParentType": previous_parent_type,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_update(
@@ -4654,16 +4630,15 @@ impl ConfluenceProvider {
         });
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "pageId": page.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_draft_create(
@@ -4898,19 +4873,20 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                space_response.duration_ms + response.duration_ms + readback_response.duration_ms,
-            ),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    space_response.duration_ms
+                        + response.duration_ms
+                        + readback_response.duration_ms,
+                ),
+            )
+            .with_object_ids(json!({
                 "pageId": draft.id,
                 "parentPageId": effective_parent_page_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_draft_stage(
@@ -5014,19 +4990,18 @@ impl ConfluenceProvider {
         audit["expectedBaseVersion"] = json!(inputs.base_version);
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                current_response
-                    .duration_ms
-                    .saturating_add(space_response.duration_ms)
-                    .saturating_add(response.duration_ms),
-            ),
-            object_ids: Some(json!({ "pageId": draft.id })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(
+                    current_response
+                        .duration_ms
+                        .saturating_add(space_response.duration_ms)
+                        .saturating_add(response.duration_ms),
+                ),
+            )
+            .with_object_ids(json!({ "pageId": draft.id })))
     }
 
     async fn invoke_page_draft_view(
@@ -5060,10 +5035,8 @@ impl ConfluenceProvider {
             &self.config,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(draft_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(draft_audit(
                 &request,
                 "page.draft.view",
                 &response.value,
@@ -5071,11 +5044,9 @@ impl ConfluenceProvider {
                 Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({ "pageId": response.value.id })),
-        })
+            ))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({ "pageId": response.value.id })))
     }
 
     async fn invoke_page_draft_update(
@@ -5144,14 +5115,13 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(current.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "pageId": draft.id })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(current.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "pageId": draft.id })))
     }
 
     async fn invoke_page_draft_publish(
@@ -5279,17 +5249,16 @@ impl ConfluenceProvider {
         audit["lifecycle"] = json!("current");
         audit["draftVersion"] = json!(draft.version);
         audit["attachmentIds"] = json!(published_attachment_ids);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(draft_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "pageId": published.id,
                 "attachmentIds": published_attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_draft_discard(
@@ -5368,10 +5337,8 @@ impl ConfluenceProvider {
             "discarded": true,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(draft_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(draft_audit(
                 &request,
                 "page.draft.discard",
                 &draft,
@@ -5379,11 +5346,12 @@ impl ConfluenceProvider {
                 None,
                 true,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "pageId": draft.id })),
-        })
+            ))
+            .with_upstream(
+                Some(response.status),
+                Some(draft_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "pageId": draft.id })))
     }
 
     async fn invoke_page_draft_verify(
@@ -5470,10 +5438,8 @@ impl ConfluenceProvider {
             "spaceId": draft.space_id,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "page.draft.verify",
                 "contentType": "page",
@@ -5486,14 +5452,12 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(lookup_credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "pageId": draft.id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_draft_attachment_add(
@@ -5723,14 +5687,10 @@ impl ConfluenceProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_page_draft_attachment_list(
@@ -5804,10 +5764,8 @@ impl ConfluenceProvider {
             "nextPageToken": next_page_token,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "page.draft.attachment.list",
                 "contentType": "page",
@@ -5821,14 +5779,15 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(draft.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "pageId": draft.value.id,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_page_draft_attachment_download(
@@ -5877,10 +5836,9 @@ impl ConfluenceProvider {
             attachment.size,
             "Confluence page draft attachment response size did not match metadata",
         );
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "page.draft.attachment.download",
                 "contentType": "page",
@@ -5895,14 +5853,15 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(draft.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "pageId": draft.value.id,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_add(
@@ -6062,14 +6021,10 @@ impl ConfluenceProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_attachment_download(
@@ -6144,17 +6099,14 @@ impl ConfluenceProvider {
         if let Some(sha256) = result.get("sha256").cloned() {
             audit["sha256"] = sha256;
         }
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "pageId": page.id,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_list(
@@ -6247,10 +6199,8 @@ impl ConfluenceProvider {
             "nextPageToken": next_page_token,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "attachment.list",
                 "pageId": page.id,
@@ -6259,14 +6209,12 @@ impl ConfluenceProvider {
                 "hasMore": has_more,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "pageId": page.id,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_verify(
@@ -6362,10 +6310,8 @@ impl ConfluenceProvider {
             "space": page.space,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "verify",
                 "pageId": page.id,
@@ -6373,14 +6319,12 @@ impl ConfluenceProvider {
                 "checked": checked,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "pageId": page.id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_view(
@@ -6414,10 +6358,8 @@ impl ConfluenceProvider {
         )?;
         let result = blog_view_result(&blog, &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.view",
                 "blogId": blog.id,
@@ -6426,13 +6368,11 @@ impl ConfluenceProvider {
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "blogId": blog.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_search(
@@ -6490,10 +6430,7 @@ impl ConfluenceProvider {
             .collect::<BTreeSet<_>>();
         let result = blog_search_result(&response.value, &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result).with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.search",
                 "requestedSpaces": requested,
@@ -6512,13 +6449,9 @@ impl ConfluenceProvider {
                 "resultCount": response.value.blogs.len(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            })).with_upstream(Some(response.status), Some(response.duration_ms)).with_object_ids(json!({
                 "blogIds": response.value.blogs.iter().map(|blog| blog.id.clone()).collect::<Vec<_>>(),
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_create(
@@ -6607,16 +6540,15 @@ impl ConfluenceProvider {
         });
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(space_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(space_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "blogId": blog.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_update(
@@ -6726,16 +6658,15 @@ impl ConfluenceProvider {
         });
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "blogId": blog.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_draft_create(
@@ -6816,14 +6747,13 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(space_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "blogId": draft.id })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(space_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "blogId": draft.id })))
     }
 
     async fn invoke_blog_draft_stage(
@@ -6922,14 +6852,13 @@ impl ConfluenceProvider {
         audit["expectedBaseVersion"] = json!(inputs.base_version);
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(current_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "blogId": draft.id })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(current_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "blogId": draft.id })))
     }
 
     async fn invoke_blog_draft_view(
@@ -6963,10 +6892,8 @@ impl ConfluenceProvider {
             &self.config,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(draft_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(draft_audit(
                 &request,
                 "blog.draft.view",
                 &response.value,
@@ -6974,11 +6901,9 @@ impl ConfluenceProvider {
                 Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({ "blogId": response.value.id })),
-        })
+            ))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({ "blogId": response.value.id })))
     }
 
     async fn invoke_blog_draft_update(
@@ -7047,14 +6972,13 @@ impl ConfluenceProvider {
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(current.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "blogId": draft.id })),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(current.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "blogId": draft.id })))
     }
 
     async fn invoke_blog_draft_publish(
@@ -7179,17 +7103,16 @@ impl ConfluenceProvider {
         audit["lifecycle"] = json!("current");
         audit["draftVersion"] = json!(draft.version);
         audit["attachmentIds"] = json!(published_attachment_ids);
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(draft_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "blogId": published.id,
                 "attachmentIds": published_attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_draft_discard(
@@ -7268,10 +7191,8 @@ impl ConfluenceProvider {
             "discarded": true,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(draft_audit(
+        Ok(ProviderResult::new(result)
+            .with_audit(draft_audit(
                 &request,
                 "blog.draft.discard",
                 &draft,
@@ -7279,11 +7200,12 @@ impl ConfluenceProvider {
                 None,
                 true,
                 self.backend.egress_proxy_audit(credential),
-            )),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({ "blogId": draft.id })),
-        })
+            ))
+            .with_upstream(
+                Some(response.status),
+                Some(draft_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({ "blogId": draft.id })))
     }
 
     async fn invoke_blog_draft_verify(
@@ -7370,10 +7292,8 @@ impl ConfluenceProvider {
             "spaceId": draft.space_id,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.draft.verify",
                 "contentType": "blog",
@@ -7386,14 +7306,12 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(lookup_credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "blogId": draft.id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_draft_attachment_add(
@@ -7623,14 +7541,10 @@ impl ConfluenceProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_blog_draft_attachment_list(
@@ -7704,10 +7618,8 @@ impl ConfluenceProvider {
             "nextPageToken": next_page_token,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.draft.attachment.list",
                 "contentType": "blog",
@@ -7721,14 +7633,15 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(draft.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "blogId": draft.value.id,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_draft_attachment_download(
@@ -7777,10 +7690,9 @@ impl ConfluenceProvider {
             attachment.size,
             "Confluence blog draft attachment response size did not match metadata",
         );
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.draft.attachment.download",
                 "contentType": "blog",
@@ -7795,14 +7707,15 @@ impl ConfluenceProvider {
                 "draftHandleValidated": true,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(draft.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(draft.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "blogId": draft.value.id,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_attachment_add(
@@ -7971,14 +7884,10 @@ impl ConfluenceProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_blog_attachment_download(
@@ -8055,17 +7964,14 @@ impl ConfluenceProvider {
         if let Some(sha256) = result.get("sha256").cloned() {
             audit["sha256"] = sha256;
         }
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "blogId": blog.id,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_attachment_list(
@@ -8156,10 +8062,8 @@ impl ConfluenceProvider {
             "nextPageToken": next_page_token,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.attachment.list",
                 "blogId": blog.id,
@@ -8169,14 +8073,12 @@ impl ConfluenceProvider {
                 "hasMore": has_more,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "blogId": blog.id,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_blog_verify(
@@ -8256,10 +8158,8 @@ impl ConfluenceProvider {
             "spaceId": blog.space_id,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.verify",
                 "blogId": blog.id,
@@ -8268,14 +8168,12 @@ impl ConfluenceProvider {
                 "checked": checked,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "blogId": blog.id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     fn draft_handle_scopes(

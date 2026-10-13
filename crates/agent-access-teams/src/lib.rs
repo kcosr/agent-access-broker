@@ -375,14 +375,12 @@ impl Provider for TeamsProvider {
                 .with_upstream(Some(status), Some(elapsed))
                 .with_audit(audit));
         }
-        Ok(ProviderResult {
-            result: json!({"destination":destination,"accepted":true}),
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(elapsed),
-            object_ids: Some(json!({"destination":destination})),
-        })
+        Ok(
+            ProviderResult::new(json!({"destination":destination,"accepted":true}))
+                .with_audit(audit)
+                .with_upstream(Some(status), Some(elapsed))
+                .with_object_ids(json!({"destination":destination})),
+        )
     }
 }
 
