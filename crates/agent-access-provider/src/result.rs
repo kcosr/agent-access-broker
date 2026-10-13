@@ -226,6 +226,11 @@ impl ProviderStreamError {
     }
 }
 
+/// Where a result body's bytes are: in memory, or a stream the host takes
+/// once.
+///
+/// Intentionally exhaustive: the host must deliver every source, so a new
+/// one is an incompatible change.
 pub enum ProviderResultStreamSource {
     Memory(Vec<u8>),
     Stream(Arc<Mutex<Option<ProviderByteStream>>>),

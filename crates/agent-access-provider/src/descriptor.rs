@@ -45,6 +45,7 @@ pub struct ServiceDescriptor {
     pub presentation_body_limit: Option<u64>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceSurface {
     Invoke,
@@ -93,6 +94,7 @@ pub struct ActionDescriptor {
 }
 
 /// Imported source names cannot fall back to a built-in canonical action name.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopedMcpNameSource {
     CanonicalAction,
@@ -100,6 +102,7 @@ pub enum ScopedMcpNameSource {
 }
 
 /// When a provider needs the broker's lookup credential for an action.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LookupRequirement {
     None,
@@ -703,6 +706,7 @@ pub const RESULT_METADATA_HEADER: &str = "X-Agent-Access-Result-Metadata";
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[non_exhaustive]
 pub enum ActionIo {
     Json,
     MultipartUpload {
@@ -780,6 +784,7 @@ impl MultipartUploadSpec {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HeaderEncoding {

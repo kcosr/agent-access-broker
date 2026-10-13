@@ -23,7 +23,7 @@ fn job_inputs(selector: &ResourceSelector) -> Option<serde_json::Map<String, Val
     let (value, exact) = match selector {
         ResourceSelector::Exact { value } => (value, true),
         ResourceSelector::Namespace { value } => (value, false),
-        ResourceSelector::All => return None,
+        _ => return None,
     };
     let (controller, job) = value.split_once('/').unwrap_or((value, ""));
     let mut inputs = serde_json::Map::from_iter([("controller".into(), json!(controller))]);

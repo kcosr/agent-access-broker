@@ -8,6 +8,10 @@ use std::str::FromStr;
 /// The grant mode that selected an invocation's credentials, independent of
 /// whether the action needs execution material. Descriptors, configuration
 /// and audit spell it `service` or `per_user`.
+///
+/// Intentionally exhaustive: the two modes are a closed, stored and
+/// configured contract, and every grant, credential slot and audit record
+/// names one of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialMode {
@@ -30,7 +34,8 @@ impl fmt::Display for CredentialMode {
     }
 }
 
-/// A credential mode spelling other than `service` or `per_user`.
+/// A credential mode spelling other than `service` or `per_user`. A unit
+/// error by design: it carries no detail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("unsupported credential mode")]
 pub struct UnsupportedCredentialMode;
@@ -49,6 +54,7 @@ impl FromStr for CredentialMode {
 
 /// The static credential kinds the host stores and selects, spelled
 /// `basic_api_token` and `bearer_token` in configuration and stored rows.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StaticCredentialKind {
     BasicApiToken,
@@ -80,6 +86,7 @@ enum CredentialMaterial {
 }
 
 /// Read-only access to an [`ExecutionCredential`]'s material.
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub enum CredentialView<'a> {
     Basic { username: &'a str, token: &'a str },
@@ -140,6 +147,7 @@ impl fmt::Debug for CredentialView<'_> {
 /// The execution material lent to one invocation. Static and delegated
 /// material never coexist; lookup material is separate and never stands in
 /// for either.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ExecutionAccess {
     /// The action needs no execution credential, such as a Teams Workflow

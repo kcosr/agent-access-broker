@@ -2,6 +2,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
 
+/// An outcome's decision: `allow`, `deny` or `error` on the wire.
+///
+/// Intentionally exhaustive: these three are the complete decision
+/// vocabulary of responses, audit records and the reason contracts, so a new
+/// decision would change every consumer's semantics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
@@ -23,6 +28,7 @@ impl Decision {
 /// The Broker's standard reasons. Each has a fixed HTTP status and wire
 /// spelling ([`Self::as_str`], which its serde form matches). Responses and
 /// audit records carry the spelling as a [`ReasonCodeId`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonCode {
@@ -777,7 +783,8 @@ impl<'de> Deserialize<'de> for ReasonCodeId {
     }
 }
 
-/// A string without reason identifier syntax.
+/// A string without reason identifier syntax. A unit error by design: it
+/// carries no detail, so it never echoes the rejected string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidReasonCodeId;
 

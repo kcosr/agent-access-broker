@@ -326,9 +326,7 @@ pub(crate) fn auth(
         {
             token
         }
-        CredentialView::Bearer { .. } | CredentialView::Basic { .. } => {
-            return Err(credential_error());
-        }
+        _ => return Err(credential_error()),
     };
     let (name, text) = match delivery {
         ImportedCredentialDelivery::Bearer => (

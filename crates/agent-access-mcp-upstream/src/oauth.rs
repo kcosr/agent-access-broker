@@ -74,7 +74,12 @@ fn endpoints(config: &OAuthRegistrationConfig) -> Result<Endpoints<'_>, String> 
         approved_url(value, config.allow_insecure_loopback)?;
     }
     approved_url(&config.base_url, config.allow_insecure_loopback)?;
-    if config.encoding != OAuthTokenEncoding::Form || config.rotation == OAuthRotation::RotateBoth {
+    if config.encoding != OAuthTokenEncoding::Form
+        || !matches!(
+            config.rotation,
+            OAuthRotation::PreserveOld | OAuthRotation::RotateRefresh
+        )
+    {
         return Err(
             "MCP OAuth requires form token encoding and preserve_old or rotate_refresh rotation"
                 .into(),
@@ -131,15 +136,19 @@ fn validate_profile(
             return Err("MCP OAuth server-default profiles must omit scopes".into());
         }
         OAuthScopeMode::ServerDefault => {}
+        _ => return Err("MCP OAuth profiles must use explicit or server-default scopes".into()),
     }
     Ok(())
 }
 
-fn client_auth_method(auth: OAuthClientAuth) -> &'static str {
+/// The token endpoint authentication method name, or `None` for a method
+/// this dialect does not support.
+fn client_auth_method(auth: OAuthClientAuth) -> Option<&'static str> {
     match auth {
-        OAuthClientAuth::None => "none",
-        OAuthClientAuth::ClientSecretPost => "client_secret_post",
-        OAuthClientAuth::ClientSecretBasic => "client_secret_basic",
+        OAuthClientAuth::None => Some("none"),
+        OAuthClientAuth::ClientSecretPost => Some("client_secret_post"),
+        OAuthClientAuth::ClientSecretBasic => Some("client_secret_basic"),
+        _ => None,
     }
 }
 
@@ -216,7 +225,8 @@ async fn discover(
             .is_some_and(|methods| methods.contains(&"S256"))
         || !string_list(&server, "token_endpoint_auth_methods_supported")?
             .unwrap_or_else(|| vec!["client_secret_basic"])
-            .contains(&client_auth_method(config.client_auth))
+            .iter()
+            .any(|method| Some(*method) == client_auth_method(config.client_auth))
         || string_list(&server, "grant_types_supported")?.is_some_and(|types| {
             !types.contains(&if refresh {
                 "refresh_token"
@@ -428,6 +438,7 @@ async fn token(
                 Some(encode(client.client_secret)),
             );
         }
+        _ => return Err(OAuthDialectError::Configuration),
     }
     let response = http
         .send(
@@ -492,6 +503,7 @@ fn parse_grant(
                 .flatten()
                 .cloned()
                 .collect(),
+            _ => return Err(OAuthDialectError::Configuration),
         },
         _ => return Err(invalid()),
     };

@@ -21,6 +21,12 @@ pub const RENDER_FAILURE_MESSAGE: &str = "provider response content could not be
 const MAX_REQUEST_RENDER_NODES: usize = 131_072;
 const MAX_REQUEST_RENDER_WORK_UNITS: usize = 524_288;
 
+/// How embedded upstream bodies are normalized: kept native, or rendered as
+/// Markdown or plain text.
+///
+/// Intentionally exhaustive: every [`EmbeddedBodyCodec`] receives the
+/// requested format and must render each one, so a new format is an
+/// incompatible change to the codec contract.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadContentFormat {
@@ -113,6 +119,7 @@ impl RenderBudget {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseFormat {
@@ -184,12 +191,14 @@ impl ResponseCapabilities {
 }
 
 /// Why a presentation step failed. Callers report every failure the same
-/// way, so no rendered or native content leaks through error details.
+/// way, so no rendered or native content leaks through error details: it is
+/// a unit error by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("provider response content could not be rendered safely")]
 pub struct RenderError;
 
 /// A shared render budget ran out.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RenderBudgetExhausted {
     #[error("rich-content node budget exhausted")]
@@ -335,6 +344,7 @@ impl PartialEq for EmbeddedBody {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyPathSegment {
     Field(&'static str),

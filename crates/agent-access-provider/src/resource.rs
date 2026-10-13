@@ -607,6 +607,7 @@ pub fn is_canonical_repository_path(value: &str) -> bool {
         && !value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceSelector {

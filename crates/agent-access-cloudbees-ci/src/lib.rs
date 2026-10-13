@@ -476,6 +476,10 @@ impl CloudbeesCiProvider {
                     )
                 }
                 UpstreamError::NotAllowed | UpstreamError::Redirect => protocol_error(),
+                other => ProviderError::error(
+                    other.reason_code(),
+                    "CloudBees CI artifact request failed",
+                ),
             })?;
         complete_upstream_trace(&mut response, None);
         match response.status() {
@@ -1248,7 +1252,7 @@ pub(crate) fn basic_material(
         CredentialView::Basic { username, token } if !username.is_empty() && !token.is_empty() => {
             Ok((username, token))
         }
-        CredentialView::Basic { .. } | CredentialView::Bearer { .. } => Err(credential_invalid()),
+        _ => Err(credential_invalid()),
     }
 }
 

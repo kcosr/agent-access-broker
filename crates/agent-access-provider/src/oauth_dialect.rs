@@ -71,6 +71,7 @@ pub struct OAuthRegistrationConfig {
     pub permission_profiles: BTreeMap<String, OAuthPermissionProfile>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthClientAuth {
@@ -80,6 +81,7 @@ pub enum OAuthClientAuth {
     ClientSecretBasic,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthTokenEncoding {
@@ -88,6 +90,7 @@ pub enum OAuthTokenEncoding {
     Json,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthRotation {
@@ -99,6 +102,7 @@ pub enum OAuthRotation {
 
 /// Whether a permission profile requests configured scopes or leaves the
 /// resource-bound authorization decision to the authorization server.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthScopeMode {
@@ -317,6 +321,10 @@ impl<'a> CodeExchange<'a> {
 }
 
 /// What a token response says about the refresh token.
+///
+/// Intentionally exhaustive: a response issues a new refresh token, keeps the
+/// old one valid or issues none, and the manager's refresh fences depend on
+/// handling each of them.
 pub enum IssuedRefreshToken {
     /// A new refresh token replaces the old one.
     Issued(String),
@@ -411,6 +419,7 @@ impl ConnectedIdentity {
 /// that might have consumed it: a dialect must report `RetryAfter`,
 /// `PermissionRejected`, and `RequestRejected` only when the authorization
 /// server guarantees the grant was not consumed.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OAuthDialectError {
     #[error("OAuth request was not sent")]
@@ -438,6 +447,9 @@ pub enum OAuthDialectError {
 
 /// Whether an uncertain refresh exchange may safely reuse its input material.
 /// This is a provider guarantee, independent of successful-response rotation.
+///
+/// Intentionally exhaustive: an exchange either consumes its input or may
+/// reuse it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshReplay {
     Consuming,

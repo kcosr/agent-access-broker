@@ -64,6 +64,7 @@ impl std::fmt::Debug for ProviderState {
 /// A provider hook found its own required state missing or of another type.
 /// This is an SDK invariant failure, not an upstream or caller error; the
 /// host reports it as a provider contract failure without the state contents.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderStateError {
     #[error("required provider state is missing")]
@@ -97,6 +98,9 @@ impl From<ProviderStateError> for ProviderError {
 /// What multipart body admission does with the operation's provider state.
 /// There is no default: a provider states whether it keeps, replaces or
 /// clears the state it received.
+///
+/// Intentionally exhaustive: keep, replace and clear are every outcome for
+/// the state.
 #[derive(Debug, Clone)]
 pub enum StateDisposition {
     Keep,

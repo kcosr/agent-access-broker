@@ -79,10 +79,13 @@ pub enum AtlassianAuthorization<'a> {
 }
 
 impl<'a> AtlassianAuthorization<'a> {
-    pub fn new(credential: &'a ExecutionCredential) -> Self {
+    /// How `credential` authenticates, or `None` for a credential kind
+    /// Atlassian providers do not support, which the caller must reject.
+    pub fn new(credential: &'a ExecutionCredential) -> Option<Self> {
         match credential.view() {
-            CredentialView::Basic { username, token } => Self::Basic { username, token },
-            CredentialView::Bearer { token } => Self::Bearer(token),
+            CredentialView::Basic { username, token } => Some(Self::Basic { username, token }),
+            CredentialView::Bearer { token } => Some(Self::Bearer(token)),
+            _ => None,
         }
     }
 

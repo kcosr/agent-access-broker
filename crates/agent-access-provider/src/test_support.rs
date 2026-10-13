@@ -60,6 +60,7 @@ pub struct TestHost {
 }
 
 /// One client a [`TestHost`] built.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuiltClient {
     pub label: String,

@@ -328,6 +328,7 @@ fn seed_test_resource_catalog(store_path: &Path) {
             ResourceSelector::Exact { value } => ("exact", value),
             ResourceSelector::Namespace { value } => ("namespace", value),
             ResourceSelector::All => ("all", String::new()),
+            other => panic!("untested selector {other:?}"),
         };
         conn.execute("INSERT OR IGNORE INTO resources (resource_id,resource_type,selector_kind,selector_value,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES (?1,?2,?3,?4,?5,1,1,?6,'admin',?6,'admin')",rusqlite::params![resource.id,resource.resource_type.as_str(),kind,value,serde_json::to_string(&resource.allowed_execution_contexts).unwrap(),now]).unwrap();
     }

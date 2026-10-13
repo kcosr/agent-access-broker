@@ -257,6 +257,8 @@ impl From<OAuthDialectError> for OAuthError {
             OAuthDialectError::GrantInvalid => Self::ReconnectRequired,
             OAuthDialectError::ClientRejected => Self::ApplicationCredential,
             OAuthDialectError::Configuration => Self::Configuration,
+            // A failure this host does not know may have consumed the grant.
+            _ => Self::Provider,
         }
     }
 }
@@ -328,6 +330,7 @@ impl OAuthConfig {
                         return Err(OAuthError::Configuration);
                     }
                     OAuthScopeMode::ServerDefault => {}
+                    _ => return Err(OAuthError::Configuration),
                 }
             }
         }

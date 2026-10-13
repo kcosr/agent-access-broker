@@ -318,6 +318,7 @@ async fn code_and_refresh_support_public_post_and_basic_clients_without_identity
                             b"app%3Aid:secret%26value"
                         );
                     }
+                    other => panic!("untested client authentication {other:?}"),
                 }
             }
             assert_eq!(calls[0].2["code_verifier"], "pkce-verifier");
@@ -765,6 +766,7 @@ async fn both_permission_modes_require_exact_resource_and_valid_scope_configurat
         let invalid_scopes = match scope_mode {
             OAuthScopeMode::Explicit => vec![None, Some(vec![])],
             OAuthScopeMode::ServerDefault => vec![Some(vec![]), Some(vec!["read".into()])],
+            other => panic!("untested scope mode {other:?}"),
         };
         for scopes in invalid_scopes {
             let mut config = fixture.config.clone();

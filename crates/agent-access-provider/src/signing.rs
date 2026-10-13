@@ -16,12 +16,15 @@ pub trait StableSigningKey: Send + Sync {
     fn hmac_base64url(&self, context: &[u8], payload: &[u8]) -> Result<String, SigningError>;
 }
 
+/// The signing key is unavailable. A unit error by design: it carries no
+/// detail about the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("signing key is unavailable")]
 pub struct SigningError;
 
 /// Signs opaque tokens with the broker's stable key when one is configured,
 /// and otherwise with a key that lives only as long as this process.
+#[non_exhaustive]
 #[derive(Clone)]
 pub enum OpaqueTokenSigner {
     Stable(Arc<dyn StableSigningKey>),

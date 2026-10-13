@@ -46,6 +46,7 @@ fn redacted_proxy_url_for_debug(value: &str) -> String {
 
 /// How an upstream client's traffic is routed. The host decides the route;
 /// a provider only declares which kind it needs.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum EgressDeclaration<'a> {
     /// The host's ordinary selection: a `NO_PROXY` match connects directly;
@@ -62,6 +63,7 @@ pub enum EgressDeclaration<'a> {
 }
 
 /// Which proxy setting a proxied route came from.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressProxySource {
     Environment,

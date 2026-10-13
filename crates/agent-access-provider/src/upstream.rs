@@ -25,6 +25,7 @@ use url::Url;
 /// How a client bounds time and retries. Every profile uses the broker's
 /// outbound TLS trust and the host's egress route, and never follows redirects
 /// on its own.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientProfile {
     /// Each request must complete within `ProviderLimits::request_timeout_ms`.
@@ -101,6 +102,7 @@ impl<'a> UpstreamClientSpec<'a> {
 }
 
 /// Why an upstream request produced no usable response.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UpstreamError {
     #[error("upstream URL is not allowlisted")]

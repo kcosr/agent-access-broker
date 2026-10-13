@@ -16,8 +16,17 @@ pub enum ProjectionMode {
 #[error("{0}")]
 pub struct ProjectionError(pub &'static str);
 
+/// Whether `mode` can serve the action: HTTP serves JSON I/O only, and stdio
+/// also stages multipart uploads and raw downloads locally. An I/O kind this
+/// build does not know is never served.
 pub fn action_eligible(action: &ApiActionSpec, mode: ProjectionMode) -> bool {
-    mode == ProjectionMode::Stdio || matches!(action.io, ActionIo::Json)
+    match action.io {
+        ActionIo::Json => true,
+        ActionIo::MultipartUpload { .. } | ActionIo::RawDownload { .. } => {
+            mode == ProjectionMode::Stdio
+        }
+        _ => false,
+    }
 }
 
 fn json_pointer_unescape(value: &str) -> String {
@@ -139,6 +148,8 @@ pub fn input_schema(action: &ApiActionSpec, mode: ProjectionMode) -> Value {
             required.push("outputPath");
         }
         ActionIo::Json => {}
+        // Never eligible for projection: see `action_eligible`.
+        _ => {}
     }
     if action.supports_json_file_output() {
         properties["outputPath"] = json_output_path_schema();

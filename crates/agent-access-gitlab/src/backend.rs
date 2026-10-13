@@ -4702,7 +4702,7 @@ pub(crate) fn authenticated_gitlab_request(
 ) -> Result<reqwest::RequestBuilder, GitlabBackendError> {
     match credential.view() {
         CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
-        CredentialView::Basic { .. } => Err(GitlabBackendError::Protocol(
+        _ => Err(GitlabBackendError::Protocol(
             "unsupported GitLab credential kind".to_string(),
         )),
     }
@@ -4762,6 +4762,8 @@ pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError 
         UpstreamError::NotAllowed | UpstreamError::Redirect => {
             GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
         }
+        // Any other failure produced no usable response.
+        other => GitlabBackendError::Transport(other.to_string()),
     }
 }
 

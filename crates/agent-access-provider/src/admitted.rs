@@ -13,6 +13,7 @@ use thiserror::Error;
 /// contract: an ordinary scoped action never receives empty resource
 /// authority, an action-only action never inherits resources, and a search
 /// action receives its complete finite or all-except boundary.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum InvocationAuthority {
     /// An action without a resource scope.
@@ -42,6 +43,7 @@ impl InvocationAuthority {
 /// A provider asked for authority its action was not admitted with. This is
 /// an SDK invariant failure: the host reports it as a provider contract
 /// failure.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum AuthorityMismatch {
     #[error("the operation was not admitted with resource authority")]

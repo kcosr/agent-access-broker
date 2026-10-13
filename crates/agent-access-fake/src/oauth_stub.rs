@@ -47,9 +47,16 @@ struct TokenResponse {
 #[async_trait]
 impl OAuthDialect for StubDialect {
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String> {
-        if config.client_auth == OAuthClientAuth::None || !config.adapter_settings.is_empty() {
+        if !matches!(
+            config.client_auth,
+            OAuthClientAuth::ClientSecretPost | OAuthClientAuth::ClientSecretBasic
+        ) || !matches!(
+            config.rotation,
+            OAuthRotation::PreserveOld | OAuthRotation::RotateRefresh | OAuthRotation::RotateBoth
+        ) || !config.adapter_settings.is_empty()
+        {
             return Err(
-                "stub requires secret-post/basic client authentication and no adapter settings"
+                "stub requires secret-post/basic client authentication, a supported rotation and no adapter settings"
                     .into(),
             );
         }
@@ -202,6 +209,7 @@ async fn token(
     request = match client.config.encoding {
         OAuthTokenEncoding::Form => request.form(&fields),
         OAuthTokenEncoding::Json => request.json(&fields),
+        _ => return Err(OAuthDialectError::Configuration),
     };
     let value = response(http, request, "oauth.token", true).await?;
     grant_from_value(value, client.config)

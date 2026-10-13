@@ -1006,7 +1006,15 @@ async fn forward_prepared_git_http(
                 prepared.correlation.broker_request_id.clone(),
             );
     }
-    builder = apply_gateway_credential(builder, &prepared.credential);
+    builder = match apply_gateway_credential(builder, &prepared.credential) {
+        Ok(builder) => builder,
+        Err(error) => {
+            let response = runtime
+                .fail_prepared_gateway_operation(prepared, error)
+                .await;
+            return gateway_runtime_response(response);
+        }
+    };
 
     if let Err(response) = runtime
         .start_prepared_gateway_operation(
@@ -2117,10 +2125,14 @@ fn apply_single_request_header(
 fn apply_gateway_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder, ProviderError> {
     match credential.view() {
-        CredentialView::Bearer { token } => builder.bearer_auth(token),
-        CredentialView::Basic { username, token } => builder.basic_auth(username, Some(token)),
+        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
+        CredentialView::Basic { username, token } => Ok(builder.basic_auth(username, Some(token))),
+        _ => Err(ProviderError::deny(
+            ReasonCode::CredentialInvalid,
+            "the Git gateway does not support this credential kind",
+        )),
     }
 }
 
@@ -3300,6 +3312,7 @@ mod tests {
             builder,
             &agent_access_provider::test_support::bearer_credential("upstream-token"),
         )
+        .unwrap()
         .build()
         .unwrap();
 

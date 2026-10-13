@@ -143,6 +143,11 @@ impl HostNetwork {
                 }
                 EgressProxySelection::direct()
             }
+            _ => {
+                return Err(HostConfigError::invalid(format!(
+                    "{label} requests an egress route this host does not support"
+                )));
+            }
         };
         let client = self
             .client(&selection, spec.profile())?

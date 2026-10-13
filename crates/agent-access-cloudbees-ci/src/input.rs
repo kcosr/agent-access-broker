@@ -684,7 +684,8 @@ pub(crate) fn job_action_inputs(
             let controller = value.split('/').next().filter(|alias| !alias.is_empty())?;
             inputs.insert("controller".into(), json!(controller));
         }
-        ResourceSelector::All => return None,
+        // All jobs, or a selector form this build does not know, maps to no inputs.
+        _ => return None,
     }
     Some(inputs)
 }

@@ -14,7 +14,9 @@ use std::fmt;
 /// cancellation or method outcome: upstream throttling uses the standard
 /// `upstream_rate_limited` reason, and a domain status never creates a
 /// challenge, `Retry-After` header, admission decision or retry promise.
-#[non_exhaustive]
+///
+/// Intentionally exhaustive: the closed set is the contract, so adding a
+/// status is an incompatible change that also decides its CLI exit mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderFailureStatus {
     /// 400

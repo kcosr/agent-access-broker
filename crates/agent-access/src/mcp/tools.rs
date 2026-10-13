@@ -279,6 +279,7 @@ pub(super) async fn call_tool(
                 )
             }
         }
+        _ => bail!("this client does not support the action's input and output kind"),
     };
     let is_error = status >= 400 || value.get("decision").and_then(Value::as_str) != Some("allow");
     let file_receipt = args.output_path.is_some() && !is_error;
@@ -353,12 +354,20 @@ fn response_options(
             crate::ReadContentFormatArg::Text
         }
     });
-    let explicit_output = args.response_format.map(|format| match format {
-        agent_access_provider::presentation::ResponseFormat::Json => crate::OutputFormatArg::Json,
-        agent_access_provider::presentation::ResponseFormat::Markdown => {
-            crate::OutputFormatArg::Markdown
-        }
-    });
+    let explicit_output = args
+        .response_format
+        .map(|format| match format {
+            agent_access_provider::presentation::ResponseFormat::Json => {
+                Ok(crate::OutputFormatArg::Json)
+            }
+            agent_access_provider::presentation::ResponseFormat::Markdown => {
+                Ok(crate::OutputFormatArg::Markdown)
+            }
+            _ => Err(anyhow::anyhow!(
+                "this client does not support the responseFormat"
+            )),
+        })
+        .transpose()?;
     let options = crate::resolve_response_options(
         settings,
         explicit_read,

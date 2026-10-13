@@ -40,6 +40,8 @@ impl From<RenderBudgetExhausted> for ContentRenderError {
         match exhausted {
             RenderBudgetExhausted::Nodes => Self::NodeLimitExceeded,
             RenderBudgetExhausted::WorkUnits => Self::WorkLimitExceeded,
+            // Any other exhausted shared budget fails the render the same way.
+            _ => Self::WorkLimitExceeded,
         }
     }
 }

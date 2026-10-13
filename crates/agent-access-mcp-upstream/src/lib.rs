@@ -422,7 +422,7 @@ fn auth_headers(
     delivery.validate().map_err(|_| credential_error())?;
     let token = |credential: &ExecutionCredential| match credential.view() {
         CredentialView::Bearer { token } if valid_token(token) => Ok(token.to_owned()),
-        CredentialView::Bearer { .. } | CredentialView::Basic { .. } => Err(credential_error()),
+        _ => Err(credential_error()),
     };
     let mut auth = HeaderMap::new();
     let token = token(execution)?;

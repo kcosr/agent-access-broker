@@ -194,6 +194,11 @@ impl SearchAuthorization {
     }
 }
 
+/// The values a search boundary admits: a finite set, or every value except
+/// a finite set.
+///
+/// Intentionally exhaustive: a finite set and the complement of one describe
+/// every boundary, and providers must enforce both exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "type",

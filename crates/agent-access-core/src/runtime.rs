@@ -4307,7 +4307,7 @@ impl BrokerRuntime {
                     correlation.broker_request_id.clone(),
                 );
         }
-        builder = apply_gateway_execution_credential(builder, credential);
+        builder = apply_gateway_execution_credential(builder, credential)?;
         let started = Instant::now();
         let verification_timeout = Duration::from_millis(
             gateway
@@ -6404,10 +6404,14 @@ fn normalize_git_verification_repository(
 fn apply_gateway_execution_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder, ProviderError> {
     match credential.view() {
-        CredentialView::Bearer { token } => builder.bearer_auth(token),
-        CredentialView::Basic { username, token } => builder.basic_auth(username, Some(token)),
+        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
+        CredentialView::Basic { username, token } => Ok(builder.basic_auth(username, Some(token))),
+        _ => Err(ProviderError::deny(
+            ReasonCode::CredentialInvalid,
+            "the Git gateway does not support this credential kind",
+        )),
     }
 }
 
