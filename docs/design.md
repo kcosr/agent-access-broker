@@ -380,8 +380,9 @@ resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
 page tokens, and Gmail and Jira search page tokens use it; other native
 providers keep their own token handling, which is described in each provider's
 documentation. A provider that uses the envelope declares each token family
-once: its service and purpose, a version, an explicit payload cap, an optional
-expiry, and a signing lifetime:
+once: its service and purpose, a version, an explicit payload cap (a family
+relaying an upstream token may instead derive it at construction from a
+configured limit), an optional expiry, and a signing lifetime:
 
 - **generation**: a key generated with the provider instance, so a reload or
   restart invalidates the tokens even when a stable key is configured;

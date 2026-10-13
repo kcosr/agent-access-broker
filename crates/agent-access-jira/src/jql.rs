@@ -78,10 +78,12 @@ pub(crate) fn parse_search_inputs(inputs: &Value) -> Result<SearchInputs, Provid
     let inputs: SearchInputs = serde_json::from_value(inputs.clone()).map_err(|_| {
         ProviderError::deny(ReasonCode::InputInvalid, "jira.search inputs are invalid")
     })?;
+    // The continuation's size bound follows the configured limits and is
+    // enforced when the continuation is opened.
     if inputs
         .next_page_token
         .as_ref()
-        .is_some_and(|token| token.is_empty() || token.len() > JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES)
+        .is_some_and(String::is_empty)
     {
         return Err(search_page_token_invalid());
     }

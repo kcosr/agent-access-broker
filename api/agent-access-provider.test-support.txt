@@ -2132,6 +2132,7 @@ pub const fn agent_access_provider::ContinuationFamily::shared_across_actions(se
 pub const fn agent_access_provider::ContinuationFamily::time_to_live(&self) -> core::option::Option<core::time::Duration>
 pub const fn agent_access_provider::ContinuationFamily::token_prefix(self, &'static str) -> Self
 pub const fn agent_access_provider::ContinuationFamily::version(&self) -> u8
+pub const fn agent_access_provider::ContinuationFamily::with_max_payload_bytes(self, usize) -> Self
 impl core::clone::Clone for agent_access_provider::ContinuationFamily
 pub fn agent_access_provider::ContinuationFamily::clone(&self) -> agent_access_provider::ContinuationFamily
 impl core::cmp::Eq for agent_access_provider::ContinuationFamily

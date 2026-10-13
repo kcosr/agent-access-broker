@@ -65,8 +65,8 @@ pub struct JiraProvider {
     limits: ProviderLimits,
     backend: Arc<dyn JiraBackend>,
     attribution: ProviderAttributionConfig,
-    /// Seals search continuations with this instance's generation key.
-    search_pages: ContinuationSigner,
+    /// Search continuations, sealed with this instance's generation key.
+    search_pages: SearchPages,
     search_configuration: [u8; 32],
 }
 
@@ -82,7 +82,7 @@ impl JiraProvider {
             host.clients(),
         )?);
         Ok(Self {
-            search_pages: search_page_signer(),
+            search_pages: SearchPages::new(&limits),
             search_configuration: search_configuration_fingerprint(&config),
             config,
             limits,
@@ -97,7 +97,7 @@ impl JiraProvider {
         backend: Arc<dyn JiraBackend>,
     ) -> Self {
         Self {
-            search_pages: search_page_signer(),
+            search_pages: SearchPages::new(&limits),
             search_configuration: search_configuration_fingerprint(&config),
             config,
             limits,
@@ -113,12 +113,6 @@ impl JiraProvider {
     ) -> Self {
         Self::from_backend(config, limits, backend)
     }
-}
-
-/// Search continuations use only [`ContinuationLifetime::Generation`] keys,
-/// which the signer generates itself, so it needs no host stable key.
-fn search_page_signer() -> ContinuationSigner {
-    ContinuationSigner::new(None)
 }
 
 /// Jira projects, identified by project key.
@@ -387,7 +381,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                         "minItems": 1
                     },
                     "maxResults": { "type": "integer", "minimum": 1, "description": "Requested page size, capped by broker configuration." },
-                    "nextPageToken": { "type": "string", "minLength": 1, "maxLength": JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES, "description": "Opaque continuation from the previous response; reuse the same query, projects, and maxResults." }
+                    "nextPageToken": { "type": "string", "minLength": 1, "description": "Opaque continuation from the previous response; reuse the same query, projects, and maxResults." }
                 },
                 "additionalProperties": false
             }),

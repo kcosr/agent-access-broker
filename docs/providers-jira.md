@@ -881,11 +881,15 @@ grant change that leaves the composed query unchanged, such as one outside
 explicit `projects`, keeps the continuation valid; losing a requested project
 denies the request as usual.
 
-The `nextPageToken` input accepts 1 to 21943 characters, the encoded size of
-the largest continuation. The broker relays Jira tokens of up to 16384 bytes;
-Jira documents no maximum, and its tokens return to Jira in a request URL
-alongside the composed JQL. A longer Jira token fails the page with
-`upstream_protocol_failed` and is never truncated.
+Jira documents no maximum token size, and the broker adds no Jira-specific
+limit. `limits.max_upstream_response_bytes` bounds both the search response
+Jira's token arrives in and the result its continuation is returned in, so a
+continuation may be as long as that cap. That holds a Jira token of up to
+three quarters of the cap, less 73 bytes of envelope and query commitment. A
+longer Jira token fails the page with `upstream_protocol_failed`, as does a
+page whose whole result exceeds the cap; nothing is truncated. The
+`nextPageToken` input schema sets no maximum length; an empty token, or one
+longer than the cap, is rejected with `input_invalid` before Jira is called.
 
 ### Diagnosing rejected search results
 

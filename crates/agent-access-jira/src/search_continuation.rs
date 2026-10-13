@@ -14,17 +14,10 @@
 //! a different query.
 use super::*;
 
-/// The longest upstream `nextPageToken` the broker relays. Jira does not
-/// document a maximum, and observed tokens are short opaque strings. The
-/// broker returns the token to Jira in the query string of its
-/// `GET search/jql` request, beside the composed JQL (raw caller JQL alone
-/// may be [`MAX_JIRA_RAW_QUERY_BYTES`]), so a token Jira can accept back is
-/// bounded by upstream request-URL limits on the order of 8 KiB. 16 KiB is
-/// twice that ceiling. A longer token is an upstream protocol failure, never
-/// truncated.
-pub(crate) const JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES: usize = 16 * 1024;
 const UPSTREAM_QUERY_COMMITMENT_BYTES: usize = 32;
 const UPSTREAM_QUERY_LABEL: &str = "upstreamJql";
+/// The version, expiry and MAC bytes an envelope adds around its payload.
+const ENVELOPE_OVERHEAD_BYTES: usize = 1 + 8 + 32;
 
 /// How long a search continuation stays valid after it is issued.
 const JIRA_SEARCH_PAGE_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
@@ -32,19 +25,60 @@ const JIRA_SEARCH_PAGE_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 /// Search pages: a commitment to the composed upstream JQL followed by
 /// Jira's upstream token. Tokens expire 15 minutes after they are issued and
 /// are signed with a key generated for each provider instance, so a reload or
-/// restart also invalidates them.
+/// restart also invalidates them. The declared cap covers the commitment;
+/// [`SearchPages::new`] adds the upstream token's bound.
 const JIRA_SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
     "jira",
     "search-page",
     1,
     ContinuationLifetime::Generation,
-    UPSTREAM_QUERY_COMMITMENT_BYTES + JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES,
+    UPSTREAM_QUERY_COMMITMENT_BYTES,
 )
 .expires_after(JIRA_SEARCH_PAGE_TOKEN_TTL);
 
-/// The exact encoded size of the largest search continuation, which bounds
-/// the `nextPageToken` input.
-pub(crate) const JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES: usize = JIRA_SEARCH_PAGES.max_token_bytes();
+/// One provider instance's search continuations: the family, with its
+/// payload cap derived from the configured limits, and the instance's
+/// generation key.
+#[derive(Debug, Clone)]
+pub(crate) struct SearchPages {
+    family: ContinuationFamily,
+    signer: ContinuationSigner,
+}
+
+impl SearchPages {
+    /// Jira documents no maximum `nextPageToken` size, so the broker adds no
+    /// Jira-specific limit. The bound comes from the existing response
+    /// contract: `limits.max_upstream_response_bytes` bounds the search
+    /// response Jira's token arrives in and the provider result the
+    /// continuation is returned in, so the largest continuation is the
+    /// largest that fits within that cap. The family is
+    /// [`ContinuationLifetime::Generation`], so the signer needs no host
+    /// stable key.
+    pub(crate) fn new(limits: &ProviderLimits) -> Self {
+        let cap = usize::try_from(limits.max_upstream_response_bytes).unwrap_or(usize::MAX);
+        // The longest raw envelope whose unpadded base64, ceil(4n/3)
+        // characters, fits within the cap: floor(3 * cap / 4).
+        let raw = (cap / 4) * 3 + (cap % 4).saturating_sub(1);
+        Self {
+            family: JIRA_SEARCH_PAGES
+                .with_max_payload_bytes(raw.saturating_sub(ENVELOPE_OVERHEAD_BYTES)),
+            signer: ContinuationSigner::new(None),
+        }
+    }
+
+    /// The longest upstream token a continuation carries.
+    pub(crate) fn max_upstream_token_bytes(&self) -> usize {
+        self.family
+            .max_payload_bytes()
+            .saturating_sub(UPSTREAM_QUERY_COMMITMENT_BYTES)
+    }
+
+    /// The encoded size of the largest continuation.
+    #[cfg(test)]
+    pub(crate) fn max_token_bytes(&self) -> usize {
+        self.family.max_token_bytes()
+    }
+}
 
 /// The fingerprint of the configuration an upstream token depends on: the
 /// tenant, the gateway cloud ID and whether the gateway route is enabled.
@@ -68,10 +102,6 @@ pub(crate) struct SearchPageRequest<'a> {
 }
 
 impl SearchPageRequest<'_> {
-    fn binding(&self) -> ContinuationBinding {
-        self.bind(&JIRA_SEARCH_PAGES)
-    }
-
     fn bind(&self, family: &ContinuationFamily) -> ContinuationBinding {
         family
             .bind(self.request.context(), self.configuration)
@@ -88,26 +118,33 @@ impl SearchPageRequest<'_> {
     /// Seals Jira's `upstream` token for this search, issued at `now`.
     pub(crate) fn seal(
         &self,
-        signer: &ContinuationSigner,
+        pages: &SearchPages,
         upstream: &str,
         now: SystemTime,
     ) -> Result<String, ProviderError> {
-        if upstream.len() > JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES {
+        let limit = pages.max_upstream_token_bytes();
+        // The commitment always fits unless the response cap cannot hold an
+        // envelope at all.
+        if UPSTREAM_QUERY_COMMITMENT_BYTES.saturating_add(upstream.len())
+            > pages.family.max_payload_bytes()
+        {
             return Err(ProviderError::error(
                 ReasonCode::UpstreamProtocolFailed,
                 format!(
-                    "Jira returned a nextPageToken longer than the broker's {JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES}-byte limit"
+                    "Jira returned a nextPageToken longer than the broker's {limit}-byte limit"
                 ),
             ));
         }
-        let binding = self.binding();
-        let commitment = signer
+        let binding = self.bind(&pages.family);
+        let commitment = pages
+            .signer
             .commit(&binding, UPSTREAM_QUERY_LABEL, self.query.jql.as_bytes())
             .map_err(search_page_token_failure)?;
         let mut payload = Vec::with_capacity(commitment.len() + upstream.len());
         payload.extend_from_slice(&commitment);
         payload.extend_from_slice(upstream.as_bytes());
-        signer
+        pages
+            .signer
             .seal_at(&binding, &payload, now)
             .map_err(search_page_token_failure)
     }
@@ -117,19 +154,20 @@ impl SearchPageRequest<'_> {
     /// is the one the upstream token was issued for.
     pub(crate) fn open(
         &self,
-        signer: &ContinuationSigner,
+        pages: &SearchPages,
         token: &str,
         now: SystemTime,
     ) -> Result<String, ProviderError> {
-        let binding = self.binding();
-        let payload = signer
+        let binding = self.bind(&pages.family);
+        let payload = pages
+            .signer
             .open_at(&binding, token, now)
             .map_err(search_page_token_failure)?;
         if payload.len() < UPSTREAM_QUERY_COMMITMENT_BYTES {
             return Err(search_page_token_invalid());
         }
         let (commitment, upstream) = payload.split_at(UPSTREAM_QUERY_COMMITMENT_BYTES);
-        match signer.verify_commitment(
+        match pages.signer.verify_commitment(
             &binding,
             UPSTREAM_QUERY_LABEL,
             self.query.jql.as_bytes(),
@@ -176,11 +214,11 @@ mod tests {
         SystemTime::now()
     }
 
-    fn invocation() -> ProviderInvocation {
-        InvocationBuilder::new("jira", "search")
-            .principal("agent-one")
-            .credential_mode(CredentialMode::PerUser)
-            .build()
+    fn limited(max_upstream_response_bytes: u64) -> SearchPages {
+        SearchPages::new(
+            &ProviderLimits::default()
+                .with_max_upstream_response_bytes(max_upstream_response_bytes),
+        )
     }
 
     fn query(scope: &[&str]) -> BuiltJiraSearchQuery {
@@ -217,7 +255,10 @@ mod tests {
                 issue_links: JiraIssueLinksConfig::default(),
             };
             Self {
-                request: invocation(),
+                request: InvocationBuilder::new("jira", "search")
+                    .principal("agent-one")
+                    .credential_mode(CredentialMode::PerUser)
+                    .build(),
                 configuration: search_configuration_fingerprint(&config),
                 credential: basic_credential("agent@example.com", "token"),
                 query: query(scope),
@@ -225,7 +266,7 @@ mod tests {
             }
         }
 
-        fn pages(&self) -> SearchPageRequest<'_> {
+        fn search(&self) -> SearchPageRequest<'_> {
             SearchPageRequest {
                 request: &self.request,
                 configuration: &self.configuration,
@@ -238,11 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn the_token_cap_is_the_exact_size_of_the_largest_upstream_token() {
-        // 1 version byte, an 8-byte expiry, a 32-byte query commitment, the
-        // 16 KiB upstream token and a 32-byte MAC, in unpadded URL-safe
-        // base64.
-        assert_eq!(JIRA_SEARCH_PAGES.max_payload_bytes(), 32 + 16 * 1024);
+    fn the_upstream_token_cap_is_the_configured_response_cap() {
         assert_eq!(
             JIRA_SEARCH_PAGES.time_to_live(),
             Some(Duration::from_secs(900))
@@ -251,37 +288,130 @@ mod tests {
             JIRA_SEARCH_PAGES.lifetime(),
             ContinuationLifetime::Generation
         );
-        assert_eq!(JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES, 21_943);
-        let fixture = Fixture::new(&["PROJ"]);
-        let signer = ContinuationSigner::new(None);
-        let largest = "u".repeat(JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES);
-        let token = fixture.pages().seal(&signer, &largest, now()).unwrap();
-        assert_eq!(token.len(), JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
+        // The default response cap, 512 MiB, is far above the envelope's
+        // 64 KiB ceiling for provider-built payloads; the largest
+        // continuation is exactly the cap.
+        let default = SearchPages::new(&ProviderLimits::default());
+        assert_eq!(default.max_token_bytes(), 512 * 1024 * 1024);
         assert_eq!(
-            fixture.pages().open(&signer, &token, now()).unwrap(),
+            default.max_upstream_token_bytes(),
+            384 * 1024 * 1024 - ENVELOPE_OVERHEAD_BYTES - UPSTREAM_QUERY_COMMITMENT_BYTES
+        );
+        let fixture = Fixture::new(&["PROJ"]);
+        let beyond_ceiling = "u".repeat(100 * 1024);
+        let token = fixture
+            .search()
+            .seal(&default, &beyond_ceiling, now())
+            .unwrap();
+        assert_eq!(
+            fixture.search().open(&default, &token, now()).unwrap(),
+            beyond_ceiling
+        );
+
+        // With a smaller response cap, the largest token fits exactly: 1
+        // version byte, an 8-byte expiry, the 32-byte query commitment, the
+        // token and a 32-byte MAC are 3072 raw bytes, which encode to 4096
+        // characters of unpadded URL-safe base64.
+        let pages = limited(4096);
+        assert_eq!(pages.max_upstream_token_bytes(), 3072 - 41 - 32);
+        assert_eq!(pages.max_token_bytes(), 4096);
+        let largest = "u".repeat(pages.max_upstream_token_bytes());
+        let token = fixture.search().seal(&pages, &largest, now()).unwrap();
+        assert_eq!(token.len(), pages.max_token_bytes());
+        assert_eq!(
+            fixture.search().open(&pages, &token, now()).unwrap(),
             largest
         );
-        // An empty upstream token still round-trips exactly.
-        let empty = fixture.pages().seal(&signer, "", now()).unwrap();
-        assert_eq!(fixture.pages().open(&signer, &empty, now()).unwrap(), "");
-        // 73 raw bytes (version, expiry, commitment, MAC) encode to 98
-        // characters.
+        // An empty upstream token still round-trips exactly: 73 raw bytes
+        // (version, expiry, commitment, MAC) encode to 98 characters.
+        let empty = fixture.search().seal(&pages, "", now()).unwrap();
         assert_eq!(empty.len(), 98);
+        assert_eq!(fixture.search().open(&pages, &empty, now()).unwrap(), "");
+    }
+
+    #[test]
+    fn the_largest_continuation_is_the_largest_that_fits_the_response_cap() {
+        for cap in (0..=200).chain([4093, 4094, 4095, 4096, 1 << 20, u64::MAX]) {
+            let pages = limited(cap);
+            let cap = usize::try_from(cap).unwrap_or(usize::MAX);
+            if pages.family.max_payload_bytes() == 0 {
+                // Even an empty envelope is 55 characters.
+                assert!(cap <= 55, "{cap}");
+                continue;
+            }
+            assert!(pages.max_token_bytes() <= cap, "{cap}");
+            if cap < usize::MAX {
+                let larger = JIRA_SEARCH_PAGES
+                    .with_max_payload_bytes(pages.family.max_payload_bytes() + 1)
+                    .max_token_bytes();
+                assert!(larger > cap, "{cap}");
+            }
+        }
+        // A cap too small for an envelope relays no upstream token: even an
+        // empty one fails explicitly.
+        let tiny = limited(64);
+        assert_eq!(tiny.max_upstream_token_bytes(), 0);
+        let error = Fixture::new(&["PROJ"])
+            .search()
+            .seal(&limited(0), "", now())
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert!(error.message.contains("0-byte limit"), "{}", error.message);
+    }
+
+    #[test]
+    fn oversized_tokens_are_rejected_and_never_truncated() {
+        let fixture = Fixture::new(&["PROJ"]);
+        let pages = limited(4096);
+        let limit = pages.max_upstream_token_bytes();
+        let error = fixture
+            .search()
+            .seal(&pages, &"u".repeat(limit + 1), now())
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.decision(), Decision::Error);
+        assert!(
+            error.message.contains(&format!("{limit}-byte limit")),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("uuuu"));
+
+        // A presented continuation longer than the largest one is rejected
+        // before it is decoded, including one sealed under a larger cap.
+        let larger = limited(8192);
+        let token = fixture
+            .search()
+            .seal(
+                &larger,
+                &"u".repeat(larger.max_upstream_token_bytes()),
+                now(),
+            )
+            .unwrap();
+        assert!(token.len() > pages.max_token_bytes());
+        assert_eq!(
+            fixture
+                .search()
+                .open(&pages, &token, now())
+                .unwrap_err()
+                .message,
+            search_page_token_invalid().message
+        );
     }
 
     #[test]
     fn search_tokens_expire_fifteen_minutes_after_issue() {
         let fixture = Fixture::new(&["PROJ"]);
-        let signer = ContinuationSigner::new(None);
+        let pages = limited(4096);
         let issued = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
-        let token = fixture.pages().seal(&signer, "upstream", issued).unwrap();
+        let token = fixture.search().seal(&pages, "upstream", issued).unwrap();
         let open = |offset: i64| {
             let at = if offset < 0 {
                 issued - Duration::from_secs(offset.unsigned_abs())
             } else {
                 issued + Duration::from_secs(offset.unsigned_abs())
             };
-            fixture.pages().open(&signer, &token, at)
+            fixture.search().open(&pages, &token, at)
         };
         assert_eq!(open(899).unwrap(), "upstream");
         for offset in [900, 3_600, -1] {
@@ -296,49 +426,47 @@ mod tests {
     #[test]
     fn other_families_versions_and_instances_cannot_open_search_tokens() {
         let fixture = Fixture::new(&["PROJ"]);
-        let signer = ContinuationSigner::new(None);
-        let pages = fixture.pages();
-        let payload_cap = JIRA_SEARCH_PAGES.max_payload_bytes();
+        let pages = limited(4096);
+        let search = fixture.search();
+        let payload_cap = pages.family.max_payload_bytes();
         for family in [
-            ContinuationFamily::new(
-                "jira",
-                "issue-page",
-                1,
-                ContinuationLifetime::Generation,
-                payload_cap,
-            ),
+            ContinuationFamily::new("jira", "issue-page", 1, ContinuationLifetime::Generation, 0),
             ContinuationFamily::new(
                 "confluence",
                 "search-page",
                 1,
                 ContinuationLifetime::Generation,
-                payload_cap,
+                0,
             ),
             ContinuationFamily::new(
                 "jira",
                 "search-page",
                 2,
                 ContinuationLifetime::Generation,
-                payload_cap,
+                0,
             ),
         ] {
-            let binding = pages.bind(&family);
-            let commitment = signer
+            let family = family
+                .expires_after(JIRA_SEARCH_PAGE_TOKEN_TTL)
+                .with_max_payload_bytes(payload_cap);
+            let binding = search.bind(&family);
+            let commitment = pages
+                .signer
                 .commit(&binding, UPSTREAM_QUERY_LABEL, fixture.query.jql.as_bytes())
                 .unwrap();
             let mut payload = commitment.to_vec();
             payload.extend_from_slice(b"upstream");
-            let foreign = signer.seal(&binding, &payload).unwrap();
-            let error = pages.open(&signer, &foreign, now()).unwrap_err();
+            let foreign = pages.signer.seal(&binding, &payload).unwrap();
+            let error = search.open(&pages, &foreign, now()).unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{family:?}");
             assert_eq!(error.decision(), Decision::Deny);
             assert_eq!(error.message, search_page_token_invalid().message);
         }
         // Another provider instance (a reload) has another generation key.
-        let token = pages.seal(&signer, "upstream", now()).unwrap();
+        let token = search.seal(&pages, "upstream", now()).unwrap();
         assert_eq!(
-            pages
-                .open(&ContinuationSigner::new(None), &token, now())
+            search
+                .open(&limited(4096), &token, now())
                 .unwrap_err()
                 .reason_code(),
             ReasonCode::InputInvalid
@@ -349,16 +477,16 @@ mod tests {
         tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
         let tampered = String::from_utf8(tampered).unwrap();
         assert_eq!(
-            pages.open(&signer, &tampered, now()).unwrap_err().message,
+            search.open(&pages, &tampered, now()).unwrap_err().message,
             search_page_token_invalid().message
         );
     }
 
     #[test]
     fn a_recomposed_upstream_query_rejects_the_upstream_token() {
-        let signer = ContinuationSigner::new(None);
+        let pages = limited(4096);
         let issued = Fixture::new(&["PROJ"]);
-        let token = issued.pages().seal(&signer, "upstream", now()).unwrap();
+        let token = issued.search().seal(&pages, "upstream", now()).unwrap();
         // The same caller query composed under another boundary binds the
         // same continuation, but its upstream token belongs to the old query.
         let narrowed = Fixture::new(&["OPS_TOOLS", "PROJ"]);
@@ -367,7 +495,7 @@ mod tests {
             narrowed.query.canonical_caller_jql
         );
         assert_ne!(issued.query.jql, narrowed.query.jql);
-        let error = narrowed.pages().open(&signer, &token, now()).unwrap_err();
+        let error = narrowed.search().open(&pages, &token, now()).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert_eq!(error.decision(), Decision::Deny);
         assert!(
@@ -376,22 +504,8 @@ mod tests {
             error.message
         );
         assert_eq!(
-            issued.pages().open(&signer, &token, now()).unwrap(),
+            issued.search().open(&pages, &token, now()).unwrap(),
             "upstream"
         );
-    }
-
-    #[test]
-    fn oversized_upstream_tokens_are_upstream_failures_never_truncated() {
-        let fixture = Fixture::new(&["PROJ"]);
-        let signer = ContinuationSigner::new(None);
-        let oversized = "u".repeat(JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES + 1);
-        let error = fixture
-            .pages()
-            .seal(&signer, &oversized, now())
-            .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
-        assert_eq!(error.decision(), Decision::Error);
-        assert!(!error.message.contains("uuuu"));
     }
 }

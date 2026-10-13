@@ -271,6 +271,10 @@ All notable changes to this project are documented in this file.
   through the MAC context only, `ContinuationSigner` seals and opens tokens,
   and `ContinuationError` reports rejected tokens separately from signing
   failures.
+- `ContinuationFamily::with_max_payload_bytes` sets a family's payload cap at
+  run time, beyond the 64 KiB ceiling of `ContinuationFamily::new`, for a
+  family relaying upstream tokens that only a configured response limit
+  bounds; `max_token_bytes()` saturates instead of overflowing.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph

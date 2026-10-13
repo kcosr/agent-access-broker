@@ -232,7 +232,7 @@ async fn unrestricted_paginated_search_accepts_underscore_issue_on_continuation(
     let token = first.result["nextPageToken"].as_str().unwrap();
     assert_ne!(token, "next-page-fixture");
     assert!(!token.contains("next-page-fixture"));
-    assert!(token.len() <= JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
+    assert!(token.len() <= provider.search_pages.max_token_bytes());
     assert!(
         backend
             .last_search

@@ -47,12 +47,15 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_limits(ProviderLimits::default())
+    }
+
+    fn with_limits(limits: ProviderLimits) -> Self {
         let backend = Arc::new(StubJiraBackend {
             search_page: Mutex::new(Some(page_with_upstream_token(UPSTREAM))),
             ..StubJiraBackend::default()
         });
-        let provider =
-            JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+        let provider = JiraProvider::with_backend(jira_config(), limits, backend.clone());
         Self { backend, provider }
     }
 
@@ -103,7 +106,7 @@ async fn search_continuations_seal_jira_tokens_and_round_trip_normalized_searche
     let token = harness
         .first_page(search(base_inputs(), base_scope(), None).build())
         .await;
-    assert!(token.len() <= JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
+    assert!(token.len() <= harness.provider.search_pages.max_token_bytes());
     assert!(harness.last_search().next_page_token.is_none());
     for value in ["agent-one", "PROJ", "OPS_TOOLS", "status", "Done"] {
         assert!(!token.contains(value), "{value}");
@@ -368,7 +371,9 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
 }
 
 #[tokio::test]
-async fn search_page_tokens_are_bounded_and_never_truncated() {
+async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
+    // No fixed schema bound: the continuation's size follows the configured
+    // response cap and is enforced when it is opened.
     let descriptor = jira_descriptor(&jira_config());
     let action = descriptor
         .actions
@@ -377,21 +382,38 @@ async fn search_page_tokens_are_bounded_and_never_truncated() {
         .unwrap();
     let schema = &action.input_schema["properties"]["nextPageToken"];
     assert_eq!(schema["minLength"], 1);
-    assert_eq!(schema["maxLength"], JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
+    assert!(schema.get("maxLength").is_none(), "{schema}");
 
+    // A token beyond the envelope's 64 KiB ceiling for provider-built
+    // payloads round-trips under the default response cap.
     let harness = Harness::new();
-    // Presented tokens outside the bound are rejected before Jira is called,
-    // in scope resolution and invocation alike.
-    let oversized = "A".repeat(JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES + 1);
+    let long = "w".repeat(100 * 1024);
+    *harness.backend.search_page.lock().unwrap() = Some(page_with_upstream_token(&long));
+    let token = harness
+        .first_page(search(base_inputs(), base_scope(), None).build())
+        .await;
+    harness
+        .provider
+        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.last_search().next_page_token.as_deref(),
+        Some(long.as_str())
+    );
+
+    // Under a small response cap, presented tokens that are empty or longer
+    // than the largest continuation are rejected before Jira is called;
+    // emptiness already in scope resolution.
+    let harness =
+        Harness::with_limits(ProviderLimits::default().with_max_upstream_response_bytes(16 * 1024));
+    let bound = harness.provider.search_pages.max_token_bytes();
+    assert_eq!(bound, 16 * 1024);
+    let oversized = "A".repeat(bound + 1);
+    let mut empty = base_inputs();
+    empty["nextPageToken"] = json!("");
+    assert_rejected_token(harness.provider.local_scopes("search", &empty).unwrap_err());
     for token in ["", oversized.as_str()] {
-        let mut inputs = base_inputs();
-        inputs["nextPageToken"] = json!(token);
-        assert_rejected_token(
-            harness
-                .provider
-                .local_scopes("search", &inputs)
-                .unwrap_err(),
-        );
         assert_rejected_token(
             harness
                 .provider
@@ -402,31 +424,10 @@ async fn search_page_tokens_are_bounded_and_never_truncated() {
     }
     assert_eq!(harness.upstream_searches(), 0);
 
-    // The largest upstream token fits exactly and round-trips unchanged.
-    let largest = "u".repeat(JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES);
-    *harness.backend.search_page.lock().unwrap() = Some(page_with_upstream_token(&largest));
-    let token = harness
-        .provider
-        .invoke(search(base_inputs(), base_scope(), None).build())
-        .await
-        .unwrap()
-        .result["nextPageToken"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(token.len(), JIRA_SEARCH_PAGE_TOKEN_MAX_BYTES);
-    harness
-        .provider
-        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
-        .await
-        .unwrap();
-    assert_eq!(
-        harness.last_search().next_page_token.as_deref(),
-        Some(largest.as_str())
-    );
-
-    // A longer upstream token is an explicit upstream failure.
-    let too_long = "v".repeat(JIRA_UPSTREAM_PAGE_TOKEN_MAX_BYTES + 1);
+    // A Jira token whose continuation would not fit the cap is an explicit
+    // upstream failure, never truncated.
+    let limit = harness.provider.search_pages.max_upstream_token_bytes();
+    let too_long = "v".repeat(limit + 1);
     *harness.backend.search_page.lock().unwrap() = Some(page_with_upstream_token(&too_long));
     let error = harness
         .provider
@@ -436,8 +437,39 @@ async fn search_page_tokens_are_bounded_and_never_truncated() {
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.decision(), Decision::Error);
     assert_eq!(error.upstream_status, Some(200));
+    assert!(
+        error.message.contains(&format!("{limit}-byte limit")),
+        "{}",
+        error.message
+    );
     assert!(error.result.is_none());
     assert!(!error.message.contains("vvvv"));
+
+    // A token within the bound still shares the page's response cap with
+    // the issues: a page that would exceed it fails whole, unchanged.
+    *harness.backend.search_page.lock().unwrap() =
+        Some(page_with_upstream_token(&"v".repeat(limit)));
+    let error = harness
+        .provider
+        .invoke(search(base_inputs(), base_scope(), None).build())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert!(error.result.is_none());
+    let fits = "v".repeat(limit / 2);
+    *harness.backend.search_page.lock().unwrap() = Some(page_with_upstream_token(&fits));
+    let token = harness
+        .first_page(search(base_inputs(), base_scope(), None).build())
+        .await;
+    harness
+        .provider
+        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.last_search().next_page_token.as_deref(),
+        Some(fits.as_str())
+    );
 }
 
 #[tokio::test]
@@ -512,4 +544,48 @@ async fn http_search_continuations_send_jira_only_its_own_token() {
         );
         assert!(!request.url.as_str().contains(&token));
     }
+}
+
+#[tokio::test]
+async fn the_upstream_response_cap_bounds_jira_tokens_before_sealing() {
+    let api = MockServer::start().await;
+    let token = "t".repeat(8 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [{"id": "10001", "key": "PROJ-1", "fields": {"project": {"key": "PROJ"}}}],
+            "isLast": false,
+            "nextPageToken": token,
+        })))
+        .mount(&api)
+        .await;
+    let mut config = jira_config();
+    config.allowed_upstream_hosts = vec![format!("{}/rest/api/3/**", api.uri())];
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(4 * 1024);
+    let backend = HttpJiraBackend::new_with_api_base(
+        config.clone(),
+        limits.clone(),
+        Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
+    );
+    let provider = JiraProvider::with_backend(config, limits, Arc::new(backend));
+    // The response carrying the token exceeds the configured response cap,
+    // so the page fails as an oversized upstream response before any
+    // continuation is sealed, and nothing is truncated.
+    let error = agent_access_provider::host::with_correlation_context(
+        crate::CorrelationContext::for_tests(),
+        provider.invoke(
+            search(
+                json!({"query": {"type": "jql", "value": QUERY}}),
+                finite(&["PROJ"]),
+                None,
+            )
+            .build(),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.decision(), Decision::Error);
+    assert!(error.result.is_none());
+    assert!(!error.message.contains("tttt"));
 }
