@@ -179,9 +179,13 @@ The binary and the assembly's acceptance tests both start from them. The
 assembly's own build script reads its `Cargo.lock` and emits
 `TEAM_BROKER_UPSTREAM_REVISION`, `TEAM_BROKER_UPSTREAM_VERSION`,
 `TEAM_BROKER_NOTES_REVISION` and `TEAM_BROKER_NOTES_VERSION`
-(`cargo:rustc-env=...`) from the locked upstream and provider sources. The
-release pipeline sets `TEAM_BROKER_REVISION` and `TEAM_BROKER_QUALIFICATION`
-only for a build from a verified clean checkout that it qualifies.
+(`cargo:rustc-env=...`) from the locked upstream and provider sources. It is
+the [`build.rs`](../tests/downstream-consumer/assembly-repo/build.rs) of
+upstream's [downstream consumer fixture](#qualification) with the `TEAM_BROKER_`
+prefix in place of `DOWNSTREAM_BROKER_` and `("NOTES", "example-notes")` as its
+provider repository entry. The release pipeline sets `TEAM_BROKER_REVISION` and
+`TEAM_BROKER_QUALIFICATION` only for a build from a verified clean checkout that
+it qualifies.
 
 ```rust
 //! The modules this distribution links, and its identity.
@@ -256,14 +260,17 @@ mod tests {
 ```
 
 `src/main.rs` runs the application; a rejected composition or identity exits
-`3` with its problems on standard error:
+`3` with its problems on standard error. It is the fixture's
+[`main.rs`](../tests/downstream-consumer/assembly-repo/src/main.rs) with this
+crate's name:
 
 ```rust
 use agent_access_broker_host::{BrokerApplication, BrokerExit};
+use team_broker::{build_identity, composition};
 
 fn main() -> BrokerExit {
-    match team_broker::composition()
-        .and_then(|composition| BrokerApplication::new(composition, team_broker::build_identity()))
+    match composition()
+        .and_then(|composition| BrokerApplication::new(composition, build_identity()))
     {
         Ok(application) => application.run_from_env(),
         Err(error) => error.into(),
