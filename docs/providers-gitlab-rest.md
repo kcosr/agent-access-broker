@@ -1260,10 +1260,23 @@ uploads. A read that was never sent carries no mutation receipt.
 Only that proof yields `not_applied`. Writes with a verification contract
 (inline discussions, discussion replies, draft notes, draft publication, review
 submission, approvals, suggestion application, webhook and provisioning
-mutations) report any failure after the request may have been sent as
-`mutation_verification_failed`/409 with `mutationStatus = "applied_unverified"`
-and `retrySafe = false`, or the ordinary error when readback proves the target
-unchanged.
+mutations) treat the other failures of their mutation request by what GitLab
+may have done:
+
+- when the request may have been applied without confirmation, because it timed
+  out or its connection failed after sending, GitLab answered 5xx, or a success
+  response stalled, failed, exceeded the byte cap or did not have the expected
+  shape, the action returns `mutation_verification_failed`/409 with
+  `mutationStatus = "applied_unverified"` and `retrySafe = false`, or the
+  ordinary error when readback proves the target unchanged;
+- when GitLab definitively rejected the request, with a redirect, a 4xx status
+  such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
+  `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
+  its ordinary error without a receipt.
+
+A readback after the mutation that was never sent, timed out, failed, was
+throttled, answered 5xx or returned an unusable response also returns the
+`applied_unverified` contract.
 
 Other writes (issue, note, merge-request and merge, general discussion,
 discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and
