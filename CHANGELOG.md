@@ -133,7 +133,10 @@ All notable changes to this project are documented in this file.
   504), listed with `BackendRegistration::with_domain_reasons` and reported
   with `ProviderError::domain`. Codes start with the backend kind (hyphens as
   underscores) and `_`; the registry rejects codes another selected backend
-  owns, standard codes, and reserved `broker_` prefixes before serving.
+  owns, standard codes, and reserved `broker_` prefixes before serving. A
+  credential verification failing with a domain reason whose status is 424,
+  502, 503 or 504 records `verification_failed`, like the standard upstream
+  failures.
 - The provider SDK publishes the standard reasons providers may report, with
   their decisions and hooks (`ReasonCode::permits_provider_failure`,
   `permits_provider_allow`, `permits_late_stream`, `HookPhase`), and host-origin

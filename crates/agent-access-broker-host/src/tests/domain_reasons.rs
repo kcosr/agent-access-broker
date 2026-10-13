@@ -1,7 +1,8 @@
 //! Provider-owned domain reasons keep their fixed outcome through
 //! management: a credential verification failure reports its registered
 //! domain reason's decision, code and status in both the response and the
-//! audit record.
+//! audit record, and records a failed verification only for an upstream
+//! status.
 use super::*;
 use agent_access_core::{BackendRegistry, CredentialManagementPurpose, ProvidersConfig};
 use agent_access_provider::{
@@ -203,4 +204,26 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
             "{record}"
         );
     }
+
+    // A domain failure with an upstream status (503) records a failed
+    // verification like the standard upstream failures; one with another
+    // status (403) leaves the credential's verification state alone.
+    let maintenance = store
+        .credential_by_tuple("alice", SERVICE, "maintenance")
+        .unwrap();
+    assert_eq!(
+        maintenance.verification_status.as_deref(),
+        Some("verification_failed")
+    );
+    assert!(maintenance.last_verification_attempt_at.is_some());
+    assert_eq!(
+        maintenance.last_verification_error_code.as_deref(),
+        Some("verifier_maintenance")
+    );
+    let locked = store
+        .credential_by_tuple("alice", SERVICE, "locked")
+        .unwrap();
+    assert_eq!(locked.verification_status.as_deref(), Some("not_verified"));
+    assert!(locked.last_verification_attempt_at.is_none());
+    assert!(locked.last_verification_error_code.is_none());
 }

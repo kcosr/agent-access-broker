@@ -664,7 +664,10 @@ clears the failure code. A failed verify returns the provider failure's own
 decision and `reasonCode`. A failed upstream verify also records
 `verification_failed`, `lastVerificationAttemptAt`, and a sanitized broker
 `reasonCode` in `lastVerificationErrorCode`; stored secret material is never
-returned.
+returned. A failed upstream verify is one reporting `upstream_unauthorized`,
+`upstream_forbidden`, `upstream_failed`, `upstream_rate_limited`,
+`upstream_connection_failed`, or `upstream_timeout`, or a provider domain reason
+with HTTP status 424, 502, 503, or 504.
 
 Credential verify routes accept an optional JSON body. A service lists the
 inputs its verification needs in `credentialVerificationInputs` on its

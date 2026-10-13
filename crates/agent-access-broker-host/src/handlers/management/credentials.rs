@@ -238,9 +238,19 @@ async fn credential_owner_identity(
     ))
 }
 
+/// Whether a failed verification reached the upstream and found the
+/// credential unusable there, so the credential records
+/// `verification_failed`: the standard upstream failures, and a domain
+/// reason whose fixed status is an upstream one (424, 502, 503 or 504).
+/// Other domain statuses, like the standard reasons with those statuses,
+/// leave the credential's verification state unchanged.
 fn verification_error_records_failure(error: &ProviderError) -> bool {
+    let reason = error.reason_code();
+    if let Some(definition) = reason.domain() {
+        return matches!(definition.status().as_u16(), 424 | 502 | 503 | 504);
+    }
     matches!(
-        error.reason_code().standard(),
+        reason.standard(),
         Some(
             ReasonCode::UpstreamUnauthorized
                 | ReasonCode::UpstreamForbidden
