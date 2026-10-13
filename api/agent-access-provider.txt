@@ -2798,6 +2798,8 @@ pub fn agent_access_provider::ProviderError::unverified_after_throttling(self, &
 pub fn agent_access_provider::ProviderError::unverified_if_throttled(self, &str, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderError::with_upstream_rate_limit(self, &str, core::option::Option<agent_access_provider::UpstreamRetryAfter>) -> Self
 impl agent_access_provider::ProviderError
+pub fn agent_access_provider::ProviderError::or_mutation_receipt(self, agent_access_provider::MutationReceipt) -> Self
+pub fn agent_access_provider::ProviderError::unverified_after_mutation(self, &str, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderError::with_mutation_receipt(self, agent_access_provider::MutationReceipt) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderError
 pub fn agent_access_provider::ProviderError::clone(&self) -> agent_access_provider::ProviderError
