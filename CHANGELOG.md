@@ -480,6 +480,15 @@ All notable changes to this project are documented in this file.
 - The GitLab webhook destination diagnostic for repeated patterns now reads
   `contains duplicate normalized entry` instead of
   `contains duplicate normalized destination`.
+- GitLab writes without a verification contract (issue, note, merge-request
+  and merge, general discussion, discussion-note edit/delete, resolve/reopen,
+  branch, file, commit, pipeline and job mutations, and project uploads) whose
+  request may have reached GitLab but got no response, because it timed out
+  (including a stalled upload) or its connection failed after sending, now add
+  `mutationStatus: "unknown"`, `retrySafe: false` to their unchanged
+  `upstream_timeout` or `upstream_connection_failed` error, which previously
+  carried no result. Failures after GitLab answered, with an error status or
+  with a success status whose body then failed, keep their plain error.
 
 ### Fixed
 

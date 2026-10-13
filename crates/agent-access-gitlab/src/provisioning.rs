@@ -283,7 +283,8 @@ fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> 
     };
     let uncertain = matches!(
         error,
-        GitlabBackendError::Transport(_)
+        GitlabBackendError::NoResponse { .. }
+            | GitlabBackendError::Transport(_)
             | GitlabBackendError::Timeout
             | GitlabBackendError::Protocol(_)
             | GitlabBackendError::ResponseTooLarge
@@ -987,6 +988,8 @@ mod tests {
     fn provisioning_write_uncertainty_uses_canonical_contract_and_read_errors_stay_distinct() {
         let locators = json!({"userId":70,"previousTokenId":10});
         for error in [
+            GitlabBackendError::NoResponse { timed_out: true },
+            GitlabBackendError::NoResponse { timed_out: false },
             GitlabBackendError::Transport("secret".into()),
             GitlabBackendError::Timeout,
             GitlabBackendError::Protocol("secret".into()),

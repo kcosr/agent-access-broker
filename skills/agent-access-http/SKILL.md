@@ -758,7 +758,11 @@ sanitized upstream failure only when they prove no change.
 Any GitLab write the Broker proves was never sent (no connection was made)
 fails with `upstream_connection_failed` or `upstream_timeout` and
 `mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and the
-request may be repeated. Any other transport failure is not that proof.
+request may be repeated. Any other transport failure is not that proof. A
+GitLab write without a verification contract that may have been sent but got
+no response keeps `upstream_timeout` or `upstream_connection_failed` with
+`mutationStatus: "unknown"`, `retrySafe: false`: it may have applied, so
+inspect the target before repeating it.
 Suggestion success is based on scoped discussion/note reread, not the possibly
 stale immediate response flag. It contains no commit ID/SHA and does not imply
 thread resolution.

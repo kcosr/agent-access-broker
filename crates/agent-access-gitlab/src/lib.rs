@@ -12743,6 +12743,7 @@ fn mutation_backend_error(
         )
         .with_internal_diagnostic_code(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str()),
         GitlabBackendError::NotSent { .. }
+        | GitlabBackendError::NoResponse { .. }
         | GitlabBackendError::Transport(_)
         | GitlabBackendError::Timeout
         | GitlabBackendError::Protocol(_)
@@ -14108,15 +14109,20 @@ pub(crate) fn mutation_not_sent(timed_out: bool) -> ProviderError {
         },
         "GitLab request was not sent; nothing was applied",
     )
-    .with_result(json!({ "mutationStatus": "not_applied", "retrySafe": true }))
+    .with_mutation_receipt(MutationReceipt::not_applied())
 }
 
 /// The error of an action's single upstream write that carries no
-/// verification receipt: a proven-unsent request reports `not_applied`, and
-/// every other failure keeps its ordinary mapping.
+/// verification receipt: a proven-unsent request reports `not_applied`, a
+/// request that may have reached GitLab without a response reports
+/// `unknown`, and every other failure, including one after GitLab's status
+/// arrived, keeps its ordinary mapping without a receipt.
 fn gitlab_write_error(error: GitlabBackendError) -> ProviderError {
     match error {
         GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
+        GitlabBackendError::NoResponse { .. } => {
+            gitlab_backend_error(error).with_mutation_receipt(MutationReceipt::unknown())
+        }
         other => gitlab_backend_error(other),
     }
 }
@@ -14156,13 +14162,15 @@ fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {
             format!("GitLab rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        GitlabBackendError::NotSent { timed_out: false } | GitlabBackendError::Transport(_) => {
-            ProviderError::error(
-                ReasonCode::UpstreamConnectionFailed,
-                "GitLab request failed",
-            )
-        }
-        GitlabBackendError::NotSent { timed_out: true } | GitlabBackendError::Timeout => {
+        GitlabBackendError::NotSent { timed_out: false }
+        | GitlabBackendError::NoResponse { timed_out: false }
+        | GitlabBackendError::Transport(_) => ProviderError::error(
+            ReasonCode::UpstreamConnectionFailed,
+            "GitLab request failed",
+        ),
+        GitlabBackendError::NotSent { timed_out: true }
+        | GitlabBackendError::NoResponse { timed_out: true }
+        | GitlabBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "GitLab request timed out")
         }
         GitlabBackendError::ResponseTooLarge => ProviderError::error(

@@ -263,7 +263,7 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
             .upload_project(42, upload_fixture().1, &test_credential())
             .await
             .unwrap_err(),
-        GitlabBackendError::Timeout
+        GitlabBackendError::NoResponse { timed_out: true }
     ));
 }
 
@@ -322,7 +322,10 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
             assert!(result.unwrap().status().is_success());
             assert!(started.elapsed() > Duration::from_millis(idle_ms));
         } else {
-            assert!(matches!(result.unwrap_err(), GitlabBackendError::Timeout));
+            assert!(matches!(
+                result.unwrap_err(),
+                GitlabBackendError::NoResponse { timed_out: true }
+            ));
         }
     }
 }
@@ -6338,16 +6341,18 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
     // Failures that may have reached GitLab are never reported as unsent.
     assert_eq!(
         gitlab_upstream_error(UpstreamError::Timeout),
-        GitlabBackendError::Timeout
+        GitlabBackendError::NoResponse { timed_out: true }
     );
     assert_eq!(
         gitlab_upstream_error(UpstreamError::Transport("reset".to_string())),
-        GitlabBackendError::Transport("reset".to_string())
+        GitlabBackendError::NoResponse { timed_out: false }
     );
-    for error in [
-        GitlabBackendError::Timeout,
-        GitlabBackendError::Transport("reset".to_string()),
+    let unknown = json!({ "mutationStatus": "unknown", "retrySafe": false });
+    for (timed_out, reason) in [
+        (false, ReasonCode::UpstreamConnectionFailed),
+        (true, ReasonCode::UpstreamTimeout),
     ] {
+        let error = GitlabBackendError::NoResponse { timed_out };
         let failure = mutation_backend_error(
             error.clone(),
             MutationVerificationStage::MutationResponse,
@@ -6362,10 +6367,42 @@ fn only_sdk_proven_unsent_writes_report_not_applied() {
             "applied_unverified"
         );
         assert_eq!(failure.result.as_deref().unwrap()["retrySafe"], false);
-        assert_ne!(
-            gitlab_write_error(error).result.as_deref(),
-            Some(&not_applied)
-        );
+        // A write without a verification contract keeps its reason and
+        // message, with an unknown outcome.
+        let write = gitlab_write_error(error.clone());
+        assert_eq!(write.decision(), Decision::Error);
+        assert_eq!(write.reason_code(), reason);
+        assert_eq!(write.message, gitlab_backend_error(error.clone()).message);
+        assert_eq!(write.result.as_deref(), Some(&unknown));
+        // Reads carry no mutation receipt.
+        let read = gitlab_backend_error(error);
+        assert_eq!(read.reason_code(), reason);
+        assert!(read.result.is_none());
+    }
+    // A failure after GitLab's status arrived, such as an interrupted or
+    // oversized body, and a definitive error status keep their plain error.
+    for (error, reason) in [
+        (
+            GitlabBackendError::Transport("body".to_string()),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (GitlabBackendError::Timeout, ReasonCode::UpstreamTimeout),
+        (
+            GitlabBackendError::ResponseTooLarge,
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            GitlabBackendError::Protocol("shape".to_string()),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            GitlabBackendError::HttpStatus(500),
+            ReasonCode::UpstreamFailed,
+        ),
+    ] {
+        let write = gitlab_write_error(error);
+        assert_eq!(write.reason_code(), reason);
+        assert!(write.result.is_none());
     }
 }
 
@@ -6379,6 +6416,9 @@ enum WriteFate {
     ResetAfterSend,
     /// The write is read in full and never answered.
     NoResponse,
+    /// The write is read in full and answered with a success status whose
+    /// body is cut short.
+    TruncatedSuccess,
 }
 
 /// A raw GitLab stand-in that answers `reads` in order, one connection each,
@@ -6438,8 +6478,16 @@ fn scripted_gitlab(
             return;
         };
         let _ = seen_tx.send(request_line(&mut socket));
-        if fate == WriteFate::NoResponse {
-            std::thread::sleep(std::time::Duration::from_secs(30));
+        match fate {
+            WriteFate::NoResponse => std::thread::sleep(std::time::Duration::from_secs(30)),
+            WriteFate::TruncatedSuccess => {
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{{\"id\":"
+                );
+                let _ = socket.flush();
+            }
+            WriteFate::Refused | WriteFate::ResetAfterSend => {}
         }
         let _ = socket.shutdown(std::net::Shutdown::Both);
     });
@@ -6518,27 +6566,42 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
         );
     }
     // Writes without a verification receipt report a refused connection the
-    // same way; a write that may have been sent keeps its ordinary error.
-    let (base, seen) = scripted_gitlab(vec![project.clone()], WriteFate::Refused);
-    let error = scripted_provider(&base)
-        .invoke(issue_create())
-        .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
-    assert_eq!(
-        error.result.as_deref(),
-        Some(&json!({ "mutationStatus": "not_applied", "retrySafe": true }))
-    );
-    assert_eq!(seen.try_iter().count(), 1);
-    let (base, seen) = scripted_gitlab(vec![project], WriteFate::ResetAfterSend);
-    let error = scripted_provider(&base)
-        .invoke(issue_create())
-        .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
-    assert!(error.result.is_none());
-    assert_eq!(
-        seen.try_iter().collect::<Vec<_>>()[1],
-        "POST /api/v4/projects/42/issues HTTP/1.1"
-    );
+    // same way. A write that may have been sent without a response keeps its
+    // ordinary error with an unknown outcome, and one whose success status
+    // arrived keeps its ordinary error without a receipt.
+    for (fate, reason, receipt) in [
+        (
+            WriteFate::Refused,
+            ReasonCode::UpstreamConnectionFailed,
+            Some(json!({ "mutationStatus": "not_applied", "retrySafe": true })),
+        ),
+        (
+            WriteFate::ResetAfterSend,
+            ReasonCode::UpstreamConnectionFailed,
+            Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
+        ),
+        (
+            WriteFate::NoResponse,
+            ReasonCode::UpstreamTimeout,
+            Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
+        ),
+        (
+            WriteFate::TruncatedSuccess,
+            ReasonCode::UpstreamConnectionFailed,
+            None,
+        ),
+    ] {
+        let (base, seen) = scripted_gitlab(vec![project.clone()], fate);
+        let error = scripted_provider(&base)
+            .invoke(issue_create())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), reason);
+        assert_eq!(error.result.as_deref(), receipt.as_ref());
+        let lines = seen.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            lines.get(1).map(String::as_str),
+            (fate != WriteFate::Refused).then_some("POST /api/v4/projects/42/issues HTTP/1.1")
+        );
+    }
 }
