@@ -236,7 +236,8 @@ header changes, as well as review and discussion readbacks), the error is
 `mutation_verification_failed`/409 like any other readback failure, with
 `mutationStatus: "applied_unverified"`, `retrySafe: false`,
 `verificationStage`, and `safeLocators`, and no retry wait: refresh by the
-returned IDs instead of repeating the mutation.
+returned IDs instead of repeating the mutation. A write proven never sent is
+reported as `not_applied`; see [Unsent writes](#unsent-writes).
 
 ## Actions and lookup requirements
 
@@ -481,7 +482,10 @@ mutation exposes only the safe hook ID, never the header key.
   affected key names and performs no PUT;
 - hidden/missing projects, hooks, or events retain `scope_unresolved`; GitLab
   permission failures remain sanitized `upstream_forbidden`;
-- malformed/oversized upstream structures use `upstream_protocol_failed`; and
+- malformed/oversized upstream structures use `upstream_protocol_failed`;
+- a mutation or delivery request proven never sent returns
+  `upstream_connection_failed` (or `upstream_timeout` for a connect timeout)
+  with `mutationStatus = "not_applied"` and `retrySafe = true`; and
 - ambiguous mutations or deliveries use `mutation_verification_failed`/409,
   `applied_unverified`, and `retrySafe = false`.
 
@@ -916,7 +920,11 @@ request is treated as potentially applied and returns this 409
 applied-unverified contract. `draft_note.publish_all` and `review.submit`
 re-read the owner-draft snapshot and reviewer state; they return the 409
 contract if any effect may have applied, but may surface an ordinary sanitized
-upstream failure when readback proves the operation left both unchanged.
+upstream failure when readback proves the operation left both unchanged. A
+mutation request proven never sent returns `mutationStatus = "not_applied"`
+with `retrySafe = true` instead (see [Unsent writes](#unsent-writes)). The
+`review.submit` summary note follows a publication that already applied, so
+any failure to create it, sent or not, stays applied-unverified.
 
 GitLab returns no created-note body from its single-draft publish endpoint, so
 `merge_request.draft_note.publish` proves the resulting locator with bounded
@@ -1229,6 +1237,41 @@ content. Merge audit records include safe source branch, target branch,
 expected SHA, merge option flags, and upstream merge status.
 Review audit may include bounded position type and numeric-line metadata,
 expected/proven head SHA, reviewer state, resolution flag, and safe object IDs.
+
+### Unsent writes
+
+A GitLab write action sends its mutation request after its reads. When the
+Broker proves that request never reached GitLab, because no connection was
+established (including a connect timeout) or the request could not be built,
+the action fails with its ordinary `upstream_connection_failed` (HTTP 502), or
+`upstream_timeout` (HTTP 504) for a connect timeout, and a result of:
+
+```json
+{ "mutationStatus": "not_applied", "retrySafe": true }
+```
+
+Nothing was applied, and the action can be repeated. This covers every write,
+with or without a verification contract, including provisioning and project
+uploads. A read that was never sent carries no mutation receipt.
+
+Only that proof yields `not_applied`. A timeout, connection reset or other
+transport failure after the request may have been sent keeps its existing
+outcome:
+
+- writes with a verification contract (inline discussions, discussion
+  replies, draft notes, draft publication, review submission, approvals,
+  suggestion application, webhook and provisioning mutations) return
+  `mutation_verification_failed`/409 with `mutationStatus =
+  "applied_unverified"` and `retrySafe = false`, or the ordinary error when
+  readback proves the target unchanged; and
+- other writes (issue, note, merge-request and merge, general discussion,
+  discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline
+  and job mutations, and project uploads) return their ordinary sanitized
+  upstream error without a mutation receipt. Inspect the target before
+  repeating them.
+
+A later request that fails after a write applied, such as a readback or the
+`review.submit` summary note, never reports `not_applied`.
 
 ## Bot accounts and issued tokens
 

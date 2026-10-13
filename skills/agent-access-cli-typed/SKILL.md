@@ -735,6 +735,10 @@ A direct or single-item mutation's upstream 5xx after the request uses this
 same applied-unverified 409 contract and is not a retry signal. Publish-all and
 review-submit re-read drafts and reviewer state and may return an ordinary
 sanitized upstream failure only when they prove no change.
+Any GitLab write the Broker proves was never sent (no connection was made)
+fails with `upstream_connection_failed` or `upstream_timeout` and
+`mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and the
+command may be repeated. Any other transport failure is not that proof.
 Suggestion apply follows the same no-blind-retry rule: disregard a stale
 immediate `applied` flag and rely on the Broker's scoped reread. A successful
 result intentionally has no commit ID or SHA and does not imply that the thread

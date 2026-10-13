@@ -6291,3 +6291,254 @@ async fn body_admission_accepts_only_project_upload_and_states_its_disposition()
     assert!(matches!(admission.state(), StateDisposition::Keep));
     assert_eq!(admission.part_specs().len(), 1);
 }
+
+#[test]
+fn only_sdk_proven_unsent_writes_report_not_applied() {
+    let not_applied = json!({ "mutationStatus": "not_applied", "retrySafe": true });
+    for (timed_out, reason) in [
+        (false, ReasonCode::UpstreamConnectionFailed),
+        (true, ReasonCode::UpstreamTimeout),
+    ] {
+        let error = gitlab_upstream_error(UpstreamError::NotSent {
+            timed_out,
+            detail: "connection refused".to_string(),
+        });
+        assert_eq!(error, GitlabBackendError::NotSent { timed_out });
+        for failure in [
+            mutation_backend_error(
+                error.clone(),
+                MutationVerificationStage::MutationResponse,
+                MutationSafeLocators::new().with_webhook_ids(vec![7]),
+            ),
+            gitlab_write_error(error.clone()),
+        ] {
+            assert_eq!(failure.decision(), Decision::Error);
+            assert_eq!(failure.reason_code(), reason);
+            assert_eq!(failure.result.as_deref(), Some(&not_applied));
+        }
+        // An unsent readback leaves the applied write unverified.
+        let readback = mutation_backend_error(
+            error.clone(),
+            MutationVerificationStage::MutationReadback,
+            MutationSafeLocators::new(),
+        );
+        assert_eq!(
+            readback.reason_code(),
+            ReasonCode::MutationVerificationFailed
+        );
+        assert_eq!(
+            readback.result.as_deref().unwrap()["mutationStatus"],
+            "applied_unverified"
+        );
+        // Reads carry no mutation receipt.
+        let read = gitlab_backend_error(error);
+        assert_eq!(read.reason_code(), reason);
+        assert!(read.result.is_none());
+    }
+    // Failures that may have reached GitLab are never reported as unsent.
+    assert_eq!(
+        gitlab_upstream_error(UpstreamError::Timeout),
+        GitlabBackendError::Timeout
+    );
+    assert_eq!(
+        gitlab_upstream_error(UpstreamError::Transport("reset".to_string())),
+        GitlabBackendError::Transport("reset".to_string())
+    );
+    for error in [
+        GitlabBackendError::Timeout,
+        GitlabBackendError::Transport("reset".to_string()),
+    ] {
+        let failure = mutation_backend_error(
+            error.clone(),
+            MutationVerificationStage::MutationResponse,
+            MutationSafeLocators::new(),
+        );
+        assert_eq!(
+            failure.reason_code(),
+            ReasonCode::MutationVerificationFailed
+        );
+        assert_eq!(
+            failure.result.as_deref().unwrap()["mutationStatus"],
+            "applied_unverified"
+        );
+        assert_eq!(failure.result.as_deref().unwrap()["retrySafe"], false);
+        assert_ne!(
+            gitlab_write_error(error).result.as_deref(),
+            Some(&not_applied)
+        );
+    }
+}
+
+/// What a scripted GitLab does with the write that follows its reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteFate {
+    /// The port is closed before the last read is answered, so the write's
+    /// connection is refused.
+    Refused,
+    /// The write is read in full, then the connection closes unanswered.
+    ResetAfterSend,
+    /// The write is read in full and never answered.
+    NoResponse,
+}
+
+/// A raw GitLab stand-in that answers `reads` in order, one connection each,
+/// then applies `fate` to the next request. It reports each request line.
+fn scripted_gitlab(
+    reads: Vec<Value>,
+    fate: WriteFate,
+) -> (String, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (seen_tx, seen) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let request_line = |socket: &mut std::net::TcpStream| {
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                match socket.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    _ => break,
+                }
+            }
+            let head = String::from_utf8_lossy(&head).to_string();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            let mut body = vec![0_u8; length];
+            let _ = socket.read_exact(&mut body);
+            head.lines().next().unwrap_or_default().to_string()
+        };
+        let mut listener = Some(listener);
+        let count = reads.len();
+        for (index, body) in reads.into_iter().enumerate() {
+            let Ok((mut socket, _)) = listener.as_ref().unwrap().accept() else {
+                return;
+            };
+            let _ = seen_tx.send(request_line(&mut socket));
+            if index + 1 == count && fate == WriteFate::Refused {
+                listener = None;
+            }
+            let body = body.to_string();
+            let _ = write!(
+                socket,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+        let Some(listener) = listener else {
+            return;
+        };
+        let Ok((mut socket, _)) = listener.accept() else {
+            return;
+        };
+        let _ = seen_tx.send(request_line(&mut socket));
+        if fate == WriteFate::NoResponse {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+    });
+    (base, seen)
+}
+
+fn scripted_provider(base: &str) -> GitlabProvider {
+    let mut config = config();
+    config.api_base_url = format!("{base}/api/v4");
+    config.allowed_upstream_hosts = vec![format!("{base}/api/v4/**")];
+    let host = agent_access_provider::test_support::TestHost::with_limits(
+        ProviderLimits::default().with_request_timeout_ms(500),
+    );
+    GitlabProvider::new(config, &host.context()).unwrap()
+}
+
+#[tokio::test]
+async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
+    let project = json!({ "id": 42, "path_with_namespace": "sip/service" });
+    let hook = json!({ "id": 7, "project_id": 42, "url": "https://hooks.example.com/notify" });
+    let webhook_delete = || {
+        test_invocation(
+            "webhook.delete",
+            json!({ "project": "sip/service", "webhookId": 7 }),
+        )
+    };
+    let issue_create = || {
+        test_invocation(
+            "issue.create",
+            json!({ "project": "sip/service", "title": "New issue" }),
+        )
+    };
+    let webhook_reads = || vec![project.clone(), project.clone(), hook.clone()];
+    for (fate, reason, mutation_status, retry_safe) in [
+        (
+            WriteFate::Refused,
+            ReasonCode::UpstreamConnectionFailed,
+            "not_applied",
+            true,
+        ),
+        (
+            WriteFate::ResetAfterSend,
+            ReasonCode::MutationVerificationFailed,
+            "applied_unverified",
+            false,
+        ),
+        (
+            WriteFate::NoResponse,
+            ReasonCode::MutationVerificationFailed,
+            "applied_unverified",
+            false,
+        ),
+    ] {
+        let (base, seen) = scripted_gitlab(webhook_reads(), fate);
+        let error = scripted_provider(&base)
+            .invoke(webhook_delete())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), reason);
+        let result = error.result.as_deref().unwrap();
+        assert_eq!(result["mutationStatus"], mutation_status);
+        assert_eq!(result["retrySafe"], retry_safe);
+        let lines = seen.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            lines[..3],
+            [
+                "GET /api/v4/projects/sip%2Fservice HTTP/1.1",
+                "GET /api/v4/projects/sip%2Fservice HTTP/1.1",
+                "GET /api/v4/projects/42/hooks/7 HTTP/1.1",
+            ]
+        );
+        // The refused write never reached the stand-in; the others did.
+        assert_eq!(
+            lines.get(3).map(String::as_str),
+            (fate != WriteFate::Refused).then_some("DELETE /api/v4/projects/42/hooks/7 HTTP/1.1")
+        );
+    }
+    // Writes without a verification receipt report a refused connection the
+    // same way; a write that may have been sent keeps its ordinary error.
+    let (base, seen) = scripted_gitlab(vec![project.clone()], WriteFate::Refused);
+    let error = scripted_provider(&base)
+        .invoke(issue_create())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({ "mutationStatus": "not_applied", "retrySafe": true }))
+    );
+    assert_eq!(seen.try_iter().count(), 1);
+    let (base, seen) = scripted_gitlab(vec![project], WriteFate::ResetAfterSend);
+    let error = scripted_provider(&base)
+        .invoke(issue_create())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert!(error.result.is_none());
+    assert_eq!(
+        seen.try_iter().collect::<Vec<_>>()[1],
+        "POST /api/v4/projects/42/issues HTTP/1.1"
+    );
+}

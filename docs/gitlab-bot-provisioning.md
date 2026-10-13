@@ -238,6 +238,11 @@ response, or server error after a write attempt uses the canonical
 `mutationStatus: "applied_unverified"`, `retrySafe: false`,
 `verificationStage: "mutation_response"`, and numeric IDs under `safeLocators`.
 The write may have applied; this status does not prove it succeeded.
+A write the Broker proves was never sent, because no connection was
+established, instead fails with `upstream_connection_failed` (or
+`upstream_timeout` for a connect timeout) and `mutationStatus: "not_applied"`,
+`retrySafe: true`: nothing was issued or changed, and the action can be
+repeated.
 Rotation always identifies the old token as `previousTokenId`; `tokenId` is
 present only when a different new ID was returned. These IDs and the available
 upstream status/duration are also audited. Upstream 400/422 validation responses
