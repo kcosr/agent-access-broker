@@ -13,9 +13,10 @@ use crate::{
 };
 use agent_access_core::imports::HOST_IMPLEMENTATION;
 use agent_access_provider::{
-    DelegatedCredential, InvocationScope, ProviderError, ProviderFinalizationContext, ReasonCode,
-    UpstreamCall, UpstreamClient, UpstreamError, UpstreamRetryAfter, complete_upstream_trace,
-    current_provider_finalization, upstream_rate_limited,
+    DelegatedAccessError, DelegatedCredential, InvocationScope, ProviderError,
+    ProviderFinalizationContext, ReasonCode, UpstreamCall, UpstreamClient, UpstreamError,
+    UpstreamRetryAfter, complete_upstream_trace, current_provider_finalization,
+    upstream_rate_limited,
 };
 use http::{HeaderMap, HeaderValue};
 use rmcp::{
@@ -324,13 +325,14 @@ impl OperationContext {
         let mut headers = self.auth.clone();
         let mut sent_version = None;
         if let Some((credential, resource)) = &self.delegated {
-            credential.revalidate().await?;
-            let access = credential.access();
-            if access.target() != *resource
-                || access.audience() != *resource
-                || access.version().is_empty()
-                || !crate::valid_token(access.token())
-            {
+            let access = credential
+                .revalidated_access_for(resource, resource)
+                .await
+                .map_err(|error| match error {
+                    DelegatedAccessError::Revalidation(failure) => failure,
+                    _ => crate::credential_error(),
+                })?;
+            if access.version().is_empty() || !crate::valid_token(access.token()) {
                 return Err(crate::credential_error());
             }
             let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token()))

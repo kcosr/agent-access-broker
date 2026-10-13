@@ -234,7 +234,9 @@ pub use credential::{
     CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
     UnsupportedCredentialMode,
 };
-pub use delegated::{DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease};
+pub use delegated::{
+    DelegatedAccess, DelegatedAccessError, DelegatedBindingId, DelegatedCredential, DelegatedLease,
+};
 pub use descriptor::{
     ActionDescriptor, ActionIo, CredentialDescriptor, CredentialProfile, DelegatedConnection,
     HeaderEncoding, LookupRequirement, MultipartUploadSpec, RESULT_METADATA_HEADER,

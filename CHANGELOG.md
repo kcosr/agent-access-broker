@@ -297,6 +297,13 @@ All notable changes to this project are documented in this file.
   `UpstreamQueryChanged` or `DurableKeyUnavailable` differently. CloudBees,
   GitLab, Gmail, Jira and Confluence report their continuation failures
   through it, with unchanged reasons, decisions and messages.
+- `DelegatedCredential::revalidated_access_for(target, audience)` revalidates
+  a delegated lease and returns its access only for exactly that target and
+  audience, and `access_for` makes the same comparison without revalidating.
+  `DelegatedAccessError` separates the host's revalidation failure, returned
+  unchanged, from a mismatch the provider reports. Gmail and imported MCP
+  check their delegated access through them, with unchanged errors and order
+  of checks.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph

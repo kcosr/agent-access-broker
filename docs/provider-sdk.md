@@ -467,36 +467,45 @@ OAuth registration does not prove which upstream resource or API audience the
 token serves, so the provider must check that on every use:
 
 1. Before each upstream request, including each page or detail call of one
-   invocation, call `revalidate().await?`. It confirms the connection is still
-   current and renews stale access.
-2. Read `access()` and check its `target()` and `audience()` against the values
-   the provider requires. Deny with `credential_invalid` when they differ.
+   invocation, call `revalidated_access_for(target, audience).await`. It
+   confirms the connection is still current and renews stale access, then
+   returns the access only when it is bound to exactly the target and issued for
+   exactly the audience the provider requires.
+2. Return a `DelegatedAccessError::Revalidation` failure unchanged. Deny a
+   `DelegatedAccessError::Mismatch` with `credential_invalid`.
 3. Attach its `token()` only to requests for the provider's own origin, after
    the origin check in [credentials and origins](#credentials-and-origins).
 
 ```rust check
-use agent_access_provider::{DelegatedCredential, ProviderError, ReasonCode};
+use agent_access_provider::{DelegatedAccessError, DelegatedCredential, ProviderError, ReasonCode};
 
 const NOTES_TARGET: &str = "https://notes.example.com/";
 const NOTES_AUDIENCE: &str = "https://notes.example.com/api";
 
 /// The token to present for the next upstream request.
 async fn delegated_token(credential: &DelegatedCredential) -> Result<String, ProviderError> {
-    credential.revalidate().await?;
-    let access = credential.access();
-    if access.target() != NOTES_TARGET || access.audience() != NOTES_AUDIENCE {
-        return Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "the connected account does not grant access to the notes service",
-        ));
-    }
+    let access = credential
+        .revalidated_access_for(NOTES_TARGET, NOTES_AUDIENCE)
+        .await
+        .map_err(|error| match error {
+            DelegatedAccessError::Revalidation(failure) => failure,
+            _ => ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "the connected account does not grant access to the notes service",
+            ),
+        })?;
     Ok(access.token().to_owned())
 }
 ```
 
-Return lease failures unchanged with `?`. They are host-origin failures; a
-refresh already in progress, for example, reports `concurrency_limited` (HTTP
-429), which a provider cannot report itself.
+`access_for(target, audience)` makes the same comparison without revalidating,
+for a check that sends nothing upstream, such as comparing a continuation's
+binding with the selected lease before opening it.
+
+Return lease failures unchanged, from `revalidated_access_for` as above and from
+the other lease methods with `?`. They are host-origin failures; a refresh
+already in progress, for example, reports `concurrency_limited` (HTTP 429), which
+a provider cannot report itself.
 
 An upstream 401 does not license a retry. `mark_rejected(version)` invalidates
 only the rejected access version for later calls, without refreshing or

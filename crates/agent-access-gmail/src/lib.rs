@@ -197,8 +197,10 @@ impl GmailProvider {
     ) -> Result<Value, ProviderError> {
         for attempt in 1..=2 {
             // Every page/detail call rechecks the original account and consent.
-            credential.revalidate().await?;
-            let access = account_bound(credential)?;
+            let access = credential
+                .revalidated_access_for(GMAIL_TARGET, GMAIL_AUDIENCE)
+                .await
+                .map_err(account_failure)?;
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
@@ -371,7 +373,9 @@ impl GmailProvider {
                 // invocation, before its upstream token is used: reconnecting,
                 // replacing the account or new consent changes the binding
                 // identity, while routine access refresh keeps it.
-                account_bound(credential)?;
+                credential
+                    .access_for(GMAIL_TARGET, GMAIL_AUDIENCE)
+                    .map_err(account_failure)?;
                 let binding = self.search_binding(invocation.context(), credential, &search);
                 let upstream_page_token = inputs["pageToken"]
                     .as_str()
@@ -567,17 +571,16 @@ fn validate_inputs(action: &str, inputs: &Value) -> Result<(), ProviderError> {
 fn invalid() -> ProviderError {
     ProviderError::deny(ReasonCode::InputInvalid, "Invalid Gmail action inputs")
 }
-/// The lease's current access, provided it is for the connected Gmail
-/// mailbox: the exact target and audience.
-fn account_bound(credential: &DelegatedCredential) -> Result<DelegatedAccess, ProviderError> {
-    let access = credential.access();
-    if access.target() != GMAIL_TARGET || access.audience() != GMAIL_AUDIENCE {
-        return Err(ProviderError::deny(
+/// Gmail presents only access for the connected Gmail mailbox: the exact
+/// target and audience. A lease failure passes through unchanged.
+fn account_failure(error: DelegatedAccessError) -> ProviderError {
+    match error {
+        DelegatedAccessError::Revalidation(failure) => failure,
+        _ => ProviderError::deny(
             ReasonCode::CredentialInvalid,
             "Gmail needs an account-bound Gmail OAuth connection",
-        ));
+        ),
     }
-    Ok(access)
 }
 fn page_token_error() -> ProviderError {
     ProviderError::deny(
