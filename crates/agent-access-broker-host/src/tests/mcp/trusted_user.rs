@@ -78,8 +78,16 @@ impl Provider for UserProvider {
 }
 
 async fn fixture(max_sessions: usize) -> (Fixture, ManagedStore, Arc<UserProvider>) {
+    fixture_with(max_sessions, |application| application).await
+}
+
+/// [`fixture`] with additions to the isolated broker application.
+async fn fixture_with(
+    max_sessions: usize,
+    customize: impl FnOnce(IsolatedBroker) -> IsolatedBroker,
+) -> (Fixture, ManagedStore, Arc<UserProvider>) {
     let provider = UserProvider::new();
-    let fixture = Fixture::with_providers(
+    let fixture = Fixture::start(
         |config| {
             let directory = PathBuf::from(&config.limits.upload_spool_dir);
             let directory = directory.parent().unwrap();
@@ -159,7 +167,10 @@ async fn fixture(max_sessions: usize) -> (Fixture, ManagedStore, Arc<UserProvide
                     .unwrap();
             }
         },
-        vec![provider.clone()],
+        {
+            let provider = provider.clone();
+            move |application| customize(with_provider_instances(application, vec![provider]))
+        },
     )
     .await;
     let store = fixture
@@ -415,7 +426,10 @@ async fn trusted_user_body_intake_cannot_rebind_to_replacement_human() {
 #[tokio::test]
 async fn trusted_user_final_admission_rechecks_gate_mapping_and_caller_aba() {
     for mutation in 0..3 {
-        let (fixture, store, provider) = fixture(4).await;
+        // The endpoint's background sweep would prune the session, whose
+        // proof the mutations make stale, and end the held request's stream
+        // before final admission answers it.
+        let (fixture, store, provider) = fixture_with(4, IsolatedBroker::pause_mcp_cleanup).await;
         let session = initialize(&fixture, false).await;
         let barrier = Arc::new(crate::state::McpAdmissionBarrier {
             reached: tokio::sync::Notify::new(),

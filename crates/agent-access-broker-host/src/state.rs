@@ -81,6 +81,10 @@ pub struct ReloadableState {
     pub(crate) mcp_reap_completed: tokio::sync::Notify,
     #[cfg(test)]
     pub(crate) mcp_session_count: std::sync::atomic::AtomicUsize,
+    /// Suspends the HTTP MCP endpoint's background session reaping and
+    /// pruning.
+    #[cfg(test)]
+    pub(crate) mcp_cleanup_paused: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(test)]
@@ -663,6 +667,8 @@ impl ReloadableState {
             mcp_reap_completed: tokio::sync::Notify::new(),
             #[cfg(test)]
             mcp_session_count: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            mcp_cleanup_paused: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

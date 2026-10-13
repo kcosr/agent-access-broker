@@ -170,6 +170,10 @@ pub(crate) struct StartupHooks {
     /// Host tests' invocation limiter, such as one with a manual clock.
     #[cfg(test)]
     pub(crate) invocation_limiter: Option<crate::ingress::invocation_limits::InvocationLimiter>,
+    /// Starts with the HTTP MCP endpoint's background session cleanup
+    /// suspended.
+    #[cfg(test)]
+    pub(crate) mcp_cleanup_paused: bool,
 }
 
 impl StartupHooks {
@@ -222,10 +226,14 @@ impl StartupHooks {
     /// Applies host tests' replacements to the startup state.
     #[cfg(test)]
     pub(crate) fn customize_state(&mut self, state: ReloadableState) -> ReloadableState {
-        match self.invocation_limiter.take() {
+        let state = match self.invocation_limiter.take() {
             Some(limiter) => state.with_invocation_limiter(limiter),
             None => state,
-        }
+        };
+        state
+            .mcp_cleanup_paused
+            .store(self.mcp_cleanup_paused, std::sync::atomic::Ordering::SeqCst);
+        state
     }
 }
 

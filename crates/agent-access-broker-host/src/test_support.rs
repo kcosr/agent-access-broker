@@ -368,6 +368,15 @@ impl IsolatedBroker {
         self
     }
 
+    /// Starts with the HTTP MCP endpoint's background session reaping and
+    /// pruning suspended, for host tests whose sessions must not be pruned
+    /// while they hold a request.
+    #[cfg(test)]
+    pub(crate) fn pause_mcp_cleanup(mut self) -> Self {
+        self.test_hooks.mcp_cleanup_paused = true;
+        self
+    }
+
     /// Starts serving on the caller's Tokio runtime. Fails as the broker
     /// process would at startup, for example on an invalid configuration or
     /// a held state lock.
@@ -416,6 +425,8 @@ impl IsolatedBroker {
                 microsoft_oidc: test_hooks.microsoft_oidc,
                 #[cfg(test)]
                 invocation_limiter: test_hooks.invocation_limiter,
+                #[cfg(test)]
+                mcp_cleanup_paused: test_hooks.mcp_cleanup_paused,
             },
         };
         let options = ServeOptions {

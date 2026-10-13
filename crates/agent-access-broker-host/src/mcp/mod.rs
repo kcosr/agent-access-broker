@@ -208,6 +208,10 @@ impl Endpoint {
                     }
                     break;
                 };
+                #[cfg(test)]
+                if endpoint.state.mcp_cleanup_paused.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let snapshot = endpoint.state.current();
                 endpoint.sessions.reap(snapshot.clone()).await;
                 #[cfg(test)]
