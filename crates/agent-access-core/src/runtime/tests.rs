@@ -7980,7 +7980,10 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         providers: crate::ProvidersConfig::new(crate::tests::test_backend_registry())
             .with(agent_access_fake::FakeProviderConfig::default()),
         gateways: BTreeMap::new(),
-        limits: crate::LimitsConfig::default(),
+        limits: crate::LimitsConfig {
+            upload_spool_dir: test_temp_dir().join("spool").display().to_string(),
+            ..crate::LimitsConfig::default()
+        },
         audit: None,
     }
 }

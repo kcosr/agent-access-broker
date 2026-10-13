@@ -109,6 +109,8 @@ allow_push = false
 [policy]
 authority = "managed"
 default_decision = "deny"
+[limits]
+upload_spool_dir = ${quoted("spool")}
 [audit]
 type = "jsonl"
 path = ${quoted("audit.jsonl")}

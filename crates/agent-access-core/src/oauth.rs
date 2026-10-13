@@ -2198,9 +2198,12 @@ pub(crate) mod tests {
             # The records API is never contacted by these lifecycle tests.
             [providers.oauth_stub]
             base_url = "http://127.0.0.1:9"
+            [limits]
+            upload_spool_dir = {:?}
             "#,
             directory.join("oauth.sqlite").display().to_string(),
-            key.display().to_string()
+            key.display().to_string(),
+            directory.join("spool").display().to_string()
         );
         let mut config = crate::parse_broker_config_raw(
             "oauth-runtime-fixture",
