@@ -198,7 +198,7 @@ async fn missing_required_state_fails_closed_as_a_provider_contract_error() {
     let (provider, envelope) = run(Admission::Clear, Requirement::AdmissionState).await;
     assert_eq!(*provider.invocations.lock().unwrap(), ["none"]);
     assert_eq!(envelope["decision"], "error");
-    assert_eq!(envelope["reasonCode"], "operation_failed");
+    assert_eq!(envelope["reasonCode"], "broker_provider_contract_failed");
     assert!(envelope.get("result").is_none_or(Value::is_null));
     let expected = ProviderError::from(ProviderStateError::Missing);
     assert_eq!(envelope["reason"], expected.message);
@@ -209,7 +209,7 @@ async fn state_of_another_type_fails_closed_without_exposing_it() {
     let (provider, envelope) = run(Admission::Keep, Requirement::AdmissionState).await;
     assert_eq!(*provider.invocations.lock().unwrap(), ["scope:first"]);
     assert_eq!(envelope["decision"], "error");
-    assert_eq!(envelope["reasonCode"], "operation_failed");
+    assert_eq!(envelope["reasonCode"], "broker_provider_contract_failed");
     assert!(!envelope.to_string().contains("first"));
 }
 

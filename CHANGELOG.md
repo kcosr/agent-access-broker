@@ -92,7 +92,10 @@ All notable changes to this project are documented in this file.
 
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does
-  not allow.
+  not allow. It also reports a provider whose own operation state is missing
+  or of another type (`ProviderStateError`), or that asks for an authority its
+  action was not admitted with (`AuthorityMismatch`), keeping their internal
+  diagnostic codes.
 - Native backends can declare provider-owned domain reasons: static
   `ProviderReasonDefinition`s with a fixed `deny` or `error` decision and a
   `ProviderFailureStatus` (400, 403, 404, 409, 413, 415, 424, 500, 502, 503 or

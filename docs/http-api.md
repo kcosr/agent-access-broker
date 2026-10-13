@@ -2227,9 +2227,11 @@ reason code in the sanitized portal error URL.
 `broker_provider_contract_failed` (`decision = error`) means a provider
 reported an outcome its contract does not allow: a standard reason, decision,
 or hook outside the [provider-reported subset](#provider-reported-standard-reasons),
-or a domain reason its own registration does not define with that outcome. The
-Broker never forwards the provider's own code or message in that case; the
-response carries only a safe diagnostic. New standard reasons use the reserved
+or a domain reason its own registration does not define with that outcome. It
+also reports a provider that finds its own operation state missing or asks for
+an authority its action was not admitted with. The Broker never forwards the
+provider's own code or message in that case; the response carries only a safe
+diagnostic. New standard reasons use the reserved
 `broker_` namespace; existing standard reasons keep their spellings.
 
 ### Provider-reported standard reasons

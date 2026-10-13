@@ -84,7 +84,7 @@ impl ProviderStateError {
 impl From<ProviderStateError> for ProviderError {
     fn from(error: ProviderStateError) -> Self {
         ProviderError::error(
-            ReasonCode::OperationFailed,
+            ReasonCode::BrokerProviderContractFailed,
             "provider operation state is unavailable",
         )
         .with_internal_diagnostic_code(error.diagnostic_code())
@@ -213,8 +213,12 @@ mod tests {
             ),
         ] {
             let mapped = ProviderError::from(error);
-            assert_eq!(mapped.decision, crate::Decision::Error);
-            assert_eq!(mapped.reason_code, ReasonCode::OperationFailed);
+            assert_eq!(mapped.decision(), crate::Decision::Error);
+            assert_eq!(
+                mapped.reason_code(),
+                ReasonCode::BrokerProviderContractFailed
+            );
+            assert_eq!(mapped.reason_code().http_status(), 500);
             assert_eq!(mapped.internal_diagnostic_code, Some(code));
             assert!(mapped.result.is_none() && mapped.audit.is_none());
         }

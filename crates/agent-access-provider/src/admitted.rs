@@ -62,7 +62,7 @@ impl AuthorityMismatch {
 impl From<AuthorityMismatch> for ProviderError {
     fn from(error: AuthorityMismatch) -> Self {
         ProviderError::error(
-            ReasonCode::OperationFailed,
+            ReasonCode::BrokerProviderContractFailed,
             "provider operation authority is unavailable",
         )
         .with_internal_diagnostic_code(error.diagnostic_code())
@@ -352,7 +352,11 @@ mod tests {
             InvocationAuthority::ActionOnly
         ));
         let error = ProviderError::from(action_only.resource_scopes().unwrap_err());
-        assert_eq!(error.reason_code, ReasonCode::OperationFailed);
+        assert_eq!(error.decision(), crate::Decision::Error);
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::BrokerProviderContractFailed
+        );
         assert_eq!(
             error.internal_diagnostic_code,
             Some("provider_authority_not_resources")

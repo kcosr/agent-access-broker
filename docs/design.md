@@ -701,7 +701,7 @@ sequenceDiagram
    never reaches another generation's provider. Body-part admission explicitly
    keeps, replaces, or clears it; the runtime never inspects, serializes, or
    merges it. A provider whose own required state is missing or of another type
-   fails closed with an `operation_failed` contract error.
+   fails closed with a `broker_provider_contract_failed` error.
 9. **Deny-by-default policy selection.** The resolved scope set is authorized;
    the credential mode is selected from the surviving grant.
 10. **Execution-credential resolution.** The credential for the selected mode is
@@ -716,8 +716,10 @@ sequenceDiagram
    action's validated contract (`ActionOnly`, `Resources` with the resolved
    canonical scopes, or `Search` with the complete boundary). Ordinary scoped
    actions never receive empty resource authority and action-only actions never
-   receive resources. Multipart admission sees this context with the inputs and
-   selected credentials, but no body data or decrypted private attributes.
+   receive resources. A provider asking for an authority its action was not
+   admitted with fails closed with a `broker_provider_contract_failed` error.
+   Multipart admission sees this context with the inputs and selected
+   credentials, but no body data or decrypted private attributes.
 13. **Provider invoke**, then **finalize/audit**. The final invocation is built
    only after staging: the body is consumed, the revision fences run, and only
    the admitted resource's private attributes are decrypted. Its fields are
