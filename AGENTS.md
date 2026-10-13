@@ -145,7 +145,15 @@ cargo fmt --check
 cargo test --locked
 cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
+node scripts/check-crate-boundaries.mjs
 ```
+
+Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
+`core`, `host`, `assembly`, `cli`, `native`, `reference`, `adapter`, or
+`helper`); declare one when adding a crate. The boundary check rejects an
+undeclared role and dependency edges that cross the roles, such as any
+production path from core or the host to a backend or import adapter. See
+`docs/testing.md` for the rules.
 
 Use these for offline config validation:
 
@@ -430,8 +438,9 @@ empty evidence directory outside the checkout:
 node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
-The driver runs the required standalone Rust, portal, script, documentation,
-sample-config, Unix signal, native release-provenance, and notice checks. It
+The driver runs the required standalone Rust, crate-boundary, portal, script,
+documentation, sample-config, Unix signal, native release-provenance, and notice
+checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight

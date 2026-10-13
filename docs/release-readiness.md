@@ -68,9 +68,9 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
 The output directory must be new or empty and outside the checkout. The driver
-runs the required standalone Rust, portal build/unit/browser, script,
-documentation, sample-config, Unix signal, native release-provenance, and notice
-checks. It writes `qualification.json`, per-gate logs, and native Rust notices.
+runs the required standalone Rust, crate-boundary, portal build/unit/browser,
+script, documentation, sample-config, Unix signal, native release-provenance, and
+notice checks. It writes `qualification.json`, per-gate logs, and native Rust notices.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
 exclusions and platform applicability are recorded explicitly.
@@ -100,6 +100,7 @@ npm --prefix apps/portal ci
 npm --prefix apps/portal run build
 npm --prefix apps/portal run test:unit
 node --test scripts/*.test.mjs
+node scripts/check-crate-boundaries.mjs
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/release-prerequisites.test.py
 python3 scripts/local-broker-process.test.py

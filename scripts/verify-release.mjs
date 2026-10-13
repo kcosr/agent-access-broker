@@ -71,6 +71,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "audit-demo-tests", command: [python, "-B", "demo/seed-audit-showcase.test.py"] },
     { id: "doc-links", command: [node, "scripts/check-doc-links.mjs"] },
     { id: "rust-format", command: cargoCommand("fmt", "--check"), cargo: true },
+    { id: "crate-boundaries", command: [node, "scripts/check-crate-boundaries.mjs"], cargo: true },
     { id: "portal-unit", command: portal("test:unit") },
     { id: "portal-build", command: portal("build") },
     { id: "rust-tests", command: cargoCommand("test", ...native, "--workspace", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },

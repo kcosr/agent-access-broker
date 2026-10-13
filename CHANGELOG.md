@@ -15,6 +15,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Release qualification runs a required `crate-boundaries` gate
+  (`node scripts/check-crate-boundaries.mjs`). Every workspace crate declares a
+  role, and the check rejects dependencies that cross the role boundaries.
+
 ### Changed
 
 - Broker HTTP, MCP, management, gateway, and reload events now log under

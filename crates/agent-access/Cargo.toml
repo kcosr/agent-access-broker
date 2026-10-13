@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[package.metadata.agent-access]
+role = "cli"
+
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
 agent-access-provider = { path = "../agent-access-provider" }

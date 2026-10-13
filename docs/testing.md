@@ -146,11 +146,41 @@ npm --prefix apps/portal run build
 npm --prefix apps/portal run test:unit
 npm --prefix apps/portal run test:e2e
 node --test scripts/*.test.mjs
+node scripts/check-crate-boundaries.mjs
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
 node scripts/check-doc-links.mjs
 ```
+
+Every workspace crate declares one role in its manifest:
+
+```toml
+[package.metadata.agent-access]
+role = "native"
+```
+
+The roles are `sdk` (`agent-access-provider`), `core`, `host`
+(`agent-access-broker-host`), `assembly` (`agent-access-broker`), `cli`
+(`agent-access`), `native` (backend crates), `reference`
+(`agent-access-conformance`), `adapter` (the MCP and OpenAPI import adapters),
+and `helper` (`agent-access-atlassian`, `agent-access-content`).
+`node scripts/check-crate-boundaries.mjs` reads
+`cargo metadata --locked --format-version 1 --all-features` and fails when a
+workspace member has no known role or when a resolved dependency edge crosses
+these boundaries:
+
+- The SDK has no dependency of any kind on another workspace crate.
+- Native, reference, and helper crates have no normal, build, or development
+  dependency on core, host, assembly, CLI, or adapter crates.
+- Adapter normal and build dependencies reach only SDK, helper, and core crates.
+- The transitive normal and build dependency closures of core and the host
+  contain no native, adapter, or reference crate. Development dependencies may
+  link real backends for tests.
+- The CLI's normal and build closure contains no host, assembly, native,
+  adapter, or reference crate. Its core dependency is reported as allowed.
+
+Its unit tests use synthetic metadata and run with the other script tests.
 
 On Unix, run the real-signal parent fixture separately:
 

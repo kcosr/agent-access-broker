@@ -93,6 +93,9 @@ test("qualification uses required native/browser gates and fresh paths without p
     assert.equal(check.command[check.command.indexOf("--target") + 1], nativeTarget);
     assert.equal(check.command[check.command.indexOf("--target-dir") + 1], "target");
   }
+  const boundaries = plan.find((entry) => entry.id === "crate-boundaries");
+  assert.deepEqual(boundaries.command, [process.execPath, "scripts/check-crate-boundaries.mjs"]);
+  assert.equal(boundaries.cargo, true);
   const browser = plan.find((entry) => entry.id === "portal-browser");
   assert.equal(browser.binaries.brokerBinary, path.join(root, "target", nativeTarget, "debug", "agent-access-broker"));
   assert.ok(plan.find((entry) => entry.id === "browser-prerequisites").command.at(-1).includes("chromium.launch"));
