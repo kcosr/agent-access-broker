@@ -231,18 +231,6 @@ fn normalized_comment(id: &str, parent_comment_id: Option<&str>, body: &str) -> 
     }
 }
 
-async fn normalized_runtime(
-    backend: Arc<NormalizedReadBackend>,
-    audit_name: &str,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let audit_path = temp_path(audit_name);
-    let config = confluence_config(&audit_path);
-    let provider =
-        confluence_provider_with_backend(&config, confluence_provider_config(2), backend);
-    let runtime = agent_access_core::BrokerRuntime::with_providers(config, vec![provider]).unwrap();
-    start_broker(runtime).await
-}
-
 async fn invoke(
     base_url: &str,
     action: &str,
@@ -282,7 +270,8 @@ async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
         comments: BTreeMap::new(),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) = normalized_runtime(backend.clone(), "normalized-page.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let (native_status, native) = invoke(
         &base_url,
@@ -336,7 +325,7 @@ async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
     assert!(!value.contains("\"type\":\"doc\""));
     assert_eq!(backend.take_calls(), native_calls);
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -350,8 +339,8 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
         comments: BTreeMap::new(),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) =
-        normalized_runtime(backend.clone(), "malformed-normalized-page.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let (status, body) = invoke(
         &base_url,
@@ -368,7 +357,7 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
     assert!(!body.to_string().contains(STORAGE));
     assert_eq!(backend.take_calls(), vec!["page_metadata", "page"]);
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -389,7 +378,8 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         ]),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) = normalized_runtime(backend.clone(), "normalized-comments.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let list_inputs = serde_json::json!({
         "pageId":"123456",
@@ -509,5 +499,5 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
     );
     assert_eq!(backend.take_calls(), native_reply_calls);
 
-    server.abort();
+    stop(broker).await;
 }
