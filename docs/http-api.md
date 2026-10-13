@@ -2349,7 +2349,8 @@ state missing or of another type, or asks for an authority its action was not
 admitted with, reports `broker_provider_contract_failed`.
 
 The Broker checks each outcome at the hook that reported it, imported services
-included: a standard reason against the table above, a domain reason against
+included (their administrative discovery is checked like credential
+verification): a standard reason against the table above, a domain reason against
 the provider's own registration, and a delegated credential's failure against
 the credential's own outcomes. An `upstream_rate_limited` failure must carry
 its upstream rate-limit `result`, described below, naming the invoked service.

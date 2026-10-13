@@ -868,10 +868,10 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
             )
             .await;
         if revoke_after_first_page {
-            assert_eq!(
-                result.unwrap_err().reason_code(),
-                ReasonCode::CredentialInvalid
-            );
+            assert!(matches!(
+                result.unwrap_err(),
+                AdapterDiscoveryError::Failed(error) if error.reason_code() == ReasonCode::CredentialInvalid
+            ));
         } else {
             assert_eq!(result.unwrap().tools.len(), 1);
         }

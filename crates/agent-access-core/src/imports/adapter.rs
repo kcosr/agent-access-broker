@@ -81,11 +81,33 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         host: &BuildContext<'_>,
     ) -> Result<Arc<dyn Provider>, ProviderBuildError>;
     /// The host resolves/authorizes both identities and gates the endpoint before calling.
+    /// It runs discovery as a credential-verification hook of the imported
+    /// service: a [`AdapterDiscoveryError::Failed`] outcome is checked like a
+    /// verification failure, and configuration failures are the host's to
+    /// report.
     async fn discover(
         &self,
         definition: &ImportedServiceDefinition,
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError>;
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError>;
+}
+
+/// Why an adapter's administrative discovery produced no tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdapterDiscoveryError {
+    /// The import's settings or document destination cannot be prepared for
+    /// discovery. Host management reports its `config_validation_failed`
+    /// with this bounded, administrator-facing message.
+    Configuration(String),
+    /// Discovery failed upstream, or with its credential or protocol. The
+    /// host checks it against the credential-verification contract.
+    Failed(ProviderError),
+}
+
+impl From<ProviderError> for AdapterDiscoveryError {
+    fn from(error: ProviderError) -> Self {
+        Self::Failed(error)
+    }
 }

@@ -45,7 +45,7 @@ impl ImportedAdapter for SyntheticImport {
         _: &ImportedDiscoveryAuthentication,
         _: Option<ExecutionCredential>,
         _: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         unreachable!("eligibility never discovers")
     }
 }

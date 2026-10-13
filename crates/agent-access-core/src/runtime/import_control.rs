@@ -9,26 +9,29 @@ pub enum ImportDiscoveryError {
     /// The host could not prepare discovery or its catalog publication.
     Preparation(ImportPreparationError),
     /// The adapter's discovery, or a host port acting for it such as a
-    /// delegated OAuth lease, failed with its own outcome.
+    /// delegated OAuth lease, failed with its own outcome. Discovery runs as
+    /// a credential-verification hook of the imported service, so an outcome
+    /// outside that contract arrives as `broker_provider_contract_failed`.
     Discovery(ProviderError),
 }
 
 /// A host failure preparing discovery or its catalog publication: the import
-/// is retired or its destination, discovery credential or adapter is
-/// unavailable, the managed store could not provide the credential, or the
-/// discovered tools cannot be named. It carries a reason and a public
-/// message but no decision; host management reports it as its own failure.
+/// is retired, its settings are invalid, its destination, discovery credential
+/// or adapter is unavailable, the managed store could not provide the
+/// credential, or the discovered tools cannot be named. It carries a reason
+/// and a public message but no decision; host management reports it as its
+/// own failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportPreparationError {
     reason_code: ReasonCode,
-    message: &'static str,
+    message: std::borrow::Cow<'static, str>,
 }
 
 impl ImportPreparationError {
-    fn new(reason_code: ReasonCode, message: &'static str) -> Self {
+    fn new(reason_code: ReasonCode, message: impl Into<std::borrow::Cow<'static, str>>) -> Self {
         Self {
             reason_code,
-            message,
+            message: message.into(),
         }
     }
 
@@ -36,8 +39,8 @@ impl ImportPreparationError {
         self.reason_code
     }
 
-    pub fn message(&self) -> &'static str {
-        self.message
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -205,10 +208,36 @@ impl BrokerRuntime {
             ProviderAttributionConfig::default(),
             None,
         );
-        let mut discovery = adapter
-            .discover(&record.definition, &execution, transport, &host)
-            .await
-            .map_err(ImportDiscoveryError::Discovery)?;
+        // Administrative discovery is an upstream check with stored
+        // credentials outside any invocation, so it is held to the
+        // credential-verification contract. Imported services register no
+        // domain reasons.
+        let hook = agent_access_provider::host::hook_context(
+            service,
+            "import.discover",
+            HookPhase::CredentialVerification,
+            &[],
+        );
+        let mut discovery = match agent_access_provider::host::with_hook_context(
+            hook.clone(),
+            adapter.discover(&record.definition, &execution, transport, &host),
+        )
+        .await
+        {
+            Ok(discovery) => discovery,
+            Err(AdapterDiscoveryError::Configuration(message)) => {
+                return Err(ImportPreparationError::new(
+                    ReasonCode::ConfigValidationFailed,
+                    message,
+                )
+                .into());
+            }
+            Err(AdapterDiscoveryError::Failed(error)) => {
+                return Err(ImportDiscoveryError::Discovery(checked_hook_failure(
+                    &hook, error,
+                )));
+            }
+        };
         assign_imported_action_names(&record, &mut discovery).map_err(|_| {
             ImportPreparationError::new(
                 ReasonCode::UpstreamProtocolFailed,

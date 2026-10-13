@@ -407,7 +407,11 @@ result. Anything else becomes `broker_provider_contract_failed` with a fixed
 message and an internal diagnostic code; an invocation's failure adds an
 unknown, not retry-safe execution state, and lookup concealment still applies.
 Late result-stream failures are checked against the code-only subset and the
-domain reasons, never a host port's reason.
+domain reasons, never a host port's reason. Imported services have no domain
+reasons. Their adapters' administrative discovery runs as a
+credential-verification hook of the imported service; an adapter reports
+invalid settings or document destinations as a typed configuration failure,
+which the host reports as `config_validation_failed`.
 
 `crates/agent-access-conformance` is the reference: a test-only backend with a
 namespace-capable resource type, typed configuration, a managed profile, JSON,

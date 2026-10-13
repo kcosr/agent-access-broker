@@ -1262,10 +1262,16 @@ async fn run_provider_hook<T>(
     let checked = hook.clone();
     agent_access_provider::host::with_hook_context(hook, future)
         .await
-        .map_err(|error| match checked.check_failure(&error) {
-            Ok(()) => error,
-            Err(violation) => provider_contract_failure(&checked, violation, error),
-        })
+        .map_err(|error| checked_hook_failure(&checked, error))
+}
+
+/// A hook's failure if its contract allows it, or the host's contract
+/// failure in its place.
+fn checked_hook_failure(hook: &HookContext, error: ProviderError) -> ProviderError {
+    match hook.check_failure(&error) {
+        Ok(()) => error,
+        Err(violation) => provider_contract_failure(hook, violation, error),
+    }
 }
 
 /// The host's `broker_provider_contract_failed` (error/500) replacing a hook

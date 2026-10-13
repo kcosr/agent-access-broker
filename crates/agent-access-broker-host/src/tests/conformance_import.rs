@@ -27,6 +27,11 @@ pub fn registry() -> BackendRegistry {
 
 /// A discovery credential with which the synthetic upstream is unreachable.
 pub const UNREACHABLE_DISCOVERY_TOKEN: &str = "import-upstream-unreachable";
+/// A discovery credential with which the adapter reports a reason only the
+/// Broker host may report.
+pub const HOST_ONLY_DISCOVERY_TOKEN: &str = "import-host-only-reason";
+/// A discovery credential with which the adapter finds its settings invalid.
+pub const INVALID_SETTINGS_DISCOVERY_TOKEN: &str = "import-invalid-settings";
 
 /// The fixture deliberately has a source identity unlike its grant action ID.
 pub fn conformance_import_action() -> ImportedActionDefinition {
@@ -103,14 +108,30 @@ impl ImportedAdapter for ConformanceImportAdapter {
         authentication: &ImportedDiscoveryAuthentication,
         _transport: Option<ExecutionCredential>,
         _host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
-        if let ImportedDiscoveryAuthentication::Static(credential) = authentication
-            && credential_token(credential) == UNREACHABLE_DISCOVERY_TOKEN
-        {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamConnectionFailed,
-                "conformance upstream is unreachable",
-            ));
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
+        if let ImportedDiscoveryAuthentication::Static(credential) = authentication {
+            match credential_token(credential) {
+                UNREACHABLE_DISCOVERY_TOKEN => {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamConnectionFailed,
+                        "conformance upstream is unreachable",
+                    )
+                    .into());
+                }
+                HOST_ONLY_DISCOVERY_TOKEN => {
+                    return Err(ProviderError::error(
+                        ReasonCode::RateLimited,
+                        "conformance claims a broker rate limit",
+                    )
+                    .into());
+                }
+                INVALID_SETTINGS_DISCOVERY_TOKEN => {
+                    return Err(AdapterDiscoveryError::Configuration(
+                        "conformance settings are invalid".to_owned(),
+                    ));
+                }
+                _ => {}
+            }
         }
         Ok(ImportedDiscovery {
             protocol_version: "conformance-v1".into(),

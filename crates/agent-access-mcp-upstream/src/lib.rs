@@ -97,11 +97,10 @@ impl ImportedAdapter for McpAdapter {
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let wire = make_wire(definition, host).map_err(|_| {
-            ProviderError::deny(
-                ReasonCode::ConfigValidationFailed,
-                "imported MCP endpoint could not be prepared",
+            AdapterDiscoveryError::Configuration(
+                "imported MCP endpoint could not be prepared".to_owned(),
             )
         })?;
         let delivery = &definition
@@ -133,9 +132,9 @@ impl ImportedAdapter for McpAdapter {
             {
                 (HeaderMap::new(), Some(credential.clone()))
             }
-            _ => return Err(credential_error()),
+            _ => return Err(credential_error().into()),
         };
-        discover(wire, auth, delegated, &definition.endpoint).await
+        Ok(discover(wire, auth, delegated, &definition.endpoint).await?)
     }
 }
 

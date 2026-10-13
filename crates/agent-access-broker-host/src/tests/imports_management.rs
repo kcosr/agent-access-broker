@@ -1,5 +1,7 @@
 //! Exercise the administrator workflow through the real router and store.
-use super::conformance_import::UNREACHABLE_DISCOVERY_TOKEN;
+use super::conformance_import::{
+    HOST_ONLY_DISCOVERY_TOKEN, INVALID_SETTINGS_DISCOVERY_TOKEN, UNREACHABLE_DISCOVERY_TOKEN,
+};
 use super::imports_foundation::{Fixture, definition, fixture, update};
 use super::*;
 use agent_access_core::imports::ImportedDiscoveryCredential;
@@ -581,6 +583,78 @@ async fn discovery_reports_adapter_outcomes_and_host_preparation_failures_apart(
         [
             (json!("error"), json!("upstream_connection_failed")),
             (json!("deny"), json!("encryption_key_missing")),
+        ]
+    );
+}
+
+/// Discovery runs as a credential-verification hook of the imported service:
+/// an adapter outcome outside that contract becomes the Broker's contract
+/// failure, and an adapter's configuration failure is the host's
+/// `config_validation_failed`.
+#[tokio::test]
+async fn discovery_holds_adapters_to_the_verification_contract() {
+    let fixture = fixture();
+    let token = admin_token(&fixture);
+    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let mut current = detail(&app, &token, "observability").await;
+    for (discovery_token, status, decision, reason, message) in [
+        (
+            HOST_ONLY_DISCOVERY_TOKEN,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "error",
+            "broker_provider_contract_failed",
+            "the provider reported an outcome its contract does not allow",
+        ),
+        (
+            INVALID_SETTINGS_DISCOVERY_TOKEN,
+            StatusCode::BAD_REQUEST,
+            "deny",
+            "config_validation_failed",
+            "conformance settings are invalid",
+        ),
+    ] {
+        let mut secret = versions(&current);
+        secret["token"] = json!(discovery_token);
+        let (put_status, put) = request(
+            &app,
+            &token,
+            Method::PUT,
+            "/v1/admin/imports/observability/credentials/execution",
+            Some(secret),
+        )
+        .await;
+        assert_eq!(put_status, StatusCode::OK, "{put}");
+        current = put["result"].clone();
+        let (actual, failed) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/observability/discover",
+            Some(versions(&current)),
+        )
+        .await;
+        assert_eq!(actual, status, "{failed}");
+        assert_eq!(failed["decision"], decision, "{failed}");
+        assert_eq!(failed["reasonCode"], reason, "{failed}");
+        assert_eq!(failed["error"]["message"], message, "{failed}");
+        assert!(
+            !failed.to_string().contains("broker rate limit"),
+            "{failed}"
+        );
+    }
+    let outcomes = read_audit_records(Path::new(&fixture.config.audit.as_ref().unwrap().path))
+        .into_iter()
+        .filter(|record| {
+            record["action"] == "admin.imports.discover"
+                && record["providerAudit"]["management"]["phase"].is_null()
+        })
+        .map(|record| (record["decision"].clone(), record["reasonCode"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        [
+            (json!("error"), json!("broker_provider_contract_failed")),
+            (json!("deny"), json!("config_validation_failed")),
         ]
     );
 }

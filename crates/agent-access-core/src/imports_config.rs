@@ -91,13 +91,11 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
 mod tests {
     use super::*;
     use crate::imports::{
-        ImportedActionDefinition, ImportedAdapter, ImportedDiscovery,
+        AdapterDiscoveryError, ImportedActionDefinition, ImportedAdapter, ImportedDiscovery,
         ImportedDiscoveryAuthentication, ImportedServiceDefinition, imported_adapter_registration,
     };
     use crate::{BackendRegistry, ProvidersConfig, parse_broker_config_raw};
-    use agent_access_provider::{
-        BuildContext, ExecutionCredential, Provider, ProviderBuildError, ProviderError,
-    };
+    use agent_access_provider::{BuildContext, ExecutionCredential, Provider, ProviderBuildError};
     use std::sync::Arc;
 
     /// Validation-only adapter double; configuration checks never build one.
@@ -144,7 +142,7 @@ mod tests {
             _: &ImportedDiscoveryAuthentication,
             _: Option<ExecutionCredential>,
             _: &BuildContext<'_>,
-        ) -> Result<ImportedDiscovery, ProviderError> {
+        ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
             unreachable!("configuration validation never discovers")
         }
     }

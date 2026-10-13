@@ -328,6 +328,14 @@ call is replayed after an authentication, session, transport or protocol failure
 A session-bearing HTTP 404 ends the operation. A future independent operation
 starts with a new lifecycle and session.
 
+Imported actions are held to the same
+[provider reason contract](http-api.md#provider-reported-standard-reasons) as
+native ones, with no domain reasons of their own: an outcome outside it reports
+`broker_provider_contract_failed`. Administrative discovery is checked like a
+credential verification. An import whose settings or document destination
+cannot be prepared reports `config_validation_failed`; other discovery failures
+keep their own decision, such as `error` for an unreachable upstream.
+
 Invocation audit records include the admitted import catalog, service and action
 revisions alongside normal caller, context and outcome fields. These revisions
 identify the definitions used for the call without recording credentials or tool

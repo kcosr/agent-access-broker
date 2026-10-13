@@ -136,31 +136,27 @@ impl ImportedAdapter for OpenApiAdapter {
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let settings = Settings::parse(definition).map_err(|reason| {
-            ProviderError::deny(
-                ReasonCode::ConfigValidationFailed,
-                format!(
-                    "OpenAPI configuration is invalid: {}",
-                    reason.chars().take(512).collect::<String>()
-                ),
-            )
+            AdapterDiscoveryError::Configuration(format!(
+                "OpenAPI configuration is invalid: {}",
+                reason.chars().take(512).collect::<String>()
+            ))
         })?;
         if transport_credential.is_some() {
-            return Err(credential_error());
+            return Err(credential_error().into());
         }
         let headers = match (&settings.document_delivery, authentication) {
             (None, ImportedDiscoveryAuthentication::Anonymous) => HeaderMap::new(),
             (Some(delivery), ImportedDiscoveryAuthentication::Static(credential)) => {
                 auth(delivery, credential)?
             }
-            _ => return Err(credential_error()),
+            _ => return Err(credential_error().into()),
         };
         let client =
             client(&settings.document, &[settings.document.to_string()], host).map_err(|_| {
-                ProviderError::deny(
-                    ReasonCode::ConfigValidationFailed,
-                    "OpenAPI document destination is invalid",
+                AdapterDiscoveryError::Configuration(
+                    "OpenAPI document destination is invalid".to_owned(),
                 )
             })?;
         let limit = MAX_DOCUMENT_BYTES.min(host.limits().max_upstream_response_bytes as usize);
@@ -242,14 +238,14 @@ impl ImportedAdapter for OpenApiAdapter {
                 tools,
             })
         };
-        tokio::time::timeout(Duration::from_secs(60), operation)
+        Ok(tokio::time::timeout(Duration::from_secs(60), operation)
             .await
             .map_err(|_| {
                 ProviderError::error(
                     ReasonCode::UpstreamTimeout,
                     "OpenAPI discovery exceeded its deadline",
                 )
-            })?
+            })??)
     }
 }
 

@@ -497,8 +497,10 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
         .await
         .err()
         .unwrap();
-    assert_eq!(error.reason_code(), ReasonCode::ConfigValidationFailed);
-    assert!(error.message.contains("definitionUrl is required"));
+    let AdapterDiscoveryError::Configuration(message) = error else {
+        panic!("expected a configuration failure: {error:?}");
+    };
+    assert!(message.contains("definitionUrl is required"));
     assert_eq!(fixture.call_count(), 0);
 }
 

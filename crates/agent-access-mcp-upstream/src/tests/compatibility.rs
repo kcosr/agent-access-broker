@@ -209,6 +209,10 @@ impl CompatFixture {
                 &test_host().context(),
             )
             .await
+            .map_err(|error| match error {
+                AdapterDiscoveryError::Failed(error) => error,
+                other => panic!("unexpected discovery failure: {other:?}"),
+            })
     }
 }
 async fn compat_handler(
@@ -1530,10 +1534,10 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
             )
             .await;
         if permitted_requests == 4 {
-            assert_eq!(
-                outcome.unwrap_err().reason_code(),
-                ReasonCode::CredentialInvalid
-            );
+            assert!(matches!(
+                outcome.unwrap_err(),
+                AdapterDiscoveryError::Failed(error) if error.reason_code() == ReasonCode::CredentialInvalid
+            ));
             assert_eq!(fixture.count("tools/list"), 1);
         } else {
             assert_eq!(outcome.unwrap().tools.len(), 1);
