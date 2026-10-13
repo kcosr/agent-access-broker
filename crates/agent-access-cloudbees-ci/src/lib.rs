@@ -4,8 +4,8 @@
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BoundedDownload,
     BuildContext, ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration,
-    EgressProxyConfig, EgressRoute, ExecutionCredential, Provider, ProviderBuildError,
-    ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
+    EgressProxyConfig, EgressRoute, ExecutionCredential, MutationReceipt, Provider,
+    ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
     ProviderReasonDefinition, ProviderResult, ProviderResultStream, ReasonCode, RedirectRules,
     ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
     ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
@@ -1114,10 +1114,10 @@ impl CloudbeesCiProvider {
                     json!({"controller":input.controller,"job":&input.job,
                         "queueId":queue,"queueUrl":queue_url,"mutationStatus":"applied","retrySafe":false})
                 } else {
-                    json!({"controller":input.controller,"job":&input.job,
-                        "mutationStatus":"applied_unverified","retrySafe":false,
-                        "verificationStage":"mutation_response",
-                        "safeLocators":safe_locators})
+                    let mut value = json!({"controller":input.controller,"job":&input.job});
+                    MutationReceipt::applied_unverified("mutation_response", safe_locators)
+                        .write_into(&mut value);
+                    value
                 };
                 (value, reply)
             }
@@ -1199,12 +1199,10 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
         ReasonCode::MutationVerificationFailed,
         "CloudBees CI did not confirm the build trigger; a build may already be queued. Do not retry automatically; check job.view (inQueue, lastBuild) or build.list first.",
     )
-    .with_result(json!({
-        "mutationStatus": "applied_unverified",
-        "retrySafe": false,
-        "verificationStage": "mutation_response",
-        "safeLocators": safe_locators,
-    }))
+    .with_mutation_receipt(MutationReceipt::applied_unverified(
+        "mutation_response",
+        safe_locators.clone(),
+    ))
 }
 /// CloudBees CI authenticates with a non-empty Basic username and API token.
 pub(crate) fn basic_material(

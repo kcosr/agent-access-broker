@@ -14216,12 +14216,6 @@ struct PositionInputFailureResult {
     input_category: PositionInputCategory,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MutationVerificationStatus {
-    AppliedUnverified,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationVerificationStage {
@@ -14339,44 +14333,22 @@ where
     ))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MutationVerificationFailureResult {
-    mutation_status: MutationVerificationStatus,
-    retry_safe: bool,
-    verification_stage: MutationVerificationStage,
-    safe_locators: MutationSafeLocators,
-}
-
-impl MutationVerificationFailureResult {
-    pub(crate) fn new(
-        verification_stage: MutationVerificationStage,
-        safe_locators: MutationSafeLocators,
-    ) -> Self {
-        Self {
-            mutation_status: MutationVerificationStatus::AppliedUnverified,
-            retry_safe: false,
-            verification_stage,
-            safe_locators,
-        }
-    }
-}
-
 pub fn mutation_verification_failed(
     verification_stage: MutationVerificationStage,
     safe_locators: MutationSafeLocators,
 ) -> ProviderError {
+    let stage = serde_json::to_value(verification_stage)
+        .expect("mutation verification stage is serializable");
     ProviderError::error(
         ReasonCode::MutationVerificationFailed,
         "upstream mutation could not be fully verified",
     )
-    .with_result(
-        serde_json::to_value(MutationVerificationFailureResult::new(
-            verification_stage,
-            safe_locators,
-        ))
-        .expect("mutation verification failure result is serializable"),
-    )
+    .with_mutation_receipt(MutationReceipt::applied_unverified(
+        stage
+            .as_str()
+            .expect("mutation verification stage serializes as a string"),
+        serde_json::to_value(safe_locators).expect("mutation safe locators are serializable"),
+    ))
 }
 
 pub fn position_input_invalid(input_category: PositionInputCategory) -> ProviderError {
