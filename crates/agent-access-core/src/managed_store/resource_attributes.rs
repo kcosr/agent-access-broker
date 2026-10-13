@@ -608,15 +608,6 @@ mod tests {
     #[test]
     fn stale_disabled_and_ineligible_bindings_are_refused_before_decryption() {
         let (_temp, store, ring) = fixture();
-        let created = store.create_resource(create("release"), accept).unwrap();
-        let stale = created.catalog.attribute_bindings[0].clone();
-        let mut disable = patch(1);
-        disable.enabled = Some(false);
-        let disabled = store.patch_resource(disable, accept).unwrap().catalog;
-        let other = store
-            .create_resource(create("other"), accept)
-            .unwrap()
-            .catalog;
         let binding = |catalog: &ManagedResourceCatalog, id: &str| {
             catalog
                 .attribute_bindings
@@ -625,6 +616,31 @@ mod tests {
                 .unwrap()
                 .clone()
         };
+        // A metadata-only patch leaves "release" enabled, context-eligible and
+        // on the same material; only the resource version moves on.
+        let stale = binding(
+            &store
+                .create_resource(create("release"), accept)
+                .unwrap()
+                .catalog,
+            "release",
+        );
+        let mut rename = patch(1);
+        rename.display_name = Some(Some("Release alerts".into()));
+        let current = binding(
+            &store.patch_resource(rename, accept).unwrap().catalog,
+            "release",
+        );
+        assert_eq!(current.material_versions, stale.material_versions);
+        assert_ne!(current.resource_version, stale.resource_version);
+        store.create_resource(create("paused"), accept).unwrap();
+        let mut pause = patch(1);
+        pause.id = "paused".into();
+        pause.enabled = Some(false);
+        let disabled = binding(
+            &store.patch_resource(pause, accept).unwrap().catalog,
+            "paused",
+        );
         // Material that can no longer be decrypted: reaching decryption
         // reports CredentialDecryptFailed rather than a fence failure.
         store
@@ -634,20 +650,20 @@ mod tests {
             .execute("UPDATE resource_secret_material SET nonce=zeroblob(12)", [])
             .unwrap();
         assert!(matches!(
-            store.resolve_resource_attributes(&binding(&other, "other"), "internal", &ring),
+            store.resolve_resource_attributes(&current, "internal", &ring),
             Err(ManagedStoreError::CredentialDecryptFailed)
         ));
-        for (binding, context) in [
-            (stale, "internal"),
-            (binding(&disabled, "release"), "internal"),
-            (binding(&other, "other"), "external"),
-        ] {
-            let result = store.resolve_resource_attributes(&binding, context, &ring);
+        // A stale version is refused before decryption on its own.
+        let result = store.resolve_resource_attributes(&stale, "internal", &ring);
+        assert!(
+            matches!(result, Err(ManagedStoreError::VersionConflict)),
+            "{result:?}"
+        );
+        // So are a disabled resource and an ineligible context.
+        for (binding, context) in [(&disabled, "internal"), (&current, "external")] {
+            let result = store.resolve_resource_attributes(binding, context, &ring);
             assert!(
-                matches!(
-                    result,
-                    Err(ManagedStoreError::VersionConflict | ManagedStoreError::InputInvalid(_))
-                ),
+                matches!(result, Err(ManagedStoreError::InputInvalid(_))),
                 "{result:?}"
             );
         }
