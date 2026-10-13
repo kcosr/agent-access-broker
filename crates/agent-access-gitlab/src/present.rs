@@ -3701,7 +3701,7 @@ mod tests {
                 exact - 1,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
         }
     }
@@ -3805,7 +3805,7 @@ mod tests {
                 16384,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
         }
 
@@ -3821,7 +3821,7 @@ mod tests {
             16,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 

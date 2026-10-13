@@ -67,17 +67,19 @@ impl UnavailableCredential {
     }
 
     fn from_provider(error: ProviderError) -> Self {
-        let unknown = matches!(error.reason_code, ReasonCode::ManagedStoreUnavailable);
+        let unknown = error.reason_code() == ReasonCode::ManagedStoreUnavailable;
         let administrator = matches!(
-            error.reason_code,
-            ReasonCode::ManagedStoreUnavailable
-                | ReasonCode::ManagedStoreMigrationRequired
-                | ReasonCode::EncryptionKeyMissing
-                | ReasonCode::EncryptionKeyInvalid
-                | ReasonCode::CredentialDecryptFailed
+            error.reason_code().standard(),
+            Some(
+                ReasonCode::ManagedStoreUnavailable
+                    | ReasonCode::ManagedStoreMigrationRequired
+                    | ReasonCode::EncryptionKeyMissing
+                    | ReasonCode::EncryptionKeyInvalid
+                    | ReasonCode::CredentialDecryptFailed
+            )
         );
         Self {
-            reason: error.reason_code.as_str().into(),
+            reason: error.reason_code().as_str().into(),
             unknown,
             administrator,
         }

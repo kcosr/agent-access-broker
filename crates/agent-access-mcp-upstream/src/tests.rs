@@ -350,7 +350,7 @@ async fn input_and_credential_rejections_dispatch_nothing() {
             .invoke(invocation(json!({}), "secret"))
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
@@ -358,7 +358,7 @@ async fn input_and_credential_rejections_dispatch_nothing() {
         .execution(ExecutionAccess::None)
         .build();
     assert_eq!(
-        provider.invoke(request).await.unwrap_err().reason_code,
+        provider.invoke(request).await.unwrap_err().reason_code(),
         ReasonCode::CredentialInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
@@ -444,7 +444,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
         assert_eq!(error.upstream_status, Some(status.as_u16()));
         assert_eq!(error.result.as_ref().unwrap()["retrySafe"], false);
         if status == StatusCode::TOO_MANY_REQUESTS {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         }
     }
     for state in [
@@ -537,7 +537,7 @@ async fn bounded_json_and_sse_results_include_discarded_bytes() {
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(fixture.calls(), 1);
     }
 }
@@ -862,7 +862,7 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
             .await;
         if revoke_after_first_page {
             assert_eq!(
-                result.unwrap_err().reason_code,
+                result.unwrap_err().reason_code(),
                 ReasonCode::CredentialInvalid
             );
         } else {
@@ -905,7 +905,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
             assert!(result.is_ok());
         } else {
             let error = result.err().unwrap();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
             assert_eq!(error.result.as_ref().unwrap()["mutationStatus"], "unknown");
             assert_eq!(error.result.as_ref().unwrap()["retrySafe"], false);
         }
@@ -960,7 +960,7 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
                 .build();
         }
         let error = provider.invoke(request).await.err().unwrap();
-        assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
         assert_eq!(fixture.calls(), 0);
         assert_eq!(
             fixture.state.recorded.lock().unwrap().len(),

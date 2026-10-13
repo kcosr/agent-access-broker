@@ -12,6 +12,8 @@ use std::fmt;
 use std::sync::Arc;
 use toml::de::{DeValue, ValueDeserializer};
 
+mod domain_reasons;
+
 /// The resource type the broker itself defines, independent of any backend:
 /// the Git gateway's repositories.
 static HOST_RESOURCE_TYPE: &ResourceTypeDescriptor = &GIT_REPOSITORY_RESOURCE;
@@ -53,6 +55,7 @@ impl BackendRegistry {
                 ));
             }
         }
+        errors.extend(domain_reasons::validate(&registrations));
         let types = std::iter::once(HOST_RESOURCE_TYPE).chain(
             registrations
                 .iter()

@@ -83,7 +83,7 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
         .invoke(invocation(json!({"project":"OTHER"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.issue_type_requests.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 }
@@ -195,7 +195,7 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
         .invoke(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("sentinel"));
 
     *backend.issue_type_page.lock().unwrap() = Some(page(0, 1));
@@ -211,6 +211,6 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
         .invoke(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("sentinel"));
 }

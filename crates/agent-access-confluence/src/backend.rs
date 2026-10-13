@@ -2570,7 +2570,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -2871,7 +2874,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -2955,7 +2961,10 @@ impl HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -3581,7 +3590,13 @@ pub(crate) fn complete_confluence_trace<T>(
     outcome: &Result<T, ConfluenceBackendError>,
 ) {
     if let Some(trace) = trace {
-        trace.complete(outcome.as_ref().err().map(confluence_backend_reason_code));
+        trace.complete(
+            outcome
+                .as_ref()
+                .err()
+                .map(confluence_backend_reason_code)
+                .map(Into::into),
+        );
     }
 }
 

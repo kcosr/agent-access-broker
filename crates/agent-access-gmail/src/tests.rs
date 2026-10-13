@@ -275,14 +275,14 @@ async fn rate_limits_and_ambiguous_mutations_never_replay() {
             .unwrap_err();
         assert_eq!(err.object_ids.as_deref(), Some(&json!({"thread":"a123"})));
         assert_eq!(err.upstream_status, Some(status));
-        assert_eq!(err.reason_code, expected, "{status} {reason}");
+        assert_eq!(err.reason_code(), expected, "{status} {reason}");
         assert!(!err.message.contains("secret"));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         if expected != ReasonCode::UpstreamRateLimited {
             assert!(err.result.is_none());
             continue;
         }
-        assert_eq!(err.decision, Decision::Error);
+        assert_eq!(err.decision(), Decision::Error);
         let result = err.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
         assert_eq!(result["service"], "gmail");
@@ -388,7 +388,7 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
                 .invoke(invocation(action, json!({"id":"a123"})))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, reason);
+            assert_eq!(error.reason_code(), reason);
             assert_eq!(error.upstream_status, Some(status));
             assert_eq!(
                 error.message.contains("unknown"),

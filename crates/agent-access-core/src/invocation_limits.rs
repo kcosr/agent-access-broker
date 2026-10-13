@@ -495,8 +495,8 @@ mod tests {
             })
         );
         let error = rejection.clone().into_provider_error();
-        assert_eq!(error.reason_code, ReasonCode::RateLimited);
-        assert_eq!(error.reason_code.http_status(), 429);
+        assert_eq!(error.reason_code(), ReasonCode::RateLimited);
+        assert_eq!(error.reason_code().http_status(), 429);
         assert_eq!(error.message, rejection.message());
         assert_eq!(
             error.audit.as_deref().unwrap()["rateLimit"],

@@ -763,11 +763,11 @@ async fn gateway_preclass_auth_rate_response(
         .err()?;
     let source_address = source_log_address(source);
     let provider_error = error.provider_error().clone();
-    let reason_code = provider_error.reason_code;
+    let reason_code = provider_error.reason_code();
     let status = reason_code.http_status();
     observability::record_request_ids(agent_request_id, broker_request_id);
     observability::record_service_action(&matched_gateway.service, "gateway.classify");
-    observability::record_decision(provider_error.decision.as_str());
+    observability::record_decision(provider_error.decision().as_str());
     observability::record_reason_code(reason_code.as_str());
     observability::record_status(status);
     tracing::warn!(
@@ -780,7 +780,7 @@ async fn gateway_preclass_auth_rate_response(
         limit = error.limit(),
         source = source_address.as_str(),
         principal = "",
-        decision = provider_error.decision.as_str(),
+        decision = provider_error.decision().as_str(),
         reasonCode = reason_code.as_str(),
         "http.statusCode" = status,
     );
@@ -3050,7 +3050,7 @@ mod tests {
                 &scopes,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::GatewayUpstreamDenied);
+            assert_eq!(error.reason_code(), ReasonCode::GatewayUpstreamDenied);
         }
         assert!(
             gateway_upstream_url(
@@ -3347,7 +3347,10 @@ mod tests {
             GitRequestKind::UploadPackPost,
         )
         .unwrap_err();
-        assert_eq!(duplicate_error.reason_code, ReasonCode::GatewayHeaderDenied);
+        assert_eq!(
+            duplicate_error.reason_code(),
+            ReasonCode::GatewayHeaderDenied
+        );
 
         let mut unsupported_encoding = HeaderMap::new();
         unsupported_encoding.insert(CONTENT_ENCODING, HeaderValue::from_static("br"));
@@ -3357,7 +3360,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(
-            unsupported_error.reason_code,
+            unsupported_error.reason_code(),
             ReasonCode::GatewayHeaderDenied
         );
 
@@ -3368,7 +3371,7 @@ mod tests {
             GitRequestKind::UploadPackPost,
         )
         .unwrap_err();
-        assert_eq!(comma_error.reason_code, ReasonCode::GatewayHeaderDenied);
+        assert_eq!(comma_error.reason_code(), ReasonCode::GatewayHeaderDenied);
 
         let mut empty_encoding = HeaderMap::new();
         empty_encoding.insert(CONTENT_ENCODING, HeaderValue::from_static(""));
@@ -3377,7 +3380,7 @@ mod tests {
             GitRequestKind::UploadPackPost,
         )
         .unwrap_err();
-        assert_eq!(empty_error.reason_code, ReasonCode::GatewayHeaderDenied);
+        assert_eq!(empty_error.reason_code(), ReasonCode::GatewayHeaderDenied);
 
         let mut receive_pack_headers = HeaderMap::new();
         receive_pack_headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
@@ -3387,7 +3390,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(
-            receive_pack_error.reason_code,
+            receive_pack_error.reason_code(),
             ReasonCode::GatewayHeaderDenied
         );
 
@@ -3398,7 +3401,10 @@ mod tests {
             GitRequestKind::UploadPackDiscovery,
         )
         .unwrap_err();
-        assert_eq!(discovery_error.reason_code, ReasonCode::GatewayHeaderDenied);
+        assert_eq!(
+            discovery_error.reason_code(),
+            ReasonCode::GatewayHeaderDenied
+        );
 
         let mut trailer_headers = HeaderMap::new();
         trailer_headers.insert(TRAILER, HeaderValue::from_static("Content-MD5"));
@@ -3407,7 +3413,7 @@ mod tests {
             GitRequestKind::UploadPackPost,
         )
         .unwrap_err();
-        assert_eq!(trailer_error.reason_code, ReasonCode::GatewayHeaderDenied);
+        assert_eq!(trailer_error.reason_code(), ReasonCode::GatewayHeaderDenied);
     }
 
     #[test]
@@ -3439,14 +3445,14 @@ mod tests {
         let error = gateway_request_body_bytes(&Method::GET, &headers, Body::empty(), &limits)
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestBodyDenied);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_LENGTH, HeaderValue::from_static("5"));
         let error = gateway_request_body_bytes(&Method::GET, &headers, Body::empty(), &limits)
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
@@ -3461,14 +3467,14 @@ mod tests {
         let error = gateway_request_body_bytes(&Method::GET, &headers, Body::from("x"), &limits)
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestBodyDenied);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
 
         let headers = HeaderMap::new();
         let error =
             gateway_request_body_bytes(&Method::POST, &headers, Body::from("too large"), &limits)
                 .await
                 .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
     }
 
     fn managed_gateway_body_fixture(
@@ -3677,7 +3683,7 @@ mod tests {
             gateway_request_body_bytes(&Method::GET, &HeaderMap::new(), timed_out_body(), &limits)
                 .await
                 .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestBodyDenied);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
         let (body, failure, _) = gateway_request_stream_body(timed_out_body(), &limits);
         assert!(body.collect().await.is_err());
         assert_eq!(failure.load(Ordering::Relaxed), REPLAY_FAILURE_TIMEOUT);
@@ -4000,7 +4006,7 @@ mod tests {
             Ok(_) => panic!("declared oversized POST body should be rejected"),
             Err(error) => error,
         };
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
     }
 
     #[tokio::test]
@@ -4298,7 +4304,7 @@ mod tests {
                 parse_receive_pack_body(Body::from(payload), &git, &HeaderMap::new(), &limits)
                     .await,
             );
-            assert_eq!(error.reason_code, reason);
+            assert_eq!(error.reason_code(), reason);
         }
         for declaration in [
             "shallow bad\n".to_string(),
@@ -4311,14 +4317,14 @@ mod tests {
                 parse_receive_pack_body(Body::from(payload), &git, &HeaderMap::new(), &limits)
                     .await,
             );
-            assert_eq!(error.reason_code, ReasonCode::GitPktLineMalformed);
+            assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
         }
         let mut empty = shallow.clone();
         empty.extend(b"0000");
         let error = expect_receive_pack_error(
             parse_receive_pack_body(Body::from(empty), &git, &HeaderMap::new(), &limits).await,
         );
-        assert_eq!(error.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
         let mut late = receive_pack_payload(
             RECEIVE_PACK_OLD,
             RECEIVE_PACK_NEW,
@@ -4332,7 +4338,7 @@ mod tests {
         let error = expect_receive_pack_error(
             parse_receive_pack_body(Body::from(late), &git, &HeaderMap::new(), &limits).await,
         );
-        assert_eq!(error.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
         git.receive_pack_prefix_max_bytes = Some(shallow.len() as u64);
         let mut too_large = shallow.clone();
         too_large.extend(shallow);
@@ -4340,7 +4346,7 @@ mod tests {
         let error = expect_receive_pack_error(
             parse_receive_pack_body(Body::from(too_large), &git, &HeaderMap::new(), &limits).await,
         );
-        assert_eq!(error.reason_code, ReasonCode::GitPrefixCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GitPrefixCapExceeded);
     }
 
     #[tokio::test]
@@ -4433,7 +4439,7 @@ mod tests {
             parse_receive_pack_body(body, &git, &HeaderMap::new(), &limits).await,
         );
 
-        assert_eq!(error.reason_code, ReasonCode::GatewayRequestCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
         let audit = error.audit.map(|audit| *audit).unwrap();
         assert_eq!(audit["git"]["updates"][0]["ref"], "refs/heads/feature");
     }
@@ -4472,7 +4478,7 @@ mod tests {
             .await,
         );
 
-        assert_eq!(error.reason_code, ReasonCode::GitCapabilityDenied);
+        assert_eq!(error.reason_code(), ReasonCode::GitCapabilityDenied);
         let audit = error.audit.map(|audit| *audit).unwrap();
         assert_eq!(audit["git"]["operation"], "receive-pack");
         assert_eq!(audit["git"]["updates"][0]["ref"], "refs/heads/feature");
@@ -4500,7 +4506,7 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(tag.reason_code, ReasonCode::GitRefDenied);
+        assert_eq!(tag.reason_code(), ReasonCode::GitRefDenied);
 
         let delete = expect_receive_pack_error(
             parse_receive_pack_body(
@@ -4517,7 +4523,7 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(delete.reason_code, ReasonCode::GitRefDenied);
+        assert_eq!(delete.reason_code(), ReasonCode::GitRefDenied);
 
         let denied = expect_receive_pack_error(
             parse_receive_pack_body(
@@ -4534,7 +4540,7 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(denied.reason_code, ReasonCode::GitRefDenied);
+        assert_eq!(denied.reason_code(), ReasonCode::GitRefDenied);
     }
 
     #[tokio::test]
@@ -4560,7 +4566,7 @@ mod tests {
             .await,
         );
 
-        assert_eq!(error.reason_code, ReasonCode::GitPrefixCapExceeded);
+        assert_eq!(error.reason_code(), ReasonCode::GitPrefixCapExceeded);
     }
 
     #[test]
@@ -4570,20 +4576,20 @@ mod tests {
                 .as_bytes(),
             true,
         ));
-        assert_eq!(bad_old.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(bad_old.reason_code(), ReasonCode::GitPktLineMalformed);
 
         let bad_ref = expect_receive_pack_command_error(parse_receive_pack_command(
             format!("{RECEIVE_PACK_OLD} {RECEIVE_PACK_NEW} ../feature\0report-status").as_bytes(),
             true,
         ));
-        assert_eq!(bad_ref.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(bad_ref.reason_code(), ReasonCode::GitPktLineMalformed);
 
         let create_delete = expect_receive_pack_command_error(parse_receive_pack_command(
             format!("{RECEIVE_PACK_ZERO} {RECEIVE_PACK_ZERO} refs/heads/feature\0report-status")
                 .as_bytes(),
             true,
         ));
-        assert_eq!(create_delete.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(create_delete.reason_code(), ReasonCode::GitPktLineMalformed);
 
         let non_first_capability = expect_receive_pack_command_error(parse_receive_pack_command(
             format!("{RECEIVE_PACK_OLD} {RECEIVE_PACK_NEW} refs/heads/feature\0report-status")
@@ -4591,7 +4597,7 @@ mod tests {
             false,
         ));
         assert_eq!(
-            non_first_capability.reason_code,
+            non_first_capability.reason_code(),
             ReasonCode::GitPktLineMalformed
         );
 
@@ -4599,14 +4605,14 @@ mod tests {
             &[0xff, 0xfe, 0xfd, 0x00, b'r', b'e', b'p'],
             true,
         ));
-        assert_eq!(non_utf8.reason_code, ReasonCode::GitPktLineMalformed);
+        assert_eq!(non_utf8.reason_code(), ReasonCode::GitPktLineMalformed);
 
         let missing_capabilities = expect_receive_pack_command_error(parse_receive_pack_command(
             format!("{RECEIVE_PACK_OLD} {RECEIVE_PACK_NEW} refs/heads/feature").as_bytes(),
             true,
         ));
         assert_eq!(
-            missing_capabilities.reason_code,
+            missing_capabilities.reason_code(),
             ReasonCode::GitPktLineMalformed
         );
     }

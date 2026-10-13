@@ -14,8 +14,9 @@ use agent_access_core::{
     upload_spool_file_prefix,
 };
 use agent_access_provider::{
-    BrokerBodyPart, BrokerBodyPartSpec, Decision, ProviderError, ProviderResultStreamSource,
-    RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, is_action_name, is_service_name,
+    BrokerBodyPart, BrokerBodyPartSpec, Decision, ProviderError, ProviderReason,
+    ProviderResultStreamSource, RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, is_action_name,
+    is_service_name,
 };
 use axum::Json;
 use axum::body::Body;
@@ -120,7 +121,7 @@ pub(crate) async fn me(
             new_broker_request_id(),
             String::new(),
             String::new(),
-            error.reason_code,
+            error.reason_code(),
             &error.message,
         ))
         .into_response(),
@@ -776,9 +777,10 @@ fn discovery_error_envelope(
     broker_request_id: String,
     service: String,
     action: String,
-    reason_code: ReasonCode,
+    reason_code: impl Into<ProviderReason>,
     message: &str,
 ) -> BrokerResponse<Value> {
+    let reason_code = reason_code.into();
     BrokerResponse {
         retry_after_seconds: None,
         status: reason_code.http_status(),

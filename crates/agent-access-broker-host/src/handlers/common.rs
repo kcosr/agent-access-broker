@@ -425,15 +425,15 @@ pub(crate) fn emit_request_limited(
     identity: Option<&IdentityContext>,
 ) {
     let provider_error = error.provider_error();
-    let reason_code = provider_error.reason_code.as_str();
+    let reason_code = provider_error.reason_code().as_str();
     observability::record_service_action(service, action);
     let principal = identity.map(|identity| identity.principal.as_str());
     if let Some(principal) = principal {
         observability::record_principal(principal);
     }
-    observability::record_decision(provider_error.decision.as_str());
+    observability::record_decision(provider_error.decision().as_str());
     observability::record_reason_code(reason_code);
-    observability::record_status(provider_error.reason_code.http_status());
+    observability::record_status(provider_error.reason_code().http_status());
     let source_key = source.map(source_log_address);
     tracing::warn!(
         event = "request_limited",
@@ -446,9 +446,9 @@ pub(crate) fn emit_request_limited(
         source = source_key.as_deref().unwrap_or(""),
         principal = principal.unwrap_or(""),
         tokenId = identity.and_then(identity_token_id).unwrap_or(""),
-        decision = provider_error.decision.as_str(),
+        decision = provider_error.decision().as_str(),
         reasonCode = reason_code,
-        "http.statusCode" = provider_error.reason_code.http_status(),
+        "http.statusCode" = provider_error.reason_code().http_status(),
     );
 }
 

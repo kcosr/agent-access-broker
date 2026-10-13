@@ -536,6 +536,132 @@ impl ReasonCode {
     }
 }
 
+/// The provider hook a failure or trace comes from. The host supplies it for
+/// every hook it runs; it is never inferred from a reason.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookPhase {
+    /// Scope resolution (S), including any pre-authorization lookup.
+    ScopeResolution,
+    /// Body admission (A).
+    BodyAdmission,
+    /// The invocation result (I).
+    Invocation,
+    /// Credential verification (V).
+    CredentialVerification,
+}
+
+/// Which failure decisions a provider-emittable standard reason allows.
+#[derive(Clone, Copy)]
+enum FailureDecisions {
+    Deny,
+    Error,
+    DenyOrError,
+}
+
+impl FailureDecisions {
+    fn permit(self, decision: &Decision) -> bool {
+        matches!(
+            (self, decision),
+            (Self::Deny | Self::DenyOrError, Decision::Deny)
+                | (Self::Error | Self::DenyOrError, Decision::Error)
+        )
+    }
+}
+
+const SAIV: &[HookPhase] = &[
+    HookPhase::ScopeResolution,
+    HookPhase::BodyAdmission,
+    HookPhase::Invocation,
+    HookPhase::CredentialVerification,
+];
+const SAI: &[HookPhase] = &[
+    HookPhase::ScopeResolution,
+    HookPhase::BodyAdmission,
+    HookPhase::Invocation,
+];
+const INVOCATION: &[HookPhase] = &[HookPhase::Invocation];
+
+impl ReasonCode {
+    /// The decisions and hook phases a provider may report this standard
+    /// reason in, or `None` when only the Broker host reports it.
+    fn provider_rule(self) -> Option<(FailureDecisions, &'static [HookPhase])> {
+        use FailureDecisions::{Deny, DenyOrError, Error};
+        Some(match self {
+            Self::InputInvalid | Self::BodyMalformed => (DenyOrError, SAIV),
+            Self::InvalidDraftHandle => (Deny, SAI),
+            Self::ServiceActionDenied
+            | Self::ScopeUnresolved
+            | Self::LocatorInvalid
+            | Self::CredentialNotProvisioned
+            | Self::GitRefDenied
+            | Self::WebhookDestinationDenied => (Deny, SAIV),
+            Self::CredentialInvalid | Self::ResourceNotFound => (DenyOrError, SAIV),
+            Self::VerificationMismatch => (Deny, SAIV),
+            Self::VersionConflict => (DenyOrError, SAIV),
+            Self::MutationVerificationFailed => (Error, INVOCATION),
+            Self::BodySizeDenied
+            | Self::AttachmentSizeDenied
+            | Self::AttachmentIntegrityMismatch
+            | Self::BodyFormatUnsupported
+            | Self::ResponseFormatUnsupported
+            | Self::AttachmentMediaTypeDenied => (Deny, SAIV),
+            Self::UpstreamUnauthorized | Self::UpstreamForbidden => (DenyOrError, SAIV),
+            Self::UpstreamFailed | Self::UpstreamRateLimited | Self::UpstreamConnectionFailed => {
+                (Error, SAIV)
+            }
+            Self::UpstreamProtocolFailed => (DenyOrError, SAIV),
+            Self::CursorSigningUnavailable => (Error, SAI),
+            Self::UpstreamTimeout | Self::OperationFailed | Self::OperationCancelled => {
+                (Error, SAIV)
+            }
+            _ => return None,
+        })
+    }
+
+    /// Whether a provider may report this standard reason at all. Every
+    /// other standard reason belongs to the Broker host; a delegated host
+    /// port may still pass one through as a host-origin failure.
+    pub fn is_provider_emittable(self) -> bool {
+        self.provider_rule().is_some()
+    }
+
+    /// Whether a provider hook running in `phase` may fail with this standard
+    /// reason and `decision`. An allow decision is never a failure; see
+    /// [`Self::permits_provider_allow`].
+    pub fn permits_provider_failure(self, decision: &Decision, phase: HookPhase) -> bool {
+        self.provider_rule().is_some_and(|(decisions, phases)| {
+            decisions.permit(decision) && phases.contains(&phase)
+        })
+    }
+
+    /// Whether a provider may report this reason with an allow decision:
+    /// only `verification_mismatch` from an invocation, and only together
+    /// with its verification result.
+    pub fn permits_provider_allow(
+        self,
+        phase: HookPhase,
+        carries_verification_result: bool,
+    ) -> bool {
+        self == Self::VerificationMismatch
+            && phase == HookPhase::Invocation
+            && carries_verification_result
+    }
+
+    /// Whether a result stream that fails after the response started may
+    /// classify the failure with this standard reason. Late stream failures
+    /// carry only a code; the host keeps its own late-failure decision.
+    pub fn permits_late_stream(self) -> bool {
+        matches!(
+            self,
+            Self::AttachmentSizeDenied
+                | Self::UpstreamConnectionFailed
+                | Self::UpstreamProtocolFailed
+                | Self::UpstreamTimeout
+        )
+    }
+}
+
 /// The wire identifier of a reason: a standard [`ReasonCode`] spelling or a
 /// provider's domain reason code.
 ///
@@ -559,6 +685,12 @@ impl ReasonCodeId {
         } else {
             Err(InvalidReasonCodeId)
         }
+    }
+
+    /// An identifier already known to be valid.
+    pub(crate) fn from_valid(value: Cow<'static, str>) -> Self {
+        debug_assert!(is_reason_code_id(&value));
+        Self(value)
     }
 
     pub fn as_str(&self) -> &str {
@@ -718,6 +850,147 @@ mod tests {
             serde_json::to_string(&id).unwrap(),
             "\"example_module_quota_exceeded\""
         );
+    }
+
+    #[test]
+    fn provider_emittable_standard_reasons_match_the_contract() {
+        use HookPhase::{BodyAdmission, CredentialVerification, Invocation, ScopeResolution};
+        use ReasonCode as R;
+        const ALL: &[HookPhase] = &[
+            ScopeResolution,
+            BodyAdmission,
+            Invocation,
+            CredentialVerification,
+        ];
+        const NO_V: &[HookPhase] = &[ScopeResolution, BodyAdmission, Invocation];
+        const ONLY_I: &[HookPhase] = &[Invocation];
+        /// Reasons, HTTP status, deny, error and phases, as published.
+        type Row = (&'static [ReasonCode], u16, bool, bool, &'static [HookPhase]);
+        let table: &[Row] = &[
+            (&[R::InputInvalid, R::BodyMalformed], 400, true, true, ALL),
+            (&[R::InvalidDraftHandle], 400, true, false, NO_V),
+            (
+                &[
+                    R::ServiceActionDenied,
+                    R::ScopeUnresolved,
+                    R::LocatorInvalid,
+                    R::CredentialNotProvisioned,
+                    R::GitRefDenied,
+                    R::WebhookDestinationDenied,
+                ],
+                403,
+                true,
+                false,
+                ALL,
+            ),
+            (&[R::CredentialInvalid], 403, true, true, ALL),
+            (&[R::ResourceNotFound], 404, true, true, ALL),
+            (&[R::VerificationMismatch], 409, true, false, ALL),
+            (&[R::VersionConflict], 409, true, true, ALL),
+            (&[R::MutationVerificationFailed], 409, false, true, ONLY_I),
+            (
+                &[
+                    R::BodySizeDenied,
+                    R::AttachmentSizeDenied,
+                    R::AttachmentIntegrityMismatch,
+                ],
+                413,
+                true,
+                false,
+                ALL,
+            ),
+            (
+                &[
+                    R::BodyFormatUnsupported,
+                    R::ResponseFormatUnsupported,
+                    R::AttachmentMediaTypeDenied,
+                ],
+                415,
+                true,
+                false,
+                ALL,
+            ),
+            (
+                &[R::UpstreamUnauthorized, R::UpstreamForbidden],
+                424,
+                true,
+                true,
+                ALL,
+            ),
+            (&[R::UpstreamFailed], 424, false, true, ALL),
+            (&[R::UpstreamRateLimited], 429, false, true, ALL),
+            (&[R::UpstreamConnectionFailed], 502, false, true, ALL),
+            (&[R::UpstreamProtocolFailed], 502, true, true, ALL),
+            (&[R::CursorSigningUnavailable], 503, false, true, NO_V),
+            (&[R::UpstreamTimeout], 504, false, true, ALL),
+            (&[R::OperationFailed], 500, false, true, ALL),
+            (&[R::OperationCancelled], 408, false, true, ALL),
+        ];
+        let mut listed = std::collections::BTreeSet::new();
+        for &(reasons, status, deny, error, phases) in table {
+            for &reason in reasons {
+                assert!(listed.insert(reason), "{reason:?} is listed twice");
+                assert_eq!(reason.http_status(), status, "{reason:?}");
+                assert!(reason.is_provider_emittable(), "{reason:?}");
+                for &phase in ALL {
+                    let in_phase = phases.contains(&phase);
+                    assert_eq!(
+                        reason.permits_provider_failure(&Decision::Deny, phase),
+                        deny && in_phase,
+                        "{reason:?} deny {phase:?}"
+                    );
+                    assert_eq!(
+                        reason.permits_provider_failure(&Decision::Error, phase),
+                        error && in_phase,
+                        "{reason:?} error {phase:?}"
+                    );
+                    assert!(!reason.permits_provider_failure(&Decision::Allow, phase));
+                }
+            }
+        }
+        for &reason in ReasonCode::all() {
+            let host_only = !listed.contains(&reason);
+            assert_eq!(reason.is_provider_emittable(), !host_only, "{reason:?}");
+            for &phase in ALL {
+                for decision in [Decision::Allow, Decision::Deny, Decision::Error] {
+                    if host_only {
+                        assert!(
+                            !reason.permits_provider_failure(&decision, phase),
+                            "{reason:?}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    reason.permits_provider_allow(phase, true),
+                    reason == R::VerificationMismatch && phase == Invocation,
+                    "{reason:?} allow {phase:?}"
+                );
+                assert!(!reason.permits_provider_allow(phase, false), "{reason:?}");
+            }
+            assert_eq!(
+                reason.permits_late_stream(),
+                matches!(
+                    reason,
+                    R::AttachmentSizeDenied
+                        | R::UpstreamConnectionFailed
+                        | R::UpstreamProtocolFailed
+                        | R::UpstreamTimeout
+                ),
+                "{reason:?}"
+            );
+        }
+        for host_only in [
+            R::ConcurrencyLimited,
+            R::RateLimited,
+            R::OperationTimeout,
+            R::ConfigValidationFailed,
+            R::BrokerProviderContractFailed,
+            R::CsrfInvalid,
+            R::CallerAuthenticationRequired,
+            R::ManagementDenied,
+        ] {
+            assert!(!host_only.is_provider_emittable(), "{host_only:?}");
+        }
     }
 
     #[test]

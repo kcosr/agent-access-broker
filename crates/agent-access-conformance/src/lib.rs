@@ -541,7 +541,7 @@ impl ConformanceProvider {
         let trace = take_upstream_trace(&mut response);
         let outcome = self.read_json_body(response).await.and_then(parse);
         if let Some(trace) = trace {
-            trace.complete(outcome.as_ref().err().map(|error| error.reason_code));
+            trace.complete(outcome.as_ref().err().map(|error| error.reason_code()));
         }
         outcome
     }
@@ -717,7 +717,7 @@ impl ConformanceProvider {
             .map_err(upstream_error)?;
         if !response.status().is_success() {
             let error = status_error(response.status());
-            complete_upstream_trace(&mut response, Some(error.reason_code));
+            complete_upstream_trace(&mut response, Some(error.reason_code()));
             return Err(error);
         }
         let size = response.content_length();
@@ -726,7 +726,7 @@ impl ConformanceProvider {
                 ReasonCode::AttachmentSizeDenied,
                 "conformance content exceeds the download limit",
             );
-            complete_upstream_trace(&mut response, Some(error.reason_code));
+            complete_upstream_trace(&mut response, Some(error.reason_code()));
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -1102,9 +1102,9 @@ mod tests {
             .await;
         let provider = provider(&server.uri(), ProviderLimits::default());
         let failed = provider.invoke(ping(Some(KEY))).await.unwrap_err();
-        assert_eq!(failed.reason_code, ReasonCode::UpstreamFailed);
+        assert_eq!(failed.reason_code(), ReasonCode::UpstreamFailed);
         let unconfigured = provider.invoke(ping(None)).await.unwrap_err();
-        assert_eq!(unconfigured.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(unconfigured.reason_code(), ReasonCode::ScopeUnresolved);
         assert!(!format!("{failed:?}").contains(KEY));
     }
 
@@ -1158,7 +1158,7 @@ mod tests {
         let outside = provider
             .local_scopes("item.view", &json!({"item": "shelf-three/item"}))
             .unwrap_err();
-        assert_eq!(outside.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(outside.reason_code(), ReasonCode::InputInvalid);
         let mut config = config("https://conformance.example.test");
         for shelves in [vec!["a/b"], vec!["one", "one"], vec![""]] {
             config.shelves = shelves.into_iter().map(String::from).collect();
@@ -1279,7 +1279,7 @@ mod tests {
                     assert!(events[0].get("reasonCode").is_none(), "{events:?}");
                 }
                 Some(reason) => {
-                    assert_eq!(outcome.unwrap_err().reason_code.as_str(), reason);
+                    assert_eq!(outcome.unwrap_err().reason_code().as_str(), reason);
                     assert_eq!(events[0]["reasonCode"], reason, "{body}");
                 }
             }
@@ -1333,7 +1333,7 @@ mod tests {
         .await
         .expect("the idle timeout bounds the response body");
         assert_eq!(
-            outcome.unwrap_err().reason_code,
+            outcome.unwrap_err().reason_code(),
             ReasonCode::UpstreamTimeout
         );
         server.abort();

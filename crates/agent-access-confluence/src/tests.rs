@@ -328,7 +328,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut cross_space = PageMoveTestBackend::new();
     cross_space.pages.get_mut("200").unwrap().space = "OPS".to_string();
@@ -345,7 +345,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -461,7 +461,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         .invoke(page_move_invocation())
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(cycle_backend.moves.lock().unwrap().is_empty());
 
     let mismatch_backend = Arc::new(PageMoveTestBackend {
@@ -477,7 +477,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         .invoke(page_move_invocation())
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["mutationPhase"],
         "post_move_hierarchy_readback"
@@ -535,7 +535,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         .invoke(sibling_page_move_invocation("before"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["mutationPhase"],
         "post_move_order_readback"
@@ -545,8 +545,8 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         mutation_unverified_after_throttling_message("confluence")
@@ -671,7 +671,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
 
     let create_error = create_provider.invoke(create_request).await.unwrap_err();
 
-    assert_eq!(create_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         create_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
@@ -716,7 +716,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
 
     let draft_error = draft_provider.invoke(draft_request).await.unwrap_err();
 
-    assert_eq!(draft_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(draft_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         draft_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
@@ -749,7 +749,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         .await
         .unwrap_err();
 
-    assert_eq!(move_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(move_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         move_error.audit.as_ref().unwrap()["mutationPhase"],
         "move_mutation"
@@ -841,8 +841,8 @@ async fn page_view_rejects_legacy_space_input() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -1196,7 +1196,7 @@ async fn page_update_enforces_adf_body_cap_after_attribution() {
 
     let error = provider.invoke(request).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.page_update_requests.lock().unwrap().is_empty());
 }
@@ -1460,7 +1460,7 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
         )]))
         .build();
     let error = capped_provider.invoke(capped_request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(
         capped_backend
@@ -1539,7 +1539,7 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
 
     let error = provider.invoke(request).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -1563,7 +1563,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         )]))
         .build();
     assert_eq!(
-        provider.invoke(denied).await.unwrap_err().reason_code,
+        provider.invoke(denied).await.unwrap_err().reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1620,7 +1620,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             .invoke(wrong_container)
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1645,7 +1645,11 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         )]))
         .build();
     assert_eq!(
-        provider.invoke(non_current).await.unwrap_err().reason_code,
+        provider
+            .invoke(non_current)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 }
@@ -1669,7 +1673,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             ))
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1688,7 +1692,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
         )]))
         .build();
     assert_eq!(
-        provider.invoke(body_cap).await.unwrap_err().reason_code,
+        provider.invoke(body_cap).await.unwrap_err().reason_code(),
         ReasonCode::BodySizeDenied
     );
 
@@ -1715,7 +1719,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             )
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1742,7 +1746,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             )
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 }
@@ -1787,7 +1791,7 @@ fn comment_protocol_checks_reject_unsupported_containers_and_overreturns() {
     assert_eq!(
         validate_comment_page(&comments, action, &container, true, 1, None)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
 }
@@ -1843,7 +1847,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1852,7 +1856,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1861,7 +1865,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1870,7 +1874,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1879,7 +1883,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1888,7 +1892,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1897,7 +1901,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1906,7 +1910,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1917,7 +1921,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1928,7 +1932,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     assert_eq!(
         decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -2037,7 +2041,7 @@ fn cql_accepts_bounded_title_search_and_rejects_mixed_precedence() {
 
     let error =
         parse_cql_spaces(r#"space = ENG and title ~ "runbook" or space = OPS"#).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let spaces =
         parse_cql_spaces(r#"(space = ENG and title ~ "runbook") or (space = OPS and type = page)"#)
@@ -2051,7 +2055,7 @@ fn cql_accepts_bounded_title_search_and_rejects_mixed_precedence() {
 #[test]
 fn cql_rejects_non_ascii_unsupported_predicates_without_panicking() {
     let error = parse_cql_spaces(r#"space = ENG and type = page and résumé = true"#).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -2115,7 +2119,7 @@ fn raw_cql_is_reemitted_and_rejects_unsafe_literals() {
         "title ~ \"runbook\")",
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 }
 
@@ -2139,7 +2143,7 @@ fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
         "label IS NOT EMPTY",
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{raw}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
     }
 }
 
@@ -2168,7 +2172,7 @@ fn blog_cql_composes_blogpost_type_and_rejects_page_hierarchy_fields() {
             &SearchLimitsConfig::default(),
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{raw}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
     }
 }
 
@@ -2266,7 +2270,7 @@ async fn all_except_confluence_search_checks_returned_containment() {
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
     }
 }
@@ -2278,28 +2282,28 @@ fn raw_cql_rejects_length_token_list_string_depth_and_sort_caps() {
         " ".repeat(MAX_CONFLUENCE_RAW_QUERY_BYTES + 1)
     );
     let error = parse_cql_query(&long).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let token_heavy = (0..=MAX_CONFLUENCE_QUERY_TOKENS)
         .map(|_| "title")
         .collect::<Vec<_>>()
         .join(" ");
     let error = parse_cql_query(&token_heavy).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let in_values = (0..=MAX_CONFLUENCE_IN_LIST_VALUES)
         .map(|index| format!("ENG{index}"))
         .collect::<Vec<_>>()
         .join(", ");
     let error = parse_cql_query(&format!("space IN ({in_values})")).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let string_too_large = format!(
         "title ~ \"{}\"",
         "x".repeat(MAX_CONFLUENCE_STRING_LITERAL_BYTES + 1)
     );
     let error = parse_cql_query(&string_too_large).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let deep = format!(
         "{}title ~ \"runbook\"{}",
@@ -2307,12 +2311,12 @@ fn raw_cql_rejects_length_token_list_string_depth_and_sort_caps() {
         ")".repeat(MAX_CONFLUENCE_QUERY_DEPTH + 1)
     );
     let error = parse_cql_query(&deep).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let sort_heavy =
         "title ~ \"runbook\" ORDER BY title, created, lastModified, title, created, lastModified";
     let error = parse_cql_query(sort_heavy).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -2389,7 +2393,7 @@ fn search_inputs_reject_unknown_nested_query_fields() {
         }
     }))
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -2499,13 +2503,13 @@ fn confluence_write_formats_and_generated_storage_validation_are_strict() {
     .unwrap();
     let error =
         validate_generated_confluence_storage("<p onclick=\"bad\">unsafe</p>", false).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
     let error = validate_generated_confluence_storage(
         "<p><a href=\"javascript:bad\">unsafe</a></p>",
         false,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 #[test]
@@ -2535,7 +2539,7 @@ fn confluence_write_content_rejects_empty_and_whitespace_strings_consistently() 
                     .prepare_write_content("test.action", target, format, &json!(source), &request)
                     .unwrap_err();
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     ReasonCode::BodyMalformed,
                     "target={target:?} format={format} source={source:?}"
                 );
@@ -2675,7 +2679,11 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .resources(page_binding.resource_scopes().unwrap().clone())
         .build();
     assert_eq!(
-        provider.invoke(page_request).await.unwrap_err().reason_code,
+        provider
+            .invoke(page_request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodySizeDenied
     );
 
@@ -2709,7 +2717,11 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .resources(blog_binding.resource_scopes().unwrap().clone())
         .build();
     assert_eq!(
-        provider.invoke(blog_request).await.unwrap_err().reason_code,
+        provider
+            .invoke(blog_request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodyFormatUnsupported
     );
     assert_eq!(*backend.backend_calls.lock().unwrap(), 0);
@@ -2759,7 +2771,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     reparented_content.parent_page_id = Some("66666".to_string());
     let error =
         ensure_draft_content_matches_handle(&reparented_content, &service_handle).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     let mut wrong_service_payload = service_payload.clone();
     wrong_service_payload.service = "jira".to_string();
@@ -2825,7 +2837,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         request.resource_scopes().unwrap(),
     ));
     let error = ensure_authorized_space(request.resource_scopes().unwrap(), "OPS").unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.message,
         "Confluence content no longer matches the authorized space"
@@ -2880,7 +2892,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
 
     let process_local = ConfluenceTokenSigner::new(None);
     let error = encode_confluence_draft_handle(&process_local, &service_payload).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -2927,7 +2939,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         wrong_action.admitted(),
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let staged = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
@@ -2944,7 +2956,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         reject_staged_draft_attachment_add(&staged).unwrap_err(),
         reject_staged_draft_attachment_read(&staged).unwrap_err(),
     ] {
-        assert_eq!(error.reason_code, ReasonCode::ServiceActionDenied);
+        assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
     }
     assert!(reject_staged_draft_discard(&handle).is_ok());
     assert!(reject_staged_draft_attachment_add(&handle).is_ok());
@@ -3027,31 +3039,31 @@ fn confluence_attachment_upload_validation_rejects_limit_and_integrity_mismatche
     oversized.size = 5;
     let error =
         validate_attachment_metadata_inputs(std::slice::from_ref(&oversized), &limits).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let mut unsupported_type = input.clone();
     unsupported_type.content_type = "image/png".to_string();
     let error =
         validate_attachment_metadata_inputs(std::slice::from_ref(&unsupported_type), &limits)
             .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut wrong_size = input.clone();
     wrong_size.size = 3;
     let error = prepare_attachment_uploads(&[wrong_size], std::slice::from_ref(&part), &limits)
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let mut wrong_hash = input.clone();
     wrong_hash.sha256 = sha256_hex(b"other");
     let error = prepare_attachment_uploads(&[wrong_hash], std::slice::from_ref(&part), &limits)
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let mut wrong_content_type = part;
     wrong_content_type.content_type = Some("application/json".to_string());
     let error = prepare_attachment_uploads(&[input], &[wrong_content_type], &limits).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 }
 
 #[test]
@@ -3460,7 +3472,7 @@ fn confluence_browser_url_normalization_accepts_safe_links_and_fallbacks() {
     )
     .unwrap_err();
     assert_eq!(
-        invalid_date_blog_url.reason_code,
+        invalid_date_blog_url.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
 
@@ -3512,7 +3524,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
             &config,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     let error = content_browser_url(
@@ -3523,7 +3535,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     let error = content_browser_url(
         Some("/wiki/spaces/ENG/blog/2026/06/27/1234/222222/Weekly"),
@@ -3533,7 +3545,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     for raw in [
         "https://example.atlassian.net/wiki/spaces/OPS",
@@ -3545,7 +3557,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         "https:whatever",
     ] {
         let error = space_browser_url(Some(raw), "ENG", &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 }
 
@@ -3723,7 +3735,7 @@ fn confluence_result_urls_fail_closed_on_hostile_upstream_links() {
         next_page_token: None,
     };
     let error = search_result(&page, &config).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -3750,7 +3762,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     assert_eq!(modern.locator.candidate_space.as_deref(), Some("ENG"));
     assert!(validate_blog_locator_space(&modern.locator, "ENG").is_ok());
     let mismatch = validate_blog_locator_space(&modern.locator, "OPS").unwrap_err();
-    assert_eq!(mismatch.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(mismatch.reason_code(), ReasonCode::LocatorInvalid);
 
     let numeric_title_slug = parse_blog_view_inputs(
         &json!({
@@ -3772,7 +3784,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(invalid_date_slug.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(invalid_date_slug.reason_code(), ReasonCode::LocatorInvalid);
     assert!(invalid_date_slug.message.contains("date prefix"));
 
     let list = parse_blog_attachment_list_inputs(
@@ -3795,7 +3807,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let error = parse_blog_view_inputs(
         &json!({
@@ -3804,7 +3816,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("first path segment"));
 
     let error = parse_blog_view_inputs(
@@ -3814,7 +3826,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("numeric content ID"));
 
     let error = parse_blog_view_inputs(
@@ -3824,7 +3836,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("first path segment"));
 
     for raw in [
@@ -3834,7 +3846,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/06/27/222222/Weekly?foo=bar",
     ] {
         let error = parse_blog_view_inputs(&json!({ "url": raw }), &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     }
 }
 
@@ -4032,8 +4044,8 @@ async fn verify_missing_page_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -4056,8 +4068,8 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_config(),
@@ -4077,8 +4089,8 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Allow);
-    assert_eq!(error.reason_code, ReasonCode::VerificationMismatch);
+    assert_eq!(error.decision(), Decision::Allow);
+    assert_eq!(error.reason_code(), ReasonCode::VerificationMismatch);
 }
 
 #[tokio::test]
@@ -4166,7 +4178,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(zero.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(zero.reason_code(), ReasonCode::InputInvalid);
 
     let tampered = format!("{token}x");
     let error = provider
@@ -4179,7 +4191,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -4213,7 +4225,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -4228,7 +4240,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -4243,7 +4255,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -4258,7 +4270,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -4273,7 +4285,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -4342,7 +4354,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -4432,7 +4444,7 @@ async fn search_rejects_pages_outside_requested_space() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -4491,7 +4503,7 @@ async fn search_rejects_non_current_pages() {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     }
 }
 
@@ -4527,7 +4539,7 @@ async fn page_view_enforces_response_byte_cap() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -4560,7 +4572,7 @@ async fn page_view_enforces_configured_body_byte_cap() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -4592,7 +4604,7 @@ async fn page_view_rejects_body_response_outside_authorized_scope() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -4627,8 +4639,8 @@ async fn blog_view_rejects_non_current_execution_response() {
         .invoke(invocation("blog.view", json!({ "blogId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[test]
@@ -5726,7 +5738,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(32),
@@ -5746,7 +5758,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = confluence_download_config(32);
     config.attachments.media_types = vec![
@@ -5780,7 +5792,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(4),
@@ -5800,7 +5812,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let large_bytes = vec![b'x'; 80];
     let provider = ConfluenceProvider::with_backend(
@@ -5885,7 +5897,7 @@ fn locator_rejects_untrusted_or_ambiguous_url_shapes() {
         "https://example.atlassian.net/wiki/x/abcd",
     ] {
         let error = page_locator_from_inputs(&json!({ "url": url }), &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     }
 }
 
@@ -5903,7 +5915,7 @@ fn confluence_protocol_error_message_is_sanitized() {
         "missing field `id` at line 1 column 42".to_string(),
     ));
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.message, "Confluence response protocol error");
     assert!(!error.message.contains("missing field"));
 }
@@ -5915,7 +5927,7 @@ fn confluence_validation_error_is_actionable_and_bounded_to_the_upstream_status(
         message: "body: storage is malformed".to_string(),
     });
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(
         error.message,
         "Confluence rejected the request: body: storage is malformed"
@@ -8142,7 +8154,7 @@ fn signed_attachment_list_token(
 
 fn assert_invalid_draft_handle<T: std::fmt::Debug>(result: Result<T, ProviderError>) {
     let error = result.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InvalidDraftHandle);
+    assert_eq!(error.reason_code(), ReasonCode::InvalidDraftHandle);
 }
 
 fn confluence_config() -> ConfluenceProviderConfig {
@@ -8250,8 +8262,8 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
     };
     assert!((88..=91).contains(&wait.seconds()), "{}", wait.seconds());
     let error = confluence_backend_error(upload_error);
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert!(!error.message.contains("secret"));
     assert_eq!(
         error.message,
@@ -8370,8 +8382,8 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .unwrap_err();
     // att1 applied before the second upload was throttled: repeating the
     // batch after a wait would upload it again, so this is not a rate limit.
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         "Confluence attachment upload partially failed: part of the batch was applied before \
@@ -8899,7 +8911,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert!(
             error
                 .message
@@ -8934,7 +8946,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["retryAfterSeconds"], 30);
         assert!(result["attachments"].as_array().unwrap().is_empty());
@@ -9105,7 +9117,7 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
         "()",
     ] {
         assert_eq!(
-            parse_cql_query(raw).unwrap_err().reason_code,
+            parse_cql_query(raw).unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -9129,7 +9141,7 @@ fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     assert_eq!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()]))
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -9147,7 +9159,7 @@ fn cql_grammar_errors_are_actionable_and_do_not_echo_operands() {
         ("type = sensitive-value", "type must equal page"),
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(expected), "{}", error.message);
         assert!(error.message.contains("actions_describe"));
         assert!(!error.message.contains("sensitive-value"));

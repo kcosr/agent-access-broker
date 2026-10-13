@@ -900,7 +900,7 @@ async fn legacy_call_errors_have_one_dispatch_and_no_session_recovery() {
         .invoke(invocation(json!({"region":"east"}), "secret"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_write(&error, true);
     assert_eq!(fixture.count("tools/call"), 1);
     assert_eq!(fixture.count("DELETE"), 0);
@@ -958,7 +958,7 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
             );
         } else {
             let error = outcome.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);
             assert_eq!(fixture.count("tools/call"), 0);
         }
@@ -1029,7 +1029,7 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
             assert_eq!(fixture.count("DELETE"), 1);
         } else {
             let error = outcome.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
             assert_eq!(error.upstream_status, Some(401));
             assert_write(&error, phase == "call");
             assert_eq!(
@@ -1062,10 +1062,10 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
         assert_eq!(error.upstream_status, Some(status.as_u16()));
         assert_write(&error, false);
         if status == StatusCode::TOO_MANY_REQUESTS {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
             assert_eq!(error.result.as_ref().unwrap()["retryAfterSeconds"], 7);
         } else {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
         }
         assert_eq!(fixture.methods(), ["server/discover", "initialize"]);
     }
@@ -1082,7 +1082,7 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     lease.reject_after.store(1, Ordering::SeqCst);
     let error = provider.invoke(request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     assert_eq!(
         error.upstream_status, None,
         "pre-send initialize failure must not inherit probe 404"
@@ -1499,7 +1499,7 @@ async fn startup_and_notification_bodies_retain_response_budgets() {
         .invoke(invocation(json!({"region":"east"}), "secret"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_write(&error, false);
     assert_eq!(fixture.methods(), ["server/discover"]);
 }
@@ -1531,7 +1531,7 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
             .await;
         if permitted_requests == 4 {
             assert_eq!(
-                outcome.unwrap_err().reason_code,
+                outcome.unwrap_err().reason_code(),
                 ReasonCode::CredentialInvalid
             );
             assert_eq!(fixture.count("tools/list"), 1);
@@ -1605,7 +1605,7 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
                 )
                 .unwrap();
             let error = provider.invoke(request).await.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);
             assert_eq!(fixture.requests().len(), after);
             assert_eq!(fixture.count("tools/call"), 0);
@@ -1646,11 +1646,11 @@ async fn normal_http_error_statuses_preserve_existing_categories_in_both_lifecyc
                     fixture.discover().await.unwrap_err()
                 };
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     ReasonCode::UpstreamFailed,
                     "legacy={legacy}, method={method}, status={status}"
                 );
-                assert_eq!(error.reason_code.http_status(), 424);
+                assert_eq!(error.reason_code().http_status(), 424);
                 assert_eq!(error.upstream_status, Some(status.as_u16()));
                 assert_eq!(fixture.count("server/discover"), 1);
                 assert_eq!(fixture.count("initialize"), usize::from(legacy));
@@ -1693,8 +1693,8 @@ async fn legacy_handshake_http_rejections_preserve_status_categories_and_session
             }
             let fixture = CompatFixture::new(plan).await;
             let error = fixture.invoke().await.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
-            assert_eq!(error.reason_code.http_status(), 424);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+            assert_eq!(error.reason_code().http_status(), 424);
             assert_eq!(error.upstream_status, Some(status.as_u16()));
             assert_write(&error, false);
             assert_eq!(fixture.count("server/discover"), 1);

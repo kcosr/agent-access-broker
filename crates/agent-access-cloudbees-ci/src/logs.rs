@@ -955,7 +955,7 @@ mod tests {
         assert_eq!(search["matches"], json!([]));
         assert_eq!(search["stopReason"], "scan_limit");
         let tail = read(&ci, inputs("tail")).await.unwrap_err();
-        assert_eq!(tail.reason_code, ReasonCode::CloudbeesCiLogScanExceeded);
+        assert_eq!(tail.reason_code(), ReasonCode::CloudbeesCiLogScanExceeded);
         assert!(!tail.message.contains("xxxxx"));
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
         assert_eq!(
             ci.local_scopes("build.log.read", &value)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::InputInvalid
         );
         assert!(server.received_requests().await.unwrap().is_empty());
@@ -1203,7 +1203,7 @@ mod tests {
             )
             .unwrap();
             let error = read(&ci, inputs("tail")).await.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
             serve.abort();
         }
     }
@@ -1232,7 +1232,7 @@ mod tests {
         let mut wrong = invocation("build.log.read", input.clone());
         wrong = InvocationBuilder::from(wrong).principal("other").build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code,
+            ci.invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         let mut wrong = invocation("build.log.read", input.clone());
@@ -1240,7 +1240,7 @@ mod tests {
             .execution_context("external")
             .build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code,
+            ci.invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         let mut wrong = input.clone();
@@ -1270,7 +1270,7 @@ mod tests {
             let mut wrong = input.clone();
             wrong[key] = value;
             assert_eq!(
-                read(&ci, wrong).await.unwrap_err().reason_code,
+                read(&ci, wrong).await.unwrap_err().reason_code(),
                 ReasonCode::InputInvalid
             );
         }
@@ -1279,12 +1279,12 @@ mod tests {
             .credential_mode(CredentialMode::PerUser)
             .build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code,
+            ci.invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         ci.log_fingerprint = hash(&"different provider configuration");
         assert_eq!(
-            read(&ci, input).await.unwrap_err().reason_code,
+            read(&ci, input).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         assert_eq!(server.received_requests().await.unwrap().len(), requests);
@@ -1388,7 +1388,7 @@ mod tests {
                 .mount(&server)
                 .await;
             assert_eq!(
-                read(&ci, inputs("head")).await.unwrap_err().reason_code,
+                read(&ci, inputs("head")).await.unwrap_err().reason_code(),
                 reason
             );
         }
@@ -1454,7 +1454,7 @@ mod tests {
             verify_prefix(&prefix_unavailable, "binding", &digest, &decoded.prefix_tag)
                 .unwrap_err(),
         ] {
-            assert_eq!(error.reason_code, ReasonCode::CursorSigningUnavailable);
+            assert_eq!(error.reason_code(), ReasonCode::CursorSigningUnavailable);
             assert_eq!(
                 error.message,
                 "Broker log cursor signing key is unavailable"
@@ -1464,7 +1464,7 @@ mod tests {
         assert_eq!(
             verify_prefix(&signer, "binding", &other_digest, &decoded.prefix_tag)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::InputInvalid
         );
     }

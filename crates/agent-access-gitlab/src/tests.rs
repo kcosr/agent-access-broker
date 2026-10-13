@@ -114,7 +114,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
         assert_eq!(
             parse_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             reason
         );
     }
@@ -123,7 +123,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentIntegrityMismatch
     );
     let mut changed = part.clone();
@@ -131,7 +131,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentIntegrityMismatch
     );
     let mut changed = part.clone();
@@ -139,7 +139,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::BodyMalformed
     );
     let mut changed = part;
@@ -147,7 +147,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentMediaTypeDenied
     );
     let mut invalid = inputs.clone();
@@ -170,7 +170,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         parse_project_upload_inputs(&by_url, &config)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentSizeDenied
     );
 }
@@ -187,7 +187,7 @@ fn project_upload_default_media_types_allow_html_and_reject_invalid_mime() {
         assert_eq!(
             parse_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::AttachmentMediaTypeDenied
         );
     }
@@ -451,12 +451,12 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
             .authorize_body_parts(request.admitted(), request.state())
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
     request = InvocationBuilder::from(request).body_part(part).build();
     assert_eq!(
-        provider.invoke(request).await.unwrap_err().reason_code,
+        provider.invoke(request).await.unwrap_err().reason_code(),
         ReasonCode::ScopeUnresolved
     );
     assert!(
@@ -1219,7 +1219,7 @@ fn gitlab_search_discovery_documents_project_local_filters_and_valid_examples() 
         // Discovery must not imply Jira-style scope-only execution or admit a
         // query-language object in these structured project-local searches.
         assert_eq!(
-            parse(&json!({})).unwrap_err().reason_code,
+            parse(&json!({})).unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         assert!(
@@ -2103,7 +2103,7 @@ fn diff_version_list_rejects_cross_merge_request_items() {
         }],
     )
     .unwrap_err();
-    assert_eq!(mismatch.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(mismatch.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -2406,7 +2406,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         100,
     )
     .unwrap_err();
-    assert_eq!(unsupported.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(unsupported.reason_code(), ReasonCode::BodyFormatUnsupported);
 
     let oversized = parse_note_update_inputs(
         &json!({
@@ -2419,7 +2419,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         4,
     )
     .unwrap_err();
-    assert_eq!(oversized.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(oversized.reason_code(), ReasonCode::BodySizeDenied);
 
     for invalid in [
         json!({ "project": "sip/service", "iid": 7, "noteId": 701, "content": "missing format" }),
@@ -2430,7 +2430,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         assert_eq!(
             parse_note_update_inputs(&invalid, 100)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -2493,7 +2493,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
             .invoke(test_invocation(action, inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::BodySizeDenied, "{action}");
+        assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied, "{action}");
         assert!(!error.message.contains(sentinel), "{action}");
     }
 
@@ -2510,7 +2510,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
     assert!(!error.message.contains(unsupported_sentinel));
 
     let malformed_sentinel = "MALFORMED_SENTINEL";
@@ -2526,7 +2526,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(!error.message.contains(malformed_sentinel));
 }
 
@@ -3012,7 +3012,7 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
 }
 
@@ -3503,7 +3503,7 @@ async fn http_backend_exposes_only_allowlisted_structured_mutation_validation() 
         }
     );
     let public = gitlab_backend_error(backend_error);
-    assert_eq!(public.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(public.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(public.upstream_status, Some(422));
     assert!(!public.message.contains("scope detail"));
     assert!(!public.message.contains("raw detail"));
@@ -3526,7 +3526,7 @@ async fn http_backend_rejects_wrong_type_current_user_identity() {
     let error = backend.current_user(&test_credential()).await.unwrap_err();
     assert!(matches!(error, GitlabBackendError::Protocol(_)));
     let public = gitlab_backend_error(error);
-    assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(public.message, "GitLab response protocol error");
     assert!(!public.message.contains("sentinel-private-user-id"));
 }
@@ -3694,7 +3694,7 @@ async fn http_backend_views_exact_diff_version_and_streams_raw_diff() {
         .unwrap();
     assert_eq!(oversized.value.size, Some(8));
     let error = validate_gitlab_raw_diff_download_size(oversized.value.size, 4).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 }
 
 #[tokio::test]
@@ -3737,7 +3737,7 @@ async fn http_backend_does_not_expose_scalar_or_lookup_validation_messages() {
     assert_eq!(lookup_error, GitlabBackendError::HttpStatus(400));
     for error in [mutation_error, lookup_error] {
         let public = gitlab_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamFailed);
         assert!(!public.message.contains("detail"));
     }
 }
@@ -3764,7 +3764,7 @@ fn positioned_writes_allow_structured_line_code_validation_only() {
             status: 400,
             message,
         });
-        assert_eq!(public.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(public.reason_code(), ReasonCode::InputInvalid);
         assert!(public.message.contains("line_code"));
         assert!(!public.message.contains("secret"));
 
@@ -3807,7 +3807,7 @@ async fn http_backend_does_not_read_authorization_failure_bodies_as_validation()
         .unwrap_err();
     assert_eq!(backend_error, GitlabBackendError::Forbidden);
     let public = gitlab_backend_error(backend_error);
-    assert_eq!(public.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(public.reason_code(), ReasonCode::UpstreamForbidden);
     assert!(!public.message.contains("scope detail"));
 }
 
@@ -4630,7 +4630,7 @@ fn draft_note_parser_accepts_unpositioned_variants_but_rejects_partial_positions
         let error = draft_note_from_value(malformed).unwrap_err();
         assert_eq!(error, GitlabBackendError::DraftPositionShapeInvalid);
         let public = gitlab_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(public.message, "GitLab response protocol error");
         assert_eq!(
             public.internal_diagnostic_code,
@@ -4691,7 +4691,7 @@ fn multiline_patch_resolution_rejects_reversed_and_missing_coordinates() {
     assert!(resolve_multiline_position(patch, &missing, "a.rs").is_err());
     let malformed =
         resolve_multiline_position("@@ malformed @@\n+line\n", &missing, "a.rs").unwrap_err();
-    assert_eq!(malformed.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(malformed.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(
         malformed.result.as_deref(),
         Some(&json!({ "inputCategory": "patch_unavailable" }))
@@ -4725,7 +4725,7 @@ fn diff_version_terminal_missing_patch_states_are_permanent_input_failures() {
     assert!(ensure_current_diff_version(&version("collected"), &merge_request).is_ok());
     for state in ["overflow", "without_files"] {
         let error = ensure_current_diff_version(&version(state), &merge_request).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert_eq!(
             error.result.as_deref(),
             Some(&json!({ "inputCategory": "patch_unavailable" }))
@@ -4733,7 +4733,7 @@ fn diff_version_terminal_missing_patch_states_are_permanent_input_failures() {
     }
     let transient =
         ensure_current_diff_version(&version("collecting"), &merge_request).unwrap_err();
-    assert_eq!(transient.reason_code, ReasonCode::VersionConflict);
+    assert_eq!(transient.reason_code(), ReasonCode::VersionConflict);
 }
 
 #[test]
@@ -4772,7 +4772,7 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         name: None,
     })
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     for username in ["", "   "] {
         let error = gitlab_review_context(
             &service,
@@ -4783,10 +4783,10 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
     assert_eq!(
-        acting_reviewer_not_assigned_error().reason_code,
+        acting_reviewer_not_assigned_error().reason_code(),
         ReasonCode::VersionConflict
     );
 }
@@ -4800,7 +4800,7 @@ fn mutation_http_5xx_is_ambiguous_but_http_4xx_remains_an_ordinary_failure() {
             .with_discussion_id("discussion-9")
             .with_note_id(901),
     );
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.result.as_deref(),
         Some(&json!({
@@ -4815,7 +4815,7 @@ fn mutation_http_5xx_is_ambiguous_but_http_4xx_remains_an_ordinary_failure() {
         MutationVerificationStage::MutationResponse,
         MutationSafeLocators::new().with_note_id(901),
     );
-    assert_eq!(ordinary.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(ordinary.reason_code(), ReasonCode::UpstreamFailed);
     assert!(ordinary.result.is_none());
 }
 
@@ -4827,8 +4827,8 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
         MutationVerificationStage::MutationResponse,
         MutationSafeLocators::new().with_webhook_ids(vec![5]),
     );
-    assert_eq!(rejected.decision, Decision::Error);
-    assert_eq!(rejected.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(rejected.decision(), Decision::Error);
+    assert_eq!(rejected.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(
         rejected.message,
         format!(
@@ -4855,9 +4855,9 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
             MutationVerificationStage::MutationReadback,
             MutationSafeLocators::new().with_webhook_ids(vec![5]),
         );
-        assert_eq!(unverified.decision, Decision::Error);
+        assert_eq!(unverified.decision(), Decision::Error);
         assert_eq!(
-            unverified.reason_code,
+            unverified.reason_code(),
             ReasonCode::MutationVerificationFailed
         );
         assert_eq!(
@@ -4876,7 +4876,7 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
     }
     assert_eq!(
         gitlab_review_submit_version_backend_error(GitlabBackendError::RateLimited(None))
-            .reason_code,
+            .reason_code(),
         ReasonCode::UpstreamRateLimited
     );
 }
@@ -4914,7 +4914,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
         };
         assert_eq!(wait.is_some(), expected.is_some(), "{retry_after:?}");
         let error = gitlab_backend_error(backend_error.clone());
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         assert!(!error.message.contains("secret"));
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
@@ -4958,7 +4958,7 @@ fn mutation_readback_translation_preserves_only_the_closed_internal_diagnostic()
             stage,
             MutationSafeLocators::new().with_draft_note_ids(vec![11963]),
         );
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert_eq!(
             error.internal_diagnostic_code,
             Some(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str())
@@ -5417,7 +5417,7 @@ fn gitlab_review_submit_unreadable_version_is_always_a_protocol_failure() {
         GitlabBackendError::Protocol("parse detail".to_string()),
     ] {
         let public = gitlab_review_submit_version_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(public.message, "GitLab version discovery failed");
     }
 }
@@ -5626,9 +5626,9 @@ fn mutation_verification_failure_is_closed_and_unsafe_to_retry() {
             .with_webhook_event_ids(vec![9002, 9001, 9002]),
     );
 
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
-    assert_eq!(error.reason_code.http_status(), 409);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.reason_code().http_status(), 409);
     assert_eq!(
         error.message,
         "upstream mutation could not be fully verified"
@@ -5730,9 +5730,9 @@ fn position_input_failure_categories_are_closed_and_non_refreshable() {
             category,
         );
         let error = position_input_invalid(category);
-        assert_eq!(error.decision, crate::Decision::Deny);
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
-        assert_eq!(error.reason_code.http_status(), 400);
+        assert_eq!(error.decision(), crate::Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code().http_status(), 400);
         assert_eq!(
             error.result.as_deref(),
             Some(&json!({ "inputCategory": encoded }))

@@ -98,7 +98,9 @@ also includes a same-origin browser portal frontend:
 
 - **`agent-access-provider`** — the backend contract: service descriptors
   (`descriptor.rs`), resource types (`resource.rs`), the `Provider` trait and
-  its invocation, result, and error types, reason codes (`reason.rs`),
+  its invocation, result, and error types, standard reason codes and the subset
+  providers may report (`reason.rs`), provider-owned domain reasons and the
+  reason handles errors, streams, and traces carry (`domain_reason.rs`),
   upstream throttling (`upstream_rate_limit.rs`: bounded `Retry-After` parsing,
   the shared `upstream_rate_limited` error, and the applied-unverified
   `mutation_verification_failed` for throttling after an applied write), the
@@ -315,6 +317,12 @@ only host change. The crate supplies:
   body-part admission over the admitted request, and invocation through
   `UpstreamClient`s, returning JSON or a bounded stream. Delegated leases expose
   an opaque `DelegatedBindingId` for binding signed tokens to the connection.
+- **Domain reasons** (optional): `ProviderReasonDefinition` statics listed on
+  the registration, each with a code under the kind's prefix and a fixed
+  decision and HTTP status. Failures report them with
+  `ProviderError::domain`; standard reasons are limited to the
+  [provider-reported subset](http-api.md#provider-reported-standard-reasons).
+  The registry rejects duplicate, standard, and reserved codes before serving.
 
 `crates/agent-access-conformance` is the reference: a test-only backend with a
 namespace-capable resource type, typed configuration, a managed profile, JSON,
@@ -1335,8 +1343,8 @@ the JSONL backend writes the line.
 raw token values are never logged.
 
 **Outcome records.** Normal operations write one record per outcome. An allow is
-recorded at status 200; a deny or error is recorded at
-`reasonCode.http_status`. Identity failures are recorded with
+recorded at status 200; a deny or error is recorded at its reason's HTTP
+status: a standard reason's fixed status or a domain reason's declared one. Identity failures are recorded with
 `principal = "unknown"`. A failed `auth.local.login` records the submitted
 principal ID only when it passes the principal key check; otherwise `principal`
 is `anonymous`, `providerAudit.auth.claimedPrincipalInvalid` is `true`, and the

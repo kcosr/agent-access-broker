@@ -229,7 +229,7 @@ impl OAuthRecordsProvider {
 
     async fn read_body(&self, mut response: reqwest::Response) -> Result<Value, ProviderError> {
         if !response.status().is_success() {
-            complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamFailed));
+            complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamFailed.into()));
             return Err(ProviderError::error(
                 ReasonCode::UpstreamFailed,
                 "OAuth records request failed",
@@ -245,13 +245,16 @@ impl OAuthRecordsProvider {
             .content_length()
             .is_some_and(|n| n > self.max_bytes)
         {
-            complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamProtocolFailed));
+            complete_upstream_trace(
+                &mut response,
+                Some(ReasonCode::UpstreamProtocolFailed.into()),
+            );
             return Err(too_large());
         }
         let trace = take_upstream_trace(&mut response);
         let finish = |reason: Option<ReasonCode>| {
             if let Some(trace) = trace {
-                trace.complete(reason);
+                trace.complete(reason.map(Into::into));
             }
         };
         let mut bytes = Vec::new();
@@ -384,7 +387,7 @@ impl Provider for OAuthRecordsProvider {
         let started = Instant::now();
         let mut response = self.send(&url, &delegated.access(), 1).await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid));
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
             let access = delegated.recover_after_unauthorized().await?;
             response = self.send(&url, &access, 2).await?;
         }

@@ -1335,7 +1335,7 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
         duration_ms: 6,
         attempt: 1,
         egress_proxy_mode: "direct",
-        reason_code: Some(ReasonCode::UpstreamProtocolFailed),
+        reason_code: Some(ReasonCode::UpstreamProtocolFailed.into()),
         path_template: Some("/repos/{owner}/{repo}/issues"),
     });
 
@@ -1903,7 +1903,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
         ReasonCode::UpstreamForbidden,
         "upstream forbidden",
     ));
-    assert_eq!(public.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(public.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         public.message,
         "resource scope is not authorized or unavailable"
@@ -1913,7 +1913,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
         ReasonCode::LocatorInvalid,
         "bad locator",
     ));
-    assert_eq!(locator.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(locator.reason_code(), ReasonCode::LocatorInvalid);
     assert_eq!(locator.message, "bad locator");
 
     for reason_code in [ReasonCode::BodyMalformed, ReasonCode::BodyFormatUnsupported] {
@@ -1921,7 +1921,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
             reason_code,
             "safe local body validation",
         ));
-        assert_eq!(validation.reason_code, reason_code);
+        assert_eq!(validation.reason_code(), reason_code);
         assert_eq!(validation.message, "safe local body validation");
     }
 
@@ -1932,7 +1932,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
     ] {
         let hidden =
             public_lookup_scope_error(ProviderError::error(reason_code, "upstream scope detail"));
-        assert_eq!(hidden.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(hidden.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
             hidden.message,
             "resource scope is not authorized or unavailable"
@@ -2895,7 +2895,7 @@ fn context_binding_and_service_context_intersection_are_enforced() {
         runtime
             .enforce_agent_invoke_token_caveats(&bound, "fake", "echo", &default)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ExecutionContextDenied
     );
     assert_eq!(
@@ -2907,7 +2907,7 @@ fn context_binding_and_service_context_intersection_are_enforced() {
                 &ExecutionContext::new("interactive").unwrap()
             )
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -3504,7 +3504,7 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
         runtime
             .plan_search_authorization(&snapshot, &identity, &ambiguous, "jira", "search")
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -5018,7 +5018,7 @@ fn local_file_secret_store_rejects_jira_anonymous_and_invalid_records() {
     )
     .unwrap_err();
     assert_eq!(
-        anonymous_error.reason_code,
+        anonymous_error.reason_code(),
         ReasonCode::CredentialNotProvisioned
     );
 
@@ -5033,7 +5033,7 @@ fn local_file_secret_store_rejects_jira_anonymous_and_invalid_records() {
     };
     let invalid_error =
         load_execution_credential("jira", "per_user", &credential, Some(&identity)).unwrap_err();
-    assert_eq!(invalid_error.reason_code, ReasonCode::CredentialInvalid);
+    assert_eq!(invalid_error.reason_code(), ReasonCode::CredentialInvalid);
 }
 
 #[test]
@@ -5413,7 +5413,7 @@ async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5485,8 +5485,8 @@ async fn git_gateway_credential_verify_reports_upstream_throttling() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(error.upstream_status, Some(429));
     assert!(!error.message.contains("secret"));
     let result = error.result.as_deref().unwrap();
@@ -5573,7 +5573,7 @@ async fn git_gateway_credential_verify_rejects_malformed_discovery_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5606,7 +5606,7 @@ async fn git_gateway_credential_verify_times_out_waiting_for_headers() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, None);
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5647,7 +5647,7 @@ async fn git_gateway_credential_verify_times_out_waiting_for_discovery_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5693,7 +5693,7 @@ async fn git_gateway_credential_verify_times_out_slow_discovery_body_drip() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5745,7 +5745,7 @@ async fn git_gateway_credential_verify_requires_per_user_policy() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ServiceActionDenied);
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
     assert!(error.message.contains("per_user"));
 }
 

@@ -11,12 +11,16 @@
 //! providers per request: [`ScopeRequest`]s, static credentials, delegated
 //! binding identities, [`AdmittedRequest`]s and the final
 //! [`ProviderInvocation`].
+//!
+//! Host cooperation ports that return [`ProviderError`]s to providers mark
+//! them with [`port_failure`], so a provider passes the host's failure on
+//! unchanged instead of authoring a host-only reason itself.
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BuildContext, ClientProfile,
-    CorrelationContext, CredentialMode, DelegatedBindingId, EgressDeclaration, EgressRoute,
-    ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity,
-    ProviderAttributionConfig, ProviderInvocation, ProviderLimits, ProviderState,
-    ResourceAttributes, ScopeRequest, StableSigningKey,
+    CorrelationContext, CredentialMode, Decision, DelegatedBindingId, EgressDeclaration,
+    EgressRoute, ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity,
+    ProviderAttributionConfig, ProviderError, ProviderInvocation, ProviderLimits, ProviderState,
+    ReasonCode, ResourceAttributes, ScopeRequest, StableSigningKey,
 };
 use serde_json::Value;
 use std::error::Error;
@@ -291,4 +295,48 @@ pub fn invocation(
 /// the lease's binding fields.
 pub fn delegated_binding_id(digest: [u8; 32]) -> DelegatedBindingId {
     DelegatedBindingId::from_digest(digest)
+}
+
+/// A host cooperation port whose failures reach providers, which pass them on
+/// unchanged. Each port has an exact allowlist of decisions and reasons.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HostPort {
+    /// [`DelegatedLease`](crate::DelegatedLease): acquiring, revalidating,
+    /// rejecting and recovering a delegated credential.
+    DelegatedLease,
+}
+
+impl HostPort {
+    /// Whether a failure from this port may carry `reason` with `decision`.
+    pub fn permits(self, decision: &Decision, reason: ReasonCode) -> bool {
+        match self {
+            Self::DelegatedLease => matches!(
+                (decision, reason),
+                (
+                    Decision::Error,
+                    ReasonCode::UpstreamConnectionFailed
+                        | ReasonCode::UpstreamProtocolFailed
+                        | ReasonCode::UpstreamRateLimited
+                        | ReasonCode::ConcurrencyLimited
+                ) | (
+                    Decision::Deny,
+                    ReasonCode::VersionConflict | ReasonCode::CredentialInvalid
+                )
+            ),
+        }
+    }
+}
+
+/// Marks `error` as a failure `port` produced. Its decision and reason are
+/// then fixed: a provider that returns it passes the host's failure on, such
+/// as a delegated lease's `concurrency_limited` while a refresh is in
+/// progress, which ordinary provider errors cannot report. Message, result
+/// and audit fields stay editable.
+///
+/// Only a host implementing `port` calls this. Origin is a cooperation
+/// contract between trusted modules, not proof of which component built the
+/// value. A domain failure, or an allow outcome, is returned unchanged.
+pub fn port_failure(port: HostPort, error: ProviderError) -> ProviderError {
+    error.into_host_origin(port)
 }

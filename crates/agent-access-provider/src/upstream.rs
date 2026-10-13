@@ -8,7 +8,7 @@
 //! handling); they build clients and send requests through this module.
 use crate::host::{ClientTransportSpec, UpstreamClientFactory};
 use crate::{
-    EgressDeclaration, EgressRoute, ProviderBuildError, ReasonCode, UpstreamTrace,
+    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode, UpstreamTrace,
     apply_current_correlation_headers, current_provider_action,
     emit_upstream_request_completed_for, same_origin, url_allowed_by_patterns,
 };
@@ -314,7 +314,10 @@ impl UpstreamClient {
                 .flatten()
                 .filter(|next| self.redirect_target_allowed(next, &rules));
             let Some(next) = next else {
-                complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamProtocolFailed));
+                complete_upstream_trace(
+                    &mut response,
+                    Some(ReasonCode::UpstreamProtocolFailed.into()),
+                );
                 return Err(UpstreamError::Redirect);
             };
             complete_upstream_trace(&mut response, None);
@@ -407,8 +410,8 @@ pub async fn file_upload_body(path: &Path) -> std::io::Result<(reqwest::Body, Up
 }
 
 /// Records the trace [`UpstreamClient`] attached to `response`, with the
-/// reason code the caller classified it with. Later calls do nothing.
-pub fn complete_upstream_trace(response: &mut Response, reason_code: Option<ReasonCode>) {
+/// reason the caller classified it with. Later calls do nothing.
+pub fn complete_upstream_trace(response: &mut Response, reason_code: Option<ProviderReason>) {
     if let Some(pending) = take_upstream_trace(response) {
         pending.complete(reason_code);
     }
@@ -448,13 +451,13 @@ struct TraceEvent {
 }
 
 impl TraceEvent {
-    fn emit(&self, reason_code: Option<ReasonCode>) {
+    fn emit(&self, reason_code: Option<ProviderReason>) {
         let reason_code = reason_code.or_else(|| {
             let status = self.status?;
             self.status_reasons
                 .iter()
                 .find(|(code, _)| *code == status)
-                .map(|(_, reason)| *reason)
+                .map(|(_, reason)| ProviderReason::from(*reason))
         });
         let trace = UpstreamTrace {
             provider: self.provider,
@@ -504,7 +507,7 @@ impl TraceEvent {
     }
 
     fn fail(self, error: UpstreamError) -> UpstreamError {
-        self.emit(Some(error.reason_code()));
+        self.emit(Some(error.reason_code().into()));
         error
     }
 }
@@ -522,7 +525,7 @@ impl PendingUpstreamTrace {
         &self.0.operation
     }
 
-    pub fn complete(self, reason_code: Option<ReasonCode>) {
+    pub fn complete(self, reason_code: Option<ProviderReason>) {
         if let Some(event) = self.0.event.lock().ok().and_then(|mut event| event.take()) {
             event.emit(reason_code);
         }
@@ -817,7 +820,7 @@ mod tests {
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
         let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/page", service.uri())).unwrap();
-        for reason in [None, Some(ReasonCode::UpstreamProtocolFailed)] {
+        for reason in [None, Some(ReasonCode::UpstreamProtocolFailed.into())] {
             let mut response = capture
                 .run(client.send(
                     client.request(Method::PUT, url.clone()),
@@ -996,8 +999,8 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed));
-                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout));
+                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed.into()));
+                complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout.into()));
                 drop(classified);
                 let dropped = client
                     .send(
@@ -1021,7 +1024,7 @@ mod tests {
                 let trace = take_upstream_trace(&mut detached).unwrap();
                 assert_eq!(trace.operation(), "item.update");
                 drop(detached);
-                trace.complete(Some(ReasonCode::UpstreamProtocolFailed));
+                trace.complete(Some(ReasonCode::UpstreamProtocolFailed.into()));
             })
             .await;
 

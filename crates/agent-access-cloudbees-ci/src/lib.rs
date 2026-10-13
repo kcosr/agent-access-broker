@@ -703,7 +703,7 @@ impl Provider for CloudbeesCiProvider {
             .await
         {
             Err(error)
-                if error.reason_code == ReasonCode::ResourceNotFound
+                if error.reason_code() == ReasonCode::ResourceNotFound
                     && error.upstream_status == Some(404) =>
             {
                 Err(self
@@ -1076,7 +1076,7 @@ impl CloudbeesCiProvider {
                     self.json(controller, credential, url)
                         .await
                         .map_err(|error| {
-                            if error.reason_code == ReasonCode::ResourceNotFound {
+                            if error.reason_code() == ReasonCode::ResourceNotFound {
                                 ProviderError::deny(
                                     ReasonCode::ScopeUnresolved,
                                     "queue item does not identify the authorized job",
@@ -1779,7 +1779,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let error = request.await.unwrap().unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
         server.abort();
     }
 
@@ -1801,10 +1801,7 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(ProviderError {
-                reason_code: ReasonCode::ScopeUnresolved,
-                ..
-            })
+            Err(ref error) if error.reason_code() == ReasonCode::ScopeUnresolved
         ));
         assert_eq!(
             server.received_requests().await.unwrap()[0].url.path(),
@@ -1862,10 +1859,7 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(ProviderError {
-                reason_code: ReasonCode::VerificationMismatch,
-                ..
-            })
+            Err(ref error) if error.reason_code() == ReasonCode::VerificationMismatch
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
@@ -1931,8 +1925,8 @@ mod tests {
     }
 
     fn assert_upstream_rate_limited(error: &ProviderError, seconds: Option<u64>) {
-        assert_eq!(error.decision, agent_access_provider::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
         assert_eq!(result["service"], "cloudbees_ci");
@@ -2128,7 +2122,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         for path in [
             "../other.txt",
@@ -2145,7 +2139,7 @@ mod tests {
                     }),
                 )
                 .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         }
     }
 
@@ -2173,7 +2167,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2197,7 +2191,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
@@ -2309,7 +2303,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+        assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
     }
 
     #[tokio::test]
@@ -2336,7 +2330,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
     }
 
     #[tokio::test]
@@ -2383,7 +2377,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2428,7 +2422,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2455,7 +2449,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
     }
 
     const JOB_API: &str = "/team-ci/job/payments/job/build-api/api/json";
@@ -2469,7 +2463,7 @@ mod tests {
     }
 
     fn input_category(error: &ProviderError) -> &str {
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{error:?}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{error:?}");
         error.result.as_deref().unwrap()["inputCategory"]
             .as_str()
             .unwrap()
@@ -2580,7 +2574,7 @@ mod tests {
                 .invoke(invocation("build.log.read", json!({"url":url})))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, expected, "{body}");
+            assert_eq!(error.reason_code(), expected, "{body}");
             match expected {
                 ReasonCode::ResourceNotFound => {
                     assert_eq!(error.message, "CloudBees CI job has no lastFailedBuild");
@@ -2748,7 +2742,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert_eq!(error.message, "CloudBees CI object was not found");
         server.verify().await;
     }
@@ -2761,7 +2755,7 @@ mod tests {
             .invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert!(
             error
                 .message
@@ -2780,7 +2774,7 @@ mod tests {
             .invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert!(
             error.message.contains("job repeats the controller alias"),
             "{}",
@@ -2798,8 +2792,8 @@ mod tests {
     }
 
     fn assert_trigger_unverified(error: &ProviderError) {
-        assert_eq!(error.decision, agent_access_provider::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert!(error.message.contains("Do not retry"), "{}", error.message);
         assert_eq!(
             error.result.as_deref(),
@@ -2922,7 +2916,7 @@ mod tests {
             .await
             .unwrap_err();
         server.await.unwrap();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
         assert!(error.result.is_none());
     }
 

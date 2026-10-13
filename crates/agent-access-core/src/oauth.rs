@@ -3728,11 +3728,11 @@ pub(crate) mod tests {
         assert_eq!(recovered.token, "protected-access-2");
         assert_eq!(credential.access(), recovered);
         let again = credential.recover_after_unauthorized().await.unwrap_err();
-        assert_eq!(again.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(again.reason_code(), ReasonCode::CredentialInvalid);
 
         manager.disconnect("user", "stub").await.unwrap();
         let revoked = credential.revalidate().await.unwrap_err();
-        assert_eq!(revoked.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(revoked.reason_code(), ReasonCode::CredentialInvalid);
     }
 
     #[tokio::test]
@@ -3926,7 +3926,7 @@ pub(crate) mod tests {
                 credential.revalidate().await
             };
             assert_eq!(
-                result.unwrap_err().reason_code,
+                result.unwrap_err().reason_code(),
                 ReasonCode::CredentialInvalid
             );
             assert!(server.received_requests().await.unwrap().is_empty());

@@ -990,12 +990,15 @@ mod tests {
             GitlabBackendError::HttpStatus(503),
         ] {
             let failure = provisioning_failure(error, Some(&locators));
-            assert_eq!(failure.reason_code, ReasonCode::MutationVerificationFailed);
+            assert_eq!(
+                failure.reason_code(),
+                ReasonCode::MutationVerificationFailed
+            );
             assert_eq!(failure.result.unwrap()["safeLocators"], locators);
             assert!(!failure.message.contains("secret"));
         }
         assert_eq!(
-            provisioning_failure(GitlabBackendError::Timeout, None).reason_code,
+            provisioning_failure(GitlabBackendError::Timeout, None).reason_code(),
             ReasonCode::UpstreamTimeout
         );
         for status in [400, 422] {
@@ -1006,7 +1009,7 @@ mod tests {
                 },
                 Some(&locators),
             );
-            assert_eq!(failure.reason_code, ReasonCode::InputInvalid);
+            assert_eq!(failure.reason_code(), ReasonCode::InputInvalid);
             assert_eq!(failure.upstream_status, Some(status));
             assert!(failure.result.is_none());
             assert!(!failure.message.contains("secret"));

@@ -74,12 +74,31 @@ All notable changes to this project are documented in this file.
   from a module that is no longer linked stay readable. The wire spelling is
   unchanged; compare with `ReasonCodeId::standard()` or
   `ReasonCodeId::from(ReasonCode::…)`.
+- `ProviderError`'s decision and reason are private and fixed at construction;
+  read them with `decision()` and `reason_code()`, which returns a
+  `ProviderReason` handle (a standard reason, a backend's registered domain
+  reason, or a host port's failure). `ProviderStreamError::reason_code`,
+  `UpstreamTrace::reason_code`, `complete_upstream_trace` and
+  `PendingUpstreamTrace::complete` take a `ProviderReason`; convert standard
+  reasons with `.into()`.
 
 ### Added
 
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does
   not allow.
+- Native backends can declare provider-owned domain reasons: static
+  `ProviderReasonDefinition`s with a fixed `deny` or `error` decision and a
+  `ProviderFailureStatus` (400, 403, 404, 409, 413, 415, 424, 500, 502, 503 or
+  504), listed with `BackendRegistration::with_domain_reasons` and reported
+  with `ProviderError::domain`. Codes start with the backend kind (hyphens as
+  underscores) and `_`; the registry rejects codes another selected backend
+  owns, standard codes, and reserved `broker_` prefixes before serving.
+- The provider SDK publishes the standard reasons providers may report, with
+  their decisions and hooks (`ReasonCode::permits_provider_failure`,
+  `permits_provider_allow`, `permits_late_stream`, `HookPhase`), and host-origin
+  failures (`host::HostPort`, `host::port_failure`) that providers pass on
+  unchanged, such as a delegated lease's `concurrency_limited`.
 - Release qualification runs a required `crate-boundaries` gate
   (`node scripts/check-crate-boundaries.mjs`). Every workspace crate declares a
   role, and the check rejects dependencies that cross the role boundaries.

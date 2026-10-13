@@ -3,7 +3,8 @@
 use crate::host::UpstreamClientFactory;
 use crate::{
     EgressProxyConfig, ModuleMetadata, Provider, ProviderAttributionConfig, ProviderBuildError,
-    ProviderLimits, ResourceTypeDescriptor, ServiceDescriptor, StableSigningKey,
+    ProviderLimits, ProviderReasonDefinition, ResourceTypeDescriptor, ServiceDescriptor,
+    StableSigningKey,
 };
 use serde::de::DeserializeOwned;
 use std::any::Any;
@@ -39,12 +40,13 @@ pub struct BackendRegistration {
     resource_types: &'static [&'static ResourceTypeDescriptor],
     parse: BackendConfigParser,
     development_only: bool,
+    domain_reasons: &'static [&'static ProviderReasonDefinition],
 }
 
 impl BackendRegistration {
     /// A backend from `module` serving `kind`, whose `[providers.<kind>]`
-    /// table `parse` reads. It defines no resource types and is not a
-    /// development fixture.
+    /// table `parse` reads. It defines no resource types or domain reasons
+    /// and is not a development fixture.
     pub const fn new(
         module: ModuleMetadata,
         kind: &'static str,
@@ -56,6 +58,7 @@ impl BackendRegistration {
             resource_types: &[],
             parse,
             development_only: false,
+            domain_reasons: &[],
         }
     }
 
@@ -72,6 +75,19 @@ impl BackendRegistration {
     /// the deployment enables fake services, and never in production.
     pub const fn development_only(mut self) -> Self {
         self.development_only = true;
+        self
+    }
+
+    /// Declares the backend's own failure reasons. Each code starts with
+    /// [`crate::domain_reason_prefix`] of the kind; the Broker rejects a code
+    /// another selected module or a standard reason already uses, a kind too
+    /// long to fit a prefix and name in 64 bytes, and a kind whose prefix
+    /// starts `broker_`.
+    pub const fn with_domain_reasons(
+        mut self,
+        domain_reasons: &'static [&'static ProviderReasonDefinition],
+    ) -> Self {
+        self.domain_reasons = domain_reasons;
         self
     }
 
@@ -93,6 +109,19 @@ impl BackendRegistration {
 
     pub const fn is_development_only(&self) -> bool {
         self.development_only
+    }
+
+    /// The backend's own failure reasons, in declaration order.
+    pub const fn domain_reasons(&self) -> &'static [&'static ProviderReasonDefinition] {
+        self.domain_reasons
+    }
+
+    /// Whether the backend registered `definition`, compared by value: a
+    /// same-spelled definition with another outcome is not registered.
+    pub fn declares_domain_reason(&self, definition: &ProviderReasonDefinition) -> bool {
+        self.domain_reasons
+            .iter()
+            .any(|declared| **declared == *definition)
     }
 
     /// Parses this backend's `[providers.<kind>]` table with its strict

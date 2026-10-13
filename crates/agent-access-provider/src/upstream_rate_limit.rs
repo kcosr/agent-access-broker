@@ -295,7 +295,7 @@ impl ProviderError {
             result.insert("retryAt".into(), json!(retry_after.retry_at()));
         }
         self.decision = Decision::Error;
-        self.reason_code = ReasonCode::UpstreamRateLimited;
+        self.reason_code = ReasonCode::UpstreamRateLimited.into();
         self.result = Some(Box::new(Value::Object(result)));
         self
     }

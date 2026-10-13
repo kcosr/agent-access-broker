@@ -258,7 +258,7 @@ mod admitted_authority {
         assert_eq!(authority.resources(), Some(&scopes(&["ENG"])));
         for empty in [ResourceScopes::new(), scopes(&[])] {
             let error = admitted_authority(&scoped, &empty, None).unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::OperationFailed);
+            assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
         }
     }
 
@@ -267,7 +267,7 @@ mod admitted_authority {
         let authority = admitted_authority(&action(), &ResourceScopes::new(), None).unwrap();
         assert!(matches!(authority, InvocationAuthority::ActionOnly));
         let error = admitted_authority(&action(), &scopes(&["*"]), None).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::OperationFailed);
+        assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
     }
 
     #[test]

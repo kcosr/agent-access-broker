@@ -860,7 +860,7 @@ mod tests {
     }
 
     fn category(error: &ProviderError) -> (&str, Option<&str>) {
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{error:?}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{error:?}");
         let result = error.result.as_deref().expect("input error result");
         (
             result["inputCategory"].as_str().unwrap(),

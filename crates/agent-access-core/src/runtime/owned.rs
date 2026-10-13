@@ -212,7 +212,7 @@ impl BrokerRuntime {
         // No cancellation select around finalization: the reserved terminal append
         // is acknowledged before success and cannot race a second outcome record.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
-            error.reason_code == ReasonCode::MutationVerificationFailed
+            error.reason_code() == ReasonCode::MutationVerificationFailed
                 && error
                     .result
                     .as_ref()

@@ -1160,7 +1160,7 @@ fn acquire_oidc_source_guard(
 }
 
 fn oidc_limit_error(error: IngressLimitError) -> (StatusCode, ReasonCode) {
-    let reason = error.provider_error().reason_code;
+    let reason = error.reason_code();
     (
         StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::TOO_MANY_REQUESTS),
         reason,

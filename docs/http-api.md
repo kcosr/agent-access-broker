@@ -2196,9 +2196,15 @@ or protocol contract.
 
 ## Reason-code table
 
-`reasonCode` is a `snake_case` enum. Each variant maps to a fixed HTTP status in
-JSON error responses. The Microsoft callback is the deliberate exception: it
-returns HTTP 303 and carries the reason code in the sanitized portal error URL.
+`reasonCode` is a `snake_case` identifier of at most 64 bytes
+(`^[a-z][a-z0-9_]{0,63}$`). It is either a standard reason, listed below with
+its fixed HTTP status, or a [domain reason](#provider-owned-domain-reasons) a
+native provider defines for itself with its own fixed status. Responses, audit
+records, audit filters, and stored audit history carry the same string, so a
+record naming a domain reason stays readable after that provider is no longer
+linked. JSON error responses use the reason's HTTP status. The Microsoft
+callback is the deliberate exception: it returns HTTP 303 and carries the
+reason code in the sanitized portal error URL.
 
 | HTTP status | Reason codes |
 | --- | --- |
@@ -2219,9 +2225,82 @@ returns HTTP 303 and carries the reason code in the sanitized portal error URL.
 | 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
 
 `broker_provider_contract_failed` (`decision = error`) means a provider
-reported an outcome its contract does not allow, such as a reason or decision
-it may not emit. The Broker never forwards the provider's own code or message
-in that case; the response carries only a safe diagnostic.
+reported an outcome its contract does not allow: a standard reason, decision,
+or hook outside the [provider-reported subset](#provider-reported-standard-reasons),
+or a domain reason its own registration does not define with that outcome. The
+Broker never forwards the provider's own code or message in that case; the
+response carries only a safe diagnostic. New standard reasons use the reserved
+`broker_` namespace; existing standard reasons keep their spellings.
+
+### Provider-reported standard reasons
+
+Providers report failures from four hooks: scope resolution (S, including any
+pre-authorization lookup), body admission (A), the invocation result (I), and
+credential verification (V). The Broker supplies the hook; it never infers it,
+or a decision, from a reason's spelling or HTTP status. A provider may report
+only the standard reasons below, with the listed decisions and in the listed
+hooks. Every other standard reason is reported only by the Broker itself.
+
+| Reason codes | HTTP | Decisions | Hooks |
+| --- | --- | --- | --- |
+| `input_invalid`, `body_malformed` | 400 | deny, error | S, A, I, V |
+| `invalid_draft_handle` | 400 | deny | S, A, I |
+| `service_action_denied`, `scope_unresolved`, `locator_invalid`, `credential_not_provisioned`, `git_ref_denied`, `webhook_destination_denied` | 403 | deny | S, A, I, V |
+| `credential_invalid` | 403 | deny, error | S, A, I, V |
+| `resource_not_found` | 404 | deny, error | S, A, I, V |
+| `verification_mismatch` | 409 | deny | S, A, I, V |
+| `verification_mismatch` with its verification result | 409 | allow | I |
+| `version_conflict` | 409 | deny, error | S, A, I, V |
+| `mutation_verification_failed` | 409 | error | I |
+| `body_size_denied`, `attachment_size_denied`, `attachment_integrity_mismatch` | 413 | deny | S, A, I, V |
+| `body_format_unsupported`, `response_format_unsupported`, `attachment_media_type_denied` | 415 | deny | S, A, I, V |
+| `upstream_unauthorized`, `upstream_forbidden` | 424 | deny, error | S, A, I, V |
+| `upstream_failed` | 424 | error | S, A, I, V |
+| `upstream_rate_limited` | 429 | error | S, A, I, V |
+| `upstream_connection_failed` | 502 | error | S, A, I, V |
+| `upstream_protocol_failed` | 502 | deny, error | S, A, I, V |
+| `cursor_signing_unavailable` | 503 | error | S, A, I |
+| `upstream_timeout` | 504 | error | S, A, I, V |
+| `operation_failed` | 500 | error | S, A, I, V |
+| `operation_cancelled` | 408 | error | S, A, I, V |
+
+A listed hook does not authorize upstream work in that hook, and a failed
+pre-authorization lookup keeps its concealment: the caller sees the lookup
+denial rather than details about the concealed resource. `verification_mismatch`
+with `decision = allow` keeps HTTP 409 and carries no error message, as the Jira
+and Confluence verification receipts do. MCP derives `isError` from the HTTP
+status and the CLI exit code follows the
+[status mapping](#http-status-to-cli-exit-mapping); neither is derived from the
+decision.
+
+A raw download stream that fails after its response started reports only a
+reason code; the provider chooses no decision. The code is one of
+`attachment_size_denied`, `upstream_connection_failed`,
+`upstream_protocol_failed`, or `upstream_timeout`, or one of the provider's own
+domain reasons. The Broker keeps its committed response and records the
+failure in the stream's terminal audit record with `decision = error`.
+
+A delegated OAuth credential's own failures pass through providers unchanged.
+In particular, a refresh already in progress for the same connection reports
+`concurrency_limited` (HTTP 429, `decision = error`) through Gmail and imported
+MCP actions, although providers cannot report that reason themselves.
+
+### Provider-owned domain reasons
+
+A native provider may define failure reasons for its own domain. Each fixes one
+decision, `deny` or `error`, and one HTTP status from 400, 403, 404, 409, 413,
+415, 424, 500, 502, 503, and 504, which drives the CLI exit code as for any
+reason. A domain reason never reports `allow` or upstream throttling, which
+always uses `upstream_rate_limited`, and its status alone never adds an
+authentication challenge or a `Retry-After` header.
+
+A domain reason code starts with the provider's kind, with hyphens written as
+underscores, followed by `_` and a name. Before serving, the Broker checks the
+selected providers' domain reasons: each complete code has exactly one owning
+provider and is not a standard reason. Kinds whose prefixes overlap, such as
+`gitlab` and `gitlab_dedicated`, coexist while their codes differ. A provider
+whose kind leaves no room for a name within 64 bytes, or whose prefix starts
+`broker_`, registers only without domain reasons.
 
 `upstream_rate_limited` means the upstream service throttled the request; the
 Broker's own limits use `rate_limited`. Jira, Confluence, GitLab REST, CloudBees

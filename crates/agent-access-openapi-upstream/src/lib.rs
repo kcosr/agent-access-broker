@@ -374,7 +374,7 @@ impl Provider for OpenApiProvider {
                 .to_ascii_lowercase();
             complete_upstream_trace(
                 &mut response,
-                (!(200..300).contains(&code)).then(|| status_reason(code)),
+                (!(200..300).contains(&code)).then(|| status_reason(code).into()),
             );
             let bytes = read_body(response, self.max_bytes).await?;
             let decoded = (|| {

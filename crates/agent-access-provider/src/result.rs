@@ -1,4 +1,5 @@
-use crate::{Decision, ReasonCode};
+use crate::host::HostPort;
+use crate::{Decision, ProviderReason, ProviderReasonDefinition, ReasonCode};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -146,17 +147,23 @@ impl ProviderResultStream {
 pub type ProviderByteStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, ProviderStreamError>> + Send + 'static>>;
 
+/// A failure after a result stream started. It carries only a reason code:
+/// the host keeps its own late-failure decision and committed response, and
+/// classifies delivery and the final audit record with this code. Standard
+/// codes come from the late-stream subset
+/// ([`ReasonCode::permits_late_stream`]); a backend may also use one of its
+/// registered domain reasons.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{reason_code:?}: {message}")]
 pub struct ProviderStreamError {
-    pub reason_code: ReasonCode,
+    pub reason_code: ProviderReason,
     pub message: String,
 }
 
 impl ProviderStreamError {
-    pub fn new(reason_code: ReasonCode, message: impl Into<String>) -> Self {
+    pub fn new(reason_code: impl Into<ProviderReason>, message: impl Into<String>) -> Self {
         Self {
-            reason_code,
+            reason_code: reason_code.into(),
             message: message.into(),
         }
     }
@@ -233,10 +240,18 @@ impl Eq for ProviderResultStream {}
 
 impl Eq for ProviderResultStreamSource {}
 
+/// A failed outcome: its decision, reason and message, with optional partial
+/// result, audit data and upstream facts.
+///
+/// The decision and reason are fixed at construction. A standard reason
+/// takes the decision its constructor names; a domain reason
+/// ([`Self::domain`]) and a host port's failure ([`crate::host::port_failure`])
+/// fix their own, so later edits to the public fields cannot change them.
+/// The Broker checks the reason a provider reports against its contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderError {
-    pub decision: Decision,
-    pub reason_code: ReasonCode,
+    pub(crate) decision: Decision,
+    pub(crate) reason_code: ProviderReason,
     pub message: String,
     pub result: Option<Box<Value>>,
     pub audit: Option<Box<Value>>,
@@ -249,18 +264,11 @@ pub struct ProviderError {
 }
 
 impl ProviderError {
+    /// An outcome reported through the error path with `decision = allow`.
+    /// The only one a provider may report is `verification_mismatch` from an
+    /// invocation, with its verification result.
     pub fn allow(reason_code: ReasonCode, message: impl Into<String>) -> Self {
-        Self {
-            decision: Decision::Allow,
-            reason_code,
-            message: message.into(),
-            result: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-            internal_diagnostic_code: None,
-        }
+        Self::with_reason(Decision::Allow, reason_code.into(), message)
     }
 
     pub fn allow_with_result(
@@ -271,9 +279,34 @@ impl ProviderError {
         Self::allow(reason_code, message).with_result(result)
     }
 
+    /// A denial with a standard reason. Providers may use only the standard
+    /// reasons [`ReasonCode::permits_provider_failure`] admits for the hook.
     pub fn deny(reason_code: ReasonCode, message: impl Into<String>) -> Self {
+        Self::with_reason(Decision::Deny, reason_code.into(), message)
+    }
+
+    /// An error with a standard reason. Providers may use only the standard
+    /// reasons [`ReasonCode::permits_provider_failure`] admits for the hook.
+    pub fn error(reason_code: ReasonCode, message: impl Into<String>) -> Self {
+        Self::with_reason(Decision::Error, reason_code.into(), message)
+    }
+
+    /// A failure with one of the backend's registered domain reasons. Its
+    /// decision and HTTP status are the definition's.
+    pub fn domain(
+        definition: &'static ProviderReasonDefinition,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::with_reason(definition.decision(), definition.into(), message)
+    }
+
+    fn with_reason(
+        decision: Decision,
+        reason_code: ProviderReason,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
-            decision: Decision::Deny,
+            decision,
             reason_code,
             message: message.into(),
             result: None,
@@ -285,18 +318,22 @@ impl ProviderError {
         }
     }
 
-    pub fn error(reason_code: ReasonCode, message: impl Into<String>) -> Self {
-        Self {
-            decision: Decision::Error,
-            reason_code,
-            message: message.into(),
-            result: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-            internal_diagnostic_code: None,
+    pub(crate) fn into_host_origin(mut self, port: HostPort) -> Self {
+        if let Some(code) = self.reason_code.standard()
+            && self.reason_code.host_port().is_none()
+            && let Some(reason_code) = ProviderReason::host(port, &self.decision, code)
+        {
+            self.reason_code = reason_code;
         }
+        self
+    }
+
+    pub fn decision(&self) -> Decision {
+        self.decision.clone()
+    }
+
+    pub fn reason_code(&self) -> ProviderReason {
+        self.reason_code
     }
 
     pub fn with_audit(mut self, audit: Value) -> Self {

@@ -219,7 +219,7 @@ impl CloudbeesCiProvider {
             response_too_large
         };
         let (data, reply) = self.json_with_size_error(controller, credential, url, size_error).await.map_err(|error| {
-            if error.reason_code == ReasonCode::ResourceNotFound && action != "build.tests.details" {
+            if error.reason_code() == ReasonCode::ResourceNotFound && action != "build.tests.details" {
                 ProviderError::deny(ReasonCode::ResourceNotFound,
                     "Pipeline data is unavailable: the build/node may not exist or the Pipeline REST API plugin may be absent")
                     .with_upstream(error.upstream_status, None)
@@ -643,7 +643,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     match status {
                         204 => ReasonCode::UpstreamProtocolFailed,
                         429 => ReasonCode::UpstreamRateLimited,
@@ -742,7 +742,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    result.unwrap_err().reason_code,
+                    result.unwrap_err().reason_code(),
                     ReasonCode::UpstreamProtocolFailed
                 );
             }
@@ -765,7 +765,7 @@ mod tests {
                 assert!(result["log"].get("consoleUrl").is_none());
             } else {
                 assert_eq!(
-                    result.unwrap_err().reason_code,
+                    result.unwrap_err().reason_code(),
                     ReasonCode::CloudbeesCiLogChunkExceeded
                 );
             }
@@ -910,7 +910,7 @@ mod tests {
                 assert_eq!(result["log"]["hasMore"], false);
             } else {
                 assert_eq!(
-                    result.unwrap_err().reason_code,
+                    result.unwrap_err().reason_code(),
                     ReasonCode::UpstreamProtocolFailed
                 );
             }
@@ -964,7 +964,7 @@ mod tests {
                 .invoke(invocation(action, inputs()))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::ResponseFormatUnsupported);
+            assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
             assert_eq!(server.received_requests().await.unwrap().len(), 1);
         }
     }
@@ -979,7 +979,7 @@ mod tests {
             .invoke(invocation("build.tests.details", inputs()))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+        assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
         assert_eq!(
             error.result.unwrap()["downloadAction"],
             "build.tests.download"

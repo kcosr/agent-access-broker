@@ -119,7 +119,7 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
         })
         .build();
     let error = provider.invoke(request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.internal_diagnostic_code,
         Some("jira_search_project_unauthorized")
@@ -268,8 +268,8 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
             .invoke(search_request(excluded.clone(), Some("next-page-fixture")))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
-        assert_eq!(error.decision, Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(error.decision(), Decision::Deny);
         assert_eq!(error.internal_diagnostic_code, Some(code));
         assert!(error.result.is_none());
         assert!(error.object_ids.is_none());

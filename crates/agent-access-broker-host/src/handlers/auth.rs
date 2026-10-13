@@ -847,16 +847,16 @@ async fn auth_limit_response(
         limit = error.limit(),
         source = source_log_address(context.source),
         principal = principal.as_deref().unwrap_or(""),
-        decision = provider_error.decision.as_str(),
-        reasonCode = provider_error.reason_code.as_str(),
-        "http.statusCode" = provider_error.reason_code.http_status(),
+        decision = provider_error.decision().as_str(),
+        reasonCode = provider_error.reason_code().as_str(),
+        "http.statusCode" = provider_error.reason_code().http_status(),
     );
     auth_error_response(
         context,
         principal,
-        StatusCode::from_u16(provider_error.reason_code.http_status())
+        StatusCode::from_u16(provider_error.reason_code().http_status())
             .unwrap_or(StatusCode::TOO_MANY_REQUESTS),
-        provider_error.reason_code,
+        error.reason_code(),
         &provider_error.message,
     )
     .await

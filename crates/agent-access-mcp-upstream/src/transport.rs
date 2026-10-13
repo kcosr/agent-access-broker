@@ -423,7 +423,10 @@ impl OperationContext {
             let _ = credential.mark_rejected(&version);
         }
         let outcome = self.read_response(&mut response, method).await;
-        complete_upstream_trace(&mut response, outcome.as_ref().err().map(|e| e.reason_code));
+        complete_upstream_trace(
+            &mut response,
+            outcome.as_ref().err().map(|e| e.reason_code()),
+        );
         outcome
     }
 
@@ -541,7 +544,7 @@ impl OperationContext {
         {
             let reason = (!response.status().is_success()).then(|| {
                 self.status_error(response.status().as_u16(), response.headers())
-                    .reason_code
+                    .reason_code()
             });
             complete_upstream_trace(&mut response, reason);
         }
@@ -1061,7 +1064,7 @@ mod tests {
             pause.1.wait();
             let result = send.await.unwrap();
             assert_eq!(
-                result.err().unwrap().reason_code,
+                result.err().unwrap().reason_code(),
                 ReasonCode::OperationCancelled
             );
             assert_eq!(received.load(Ordering::SeqCst), 0);
@@ -1112,17 +1115,17 @@ mod tests {
                     .context
                     .admit(&mut state, false)
                     .unwrap_err()
-                    .reason_code,
+                    .reason_code(),
                 ReasonCode::UpstreamTimeout
             );
             assert!(state.closed);
             assert!(state.error.is_none());
         }
-        assert_eq!(expired.error().reason_code, ReasonCode::UpstreamTimeout);
+        assert_eq!(expired.error().reason_code(), ReasonCode::UpstreamTimeout);
         let cancelled = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
         cancelled.close();
         assert_eq!(
-            cancelled.error().reason_code,
+            cancelled.error().reason_code(),
             ReasonCode::OperationCancelled
         );
         for operation in [&expired, &cancelled] {
@@ -1134,7 +1137,7 @@ mod tests {
             state.status = Some(403);
             drop(state);
             let error = operation.error();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
             assert_eq!(error.upstream_status, Some(403));
         }
     }
@@ -1158,14 +1161,14 @@ mod tests {
                     .await
                     .err()
                     .unwrap();
-                assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout, "{method}");
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout, "{method}");
             }
             let error = operation
                 .context
                 .delete_session(HeaderValue::from_static("private-session"))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
             assert!(operation.begin_legacy().is_err());
             let state = operation.state.lock().unwrap();
             assert!(state.closed);

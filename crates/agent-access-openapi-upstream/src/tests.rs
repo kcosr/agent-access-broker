@@ -391,7 +391,7 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
             .build(&def, &[action(&def)], None, &host.context())
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
-        assert_eq!(error.reason_code, status_reason(status));
+        assert_eq!(error.reason_code(), status_reason(status));
         if status == 429 {
             assert_eq!(error.result.as_ref().unwrap()["retryAfterSeconds"], 30);
             assert_eq!(error.result.as_ref().unwrap()["limitScope"], "upstream");
@@ -415,8 +415,8 @@ async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert!(matches!(
-            error.reason_code,
-            ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamTimeout
+            error.reason_code().standard(),
+            Some(ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamTimeout)
         ));
         assert_eq!(error.result.as_ref().unwrap()["mutationStatus"], "unknown");
         assert_eq!(fixture.call_count(), 1);
@@ -497,7 +497,7 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
         .await
         .err()
         .unwrap();
-    assert_eq!(error.reason_code, ReasonCode::ConfigValidationFailed);
+    assert_eq!(error.reason_code(), ReasonCode::ConfigValidationFailed);
     assert!(error.message.contains("definitionUrl is required"));
     assert_eq!(fixture.call_count(), 0);
 }

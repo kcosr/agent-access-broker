@@ -244,7 +244,7 @@ async fn issue_types_rejects_invalid_json_and_does_not_follow_redirects() {
         .await
         .unwrap_err();
     assert_eq!(
-        jira_backend_error(error).reason_code,
+        jira_backend_error(error).reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     api.reset().await;

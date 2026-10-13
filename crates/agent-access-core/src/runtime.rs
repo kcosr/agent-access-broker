@@ -1194,7 +1194,7 @@ fn add_upstream_resource_ownership_hint(
     error: &mut ProviderError,
     ownership: UpstreamResourceOwnership,
 ) {
-    if error.reason_code != ReasonCode::ScopeUnresolved {
+    if error.reason_code() != ReasonCode::ScopeUnresolved {
         return;
     }
     let result = error
@@ -1222,14 +1222,16 @@ fn add_upstream_resource_ownership_hint(
 }
 
 fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
-    match error.reason_code {
-        ReasonCode::InputInvalid
-        | ReasonCode::BodyMalformed
-        | ReasonCode::BodyFormatUnsupported
-        | ReasonCode::LocatorInvalid
-        | ReasonCode::CredentialNotProvisioned
-        | ReasonCode::CredentialInvalid
-        | ReasonCode::CredentialExpired => error,
+    match error.reason_code().standard() {
+        Some(
+            ReasonCode::InputInvalid
+            | ReasonCode::BodyMalformed
+            | ReasonCode::BodyFormatUnsupported
+            | ReasonCode::LocatorInvalid
+            | ReasonCode::CredentialNotProvisioned
+            | ReasonCode::CredentialInvalid
+            | ReasonCode::CredentialExpired,
+        ) => error,
         _ => lookup_scope_denial(),
     }
 }
@@ -1275,7 +1277,7 @@ fn present_provider_outcome(
             Ok(provider_result)
         }
         Err(mut provider_error)
-            if provider_error.decision == Decision::Allow && provider_error.result.is_some() =>
+            if provider_error.decision() == Decision::Allow && provider_error.result.is_some() =>
         {
             let mut result = *provider_error
                 .result
@@ -5862,8 +5864,9 @@ impl BrokerRuntime {
                 result.stream,
             ),
             Err(error) => {
-                let status = error.reason_code.http_status();
-                let decision = error.decision;
+                let reason_code = error.reason_code();
+                let status = reason_code.http_status();
+                let decision = error.decision();
                 let error_body = (decision != Decision::Allow).then(|| crate::ErrorBody {
                     message: error.message.clone(),
                 });
@@ -5885,7 +5888,7 @@ impl BrokerRuntime {
                         service: service.clone(),
                         action: action.clone(),
                         resource_scopes: envelope_resource_scopes,
-                        reason_code: Some(error.reason_code.into()),
+                        reason_code: Some(reason_code.into()),
                         reason: Some(error.message.clone()),
                         result: error.result.map(|value| *value),
                         error: error_body,
@@ -7686,8 +7689,7 @@ fn load_secret_store_credential(
                 "per_user credential requires authenticated identity",
             )
         })?;
-    let store = read_local_file_secret_store(credential)
-        .map_err(|error| ProviderError::deny(error.reason_code, error.message))?;
+    let store = read_local_file_secret_store(credential)?;
     let record = store
         .credentials
         .iter()
@@ -7706,8 +7708,7 @@ fn load_secret_store_credential(
                 "per_user credential is not provisioned for principal",
             )
         })?;
-    validate_secret_store_record(record)
-        .map_err(|error| ProviderError::deny(error.reason_code, error.message))?;
+    validate_secret_store_record(record)?;
     load_materialized_credential(
         service,
         credential_mode,

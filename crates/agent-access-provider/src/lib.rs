@@ -18,6 +18,7 @@ mod correlation;
 mod credential;
 mod delegated;
 mod descriptor;
+mod domain_reason;
 mod egress_config;
 mod error;
 mod finalization;
@@ -51,6 +52,9 @@ pub use correlation::*;
 pub use credential::*;
 pub use delegated::*;
 pub use descriptor::*;
+pub use domain_reason::{
+    ProviderFailureStatus, ProviderReason, ProviderReasonDefinition, domain_reason_prefix,
+};
 pub use egress_config::*;
 pub use error::*;
 pub use finalization::*;

@@ -263,7 +263,7 @@ impl NotificationTransport for HttpTransport {
             ProviderError::error(error.reason_code(), message)
         })?;
         let status = response.status().as_u16();
-        complete_upstream_trace(&mut response, status_reason(status));
+        complete_upstream_trace(&mut response, status_reason(status).map(Into::into));
         // Neither success nor error response bodies, headers or Location values
         // belong in broker results; only a throttling wait is read, as a
         // bounded number. Do not read an unbounded upstream body.

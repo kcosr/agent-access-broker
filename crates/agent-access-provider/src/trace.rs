@@ -1,5 +1,5 @@
 //! Upstream request trace events.
-use crate::{ReasonCode, current_provider_action};
+use crate::{ProviderReason, ReasonCode, current_provider_action};
 
 /// One completed upstream HTTP request, reported by a backend.
 pub struct UpstreamTrace<'a> {
@@ -11,7 +11,9 @@ pub struct UpstreamTrace<'a> {
     pub duration_ms: u64,
     pub attempt: u32,
     pub egress_proxy_mode: &'a str,
-    pub reason_code: Option<ReasonCode>,
+    /// The provider's classification: a standard reason or one of its
+    /// registered domain reasons.
+    pub reason_code: Option<ProviderReason>,
     pub path_template: Option<&'a str>,
 }
 
@@ -30,7 +32,7 @@ pub(crate) fn emit_upstream_request_completed_for(
     action: &str,
 ) {
     let reason_code = upstream_reason_code(trace.status, trace.reason_code);
-    let reason_code_field = reason_code.map(ReasonCode::as_str);
+    let reason_code_field = reason_code.map(|reason| reason.as_str());
     macro_rules! event {
         ($level:ident, $($fields:tt)*) => {
             {
@@ -83,7 +85,10 @@ pub(crate) fn emit_upstream_request_completed_for(
         };
     }
 
-    match (trace.status, reason_code) {
+    match (
+        trace.status,
+        reason_code.and_then(|reason| reason.standard()),
+    ) {
         (_, Some(ReasonCode::UpstreamConnectionFailed))
         | (_, Some(ReasonCode::UpstreamProtocolFailed))
         | (_, Some(ReasonCode::UpstreamTimeout))
@@ -98,17 +103,18 @@ pub(crate) fn emit_upstream_request_completed_for(
 /// more specific one.
 fn upstream_reason_code(
     status: Option<u16>,
-    reason_code: Option<ReasonCode>,
-) -> Option<ReasonCode> {
+    reason_code: Option<ProviderReason>,
+) -> Option<ProviderReason> {
     if reason_code.is_some() {
         return reason_code;
     }
     let status = status?;
-    match status {
-        100..=399 => None,
-        401 => Some(ReasonCode::UpstreamUnauthorized),
-        403 => Some(ReasonCode::UpstreamForbidden),
-        404 => Some(ReasonCode::ScopeUnresolved),
-        _ => Some(ReasonCode::UpstreamFailed),
-    }
+    let reason = match status {
+        100..=399 => return None,
+        401 => ReasonCode::UpstreamUnauthorized,
+        403 => ReasonCode::UpstreamForbidden,
+        404 => ReasonCode::ScopeUnresolved,
+        _ => ReasonCode::UpstreamFailed,
+    };
+    Some(reason.into())
 }

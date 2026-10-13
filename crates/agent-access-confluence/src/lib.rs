@@ -4959,7 +4959,7 @@ impl ConfluenceProvider {
                 ));
             }
             Ok(_) => {}
-            Err(error) if error.reason_code == ReasonCode::ScopeUnresolved => {}
+            Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {}
             Err(error) => return Err(error),
         }
         let space_response = self
@@ -5444,8 +5444,8 @@ impl ConfluenceProvider {
                 ),
                 Err(error)
                     if matches!(
-                        error.reason_code,
-                        ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden
+                        error.reason_code().standard(),
+                        Some(ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden)
                     ) =>
                 {
                     return Err(draft_verification_mismatch_error(
@@ -5568,7 +5568,7 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
-                        if error.reason_code != ReasonCode::UpstreamRateLimited {
+                        if error.reason_code() != ReasonCode::UpstreamRateLimited {
                             return Err(error);
                         }
                         // The upload applied but its verification was
@@ -6333,7 +6333,7 @@ impl ConfluenceProvider {
                     upstream_status = Some(response.status);
                     checked.push(json!({"type": "attachment", "id": attachment_id}));
                 }
-                Err(error) if error.reason_code == ReasonCode::ScopeUnresolved => {
+                Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {
                     return Err(confluence_verification_mismatch_error(
                         &request,
                         &page,
@@ -6343,7 +6343,7 @@ impl ConfluenceProvider {
                         self.backend.egress_proxy_audit(credential),
                     ));
                 }
-                Err(error) if error.reason_code == ReasonCode::UpstreamForbidden => {
+                Err(error) if error.reason_code() == ReasonCode::UpstreamForbidden => {
                     return Err(confluence_verification_mismatch_error(
                         &request,
                         &page,
@@ -6872,7 +6872,7 @@ impl ConfluenceProvider {
                 ));
             }
             Ok(_) => {}
-            Err(error) if error.reason_code == ReasonCode::ScopeUnresolved => {}
+            Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {}
             Err(error) => return Err(error),
         }
         let response = self
@@ -7344,8 +7344,8 @@ impl ConfluenceProvider {
                 ),
                 Err(error)
                     if matches!(
-                        error.reason_code,
-                        ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden
+                        error.reason_code().standard(),
+                        Some(ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden)
                     ) =>
                 {
                     return Err(draft_verification_mismatch_error(
@@ -7468,7 +7468,7 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
-                        if error.reason_code != ReasonCode::UpstreamRateLimited {
+                        if error.reason_code() != ReasonCode::UpstreamRateLimited {
                             return Err(error);
                         }
                         // The upload applied but its verification was
@@ -8233,8 +8233,8 @@ impl ConfluenceProvider {
                 }
                 Err(error)
                     if matches!(
-                        error.reason_code,
-                        ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden
+                        error.reason_code().standard(),
+                        Some(ReasonCode::ScopeUnresolved | ReasonCode::UpstreamForbidden)
                     ) =>
                 {
                     return Err(confluence_blog_verification_mismatch_error(

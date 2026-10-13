@@ -1,6 +1,7 @@
 //! An OAuth connection's access lent to one invocation as a delegated
 //! credential.
 use super::{OAuthBinding, OAuthError, OAuthLease, OAuthManager};
+use agent_access_provider::host::{HostPort, port_failure};
 use agent_access_provider::{
     DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease, ProviderError,
     ReasonCode, UpstreamRetryAfter, upstream_retry_hint,
@@ -146,9 +147,12 @@ impl DelegatedLease for ManagedOAuthLease {
 
     async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
         if self.recovered.swap(true, Ordering::SeqCst) {
-            return Err(ProviderError::deny(
-                ReasonCode::CredentialInvalid,
-                "delegated credential was already recovered for this invocation",
+            return Err(port_failure(
+                HostPort::DelegatedLease,
+                ProviderError::deny(
+                    ReasonCode::CredentialInvalid,
+                    "delegated credential was already recovered for this invocation",
+                ),
             ));
         }
         let rejected = self.current();
@@ -193,7 +197,13 @@ impl OAuthManager {
     }
 }
 
+/// The delegated-lease port's failure for `error`: providers pass it on with
+/// its decision and reason unchanged.
 fn oauth_provider_error(service: &str, error: OAuthError) -> ProviderError {
+    port_failure(HostPort::DelegatedLease, oauth_failure(service, error))
+}
+
+fn oauth_failure(service: &str, error: OAuthError) -> ProviderError {
     match error {
         OAuthError::BeforeSend | OAuthError::Provider => {
             ProviderError::error(ReasonCode::UpstreamConnectionFailed, error.code())
@@ -259,6 +269,32 @@ mod tests {
     use super::*;
     use agent_access_provider::Decision;
 
+    /// Lease failures pass through providers as the port's own, fixed
+    /// outcome, within the port's allowlist.
+    fn assert_delegated_lease_failure(error: &ProviderError) {
+        let reason = error.reason_code();
+        assert_eq!(
+            reason.host_port(),
+            Some(HostPort::DelegatedLease),
+            "{error:?}"
+        );
+        assert_eq!(reason.fixed_decision(), Some(error.decision()), "{error:?}");
+        assert!(
+            HostPort::DelegatedLease.permits(&error.decision(), reason.standard().unwrap()),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn refresh_busy_stays_a_host_concurrency_limit() {
+        let busy = oauth_provider_error("gmail", OAuthError::RefreshBusy);
+        assert_eq!(busy.decision(), Decision::Error);
+        assert_eq!(busy.reason_code(), ReasonCode::ConcurrencyLimited);
+        assert_eq!(busy.reason_code().http_status(), 429);
+        assert!(!ReasonCode::ConcurrencyLimited.is_provider_emittable());
+        assert_delegated_lease_failure(&busy);
+    }
+
     #[test]
     fn oauth_recovery_states_have_distinct_invocation_errors() {
         for (error, decision, reason) in [
@@ -295,9 +331,10 @@ mod tests {
         ] {
             let code = error.code();
             let mapped = oauth_provider_error("gmail", error);
-            assert_eq!(mapped.decision, decision);
-            assert_eq!(mapped.reason_code, reason);
+            assert_eq!(mapped.decision(), decision);
+            assert_eq!(mapped.reason_code(), reason);
             assert_eq!(mapped.message, code);
+            assert_delegated_lease_failure(&mapped);
         }
     }
 
@@ -337,9 +374,10 @@ mod tests {
             };
             assert_eq!(paused.code(), code);
             let mapped = oauth_provider_error("gmail", paused);
-            assert_eq!(mapped.decision, decision);
-            assert_eq!(mapped.reason_code, reason);
-            assert_ne!(mapped.reason_code, ReasonCode::UpstreamRateLimited);
+            assert_eq!(mapped.decision(), decision);
+            assert_eq!(mapped.reason_code(), reason);
+            assert_delegated_lease_failure(&mapped);
+            assert_ne!(mapped.reason_code(), ReasonCode::UpstreamRateLimited);
             let result = mapped.result.as_deref().unwrap();
             assert_eq!(result["retryAfterSeconds"], 12);
             let retry_at = result["retryAt"].as_str().unwrap();
@@ -360,8 +398,9 @@ mod tests {
     fn throttled_refresh_is_an_upstream_rate_limit_with_the_known_wait() {
         let before = chrono::Utc::now();
         let mapped = oauth_provider_error("gmail", OAuthError::RetryLater(30));
-        assert_eq!(mapped.decision, Decision::Error);
-        assert_eq!(mapped.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(mapped.decision(), Decision::Error);
+        assert_eq!(mapped.reason_code(), ReasonCode::UpstreamRateLimited);
+        assert_delegated_lease_failure(&mapped);
         let result = mapped.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
         assert_eq!(result["service"], "gmail");
@@ -382,7 +421,7 @@ mod tests {
         );
 
         let throttled = oauth_provider_error("gmail", OAuthError::Throttled);
-        assert_eq!(throttled.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(throttled.reason_code(), ReasonCode::UpstreamRateLimited);
         assert_eq!(
             throttled.message,
             "gmail OAuth token refresh is rate limited. Retry later."

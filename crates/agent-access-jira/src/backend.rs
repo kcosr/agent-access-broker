@@ -913,7 +913,12 @@ impl JiraBackend for HttpJiraBackend {
             Ok(page)
         });
         if let Some(trace) = trace {
-            trace.complete(page.as_ref().err().map(jira_backend_reason_code));
+            trace.complete(
+                page.as_ref()
+                    .err()
+                    .map(jira_backend_reason_code)
+                    .map(Into::into),
+            );
         }
         Ok(JiraBackendResponse {
             value: page?,
@@ -1050,7 +1055,7 @@ impl JiraBackend for HttpJiraBackend {
                 },
             };
             if let Some(trace) = trace {
-                trace.complete(Some(ReasonCode::UpstreamProtocolFailed));
+                trace.complete(Some(ReasonCode::UpstreamProtocolFailed.into()));
             }
             return Err(JiraBackendError::IssueCreateResponseInvalid {
                 id: partial.id,
@@ -1490,7 +1495,13 @@ impl JiraBackend for HttpJiraBackend {
         .await
         .unwrap_or(Err(JiraBackendError::Timeout));
         if let Some(trace) = trace {
-            trace.complete(value.as_ref().err().map(jira_backend_reason_code));
+            trace.complete(
+                value
+                    .as_ref()
+                    .err()
+                    .map(jira_backend_reason_code)
+                    .map(Into::into),
+            );
         }
         let value = value?;
         let attachment = value
@@ -1588,7 +1599,7 @@ impl JiraBackend for HttpJiraBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_jira_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(jira_backend_reason_code(&error)));
+            complete_upstream_trace(&mut response, Some(jira_backend_reason_code(&error).into()));
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -1920,7 +1931,13 @@ pub(crate) async fn jira_response_value(
     let trace = take_upstream_trace(&mut response);
     let value = read_jira_response_value(response, byte_cap, trace.as_ref()).await;
     if let Some(trace) = trace {
-        trace.complete(value.as_ref().err().map(jira_backend_reason_code));
+        trace.complete(
+            value
+                .as_ref()
+                .err()
+                .map(jira_backend_reason_code)
+                .map(Into::into),
+        );
     }
     value
 }
@@ -1968,7 +1985,13 @@ pub(crate) async fn jira_response_bytes_for_body(
         .and_then(|trace| jira_validation_fields(trace.operation()));
     let bytes = jira_response_bytes_untraced(response, byte_cap, validation_fields).await;
     if let Some(trace) = trace {
-        trace.complete(bytes.as_ref().err().map(jira_backend_reason_code));
+        trace.complete(
+            bytes
+                .as_ref()
+                .err()
+                .map(jira_backend_reason_code)
+                .map(Into::into),
+        );
     }
     bytes
 }

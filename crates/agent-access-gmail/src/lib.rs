@@ -204,7 +204,7 @@ impl GmailProvider {
             // A 401 explicitly rejected authentication. Only that response may
             // repeat an operation; transport errors, 403, 429 and 5xx never do.
             if response.status().as_u16() == 401 && attempt == 1 {
-                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid));
+                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
                 credential.recover_after_unauthorized().await?;
                 continue;
             }
@@ -241,7 +241,7 @@ impl GmailProvider {
                     })
             };
             if let Some(trace) = trace {
-                trace.complete(result.as_ref().err().map(|e| e.reason_code));
+                trace.complete(result.as_ref().err().map(|e| e.reason_code()));
             }
             return result;
         }

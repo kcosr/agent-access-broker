@@ -3209,7 +3209,7 @@ impl JiraProvider {
                     upstream_duration_ms += response.duration_ms;
                     upstream_status = Some(response.status);
                 }
-                Err(error) if error.reason_code == ReasonCode::ScopeUnresolved => {
+                Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {
                     return Err(verification_mismatch_error(
                         &request,
                         &metadata,

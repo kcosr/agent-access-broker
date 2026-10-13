@@ -240,13 +240,15 @@ async fn credential_owner_identity(
 
 fn verification_error_records_failure(error: &ProviderError) -> bool {
     matches!(
-        error.reason_code,
-        ReasonCode::UpstreamUnauthorized
-            | ReasonCode::UpstreamForbidden
-            | ReasonCode::UpstreamFailed
-            | ReasonCode::UpstreamRateLimited
-            | ReasonCode::UpstreamConnectionFailed
-            | ReasonCode::UpstreamTimeout
+        error.reason_code().standard(),
+        Some(
+            ReasonCode::UpstreamUnauthorized
+                | ReasonCode::UpstreamForbidden
+                | ReasonCode::UpstreamFailed
+                | ReasonCode::UpstreamRateLimited
+                | ReasonCode::UpstreamConnectionFailed
+                | ReasonCode::UpstreamTimeout
+        )
     )
 }
 
@@ -646,8 +648,8 @@ pub(super) async fn verify_credential_for_principal(
         Err(error) => {
             if verification_error_records_failure(&error) {
                 let failure_target = verification_candidate.target.clone();
-                let provider_reason_code = error.reason_code.as_str();
-                let error_code = error.reason_code.as_str().to_string();
+                let provider_reason_code = error.reason_code().as_str();
+                let error_code = error.reason_code().as_str().to_string();
                 match management_store_call(&context, move |store| {
                     store.mark_user_credential_verification_failed_if_current(
                         &failure_target,

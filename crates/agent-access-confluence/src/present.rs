@@ -1113,7 +1113,7 @@ mod tests {
                 16384,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         }
     }
 
@@ -1163,7 +1163,7 @@ mod tests {
             16384,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     fn confluence_whole_fixture(renderer: WholeRenderer) -> Value {

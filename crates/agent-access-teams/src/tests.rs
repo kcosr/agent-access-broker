@@ -87,8 +87,8 @@ async fn workflow_throttling_is_an_upstream_rate_limit_without_retry_claims() {
             max_bytes: MAX_BODY_BYTES,
         };
         let error = provider.invoke(admitted_invocation()).await.unwrap_err();
-        assert_eq!(error.decision, Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         assert_eq!(error.upstream_status, Some(429));
         assert_eq!(error.message, message);
         let mut expected = json!({"limitScope": "upstream", "service": "teams"});
@@ -456,7 +456,7 @@ async fn http_redirects_errors_and_timeouts_never_retry_or_leak_urls() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert!(error.message.contains("outcome may be unknown"));
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);

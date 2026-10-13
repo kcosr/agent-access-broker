@@ -26,7 +26,7 @@ fn parses_issue_keys_and_rejects_lowercase_or_zero_numbers() {
     assert!(!is_issue_key("PROJ-0"));
     assert!(!is_issue_key("P-1"));
     assert_eq!(
-        issue_locator_from_key("proj-1").unwrap_err().reason_code,
+        issue_locator_from_key("proj-1").unwrap_err().reason_code(),
         ReasonCode::LocatorInvalid
     );
 }
@@ -48,7 +48,7 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
     assert_eq!(
         issue_locator_from_url("https://other.atlassian.net/browse/PROJ-123", &config)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::LocatorInvalid
     );
     for raw in [
@@ -61,7 +61,7 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
         assert_eq!(
             issue_locator_from_url(raw, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::LocatorInvalid
         );
     }
@@ -170,7 +170,7 @@ fn expanded_jql_accepts_field_operator_groups_and_ordering() {
 fn current_user_function_requires_per_user_credential_mode() {
     let service_error =
         parse_jql_query("assignee = currentUser()", CredentialMode::Service).unwrap_err();
-    assert_eq!(service_error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(service_error.reason_code(), ReasonCode::InputInvalid);
 
     let per_user = parse_jql_query("assignee = currentUser()", CredentialMode::PerUser).unwrap();
     assert_eq!(per_user.emit(), "assignee = currentUser()");
@@ -183,13 +183,17 @@ fn rejects_expanded_jql_caps_and_function_edges() {
         "a".repeat(MAX_JIRA_STRING_LITERAL_BYTES + 1)
     );
     assert_eq!(
-        parse_jql_expression(&long_string).unwrap_err().reason_code,
+        parse_jql_expression(&long_string)
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let long_tokens = "A ".repeat(MAX_JIRA_QUERY_TOKENS + 1);
     assert_eq!(
-        parse_jql_expression(&long_tokens).unwrap_err().reason_code,
+        parse_jql_expression(&long_tokens)
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -276,7 +280,7 @@ fn search_inputs_reject_unknown_nested_query_fields() {
         }
     }))
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -293,7 +297,7 @@ fn jira_protocol_error_message_is_sanitized() {
         "missing field `id` at line 1 column 42".to_string(),
     ));
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.message, "Jira response protocol error");
     assert!(!error.message.contains("missing field"));
 }
@@ -315,7 +319,7 @@ fn comment_parser_preserves_body_and_id_mismatches_fail_closed() {
     assert_eq!(comment_result(&comment)["parentCommentId"], "10041");
 
     let error = validate_returned_comment_id("99999", Some("10042")).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -330,8 +334,11 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
     validate_returned_issue_description(&issue, &config).unwrap();
     config.content.max_body_bytes = exact_size - 1;
     let issue_error = validate_returned_issue_description(&issue, &config).unwrap_err();
-    assert_eq!(issue_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(issue_error.reason_code.http_status(), 502);
+    assert_eq!(
+        issue_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(issue_error.reason_code().http_status(), 502);
     assert_eq!(
         issue_error.message,
         "Jira issue description response was invalid"
@@ -346,10 +353,10 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
     validate_returned_comment_body(&comment, exact_size).unwrap();
     let comment_error = validate_returned_comment_body(&comment, exact_size - 1).unwrap_err();
     assert_eq!(
-        comment_error.reason_code,
+        comment_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(comment_error.reason_code.http_status(), 502);
+    assert_eq!(comment_error.reason_code().http_status(), 502);
     assert_eq!(
         comment_error.message,
         "Jira comment response body was invalid"
@@ -360,7 +367,7 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
 
     comment.body = Some(json!({"type": "doc", "version": 1, "content": "sentinel"}));
     let malformed = validate_returned_comment_body(&comment, u64::MAX).unwrap_err();
-    assert_eq!(malformed.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(malformed.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(malformed.message, "Jira comment response body was invalid");
     assert!(!malformed.message.contains("sentinel"));
 }
@@ -1228,7 +1235,7 @@ async fn issue_create_fails_closed_when_created_key_leaves_requested_project() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     let audit = error.audit.unwrap();
     assert_eq!(audit["failurePhase"], "create_response_validation");
     assert_eq!(audit["issueId"], "10002");
@@ -1269,7 +1276,7 @@ async fn issue_create_malformed_response_emits_side_effect_failure_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(error.upstream_duration_ms, Some(11));
     assert_eq!(
@@ -1311,7 +1318,7 @@ async fn issue_create_non_201_success_emits_side_effect_failure_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     assert_eq!(
         error.object_ids,
@@ -1345,7 +1352,7 @@ async fn issue_create_readback_failure_emits_reconciliation_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -1391,7 +1398,7 @@ async fn issue_create_readback_invalid_key_or_project_fails_protocol() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
         "post_create_readback"
@@ -1427,7 +1434,7 @@ async fn issue_create_readback_mismatch_fails_scope_unresolved() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
         "post_create_readback"
@@ -1469,7 +1476,7 @@ async fn issue_create_result_size_failure_keeps_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
@@ -1499,7 +1506,7 @@ async fn issue_create_rejects_project_scope_mismatch_before_backend() {
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 }
@@ -1640,7 +1647,7 @@ async fn issue_create_enforces_description_body_cap_after_attribution() {
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
@@ -1763,7 +1770,7 @@ async fn issue_child_create_enforces_description_body_cap_after_attribution() {
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
@@ -1942,8 +1949,8 @@ async fn issue_child_create_rejects_oversize_returned_description_after_one_muta
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira issue description response was invalid");
     assert!(!error.message.contains(&sentinel));
     assert_eq!(backend.created_issues.lock().unwrap().len(), 1);
@@ -1985,7 +1992,7 @@ async fn issue_child_create_requires_target_and_parent_scope_before_mutation() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2022,7 +2029,7 @@ async fn issue_child_create_requires_target_project_scope_before_mutation() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2094,7 +2101,7 @@ async fn issue_child_create_parent_readback_failure_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2144,8 +2151,8 @@ async fn issue_create_rejects_oversize_returned_description_after_one_mutation()
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira issue description response was invalid");
     assert!(!error.message.contains(&sentinel));
     assert_eq!(backend.created_issues.lock().unwrap().len(), 1);
@@ -2174,7 +2181,7 @@ async fn issue_child_create_created_project_mismatch_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2215,7 +2222,7 @@ async fn issue_child_create_readback_failure_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2266,7 +2273,7 @@ async fn issue_child_create_readback_mismatch_fails_scope_unresolved() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2445,7 +2452,7 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         .await
         .unwrap_err();
     assert_eq!(
-        malformed_error.reason_code,
+        malformed_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!malformed_error.message.contains("bad"));
@@ -2478,10 +2485,10 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         .await
         .unwrap_err();
     assert_eq!(
-        oversize_error.reason_code,
+        oversize_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(oversize_error.reason_code.http_status(), 502);
+    assert_eq!(oversize_error.reason_code().http_status(), 502);
     assert!(!oversize_error.message.contains(&"x".repeat(16)));
 }
 
@@ -2525,7 +2532,7 @@ async fn issue_view_confirms_authoritative_project_before_returning_content() {
         .await
         .unwrap_err();
 
-    assert_eq!(response.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(response.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!response.message.contains("must not leak"));
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2749,7 +2756,7 @@ async fn issue_dependency_add_requires_both_projects_in_authorized_scope_before_
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -2802,7 +2809,7 @@ async fn issue_dependency_add_rejects_same_canonical_issue_after_lookup() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
 }
 
@@ -2838,7 +2845,7 @@ async fn issue_dependency_add_rejects_link_direction_mismatch_before_mutation() 
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -2882,7 +2889,7 @@ async fn issue_dependency_add_rejects_unavailable_link_type_before_mutation() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -2923,7 +2930,7 @@ async fn issue_dependency_add_readback_failure_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2997,7 +3004,7 @@ async fn issue_dependency_add_readback_mismatch_fails_closed() {
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert_eq!(error.upstream_status, Some(201));
         assert_eq!(
             error.audit.as_ref().unwrap()["failurePhase"],
@@ -3176,7 +3183,7 @@ async fn issue_parent_set_requires_both_projects_in_authorized_scope_before_muta
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.parent_updates.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -3230,7 +3237,7 @@ async fn issue_parent_set_rejects_same_canonical_issue_after_lookup() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.parent_updates.lock().unwrap().is_empty());
 }
 
@@ -3254,7 +3261,7 @@ async fn issue_parent_set_readback_failure_emits_side_effect_audit() {
     );
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(204));
     assert_eq!(
         error.object_ids,
@@ -3317,7 +3324,7 @@ async fn issue_parent_set_readback_mismatch_fails_closed() {
 
         let error = provider.invoke(invocation).await.unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert_eq!(
             error.audit.as_ref().unwrap()["failurePhase"],
             "post_parent_readback"
@@ -3503,7 +3510,7 @@ async fn issue_update_enforces_description_body_cap_after_attribution() {
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
@@ -3599,7 +3606,7 @@ fn issue_update_input_validation_is_narrow_and_format_explicit() {
         json!({"issue": "PROJ-1", "summary": "x", "notifyUsers": "false"}),
     ] {
         let error = parse_issue_update_inputs(&inputs, &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 
     let error = parse_issue_update_inputs(
@@ -3607,14 +3614,14 @@ fn issue_update_input_validation_is_narrow_and_format_explicit() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let error = parse_issue_update_inputs(
         &json!({"issue": "PROJ-1", "contentFormat": "adf", "content": {}}),
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 #[tokio::test]
@@ -3679,7 +3686,7 @@ async fn issue_update_readback_failures_fail_closed_without_body_leakage() {
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert!(!error.message.contains("secret readback summary"));
         assert_eq!(backend.updated_issues.lock().unwrap().len(), 1);
     }
@@ -3715,7 +3722,7 @@ async fn issue_update_readback_validates_returned_description() {
         .unwrap_err();
 
     assert_eq!(
-        malformed_error.reason_code,
+        malformed_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!malformed_error.message.contains("bad"));
@@ -3748,10 +3755,10 @@ async fn issue_update_readback_validates_returned_description() {
         .unwrap_err();
 
     assert_eq!(
-        oversize_error.reason_code,
+        oversize_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(oversize_error.reason_code.http_status(), 502);
+    assert_eq!(oversize_error.reason_code().http_status(), 502);
     assert_eq!(oversize_backend.updated_issues.lock().unwrap().len(), 1);
 }
 
@@ -3790,7 +3797,7 @@ async fn issue_update_rejects_reconfirmed_issue_outside_authorized_scope_before_
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!error.message.contains("moved issue summary"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
@@ -3814,7 +3821,7 @@ async fn issue_update_upstream_failure_is_sanitized() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
     assert_eq!(error.message, "Jira forbade the selected credential");
     assert!(!error.message.contains("secret rejected summary"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
@@ -3855,7 +3862,7 @@ async fn attachment_list_rejects_execution_metadata_for_different_parent() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("evidence.txt"));
 }
 
@@ -3920,7 +3927,7 @@ async fn attachment_list_rejects_unknown_input_fields() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -3980,7 +3987,7 @@ async fn search_caps_pagination_and_rejects_out_of_scope_results() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!error.message.contains("must not leak"));
     assert_eq!(
         backend
@@ -4044,7 +4051,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         assert_eq!(
             parse_jql_query(invalid, CredentialMode::Service)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -4072,7 +4079,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
                 CredentialMode::Service,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
             assert!(error.message.contains("provide projects or a filter"));
             let narrowed = effective_search_scope(&authorization, &set(["PROJ"])).unwrap();
             let query = build_jira_search_query(
@@ -4092,7 +4099,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
             assert_eq!(
                 effective_search_scope(&authorization, &set(["PRIVATE"]))
                     .unwrap_err()
-                    .reason_code,
+                    .reason_code(),
                 ReasonCode::ServiceActionDenied
             );
         }
@@ -4101,7 +4108,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
         parse_search_inputs(&json!({"query": {"type": "jql", "value": ""}, "projects": []}))
             .unwrap();
     assert_eq!(
-        requested_projects(&inputs).unwrap_err().reason_code,
+        requested_projects(&inputs).unwrap_err().reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -4132,7 +4139,7 @@ fn jql_input_errors_give_safe_locations_and_supported_choices() {
         ("status = secretValue AND", "missing a field"),
     ] {
         let error = parse_jql_query(query, CredentialMode::Service).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(diagnostic), "{}", error.message);
         assert!(error.message.contains("near token"));
         for private in ["privateField", "privateFunction", "secretValue"] {
@@ -4262,7 +4269,7 @@ async fn scope_only_jira_search_checks_returned_containment() {
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
         assert_eq!(
             backend.last_search.lock().unwrap().as_ref().unwrap().jql,
@@ -4456,7 +4463,7 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{project}/{key}: {result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
         let search = backend.last_search.lock().unwrap();
         let search = search.as_ref().unwrap();
@@ -4469,11 +4476,11 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
 fn raw_jql_rejects_length_and_nesting_caps() {
     let long = "project = PROJ ".repeat(MAX_JIRA_RAW_QUERY_BYTES / 4);
     let error = parse_jql_expression(&long).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let padded = format!("{}project = PROJ", " ".repeat(MAX_JIRA_RAW_QUERY_BYTES + 1));
     let error = parse_jql_expression(&padded).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let deep = format!(
         "{}project = PROJ{}",
@@ -4481,7 +4488,7 @@ fn raw_jql_rejects_length_and_nesting_caps() {
         ")".repeat(MAX_JIRA_QUERY_DEPTH + 1)
     );
     let error = parse_jql_expression(&deep).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -4565,8 +4572,8 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             })
             .build();
         let error = provider.invoke(request).await.unwrap_err();
-        assert_eq!(error.decision, Decision::Deny);
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
             error.message,
             "Jira search returned an issue outside the authorized project scope"
@@ -4985,7 +4992,7 @@ async fn comment_view_rejects_non_adf_upstream_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -5010,8 +5017,8 @@ async fn comment_view_rejects_oversize_upstream_body_as_sanitized_502() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira comment response body was invalid");
     assert!(!error.message.contains(&sentinel));
 }
@@ -5129,7 +5136,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(view_error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(view_error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -5151,7 +5158,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(property_error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(property_error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -5192,7 +5199,7 @@ async fn comment_reply_denies_parent_on_different_issue() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.added_comments.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -5238,7 +5245,7 @@ async fn comment_reply_rejects_missing_or_mismatched_created_parent() {
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, expected_message);
         assert_eq!(backend.added_comments.lock().unwrap().len(), 1);
     }
@@ -5280,7 +5287,7 @@ async fn comment_reply_rejects_non_top_level_thread_root() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.message,
         "Jira comment thread root was not a top-level comment"
@@ -5332,7 +5339,7 @@ async fn comment_reply_denies_thread_root_on_different_issue() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.added_comments.lock().unwrap().is_empty());
 }
 
@@ -5358,7 +5365,7 @@ async fn comment_add_rejects_created_parent() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.message,
         "Jira top-level comment response unexpectedly included a parent id"
@@ -5396,8 +5403,8 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(add_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(add_error.reason_code.http_status(), 502);
+    assert_eq!(add_error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(add_error.reason_code().http_status(), 502);
     assert_eq!(add_backend.added_comments.lock().unwrap().len(), 1);
 
     let mut reply_backend = StubJiraBackend::default();
@@ -5429,8 +5436,11 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(reply_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(reply_error.reason_code.http_status(), 502);
+    assert_eq!(
+        reply_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(reply_error.reason_code().http_status(), 502);
     assert_eq!(reply_backend.added_comments.lock().unwrap().len(), 1);
 
     let mut update_backend = StubJiraBackend::default();
@@ -5459,8 +5469,11 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(update_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(update_error.reason_code.http_status(), 502);
+    assert_eq!(
+        update_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(update_error.reason_code().http_status(), 502);
     assert_eq!(update_backend.updated_comments.lock().unwrap().len(), 1);
 
     for error in [add_error, reply_error, update_error] {
@@ -5561,7 +5574,7 @@ async fn comment_update_preserve_fails_before_put_when_current_comment_unreadabl
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
     assert!(backend.updated_comments.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -5593,7 +5606,7 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
         ))
         .await
         .unwrap_err();
-    assert_eq!(denied.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(denied.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 
     let mut config = jira_config();
@@ -5861,7 +5874,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
             &config,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 
     let error = parse_comment_property_inputs(
@@ -5875,7 +5888,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut config = jira_config();
     config.comments.max_property_value_bytes = 4;
@@ -5890,7 +5903,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 }
 
 #[tokio::test]
@@ -5915,7 +5928,7 @@ async fn comment_property_membership_proof_uses_execution_credential() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -5967,7 +5980,7 @@ async fn response_byte_cap_fails_without_returning_content() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("large visible summary"));
 }
 
@@ -5997,7 +6010,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 
     let error = provider
         .invoke(
@@ -6022,7 +6035,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 
     let mut config = jira_config();
     config.content.comment_formats.clear();
@@ -6046,7 +6059,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
 }
 
 #[tokio::test]
@@ -6123,7 +6136,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
     let result = error.result.as_ref().unwrap();
     assert_eq!(result["status"], "partial");
     assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
@@ -6179,7 +6192,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let error = provider
         .invoke(
@@ -6195,7 +6208,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let duplicate = b"duplicate".to_vec();
     let error = provider
@@ -6246,7 +6259,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut failing_backend = StubJiraBackend::default();
     failing_backend
@@ -6289,7 +6302,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
     let audit = error.audit.unwrap();
     assert_eq!(
         audit["attachments"][0]["attachment"]["filename"],
@@ -6351,8 +6364,8 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .invoke(attachment_add_invocation(&["first", "second", "third"]))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         "Jira attachment upload partially failed: part of the batch was applied before jira \
@@ -6385,7 +6398,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .invoke(attachment_add_invocation(&["only"]))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(
         error.message,
         format!(
@@ -6411,8 +6424,8 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         mutation_unverified_after_throttling_message("jira")
@@ -6621,7 +6634,7 @@ async fn throttled_writes_before_anything_applied_stay_upstream_rate_limited() {
             })))
             .await
             .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(error.result.as_deref().unwrap()["retryAfterSeconds"], 30);
 }
 
@@ -6670,9 +6683,9 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
             "{retry_after:?}"
         );
         let error = jira_backend_error(backend_error.clone());
-        assert_eq!(error.decision, crate::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
-        assert_eq!(error.reason_code.http_status(), 429);
+        assert_eq!(error.decision(), crate::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code().http_status(), 429);
         assert!(!error.message.contains("secret"));
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
@@ -6735,7 +6748,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     backend.attachment_content.lock().unwrap().insert(
         "10055".to_string(),
@@ -6755,7 +6768,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = jira_config();
     config.attachments.media_types = vec![
@@ -6787,7 +6800,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     backend.attachment_content.lock().unwrap().insert(
         "10055".to_string(),
@@ -6817,7 +6830,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let mut backend = StubJiraBackend::default();
     backend.issues.insert("PROJ-1".to_string(), visible_issue());
@@ -6930,8 +6943,8 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.decision, crate::Decision::Allow);
-    assert_eq!(error.reason_code, ReasonCode::VerificationMismatch);
+    assert_eq!(error.decision(), crate::Decision::Allow);
+    assert_eq!(error.reason_code(), ReasonCode::VerificationMismatch);
     assert_eq!(error.audit.as_ref().unwrap()["status"], "mismatch");
     assert_eq!(
         error.audit.as_ref().unwrap()["mismatch"],
@@ -6962,8 +6975,8 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
 }
 
 #[test]
@@ -7678,7 +7691,7 @@ async fn http_backend_issue_create_ignores_ambiguous_error_messages() {
         .unwrap_err();
     assert_eq!(error, JiraBackendError::HttpStatus(400));
     let provider_error = jira_backend_error(error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert_eq!(provider_error.message, "Jira returned non-success");
     assert!(!provider_error.message.contains("secret value"));
 }
@@ -7728,7 +7741,7 @@ async fn http_backend_issue_create_exposes_structured_body_validation() {
     );
 
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::BodyMalformed);
     assert_eq!(
         provider_error.message,
         "Jira rejected the request: description: content must be valid ADF"
@@ -7764,7 +7777,7 @@ async fn http_backend_lookup_does_not_expose_structured_validation_body() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::HttpStatus(400));
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert_eq!(provider_error.message, "Jira returned non-success");
     assert!(!provider_error.message.contains("scope secret"));
 }
@@ -7803,7 +7816,7 @@ async fn http_backend_mutation_ignores_non_json_validation_body() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::HttpStatus(422));
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert!(!provider_error.message.contains("untrusted detail"));
 }
 
@@ -7881,7 +7894,7 @@ async fn http_backend_issue_update_permission_failure_is_sanitized() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::Forbidden);
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamForbidden);
     assert_eq!(
         provider_error.message,
         "Jira forbade the selected credential"
@@ -8240,7 +8253,7 @@ async fn http_backend_issue_rejects_non_object_description_without_leaking_conte
     let provider_error = jira_backend_error(error);
 
     assert_eq!(
-        provider_error.reason_code,
+        provider_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!provider_error.message.contains("plain string secret"));
@@ -8734,7 +8747,7 @@ fn normalized_jira_content_contract_is_canonical_and_bounded() {
         &tiny,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
 }
 
 #[test]
@@ -8801,7 +8814,7 @@ async fn issue_create_authorizes_scope_before_converting_content() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
 }
 
@@ -8859,7 +8872,7 @@ fn jira_write_capabilities_advertise_typed_content_and_omit_disabled_comments() 
     let error = disabled_provider
         .validate_configured_comment_body_format("jira.comment.add")
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
 }
 
 #[test]
@@ -8967,7 +8980,7 @@ fn native_adf_validation_has_a_depth_bound() {
     }
     let body = json!({"type":"doc","version":1,"content":[node]});
     let error = validate_adf_body(&body).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {

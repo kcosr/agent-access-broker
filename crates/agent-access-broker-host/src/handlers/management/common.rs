@@ -15,8 +15,8 @@ use agent_access_core::{
     new_broker_request_id, parse_ttl_seconds,
 };
 use agent_access_provider::{
-    Decision, ProviderCredentialVerification, ProviderError, ReasonCode, ResourceScopes,
-    is_action_name,
+    Decision, ProviderCredentialVerification, ProviderError, ReasonCode, ReasonCodeId,
+    ResourceScopes, is_action_name,
 };
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -59,7 +59,7 @@ pub(crate) struct ManagementEnvelope {
     ok: bool,
     decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reason_code: Option<ReasonCode>,
+    reason_code: Option<ReasonCodeId>,
     request_id: String,
     broker_request_id: String,
     operation: String,
@@ -1065,14 +1065,14 @@ pub(crate) fn management_error_envelope(
     broker_request_id: &str,
     operation: &str,
     principal: &str,
-    reason_code: ReasonCode,
+    reason_code: impl Into<ReasonCodeId>,
     message: &str,
     target: Option<Value>,
 ) -> ManagementEnvelope {
     ManagementEnvelope {
         ok: false,
         decision: Decision::Deny,
-        reason_code: Some(reason_code),
+        reason_code: Some(reason_code.into()),
         request_id: request_id.to_string(),
         broker_request_id: broker_request_id.to_string(),
         operation: operation.to_string(),
@@ -1089,14 +1089,14 @@ pub(crate) fn management_failure_envelope(
     context: &ManagementContext,
     operation: &str,
     decision: Decision,
-    reason_code: ReasonCode,
+    reason_code: impl Into<ReasonCodeId>,
     message: &str,
     target: Option<Value>,
 ) -> ManagementEnvelope {
     ManagementEnvelope {
         ok: false,
         decision,
-        reason_code: Some(reason_code),
+        reason_code: Some(reason_code.into()),
         request_id: context.request_id.clone(),
         broker_request_id: context.broker_request_id.clone(),
         operation: operation.to_string(),
@@ -1137,7 +1137,7 @@ pub(crate) fn management_response(
     observability::record_operation(&envelope.operation);
     observability::record_principal(&envelope.principal);
     observability::record_decision(envelope.decision.as_str());
-    if let Some(reason_code) = envelope.reason_code {
+    if let Some(reason_code) = &envelope.reason_code {
         observability::record_reason_code(reason_code.as_str());
     }
     observability::record_status(status.as_u16());
@@ -1768,7 +1768,7 @@ async fn append_management_audit_with_details(
         matched_grant: None,
         credential_mode: Some(None),
         decision: envelope.decision.clone(),
-        reason_code: envelope.reason_code.map(Into::into),
+        reason_code: envelope.reason_code.clone(),
         upstream_status: extra
             .verification
             .map(|verification| verification.upstream_status),
@@ -1910,7 +1910,7 @@ pub(crate) async fn management_context_error_response(
     context: &ManagementContext,
     status: StatusCode,
     operation: &str,
-    reason_code: ReasonCode,
+    reason_code: impl Into<ReasonCodeId>,
     message: &str,
     target: Option<Value>,
 ) -> axum::response::Response {
@@ -1991,13 +1991,13 @@ pub(super) async fn management_provider_error_response(
     target: Option<Value>,
     error: ProviderError,
 ) -> axum::response::Response {
-    let status = StatusCode::from_u16(error.reason_code.http_status())
+    let status = StatusCode::from_u16(error.reason_code().http_status())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     management_context_error_response(
         context,
         status,
         operation,
-        error.reason_code,
+        error.reason_code(),
         &error.message,
         target,
     )

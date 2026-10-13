@@ -14544,7 +14544,7 @@ fn concurrency_guards_fail_closed_at_configured_limits() {
         Err(error) => error,
     };
     assert_eq!(
-        error.provider_error().reason_code,
+        error.provider_error().reason_code(),
         ReasonCode::ConcurrencyLimited
     );
 
@@ -14558,7 +14558,7 @@ fn concurrency_guards_fail_closed_at_configured_limits() {
         Err(error) => error,
     };
     assert_eq!(
-        error.provider_error().reason_code,
+        error.provider_error().reason_code(),
         ReasonCode::ConcurrencyLimited
     );
 
@@ -14576,7 +14576,10 @@ fn concurrency_guards_fail_closed_at_configured_limits() {
         Err(error) => error,
     };
     assert_eq!(error.kind().as_str(), "limiter_capacity");
-    assert_eq!(error.provider_error().reason_code, ReasonCode::RateLimited);
+    assert_eq!(
+        error.provider_error().reason_code(),
+        ReasonCode::RateLimited
+    );
 }
 
 #[tokio::test]

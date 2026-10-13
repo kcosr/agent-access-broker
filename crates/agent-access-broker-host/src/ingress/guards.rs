@@ -51,7 +51,23 @@ pub(crate) struct IngressLimitError {
 
 impl IngressLimitError {
     fn new(kind: IngressLimitKind, limit: u32, error: ProviderError) -> Self {
-        Self { kind, limit, error }
+        let limited = Self { kind, limit, error };
+        debug_assert_eq!(limited.error.reason_code(), limited.reason_code());
+        limited
+    }
+
+    /// The host reason this limit reports.
+    pub(crate) fn reason_code(&self) -> ReasonCode {
+        match self.kind {
+            IngressLimitKind::GlobalConcurrency
+            | IngressLimitKind::PrincipalConcurrency
+            | IngressLimitKind::PrincipalBodyConcurrency
+            | IngressLimitKind::SourceConcurrency
+            | IngressLimitKind::AnonymousBodyConcurrency => ReasonCode::ConcurrencyLimited,
+            IngressLimitKind::AuthSourceRate
+            | IngressLimitKind::AuthPrincipalRate
+            | IngressLimitKind::LimiterCapacity => ReasonCode::RateLimited,
+        }
     }
 
     pub(crate) fn kind(&self) -> IngressLimitKind {

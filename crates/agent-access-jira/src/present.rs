@@ -750,7 +750,7 @@ mod tests {
             16384,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 
@@ -846,7 +846,7 @@ mod tests {
         let mut result = source;
         let error =
             present_provider_result("issue_type.list", &mut result, options, 4096, 32).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[test]
@@ -1180,7 +1180,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
         let error = validate_response_options(
             presentation("issue.delete").as_ref(),
@@ -1190,7 +1190,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResponseFormatUnsupported);
+        assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
 
         let mut result = json!({"id":"1","key":"SBC-1","description":adf("body")});
         let error = present_provider_result(
@@ -1204,7 +1204,7 @@ mod tests {
             16,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 
