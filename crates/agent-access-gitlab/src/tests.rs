@@ -10,6 +10,35 @@ use wiremock::matchers::{
 };
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Every page token failure the invoke hook can report stays within the
+/// provider-reportable subset for an invocation.
+#[test]
+fn page_token_failures_pass_the_invocation_contract() {
+    let hook = agent_access_provider::host::hook_context(
+        "gitlab",
+        "issue.list",
+        agent_access_provider::HookPhase::Invocation,
+        crate::GITLAB_BACKEND.domain_reasons(),
+    );
+    for error in [
+        ContinuationError::Invalid,
+        ContinuationError::UnsupportedVersion,
+        ContinuationError::Expired,
+        ContinuationError::TokenTooLarge { limit: 1 },
+        ContinuationError::PayloadTooLarge { limit: 1 },
+        ContinuationError::SigningUnavailable,
+        ContinuationError::DurableKeyUnavailable,
+    ] {
+        let failure = gitlab_page_token_failure(error);
+        assert_eq!(
+            hook.check_failure(&failure),
+            Ok(()),
+            "{error:?}: {failure:?}"
+        );
+    }
+    assert_eq!(hook.check_failure(&gitlab_page_token_error()), Ok(()));
+}
+
 fn config() -> GitlabProviderConfig {
     GitlabProviderConfig {
         provisioning: crate::GitlabProvisioningConfig::default(),

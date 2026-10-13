@@ -797,6 +797,35 @@ mod tests {
     fn inputs(mode: &str) -> Value {
         json!({"controller":"team-ci","job":"payments/build-api","buildNumber":42,"mode":mode,"maxBytes":1024})
     }
+
+    /// Every log cursor failure the invoke hook can report stays within the
+    /// provider-reportable subset for an invocation.
+    #[test]
+    fn log_cursor_failures_pass_the_invocation_contract() {
+        let hook = agent_access_provider::host::hook_context(
+            "cloudbees_ci",
+            "build.log",
+            agent_access_provider::HookPhase::Invocation,
+            crate::CLOUDBEES_CI_BACKEND.domain_reasons(),
+        );
+        for error in [
+            ContinuationError::Invalid,
+            ContinuationError::UnsupportedVersion,
+            ContinuationError::Expired,
+            ContinuationError::TokenTooLarge { limit: 1 },
+            ContinuationError::PayloadTooLarge { limit: 1 },
+            ContinuationError::SigningUnavailable,
+            ContinuationError::DurableKeyUnavailable,
+        ] {
+            let failure = cursor_failure(error);
+            assert_eq!(
+                hook.check_failure(&failure),
+                Ok(()),
+                "{error:?}: {failure:?}"
+            );
+        }
+        assert_eq!(hook.check_failure(&cursor_error()), Ok(()));
+    }
     async fn body(server: &MockServer, bytes: Vec<u8>) {
         Mock::given(method("GET"))
             .and(path("/team-ci/job/payments/job/build-api/42/consoleText"))
