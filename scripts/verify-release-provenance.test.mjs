@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  BROKER_LOG_FILTER,
   StatusMetadataMismatch,
   assertReleaseFeatureGraph,
   assertReleaseStatus,
@@ -23,6 +24,7 @@ import {
   releaseFeatureTreeArgs,
   releasePackageOrigins,
   validateToolchainVersions,
+  verificationBrokerEnvironment,
 } from "./verify-release-provenance.mjs";
 
 const expected = {
@@ -60,6 +62,22 @@ function releaseStatus() {
     sendSchemaVersion: "agent-access.send.v1",
   };
 }
+
+test("the verification Broker logs with the fixed filter whatever RUST_LOG it inherits", () => {
+  const env = verificationBrokerEnvironment({ RUST_LOG: "warn", PATH: "/usr/bin" }, "verify-token");
+  assert.equal(env.RUST_LOG, BROKER_LOG_FILTER);
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.AGENT_ACCESS_PROVENANCE_VERIFY_TOKEN, "verify-token");
+});
+
+test("the gates' Broker log filter is the Broker default, which logs its startup events", () => {
+  const lifecycle = readFileSync(
+    fileURLToPath(new URL("../crates/agent-access-broker-host/src/lifecycle.rs", import.meta.url)),
+    "utf8",
+  );
+  assert.equal(BROKER_LOG_FILTER, /DEFAULT_LOG_FILTER: &str = "([^"]+)"/.exec(lifecycle)?.[1]);
+  assert.ok(BROKER_LOG_FILTER.split(",").includes("agent_access_broker_host=info"));
+});
 
 test("reads the bound public address from the broker_listening event", () => {
   const event = (fields) => JSON.stringify({ level: "INFO", event: "broker_listening", nodeId: "node-1", ...fields });

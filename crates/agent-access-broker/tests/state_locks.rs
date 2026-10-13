@@ -19,6 +19,13 @@ use std::os::unix::fs::PermissionsExt;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(3);
 static STATE_LOCK_TEST_MUTEX: Mutex<()> = Mutex::new(());
+/// The broker's default log filter, set for every broker these tests start.
+/// An inherited `RUST_LOG` such as `warn` would hide the INFO
+/// `broker_listening` event that names a broker's bound address, and whose
+/// absence shows that a conflicting broker never bound its listener.
+const BROKER_LOG_FILTER: &str = "agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn";
+/// Set for the child test process that checks an inherited filter.
+const INHERITED_FILTER_CHILD: &str = "BROKER_STATE_LOCKS_INHERITED_FILTER_CHILD";
 
 #[test]
 fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offline() {
@@ -245,6 +252,56 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     let listening = event_by_name(&events, "broker_listening");
     assert_eq!(listening["listener"].as_str(), Some("public"));
     assert_eq!(listening["address"].as_str(), Some(address.as_str()));
+}
+
+/// `RUST_LOG=warn cargo test` must not hide the events the start helpers
+/// read: the child test process inherits a warning-only filter.
+#[test]
+fn start_helpers_read_startup_events_under_an_inherited_warning_only_filter() {
+    let _guard = state_lock_test_guard();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inherited_warning_only_filter_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("RUST_LOG", "warn")
+        .env(INHERITED_FILTER_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("inherited warning-only filter checked"),
+        "stdout={stdout}; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "run by start_helpers_read_startup_events_under_an_inherited_warning_only_filter"]
+fn inherited_warning_only_filter_child() {
+    assert_eq!(
+        std::env::var(INHERITED_FILTER_CHILD).as_deref(),
+        Ok("1"),
+        "run only by its parent test"
+    );
+    assert_eq!(std::env::var("RUST_LOG").as_deref(), Ok("warn"));
+    let temp = TempDir::new().unwrap();
+    private_dir(temp.path());
+    let first = BrokerConfigPaths::new(temp.path(), "inherited-filter", false, true);
+    write_config(&first);
+    let process = BrokerProcess::start(&first.config_path);
+    assert_ne!(process.addr().port(), 0);
+    // A conflicting broker is still seen failing before it binds.
+    let shared_audit = BrokerConfigPaths::new(temp.path(), "inherited-filter-audit", false, true)
+        .with_audit_path(first.audit_path.clone().unwrap());
+    write_config(&shared_audit);
+    let stderr = run_expect_startup_failure(&shared_audit.config_path);
+    assert!(stderr.contains("audit state lock is held"), "{stderr}");
+    assert!(stderr.contains("broker_start_failed"), "{stderr}");
+    drop(process);
+    println!("inherited warning-only filter checked");
 }
 
 #[test]
@@ -524,6 +581,7 @@ fn broker_command(config_path: &Path) -> Command {
         .arg("serve")
         .arg("--listen")
         .arg("127.0.0.1:0")
+        .env("RUST_LOG", BROKER_LOG_FILTER)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command

@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, qualificationOutputDirectory } from "./verify-release.mjs";
-import { cargoConfigInventory, inspectLocalToolchain, parseCargoTree, publicListeningAddress } from "./verify-release-provenance.mjs";
+import { BROKER_LOG_FILTER, cargoConfigInventory, inspectLocalToolchain, parseCargoTree, publicListeningAddress } from "./verify-release-provenance.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
@@ -1188,8 +1188,10 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
     const logPath = join(output, "broker.log");
     const log = openSync(logPath, "w", 0o600);
     try {
+      // The address is read from the INFO broker_listening event, so the
+      // Broker's log filter cannot come from the caller's environment.
       broker = supervisor.start(binary, ["--config", configPath, "serve", "--listen", "127.0.0.1:0"],
-        { env, cwd: run, stdio: ["ignore", log, log] });
+        { env: { ...env, RUST_LOG: BROKER_LOG_FILTER }, cwd: run, stdio: ["ignore", log, log] });
     } finally {
       closeSync(log);
     }

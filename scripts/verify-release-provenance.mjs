@@ -377,6 +377,18 @@ function buildBinaries(plan) {
   });
 }
 
+// The Broker's default log filter (`DEFAULT_LOG_FILTER` in the host's
+// lifecycle), set for each Broker a gate starts. An inherited RUST_LOG such
+// as `warn` would otherwise hide the INFO `broker_listening` event that names
+// the Broker's bound address.
+export const BROKER_LOG_FILTER =
+  "agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn";
+
+// The environment of the Broker whose status provenance verification reads.
+export function verificationBrokerEnvironment(env, token) {
+  return { ...env, RUST_LOG: BROKER_LOG_FILTER, AGENT_ACCESS_PROVENANCE_VERIFY_TOKEN: token };
+}
+
 // The address of the public `broker_listening` event in `log`, the Broker's
 // JSON lines, or null before it is logged. A Broker started with
 // `--listen <host>:0` reports the port it bound there, so no port has to be
@@ -454,7 +466,7 @@ default_decision = "deny"
     ["--config", configPath, "serve", "--listen", "127.0.0.1:0"],
     {
       cwd: ROOT,
-      env: { ...process.env, AGENT_ACCESS_PROVENANCE_VERIFY_TOKEN: token },
+      env: verificationBrokerEnvironment(process.env, token),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

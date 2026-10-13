@@ -5,7 +5,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
+import { BROKER_LOG_FILTER, inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
   ASSEMBLY_GUIDE, ASSEMBLY_GUIDE_SHARED_FILES, ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION,
   GUIDE_PROVIDER_URL, GUIDE_SNIPPET_PACKAGE, PROVIDER_GUIDE, PROVIDER_PACKAGE, compiledSourceFiles, dependencyInfoFiles,
@@ -792,11 +792,10 @@ ${serve}
   return broker;
 };
 
-const acceptanceRun = (directory, broker) => {
+const acceptanceRun = (directory, broker, env = sanitizedEnvironment(process.env).env) => {
   const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
   const acceptance = runProcessAcceptance({ supervisor, binary: broker, cli: join(directory, "unused-cli"),
-    run: join(directory, "run"), evidence: join(directory, "evidence"),
-    env: sanitizedEnvironment(process.env).env, expectedStatus: {} });
+    run: join(directory, "run"), evidence: join(directory, "evidence"), env, expectedStatus: {} });
   return { supervisor, acceptance };
 };
 
@@ -818,6 +817,33 @@ process.on("SIGTERM", () => process.exit(0));
   try {
     // Readiness passed at the reported address; the next check fails there.
     await assert.rejects(acceptance, /Process acceptance failed: healthz \(\{"status":503\}\)/);
+  } finally {
+    await supervisor.stopAll();
+  }
+});
+
+test("broker acceptance reads the listening address under an inherited warning-only filter", posixOnly, async (t) => {
+  const directory = temporary(t);
+  // Like the Broker, a warning-only RUST_LOG hides the INFO broker_listening event.
+  const broker = standInBroker(directory, `
+import { writeFileSync } from "node:fs";
+writeFileSync("broker-rust-log", process.env.RUST_LOG ?? "");
+const server = createServer((request, response) => {
+  response.writeHead(request.url === "/v1/readyz" ? 200 : 503);
+  response.end();
+});
+server.listen(0, "127.0.0.1", () => {
+  if (process.env.RUST_LOG !== "warn") {
+    process.stdout.write(JSON.stringify({ event: "broker_listening", listener: "public", address: "127.0.0.1:" + server.address().port }) + "\\n");
+  }
+});
+process.on("SIGTERM", () => process.exit(0));
+`);
+  const env = { ...sanitizedEnvironment(process.env).env, RUST_LOG: "warn" };
+  const { supervisor, acceptance } = acceptanceRun(directory, broker, env);
+  try {
+    await assert.rejects(acceptance, /Process acceptance failed: healthz \(\{"status":503\}\)/);
+    assert.equal(readFileSync(join(directory, "run", "broker-rust-log"), "utf8"), BROKER_LOG_FILTER);
   } finally {
     await supervisor.stopAll();
   }
