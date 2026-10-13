@@ -603,10 +603,12 @@ include `verificationStatus`, `lastVerificationAttemptAt`, `lastVerifiedAt`,
 and `lastVerificationErrorCode`. A newly saved or replaced credential reports
 `verificationStatus = not_verified`. A successful verify reports
 `local_verified` or `upstream_verified`, sets both verification timestamps, and
-clears the failure code. A failed upstream verify returns the provider error to
-the caller and records `verification_failed`, `lastVerificationAttemptAt`, and a
-sanitized broker `reasonCode` in `lastVerificationErrorCode`; stored secret
-material is never returned.
+clears the failure code. A failed verify returns the provider failure's own
+`decision`, `reasonCode`, and HTTP status, and its audit record keeps that
+decision and `reasonCode`. A failed upstream verify also records
+`verification_failed`, `lastVerificationAttemptAt`, and a sanitized broker
+`reasonCode` in `lastVerificationErrorCode`; stored secret material is never
+returned.
 
 Credential verify routes accept an optional JSON body. A service lists the
 inputs its verification needs in `credentialVerificationInputs` on its
@@ -2292,9 +2294,11 @@ MCP actions, although providers cannot report that reason themselves.
 A native provider may define failure reasons for its own domain. Each fixes one
 decision, `deny` or `error`, and one HTTP status from 400, 403, 404, 409, 413,
 415, 424, 500, 502, 503, and 504, which drives the CLI exit code as for any
-reason. A domain reason never reports `allow` or upstream throttling, which
-always uses `upstream_rate_limited`, and its status alone never adds an
-authentication challenge or a `Retry-After` header.
+reason. Invocation and management responses, such as credential verification,
+report that decision and status, and their audit records keep the decision. A
+domain reason never reports `allow` or upstream throttling, which always uses
+`upstream_rate_limited`, and its status alone never adds an authentication
+challenge or a `Retry-After` header.
 
 A domain reason code starts with the provider's kind, with hyphens written as
 underscores, followed by `_` and a name. Before serving, the Broker checks the

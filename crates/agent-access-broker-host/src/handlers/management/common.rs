@@ -1985,23 +1985,34 @@ pub(super) fn management_store_public_error_message(
     }
 }
 
+/// Reports a failed provider hook, or the host work verifying or discovering
+/// on its behalf, with the failure's own outcome: a domain reason's or host
+/// port's fixed decision and status, or a standard reason's deny or error.
+/// The response and its audit record carry the same decision. A management
+/// failure never reports allow, which only an invocation's verification
+/// result may carry, so an allow outcome is reported as deny.
 pub(super) async fn management_provider_error_response(
     context: &ManagementContext,
     operation: &str,
     target: Option<Value>,
     error: ProviderError,
 ) -> axum::response::Response {
-    let status = StatusCode::from_u16(error.reason_code().http_status())
+    let reason_code = error.reason_code();
+    let status = StatusCode::from_u16(reason_code.http_status())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    management_context_error_response(
+    let decision = match error.decision() {
+        Decision::Allow => Decision::Deny,
+        decision => decision,
+    };
+    let envelope = management_failure_envelope(
         context,
-        status,
         operation,
-        error.reason_code(),
+        decision,
+        reason_code,
         &error.message,
         target,
-    )
-    .await
+    );
+    management_audited_response(context, status, envelope).await
 }
 
 pub(super) fn default_token_ttl_seconds(

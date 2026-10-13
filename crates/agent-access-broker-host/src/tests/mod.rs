@@ -68,6 +68,7 @@ mod confluence_read_presentation;
 mod conformance;
 pub(crate) mod conformance_import;
 mod discovery;
+mod domain_reasons;
 mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;
@@ -12835,6 +12836,7 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
     assert_eq!(verify.status(), StatusCode::FAILED_DEPENDENCY);
     let body = response_json(verify).await;
     assert_eq!(body["reasonCode"], "upstream_unauthorized");
+    assert_eq!(body["decision"], "error");
     let metadata = store
         .credential_by_tuple("alice", "jira", "default")
         .unwrap();
@@ -12913,6 +12915,7 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
     assert_eq!(verify.status(), StatusCode::BAD_REQUEST);
     let body = response_json(verify).await;
     assert_eq!(body["reasonCode"], "input_invalid");
+    assert_eq!(body["decision"], "deny");
     let metadata = store
         .credential_by_tuple("alice", "jira", "default")
         .unwrap();

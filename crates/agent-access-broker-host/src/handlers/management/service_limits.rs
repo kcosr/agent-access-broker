@@ -9,9 +9,8 @@
 
 use super::common::{
     ManagementAccess, ManagementContext, management_context, management_context_error_response,
-    management_pre_audited_success_response, management_provider_error_response,
-    management_store_call, management_store_error_response, management_success_response,
-    management_write_audit_preflight,
+    management_pre_audited_success_response, management_store_call,
+    management_store_error_response, management_success_response, management_write_audit_preflight,
 };
 use crate::state::AppState;
 use agent_access_core::{InvocationLimit, InvocationLimitError, PrincipalServiceLimitWriteRequest};
@@ -74,7 +73,22 @@ pub(crate) async fn list(
         .await
     {
         Ok(limits) => management_success_response(&context, operation, target, json!(limits)).await,
-        Err(error) => management_provider_error_response(&context, operation, target, error).await,
+        // Only reading the override store can fail. Like management's other
+        // store failures, this host failure is reported as deny.
+        Err(error) => {
+            let reason_code = error.reason_code();
+            let status = StatusCode::from_u16(reason_code.http_status())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            management_context_error_response(
+                &context,
+                status,
+                operation,
+                reason_code,
+                &error.message,
+                target,
+            )
+            .await
+        }
     }
 }
 

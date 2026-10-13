@@ -133,6 +133,13 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Management credential verification and imported-service discovery report a
+  provider failure's own decision in the response and its management audit
+  record instead of always `deny`: upstream failures such as `upstream_timeout`,
+  host-origin failures such as a delegated lease's `concurrency_limited`, and
+  domain reasons defined as `error` now report `decision = error`. Their reason
+  codes and HTTP statuses are unchanged.
+
 ### Removed
 
 ## [0.1.0] - 2026-10-11
