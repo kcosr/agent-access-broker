@@ -481,6 +481,7 @@ pub agent_access_core::api::ApiActionSpec::sensitive_output_pointers: alloc::vec
 pub agent_access_core::api::ApiActionSpec::upstream_resource_ownership: core::option::Option<agent_access_provider::capabilities::UpstreamResourceOwnership>
 impl agent_access_core::api::ApiActionSpec
 pub fn agent_access_core::api::ApiActionSpec::supports_file_output(&self) -> bool
+pub fn agent_access_core::api::ApiActionSpec::supports_io(&self) -> bool
 pub fn agent_access_core::api::ApiActionSpec::supports_json_file_output(&self) -> bool
 impl core::clone::Clone for agent_access_core::api::ApiActionSpec
 pub fn agent_access_core::api::ApiActionSpec::clone(&self) -> agent_access_core::api::ApiActionSpec
