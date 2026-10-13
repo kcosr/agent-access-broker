@@ -6,7 +6,7 @@ use agent_access_provider::{
     CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig, Provider,
     ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits, ProviderResult,
     ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType, ResourceTypeDescriptor,
-    ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
+    ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall, UpstreamClient,
     UpstreamClientSpec, ValidationContext, complete_upstream_trace, is_literal_loopback,
     parse_backend_config, take_upstream_trace,
 };
@@ -114,18 +114,15 @@ impl BackendConfig for OAuthStubProviderConfig {
 fn oauth_stub_descriptor() -> ServiceDescriptor {
     let collection = || json!({"type":"string","pattern":"^[a-z0-9_-]{1,64}$"});
     let schema = |required: Value, properties: Value| json!({"type":"object","required":required,"properties":properties,"additionalProperties":false});
-    ServiceDescriptor {
-        service: "oauth_stub".into(),
-        display_name: "OAuth Test Records".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("oauth_stub", "OAuth Test Records")
+        .with_resource_scopes(BTreeMap::from([(
             "collection".into(),
-            ResourceScopeCapabilities {
-                resource_type: OAUTH_COLLECTION_RESOURCE.id().clone(),
-                selectors: vec!["exact".into(), "all".into()],
-            },
-        )]),
-        actions: vec![
+            ResourceScopeCapabilities::new(
+                OAUTH_COLLECTION_RESOURCE.id().clone(),
+                vec!["exact".into(), "all".into()],
+            ),
+        )]))
+        .with_actions(vec![
             ActionDescriptor::new(
                 "record.list",
                 "List records in an authorized test collection",
@@ -155,11 +152,11 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .credential_modes(["per_user"]),
-        ],
-        credentials: CredentialDescriptor::default()
-            .delegated("Lets agents read the test records your account can reach."),
-        presentation_body_limit: None,
-    }
+        ])
+        .with_credentials(
+            CredentialDescriptor::default()
+                .delegated("Lets agents read the test records your account can reach."),
+        )
 }
 
 /// The records API at the configured base URL. The runtime lends each

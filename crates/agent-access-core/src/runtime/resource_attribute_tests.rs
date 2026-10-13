@@ -49,13 +49,8 @@ impl BackendConfig for FixtureConfig {
         }
     }
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: self.kind().into(), display_name: "Attribute conformance".into(), surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities { resource_type: TYPE.id().clone(), selectors: vec!["exact".into(), "all".into()] })]),
-            actions: vec![ActionDescriptor::new("send", "Send to a private fixture", json!({"type":"object","required":["destination"],"properties":{"destination":{"type":"string"}},"additionalProperties":false}))
-                .scope("destination").credential_modes(["service"]).resource_attributes()],
-            credentials: CredentialDescriptor::without_execution_credential(), presentation_body_limit: None,
-        }
+        ServiceDescriptor::new(self.kind(), "Attribute conformance").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TYPE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new("send", "Send to a private fixture", json!({"type":"object","required":["destination"],"properties":{"destination":{"type":"string"}},"additionalProperties":false}))
+                .scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
     }
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]

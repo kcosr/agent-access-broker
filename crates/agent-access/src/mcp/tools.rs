@@ -1986,21 +1986,18 @@ mod tests {
         let mut action = action();
         action.read_only = false;
         action.io = ActionIo::MultipartUpload {
-            plan: agent_access_provider::MultipartUploadSpec {
-                role: "attachment".into(),
-                metadata_pointer: "/attachments".into(),
-                field_name_prefix: "upload".into(),
-                min_files: 1,
-                max_files: Some(1),
-                locator_inputs: vec![],
-                metadata_fields: vec![
-                    "field".into(),
-                    "size".into(),
-                    "sha256".into(),
-                    "filename".into(),
-                ],
-                caller_content_type_allowed: false,
-            },
+            plan: agent_access_provider::MultipartUploadSpec::new(
+                "attachment",
+                "/attachments",
+                "upload",
+            )
+            .with_file_count(1, Some(1))
+            .with_metadata_fields(vec![
+                "field".into(),
+                "size".into(),
+                "sha256".into(),
+                "filename".into(),
+            ]),
         };
         serve_catalog(&server, action).await;
         Mock::given(method("POST"))
@@ -2048,16 +2045,9 @@ mod tests {
 
     #[test]
     fn upload_metadata_is_from_stable_snapshot_and_sensitive_requirements_are_optional() {
-        let plan = agent_access_provider::MultipartUploadSpec {
-            role: "attachment".into(),
-            metadata_pointer: "/files".into(),
-            field_name_prefix: "file".into(),
-            min_files: 1,
-            max_files: Some(1),
-            locator_inputs: vec![],
-            metadata_fields: vec!["field".into(), "size".into(), "sha256".into()],
-            caller_content_type_allowed: false,
-        };
+        let plan = agent_access_provider::MultipartUploadSpec::new("attachment", "/files", "file")
+            .with_file_count(1, Some(1))
+            .with_metadata_fields(vec!["field".into(), "size".into(), "sha256".into()]);
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("file.txt");
         std::fs::write(&path, "first").unwrap();

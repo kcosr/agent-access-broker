@@ -8,11 +8,10 @@ use agent_access_provider::{
     ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderResult,
     ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
     ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
-    current_provider_action, is_service_name, parse_backend_config, upstream_rate_limited,
-    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
+    is_service_name, parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
+    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -619,23 +618,20 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
         });
     }
     actions.extend(reads::descriptors());
-    ServiceDescriptor {
-        service: "cloudbees_ci".into(),
-        display_name: "CloudBees CI".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("cloudbees_ci", "CloudBees CI")
+        .with_resource_scopes(BTreeMap::from([(
             "job".into(),
-            ResourceScopeCapabilities {
-                resource_type: crate::CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
-                selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-            },
-        )]),
-        actions,
-        credentials: CredentialDescriptor::default()
-            .service_kinds(&["basic_api_token"])
-            .profile("cloudbees-ci-api-token", "basic_api_token"),
-        presentation_body_limit: None,
-    }
+            ResourceScopeCapabilities::new(
+                crate::CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
+                vec!["exact".into(), "namespace".into(), "all".into()],
+            ),
+        )]))
+        .with_actions(actions)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .service_kinds(&["basic_api_token"])
+                .profile("cloudbees-ci-api-token", "basic_api_token"),
+        )
 }
 
 impl CloudbeesCiProvider {

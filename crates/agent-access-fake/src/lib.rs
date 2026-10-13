@@ -20,7 +20,7 @@ use agent_access_provider::{
     EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
     ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
     ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceProvider,
-    ServiceSurface, ValidationContext, parse_backend_config,
+    ValidationContext, parse_backend_config,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -136,18 +136,15 @@ pub struct FakeProviderConfig {}
 
 /// The fake service: its projects, actions, and credential modes.
 pub fn fake_descriptor() -> ServiceDescriptor {
-    ServiceDescriptor {
-        service: "fake".to_string(),
-        display_name: "Fake Provider".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("fake", "Fake Provider")
+        .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: FAKE_PROJECT_RESOURCE.id().clone(),
-                selectors: vec!["exact".to_string(), "all".to_string()],
-            },
-        )]),
-        actions: vec![
+            ResourceScopeCapabilities::new(
+                FAKE_PROJECT_RESOURCE.id().clone(),
+                vec!["exact".to_string(), "all".to_string()],
+            ),
+        )]))
+        .with_actions(vec![
             ActionDescriptor::new(
                 "echo",
                 "Echo scalar inputs after policy and credential selection",
@@ -164,10 +161,8 @@ pub fn fake_descriptor() -> ServiceDescriptor {
             .read_only()
             .scope("project")
             .credential_modes(["service", "per_user"]),
-        ],
-        credentials: CredentialDescriptor::without_execution_credential(),
-        presentation_body_limit: None,
-    }
+        ])
+        .with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// The fake provider paired with its descriptor, for runtimes built without

@@ -76,12 +76,8 @@ mod tests {
     use serde_json::json;
 
     fn descriptor(actions: &[(&str, Option<AttributionCapability>)]) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "example".to_string(),
-            display_name: "Example".to_string(),
-            surface: agent_access_provider::ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::new(),
-            actions: actions
+        ServiceDescriptor::new("example", "Example").with_actions(
+            actions
                 .iter()
                 .map(|(action, capability)| {
                     let descriptor =
@@ -93,9 +89,7 @@ mod tests {
                     }
                 })
                 .collect(),
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+        )
     }
 
     const BODY_ADD: AttributionCapability = AttributionCapability::required(
@@ -166,9 +160,10 @@ mod tests {
             ),
             (
                 "view_only".to_string(),
-                std::sync::Arc::new(ServiceDescriptor {
-                    service: "view_only".to_string(),
-                    ..descriptor(&[("item.view", None)])
+                std::sync::Arc::new({
+                    let mut descriptor = descriptor(&[("item.view", None)]);
+                    descriptor.service = "view_only".to_string();
+                    descriptor
                 }),
             ),
         ]);

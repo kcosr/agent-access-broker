@@ -224,12 +224,9 @@ impl agent_access_provider::test_support::DescribedProvider for BrokerWebhookCon
                 "additionalProperties": false
             })
         };
-        ServiceDescriptor {
-            service: "gitlab".to_string(),
-            display_name: "GitLab Webhook Broker Contract Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("repository"),
-            actions: vec![
+        ServiceDescriptor::new("gitlab", "GitLab Webhook Broker Contract Test Provider")
+            .with_resource_scopes(fixture_scope_capabilities("repository"))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "webhook.create",
                     "Create a webhook",
@@ -244,10 +241,7 @@ impl agent_access_provider::test_support::DescribedProvider for BrokerWebhookCon
                 )
                 .scope("repository")
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 

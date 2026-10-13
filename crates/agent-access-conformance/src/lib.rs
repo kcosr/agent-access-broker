@@ -18,11 +18,11 @@ use agent_access_provider::{
     ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
     ProviderState, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
     ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface,
-    StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    ValidationContext, attachment_upload_plan, complete_upstream_trace, file_upload_body,
-    parse_backend_config, take_upstream_trace, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
+    attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -243,10 +243,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     };
     let mut resource_scopes = BTreeMap::from([(
         "item".into(),
-        ResourceScopeCapabilities {
-            resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
-            selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-        },
+        ResourceScopeCapabilities::new(
+            CONFORMANCE_ITEM_RESOURCE.id().clone(),
+            vec!["exact".into(), "namespace".into(), "all".into()],
+        ),
     )]);
     let mut actions = vec![
         action("item.view", "View an item and its text body", &locator)
@@ -265,10 +265,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     if config.endpoints {
         resource_scopes.insert(
             "endpoint".into(),
-            ResourceScopeCapabilities {
-                resource_type: CONFORMANCE_ENDPOINT_RESOURCE.id().clone(),
-                selectors: vec!["exact".into(), "all".into()],
-            },
+            ResourceScopeCapabilities::new(
+                CONFORMANCE_ENDPOINT_RESOURCE.id().clone(),
+                vec!["exact".into(), "all".into()],
+            ),
         );
         actions.push(
             ActionDescriptor::new(
@@ -288,17 +288,14 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             .resource_attributes(),
         );
     }
-    ServiceDescriptor {
-        service: SERVICE.into(),
-        display_name: "Conformance".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes,
-        actions,
-        credentials: CredentialDescriptor::default()
-            .service_kinds(&["bearer_token"])
-            .profile("api_token", "bearer_token"),
-        presentation_body_limit: None,
-    }
+    ServiceDescriptor::new(SERVICE, "Conformance")
+        .with_resource_scopes(resource_scopes)
+        .with_actions(actions)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .service_kinds(&["bearer_token"])
+                .profile("api_token", "bearer_token"),
+        )
 }
 
 const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(

@@ -21,11 +21,8 @@ fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
                 .map(|capability| (action.action.as_str(), capability))
         })
         .collect::<BTreeMap<_, _>>();
-    let body = |verb| AttributionCapability {
-        verb,
-        target: "body",
-        representation: AttributionRepresentation::ConfluenceStorage,
-        required: true,
+    let body = |verb| {
+        AttributionCapability::required(verb, "body", AttributionRepresentation::ConfluenceStorage)
     };
     let expected = BTreeMap::from([
         ("page.create", body(AttributionVerb::Add)),

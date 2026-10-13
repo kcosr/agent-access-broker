@@ -31,22 +31,16 @@ impl BackendConfig for LoopbackFixture {
     }
     fn validate(&self, _: &ValidationContext<'_>, _: &mut Vec<String>) {}
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: SERVICE.into(),
-            display_name: "Loopback fixture".into(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::new(),
-            actions: vec![
+        ServiceDescriptor::new(SERVICE, "Loopback fixture")
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "ping",
                     "Fixture action",
                     json!({"type":"object","additionalProperties":false}),
                 )
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: None,
-        }
+            ])
+            .with_credentials(CredentialDescriptor::without_execution_credential())
     }
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]

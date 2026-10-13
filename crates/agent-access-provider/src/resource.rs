@@ -177,6 +177,8 @@ impl ResourceAttributeDescriptor {
     }
 }
 
+/// A private resource attribute as clients see it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceAttributeMetadata {
@@ -446,6 +448,7 @@ impl ResourceTypeDescriptor {
 }
 
 /// Client-facing description of a registered resource type.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTypeMetadata {
@@ -460,6 +463,8 @@ pub struct ResourceTypeMetadata {
     pub namespace: Option<NamespaceSelectorMetadata>,
 }
 
+/// Namespace selector support as clients see it.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamespaceSelectorMetadata {

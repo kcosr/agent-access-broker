@@ -165,13 +165,13 @@ pub(super) fn descriptor(
             action
         })
         .collect();
-    ServiceDescriptor {
-        service: record.definition.service.clone(),
-        display_name: record.definition.display_name.clone(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: if record
+    ServiceDescriptor::new(
+        record.definition.service.clone(),
+        record.definition.display_name.clone(),
+    )
+    .with_actions(actions)
+    .with_credentials(
+        if record
             .definition
             .execution_bindings
             .iter()
@@ -185,8 +185,7 @@ pub(super) fn descriptor(
         } else {
             CredentialDescriptor::default().profile("token", "bearer_token")
         },
-        presentation_body_limit: None,
-    }
+    )
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {

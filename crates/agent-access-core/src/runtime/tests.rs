@@ -2029,18 +2029,15 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
         let mut properties = serde_json::Map::new();
         properties.insert(self.input_name.clone(), json!({ "type": "string" }));
         properties.insert("message".to_string(), json!({ "type": "string" }));
-        ServiceDescriptor {
-            service: self.service.clone(),
-            display_name: "Lookup Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new(self.service.clone(), "Lookup Trace Provider".to_string())
+            .with_resource_scopes(BTreeMap::from([(
                 self.scope_type.clone(),
-                ResourceScopeCapabilities {
-                    resource_type: fixture_resource_type(&self.scope_type),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: vec![
+                ResourceScopeCapabilities::new(
+                    fixture_resource_type(&self.scope_type),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     self.action.clone(),
                     "Trace lookup credential selection",
@@ -2054,10 +2051,7 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
                 .scope(self.scope_type.clone())
                 .credential_modes(["service", "per_user"])
                 .lookup(LookupRequirement::ScopeResolution),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -2115,18 +2109,15 @@ impl SearchPreflightTraceProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for SearchPreflightTraceProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Search Preflight Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new("jira", "Search Preflight Trace Provider")
+            .with_resource_scopes(BTreeMap::from([(
                 "project".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: vec![
+                ResourceScopeCapabilities::new(
+                    agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "search",
                     "Trace search authorization preflight",
@@ -2138,10 +2129,7 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
                 .scope("project")
                 .credential_modes(["service"])
                 .search_contained(),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -2225,41 +2213,37 @@ impl agent_access_provider::test_support::DescribedProvider for DependencyPolicy
     fn descriptor(&self) -> ServiceDescriptor {
         let mut actions = vec![self.action.clone()];
         actions.extend(self.extra_actions.iter().cloned());
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Jira Dependency Policy Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new("jira", "Jira Dependency Policy Trace Provider")
+            .with_resource_scopes(BTreeMap::from([(
                 "project".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: actions
-                .into_iter()
-                .map(|action| {
-                    let lookup = if action == self.action {
-                        LookupRequirement::ScopeResolution
-                    } else {
-                        LookupRequirement::None
-                    };
-                    ActionDescriptor::new(
-                        action,
-                        "Trace Jira relationship policy selection",
-                        json!({
-                            "type": "object",
-                            "additionalProperties": true
-                        }),
-                    )
-                    .scope("project")
-                    .credential_modes(["service"])
-                    .lookup(lookup)
-                })
-                .collect(),
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+                ResourceScopeCapabilities::new(
+                    agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(
+                actions
+                    .into_iter()
+                    .map(|action| {
+                        let lookup = if action == self.action {
+                            LookupRequirement::ScopeResolution
+                        } else {
+                            LookupRequirement::None
+                        };
+                        ActionDescriptor::new(
+                            action,
+                            "Trace Jira relationship policy selection",
+                            json!({
+                                "type": "object",
+                                "additionalProperties": true
+                            }),
+                        )
+                        .scope("project")
+                        .credential_modes(["service"])
+                        .lookup(lookup)
+                    })
+                    .collect(),
+            )
     }
 }
 
@@ -7643,10 +7627,9 @@ struct NamedServiceProvider(&'static str);
 
 impl agent_access_provider::test_support::DescribedProvider for NamedServiceProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: self.0.to_string(),
-            ..agent_access_fake::fake_descriptor()
-        }
+        let mut descriptor = agent_access_fake::fake_descriptor();
+        descriptor.service = self.0.to_string();
+        descriptor
     }
 }
 

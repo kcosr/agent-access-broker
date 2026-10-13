@@ -487,12 +487,12 @@ mod tests {
             let mut descriptor = agent_access_fake::fake_descriptor();
             descriptor.resource_scopes.insert(
                 "space".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+                ResourceScopeCapabilities::new(
+                    agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
                         .id()
                         .clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
+                    vec!["exact".into(), "all".into()],
+                ),
             );
             descriptor.actions.push(
                 ActionDescriptor::new("note", "Note on a space", json!({"type": "object"}))
@@ -945,12 +945,12 @@ mod tests {
         assert!(view.resources(&ResourceListQuery::default()).is_ok());
         view.capabilities.resource_scopes.insert(
             "space".into(),
-            ResourceScopeCapabilities {
-                resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+            ResourceScopeCapabilities::new(
+                agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
                     .id()
                     .clone(),
-                selectors: vec!["exact".into()],
-            },
+                vec!["exact".into()],
+            ),
         );
         assert!(view.resources(&ResourceListQuery::default()).is_err());
         assert!(view.actions(Some("TEST"), None, None).is_err());

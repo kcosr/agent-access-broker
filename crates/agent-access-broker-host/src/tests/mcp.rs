@@ -1129,11 +1129,12 @@ impl agent_access_provider::test_support::DescribedProvider for FileCatalogProvi
         descriptor.display_name = "Jira file boundary fixture".into();
         descriptor.credentials = CredentialDescriptor::default();
         let echo = descriptor.actions[0].clone();
-        let action = |name: &str| ActionDescriptor {
-            action: name.into(),
-            documentation: Some(json!({"examples": ["extended fixture usage"]})),
-            read_only: matches!(name, "issue.view" | "attachment.download"),
-            ..echo.clone()
+        let action = |name: &str| {
+            let mut action = echo.clone();
+            action.action = name.into();
+            action.documentation = Some(json!({"examples": ["extended fixture usage"]}));
+            action.read_only = matches!(name, "issue.view" | "attachment.download");
+            action
         };
         descriptor.actions = vec![
             action("issue.view"),

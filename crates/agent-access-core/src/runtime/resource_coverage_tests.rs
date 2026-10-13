@@ -67,28 +67,25 @@ impl BackendConfig for FixtureConfig {
     fn validate(&self, _: &ValidationContext<'_>, _: &mut Vec<String>) {}
     fn descriptor(&self) -> ServiceDescriptor {
         let schema = json!({"type":"object","properties":{"controller":{"type":"string"},"job":{"type":"string"}},"additionalProperties":false});
-        ServiceDescriptor {
-            service: SERVICE.into(),
-            display_name: "Coverage fixture".into(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new(SERVICE, "Coverage fixture")
+            .with_resource_scopes(BTreeMap::from([(
                 "job".into(),
-                ResourceScopeCapabilities {
-                    resource_type: JOB.id().clone(),
-                    selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-                },
-            )]),
-            actions: ["view", "trigger"]
-                .into_iter()
-                .map(|action| {
-                    ActionDescriptor::new(action, "Fixture action", schema.clone())
-                        .scope("job")
-                        .credential_modes(["service", "per_user"])
-                })
-                .collect(),
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: None,
-        }
+                ResourceScopeCapabilities::new(
+                    JOB.id().clone(),
+                    vec!["exact".into(), "namespace".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(
+                ["view", "trigger"]
+                    .into_iter()
+                    .map(|action| {
+                        ActionDescriptor::new(action, "Fixture action", schema.clone())
+                            .scope("job")
+                            .credential_modes(["service", "per_user"])
+                    })
+                    .collect(),
+            )
+            .with_credentials(CredentialDescriptor::without_execution_credential())
     }
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]

@@ -736,27 +736,25 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     {
         credentials = credentials.profile("jira-bearer-token", "bearer_token");
     }
-    ServiceDescriptor {
-        service: "jira".to_string(),
-        display_name: "Jira".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("jira", "Jira")
+        .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: crate::JIRA_PROJECT_RESOURCE.id().clone(),
-                selectors: vec!["exact".to_string(), "all".to_string()],
-            },
-        )]),
-        actions: actions
-            .into_iter()
-            .map(|action| {
-                let presentation = present::presentation(&action.action);
-                action.presentation(presentation)
-            })
-            .collect(),
-        credentials,
-        presentation_body_limit: Some(config.content.max_body_bytes),
-    }
+            ResourceScopeCapabilities::new(
+                crate::JIRA_PROJECT_RESOURCE.id().clone(),
+                vec!["exact".to_string(), "all".to_string()],
+            ),
+        )]))
+        .with_actions(
+            actions
+                .into_iter()
+                .map(|action| {
+                    let presentation = present::presentation(&action.action);
+                    action.presentation(presentation)
+                })
+                .collect(),
+        )
+        .with_credentials(credentials)
+        .with_presentation_body_limit(config.content.max_body_bytes)
 }
 
 fn jira_read_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {

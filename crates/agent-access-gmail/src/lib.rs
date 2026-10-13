@@ -11,7 +11,6 @@ pub use google::{GMAIL_AUDIENCE, GMAIL_SCOPE, GMAIL_TARGET, GOOGLE_OAUTH_DIALECT
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -114,17 +113,9 @@ pub fn descriptor() -> ServiceDescriptor {
             );
         }
     }
-    ServiceDescriptor {
-        service: "gmail".into(),
-        display_name: "Gmail".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: CredentialDescriptor::default().delegated(
+    ServiceDescriptor::new("gmail", "Gmail").with_actions(actions).with_credentials(CredentialDescriptor::default().delegated(
             "Lets agents read, search, archive, move mail to Trash and restore it. Agent access is limited by your Broker grants. Google’s consent screen describes the broader Gmail permission.",
-        ),
-        presentation_body_limit: None,
-    }
+        ))
 }
 
 struct GmailProvider {

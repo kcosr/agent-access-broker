@@ -47,15 +47,8 @@ impl BackendConfig for VerifierConfig {
     fn validate(&self, _: &ValidationContext<'_>, _: &mut Vec<String>) {}
 
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: SERVICE.into(),
-            display_name: "Domain reason verifier".into(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: Default::default(),
-            actions: vec![],
-            credentials: CredentialDescriptor::default().profile(PROFILE, "bearer_token"),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new(SERVICE, "Domain reason verifier")
+            .with_credentials(CredentialDescriptor::default().profile(PROFILE, "bearer_token"))
     }
 
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {

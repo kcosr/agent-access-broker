@@ -1201,27 +1201,25 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
     let mut actions = confluence_content_actions(config);
     actions.extend(confluence_draft_actions(config));
     actions.extend(confluence_comment_actions(config));
-    ServiceDescriptor {
-        service: "confluence".to_string(),
-        display_name: "Confluence".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("confluence", "Confluence")
+        .with_resource_scopes(BTreeMap::from([(
             "space".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: crate::CONFLUENCE_SPACE_RESOURCE.id().clone(),
-                selectors: vec!["exact".to_string(), "all".to_string()],
-            },
-        )]),
-        actions: actions
-            .into_iter()
-            .map(|action| {
-                let presentation = present::presentation(&action.action);
-                action.presentation(presentation)
-            })
-            .collect(),
-        credentials,
-        presentation_body_limit: Some(config.content.max_body_bytes),
-    }
+            ResourceScopeCapabilities::new(
+                crate::CONFLUENCE_SPACE_RESOURCE.id().clone(),
+                vec!["exact".to_string(), "all".to_string()],
+            ),
+        )]))
+        .with_actions(
+            actions
+                .into_iter()
+                .map(|action| {
+                    let presentation = present::presentation(&action.action);
+                    action.presentation(presentation)
+                })
+                .collect(),
+        )
+        .with_credentials(credentials)
+        .with_presentation_body_limit(config.content.max_body_bytes)
 }
 
 /// When a Confluence action needs the broker's lookup credential. Actions

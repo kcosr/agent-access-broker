@@ -3,7 +3,7 @@ use agent_access_cloudbees_ci::*;
 use agent_access_fake::*;
 use agent_access_provider::{
     ActionDescriptor, ActionIo, BackendRegistration, GIT_REPOSITORY_RESOURCE, LookupRequirement,
-    ReasonCode, ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
+    ReasonCode, ResourceType, ScopedMcpNameSource, parse_backend_config,
 };
 use base64::Engine as _;
 
@@ -4764,10 +4764,10 @@ fn resource_scopes_must_bind_registered_types_and_supported_selectors() {
 
     descriptor.resource_scopes.insert(
         "issue".into(),
-        agent_access_provider::ResourceScopeCapabilities {
-            resource_type: agent_access_provider::ResourceType::new("jira_issue").unwrap(),
-            selectors: vec!["exact".into()],
-        },
+        agent_access_provider::ResourceScopeCapabilities::new(
+            agent_access_provider::ResourceType::new("jira_issue").unwrap(),
+            vec!["exact".into()],
+        ),
     );
     descriptor
         .resource_scopes
@@ -5184,14 +5184,10 @@ fn oauth_credentials_need_a_per_user_service_that_accepts_delegation() {
         read_only: None,
         credential_name: None,
     };
-    let delegated = |actions: Vec<ActionDescriptor>| ServiceDescriptor {
-        service: "records".into(),
-        display_name: "Records".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: CredentialDescriptor::default().delegated("Read records."),
-        presentation_body_limit: None,
+    let delegated = |actions: Vec<ActionDescriptor>| {
+        ServiceDescriptor::new("records", "Records")
+            .with_actions(actions)
+            .with_credentials(CredentialDescriptor::default().delegated("Read records."))
     };
     let action = |name: &str| {
         ActionDescriptor::new(name, "Read", serde_json::json!({"type": "object"}))
@@ -5244,15 +5240,7 @@ fn builtin_descriptor_validation_rejects_imported_naming_origin() {
     action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
         name: Some("upstream_inspect".into()),
     };
-    let descriptor = ServiceDescriptor {
-        service: "fake".into(),
-        display_name: "Fake".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: Default::default(),
-        actions: vec![action],
-        credentials: Default::default(),
-        presentation_body_limit: None,
-    };
+    let descriptor = ServiceDescriptor::new("fake", "Fake").with_actions(vec![action]);
     let services = BTreeMap::from([("fake".into(), Arc::new(descriptor))]);
     let mut errors = Vec::new();
     validate_service_descriptors(&services, &test_resource_types(), &mut errors);

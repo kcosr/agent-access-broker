@@ -524,25 +524,19 @@ fn descriptors_mark_current_upload_and_download_actions() {
 #[test]
 fn service_projection_removes_gateway_metadata() {
     let projected = api_service_spec(
-        &agent_access_provider::ServiceDescriptor {
-            service: "repo".to_string(),
-            display_name: "Repo gateway".to_string(),
-            surface: agent_access_provider::ServiceSurface::Gateway {
+        &agent_access_provider::ServiceDescriptor::new("repo", "Repo gateway")
+            .with_surface(agent_access_provider::ServiceSurface::Gateway {
                 kind: "git_http".to_string(),
                 broker_hosts: vec!["git.example.test".to_string()],
-            },
-            resource_scopes: BTreeMap::new(),
-            actions: vec![
+            })
+            .with_actions(vec![
                 agent_access_provider::ActionDescriptor::new(
                     "repo.fetch",
                     "Fetch",
                     json!({ "type": "object" }),
                 )
                 .credential_modes(["service"]),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        },
+            ]),
         true,
     );
     assert!(projected.is_none());
@@ -551,45 +545,37 @@ fn service_projection_removes_gateway_metadata() {
 #[test]
 fn service_projection_marks_sensitive_configured_http_headers() {
     let projected = api_service_spec(
-        &agent_access_provider::ServiceDescriptor {
-            service: "api".to_string(),
-            display_name: "API".to_string(),
-            surface: agent_access_provider::ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::new(),
-            actions: vec![
-                agent_access_provider::ActionDescriptor::new(
-                    "call",
-                    "Call",
-                    json!({
-                        "type": "object",
-                        "properties": {
-                            "headers": {
-                                "type": "object",
-                                "properties": {
-                                    "Accept": { "type": "string" },
-                                    "Password": { "type": "string" },
-                                    "Private-Key": { "type": "string" },
-                                    "X-Auth": { "type": "string" },
-                                    "X-Api-Key": { "type": "string" },
-                                    "X-Bearer": { "type": "string" },
-                                    "X-Cred": { "type": "string" },
-                                    "X-Credential": { "type": "string" },
-                                    "X-Key": { "type": "string" },
-                                    "X-Passwd": { "type": "string" },
-                                    "X-Pwd": { "type": "string" },
-                                    "X-Session": { "type": "string" },
-                                    "X/Secret~Header": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            }
+        &agent_access_provider::ServiceDescriptor::new("api", "API").with_actions(vec![
+            agent_access_provider::ActionDescriptor::new(
+                "call",
+                "Call",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "headers": {
+                            "type": "object",
+                            "properties": {
+                                "Accept": { "type": "string" },
+                                "Password": { "type": "string" },
+                                "Private-Key": { "type": "string" },
+                                "X-Auth": { "type": "string" },
+                                "X-Api-Key": { "type": "string" },
+                                "X-Bearer": { "type": "string" },
+                                "X-Cred": { "type": "string" },
+                                "X-Credential": { "type": "string" },
+                                "X-Key": { "type": "string" },
+                                "X-Passwd": { "type": "string" },
+                                "X-Pwd": { "type": "string" },
+                                "X-Session": { "type": "string" },
+                                "X/Secret~Header": { "type": "string" }
+                            },
+                            "additionalProperties": false
                         }
-                    }),
-                )
-                .credential_modes(["service"]),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        },
+                    }
+                }),
+            )
+            .credential_modes(["service"]),
+        ]),
         true,
     )
     .unwrap();
@@ -1068,16 +1054,13 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
             io: ActionIo::MultipartUpload {
-                plan: MultipartUploadSpec {
-                    role: "asset".to_string(),
-                    metadata_pointer: "/uploads".to_string(),
-                    field_name_prefix: "asset".to_string(),
-                    min_files: 2,
-                    max_files: Some(4),
-                    locator_inputs: Vec::new(),
-                    metadata_fields: vec!["field".to_string()],
-                    caller_content_type_allowed: false,
-                },
+                plan: MultipartUploadSpec::new(
+                    "asset".to_string(),
+                    "/uploads".to_string(),
+                    "asset".to_string(),
+                )
+                .with_file_count(2, Some(4))
+                .with_metadata_fields(vec!["field".to_string()]),
             },
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
@@ -1136,16 +1119,14 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
             io: ActionIo::MultipartUpload {
-                plan: MultipartUploadSpec {
-                    role: "asset".to_string(),
-                    metadata_pointer: "/payload/uploads".to_string(),
-                    field_name_prefix: "asset".to_string(),
-                    min_files: 1,
-                    max_files: None,
-                    locator_inputs: vec!["payload.pageId".to_string()],
-                    metadata_fields: vec!["field".to_string()],
-                    caller_content_type_allowed: true,
-                },
+                plan: MultipartUploadSpec::new(
+                    "asset".to_string(),
+                    "/payload/uploads".to_string(),
+                    "asset".to_string(),
+                )
+                .with_locator_inputs(vec!["payload.pageId".to_string()])
+                .with_metadata_fields(vec!["field".to_string()])
+                .allowing_caller_content_type(),
             },
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,

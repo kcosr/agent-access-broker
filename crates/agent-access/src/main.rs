@@ -22131,16 +22131,15 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn send_upload_metadata_uses_catalog_pointer_and_fields() {
-        let plan = MultipartUploadSpec {
-            role: "asset".to_string(),
-            metadata_pointer: "/payload/uploads".to_string(),
-            field_name_prefix: "asset".to_string(),
-            min_files: 1,
-            max_files: Some(3),
-            locator_inputs: vec!["pageId".to_string()],
-            metadata_fields: vec!["field".to_string(), "filename".to_string()],
-            caller_content_type_allowed: true,
-        };
+        let plan = MultipartUploadSpec::new(
+            "asset".to_string(),
+            "/payload/uploads".to_string(),
+            "asset".to_string(),
+        )
+        .with_file_count(1, Some(3))
+        .with_locator_inputs(vec!["pageId".to_string()])
+        .with_metadata_fields(vec!["field".to_string(), "filename".to_string()])
+        .allowing_caller_content_type();
         let entry = upload_metadata_entry(
             &plan,
             UploadFileMetadata {
@@ -22219,16 +22218,13 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn send_upload_validation_uses_catalog_plan_constraints() {
-        let plan = MultipartUploadSpec {
-            role: "asset".to_string(),
-            metadata_pointer: "/uploads".to_string(),
-            field_name_prefix: "asset".to_string(),
-            min_files: 1,
-            max_files: Some(2),
-            locator_inputs: Vec::new(),
-            metadata_fields: vec!["field".to_string()],
-            caller_content_type_allowed: false,
-        };
+        let plan = MultipartUploadSpec::new(
+            "asset".to_string(),
+            "/uploads".to_string(),
+            "asset".to_string(),
+        )
+        .with_file_count(1, Some(2))
+        .with_metadata_fields(vec!["field".to_string()]);
         let file = SendFileDescriptor {
             role: "asset".to_string(),
             path: PathBuf::from("a.txt"),

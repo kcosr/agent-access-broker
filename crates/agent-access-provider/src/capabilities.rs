@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// A service as capability discovery projects it from its
+/// [`ServiceDescriptor`](crate::ServiceDescriptor).
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceCapabilities {
@@ -23,11 +26,22 @@ pub struct ServiceCapabilities {
     pub actions: Vec<ActionCapabilities>,
 }
 
+/// The resource type a scope authorizes and the selector forms it offers.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceScopeCapabilities {
     pub resource_type: ResourceType,
     pub selectors: Vec<String>,
+}
+
+impl ResourceScopeCapabilities {
+    pub fn new(resource_type: ResourceType, selectors: Vec<String>) -> Self {
+        Self {
+            resource_type,
+            selectors,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,6 +50,9 @@ pub enum UpstreamResourceOwnership {
     ActingUser,
 }
 
+/// An action as capability discovery projects it from its
+/// [`ActionDescriptor`](crate::ActionDescriptor).
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionCapabilities {

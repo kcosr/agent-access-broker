@@ -7350,31 +7350,31 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             )
         }
     }));
-    ServiceDescriptor {
-        service: "gitlab".to_string(),
-        display_name: "GitLab".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("gitlab", "GitLab")
+        .with_resource_scopes(BTreeMap::from([(
             "repository".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: crate::GIT_REPOSITORY_RESOURCE.id().clone(),
-                selectors: vec![
+            ResourceScopeCapabilities::new(
+                crate::GIT_REPOSITORY_RESOURCE.id().clone(),
+                vec![
                     "exact".to_string(),
                     "namespace".to_string(),
                     "all".to_string(),
                 ],
-            },
-        )]),
-        actions: actions
-            .into_iter()
-            .map(|action| {
-                let presentation = present::presentation(&action.action);
-                action.presentation(presentation)
-            })
-            .collect(),
-        credentials: CredentialDescriptor::default().profile("gitlab-access-token", "bearer_token"),
-        presentation_body_limit: Some(config.content.max_body_bytes),
-    }
+            ),
+        )]))
+        .with_actions(
+            actions
+                .into_iter()
+                .map(|action| {
+                    let presentation = present::presentation(&action.action);
+                    action.presentation(presentation)
+                })
+                .collect(),
+        )
+        .with_credentials(
+            CredentialDescriptor::default().profile("gitlab-access-token", "bearer_token"),
+        )
+        .with_presentation_body_limit(config.content.max_body_bytes)
 }
 
 /// Every GitLab action is authorized against one repository resolved from

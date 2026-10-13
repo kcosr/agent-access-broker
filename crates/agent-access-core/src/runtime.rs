@@ -3195,10 +3195,8 @@ impl BrokerRuntime {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                (!actions.is_empty()).then(|| ServiceDescriptor {
-                    actions,
-                    ..ServiceDescriptor::clone(descriptor)
-                })
+                (!actions.is_empty())
+                    .then(|| ServiceDescriptor::clone(descriptor).with_actions(actions))
             })
             .collect()
     }
@@ -3274,11 +3272,9 @@ impl BrokerRuntime {
                     .cloned()
                     .collect::<Vec<_>>();
                 (!actions.is_empty()).then(|| {
-                    ServiceDescriptor {
-                        actions,
-                        ..ServiceDescriptor::clone(descriptor)
-                    }
-                    .capabilities()
+                    ServiceDescriptor::clone(descriptor)
+                        .with_actions(actions)
+                        .capabilities()
                 })
             })
             .collect()
@@ -6735,36 +6731,35 @@ pub(crate) fn gateway_service_descriptor(
         .credential_modes
         .iter()
         .any(|mode| mode == "per_user");
-    Some(ServiceDescriptor {
-        service: service.to_string(),
-        display_name: gateway.display_name.clone(),
-        surface: ServiceSurface::Gateway {
-            kind: gateway.kind.clone(),
-            broker_hosts: gateway.broker_hosts.clone(),
-        },
-        resource_scopes: BTreeMap::from([(
-            "repository".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
-                selectors: vec![
-                    "exact".to_string(),
-                    "namespace".to_string(),
-                    "all".to_string(),
-                ],
-            },
-        )]),
-        actions,
-        // Verifying a Git credential reads one repository's refs.
-        credentials: if per_user {
-            CredentialDescriptor::default()
-                .verification_input("repository")
-                .profile("git-basic-api-token", "basic_api_token")
-                .profile("git-bearer-token", "bearer_token")
-        } else {
-            CredentialDescriptor::default().verification_input("repository")
-        },
-        presentation_body_limit: None,
-    })
+    // Verifying a Git credential reads one repository's refs.
+    let credentials = if per_user {
+        CredentialDescriptor::default()
+            .verification_input("repository")
+            .profile("git-basic-api-token", "basic_api_token")
+            .profile("git-bearer-token", "bearer_token")
+    } else {
+        CredentialDescriptor::default().verification_input("repository")
+    };
+    Some(
+        ServiceDescriptor::new(service, gateway.display_name.clone())
+            .with_surface(ServiceSurface::Gateway {
+                kind: gateway.kind.clone(),
+                broker_hosts: gateway.broker_hosts.clone(),
+            })
+            .with_resource_scopes(BTreeMap::from([(
+                "repository".to_string(),
+                ResourceScopeCapabilities::new(
+                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
+                    vec![
+                        "exact".to_string(),
+                        "namespace".to_string(),
+                        "all".to_string(),
+                    ],
+                ),
+            )]))
+            .with_actions(actions)
+            .with_credentials(credentials),
+    )
 }
 
 fn toml_identity_groups(config: &BrokerConfig, principal: &str) -> (Vec<String>, Vec<String>) {

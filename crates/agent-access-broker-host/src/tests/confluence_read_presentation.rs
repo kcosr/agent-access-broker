@@ -457,12 +457,9 @@ impl agent_access_provider::test_support::DescribedProvider
             .credential_modes(["service"])
             .presentation(backend_presentation("confluence", action))
         };
-        ServiceDescriptor {
-            service: "confluence".to_string(),
-            display_name: "Confluence Normalized Read Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("space"),
-            actions: vec![
+        ServiceDescriptor::new("confluence", "Confluence Normalized Read Test Provider")
+            .with_resource_scopes(fixture_scope_capabilities("space"))
+            .with_actions(vec![
                 action(
                     "page.view",
                     json!({
@@ -501,10 +498,9 @@ impl agent_access_provider::test_support::DescribedProvider
                         "additionalProperties": false
                     }),
                 ),
-            ],
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: Some(confluence_provider_config().content.max_body_bytes),
-        }
+            ])
+            .with_credentials(CredentialDescriptor::without_execution_credential())
+            .with_presentation_body_limit(confluence_provider_config().content.max_body_bytes)
     }
 }
 

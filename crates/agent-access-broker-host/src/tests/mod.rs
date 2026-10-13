@@ -31,8 +31,7 @@ use agent_access_provider::{
     CredentialDescriptor, GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError,
     ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, REQUEST_ID_HEADER,
     RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, ResourceSelector, ResourceType,
-    ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface, StateDisposition,
-    attachment_upload_plan,
+    ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition, attachment_upload_plan,
 };
 use axum::Router;
 use axum::body::Body;
@@ -205,15 +204,15 @@ fn fixture_scope_capabilities(
 ) -> BTreeMap<String, agent_access_provider::ResourceScopeCapabilities> {
     BTreeMap::from([(
         scope.to_string(),
-        agent_access_provider::ResourceScopeCapabilities {
-            resource_type: match scope {
+        agent_access_provider::ResourceScopeCapabilities::new(
+            match scope {
                 "project" => JIRA_PROJECT_RESOURCE.id().clone(),
                 "space" => CONFLUENCE_SPACE_RESOURCE.id().clone(),
                 "repository" => GIT_REPOSITORY_RESOURCE.id().clone(),
                 _ => panic!("no fixture resource type for scope {scope}"),
             },
-            selectors: vec!["exact".to_string(), "all".to_string()],
-        },
+            vec!["exact".to_string(), "all".to_string()],
+        ),
     )])
 }
 
@@ -14976,12 +14975,9 @@ async fn test_multipart_broker() -> TestBroker {
 
 impl agent_access_provider::test_support::DescribedProvider for TestJiraParentInvokeProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Jira Parent Invoke Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("project"),
-            actions: vec![
+        ServiceDescriptor::new("jira", "Jira Parent Invoke Provider")
+            .with_resource_scopes(fixture_scope_capabilities("project"))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "issue.parent.set",
                     "Set Jira issue parent in route tests",
@@ -15016,10 +15012,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraParentIn
                 .scope("project")
                 .credential_modes(["service"])
                 .lookup(LookupRequirement::ScopeResolution),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -15173,21 +15166,17 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraReadPres
             .credential_modes(["service"])
             .presentation(backend_presentation("jira", action))
         };
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Jira Normalized Read Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("project"),
-            actions: vec![
+        ServiceDescriptor::new("jira", "Jira Normalized Read Test Provider")
+            .with_resource_scopes(fixture_scope_capabilities("project"))
+            .with_actions(vec![
                 action("issue.view"),
                 action("issue.update"),
                 action("verify"),
-            ],
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: Some(
+            ])
+            .with_credentials(CredentialDescriptor::without_execution_credential())
+            .with_presentation_body_limit(
                 agent_access_jira::JiraContentConfig::default().max_body_bytes,
-            ),
-        }
+            )
     }
 }
 
@@ -15263,12 +15252,7 @@ impl Provider for TestJiraReadPresentationProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestJiraNormalizedWriteProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Jira Normalized Write Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("project"),
-            actions: vec![
+        ServiceDescriptor::new("jira", "Jira Normalized Write Test Provider").with_resource_scopes(fixture_scope_capabilities("project")).with_actions(vec![
                 ActionDescriptor::new(
                     "issue.create",
                     "Create a Jira issue in normalized write tracing tests",
@@ -15287,10 +15271,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraNormaliz
                 )
                 .scope("project")
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -15384,12 +15365,7 @@ impl agent_access_provider::test_support::DescribedProvider
     for TestConfluenceNormalizedWriteProvider
 {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "confluence".to_string(),
-            display_name: "Confluence Normalized Write Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("space"),
-            actions: vec![
+        ServiceDescriptor::new("confluence", "Confluence Normalized Write Test Provider").with_resource_scopes(fixture_scope_capabilities("space")).with_actions(vec![
                 ActionDescriptor::new(
                     "page.create",
                     "Create a Confluence page in normalized write tracing tests",
@@ -15407,10 +15383,7 @@ impl agent_access_provider::test_support::DescribedProvider
                 )
                 .scope("space")
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -15496,33 +15469,27 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestGitlabNormalizedWriteProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "gitlab".to_string(),
-            display_name: "GitLab Normalized Write Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("repository"),
-            actions: vec![
-                ActionDescriptor::new(
-                    "issue.create",
-                    "Create a GitLab issue in normalized write tracing tests",
-                    json!({
-                        "type": "object",
-                        "required": ["project", "title", "contentFormat", "content"],
-                        "properties": {
-                            "project": { "type": "string" },
-                            "title": { "type": "string" },
-                            "contentFormat": { "type": "string", "enum": ["markdown", "plain_text"] },
-                            "content": { "type": "string" }
-                        },
-                        "additionalProperties": false
-                    }),
-                )
-                .scope("repository")
-                .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new("gitlab", "GitLab Normalized Write Test Provider")
+            .with_resource_scopes(fixture_scope_capabilities("repository"))
+            .with_actions(vec![
+            ActionDescriptor::new(
+                "issue.create",
+                "Create a GitLab issue in normalized write tracing tests",
+                json!({
+                    "type": "object",
+                    "required": ["project", "title", "contentFormat", "content"],
+                    "properties": {
+                        "project": { "type": "string" },
+                        "title": { "type": "string" },
+                        "contentFormat": { "type": "string", "enum": ["markdown", "plain_text"] },
+                        "content": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+            )
+            .scope("repository")
+            .credential_modes(["service"]),
+        ])
     }
 }
 
@@ -15608,12 +15575,9 @@ impl Provider for TestGitlabNormalizedWriteProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestGitlabReviewFailureProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "gitlab".to_string(),
-            display_name: "GitLab Review Failure Contract Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("repository"),
-            actions: vec![
+        ServiceDescriptor::new("gitlab", "GitLab Review Failure Contract Test Provider")
+            .with_resource_scopes(fixture_scope_capabilities("repository"))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "merge_request.discussion.inline.add",
                     "Return fixed GitLab review failures in HTTP contract tests",
@@ -15646,10 +15610,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabReview
                 )
                 .scope("repository")
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -15722,12 +15683,7 @@ impl Provider for TestGitlabReviewFailureProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestGitlabSuggestionApplyProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "gitlab".to_string(),
-            display_name: "GitLab Suggestion Apply Test Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("repository"),
-            actions: vec![
+        ServiceDescriptor::new("gitlab", "GitLab Suggestion Apply Test Provider").with_resource_scopes(fixture_scope_capabilities("repository")).with_actions(vec![
                 ActionDescriptor::new(
                     "merge_request.suggestion.apply",
                     "Apply a scoped GitLab suggestion",
@@ -15747,10 +15703,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabSugges
                 )
                 .scope("repository")
                 .credential_modes(["service"]),
-            ],
-            credentials: CredentialDescriptor::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
@@ -15831,16 +15784,9 @@ async fn multipart_upload_request(
 
 impl agent_access_provider::test_support::DescribedProvider for TestCredentialVerificationProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Credential Verification Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: Default::default(),
-            actions: vec![],
-            credentials: CredentialDescriptor::default()
-                .profile("jira-cloud-api-token", "basic_api_token"),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new("jira", "Credential Verification Provider").with_credentials(
+            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
+        )
     }
 }
 
@@ -15896,16 +15842,9 @@ impl agent_access_provider::test_support::DescribedProvider
     for TestFailingCredentialVerificationProvider
 {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Failing Credential Verification Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: Default::default(),
-            actions: vec![],
-            credentials: CredentialDescriptor::default()
-                .profile("jira-cloud-api-token", "basic_api_token"),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new("jira", "Failing Credential Verification Provider").with_credentials(
+            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
+        )
     }
 }
 
@@ -15955,16 +15894,10 @@ impl agent_access_provider::test_support::DescribedProvider
     for TestLocalCredentialVerificationFailureProvider
 {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Local Credential Verification Failure Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: Default::default(),
-            actions: vec![],
-            credentials: CredentialDescriptor::default()
-                .profile("jira-cloud-api-token", "basic_api_token"),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new("jira", "Local Credential Verification Failure Provider")
+            .with_credentials(
+                CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
+            )
     }
 }
 
@@ -16012,12 +15945,7 @@ impl Provider for TestLocalCredentialVerificationFailureProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestMultipartProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Upload Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("project"),
-            actions: vec![
+        ServiceDescriptor::new("jira", "Upload Provider").with_resource_scopes(fixture_scope_capabilities("project")).with_actions(vec![
                 ActionDescriptor::new(
                     "attachment.add",
                     "Upload test attachment",
@@ -16048,10 +15976,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestMultipartPro
                 .scope("project")
                 .credential_modes(["service"])
                 .multipart_upload(attachment_upload_plan(&["project"], None)),
-            ],
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: None,
-        }
+            ]).with_credentials(CredentialDescriptor::without_execution_credential())
     }
 }
 
@@ -16213,12 +16138,9 @@ impl Provider for TestMultipartProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for TestDownloadProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Download Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: fixture_scope_capabilities("project"),
-            actions: vec![
+        ServiceDescriptor::new("jira", "Download Provider")
+            .with_resource_scopes(fixture_scope_capabilities("project"))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "attachment.download",
                     "Download test attachment",
@@ -16234,10 +16156,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestDownloadProv
                 .scope("project")
                 .credential_modes(["service"])
                 .raw_download(),
-            ],
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: None,
-        }
+            ])
+            .with_credentials(CredentialDescriptor::without_execution_credential())
     }
 }
 

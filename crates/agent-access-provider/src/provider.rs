@@ -10,6 +10,7 @@ use std::sync::Arc;
 /// runtime reads a service's definition only from here: for configured
 /// backends the descriptor is the configuration's own, so validation,
 /// admission, discovery, and the catalog all see the same one.
+#[non_exhaustive]
 #[derive(Clone)]
 pub struct ServiceProvider {
     pub descriptor: ServiceDescriptor,

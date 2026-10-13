@@ -487,24 +487,14 @@ pub fn evaluate_scoped_mcp_readiness(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::{
-        ActionDescriptor, ScopedMcpNameSource, ServiceDescriptor, ServiceSurface,
-    };
+    use agent_access_provider::{ActionDescriptor, ScopedMcpNameSource, ServiceDescriptor};
 
     fn descriptor() -> ServiceDescriptor {
         let mut action = ActionDescriptor::new("accepted.read", "Read", json!({"type":"object"}));
         action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
             name: Some("Original.Read".into()),
         };
-        ServiceDescriptor {
-            service: "example".into(),
-            display_name: "Example".into(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: Default::default(),
-            actions: vec![action],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+        ServiceDescriptor::new("example", "Example").with_actions(vec![action])
     }
     fn catalog(descriptor: &ServiceDescriptor, ready: bool) -> ApiCatalog {
         let mut catalog = crate::empty_catalog(json!({}));
