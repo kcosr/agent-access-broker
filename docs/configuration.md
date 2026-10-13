@@ -1388,7 +1388,11 @@ forwarding are implemented. Receive-pack POST bodies are parsed before upstream
 credential use so malformed command lists, denied refs, delete/tag updates, and
 denied capabilities fail closed before forwarding. Each `[gateways.<name>]`
 entry becomes a service whose name is the config key and whose policy actions
-are `repo.fetch` and/or `repo.push`.
+are `repo.fetch` and/or `repo.push`. The name must not be `broker` or any native
+provider kind the binary selects, even one without a `[providers.<kind>]`
+table: this build reserves `jira`, `confluence`, `gitlab`, `cloudbees_ci`,
+`fake`, `gmail`, `teams` and `oauth_stub`, so configuring a provider never
+renames a gateway's service.
 
 Gateway config participates in normal validation and reloads, but it does not
 bind network traffic by itself. Run `agent-access-broker serve` with

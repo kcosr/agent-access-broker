@@ -352,6 +352,25 @@ default_decision = "deny"
     }
 
     #[test]
+    fn the_reserved_broker_kind_is_rejected_even_if_never_configured() {
+        static BROKER_KIND: BackendRegistration = BackendRegistration {
+            kind: "broker",
+            resource_types: &[],
+            parse: FAKE_BACKEND.parse,
+            development_only: false,
+        };
+        let error = BrokerComposition::builder()
+            .native(&FAKE_BACKEND)
+            .native(&BROKER_KIND)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            error.problems(),
+            ["backend kind broker is reserved for the Broker control-plane namespace"]
+        );
+    }
+
+    #[test]
     fn configured_descriptors_follow_selection_order() {
         let composition = BrokerComposition::builder()
             .native(&JIRA_BACKEND)

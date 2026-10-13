@@ -94,7 +94,12 @@ review; changing classifications affecting existing grants requires confirmation
 
 Descriptions and display labels are metadata. Schema or execution-annotation changes
 are behavioral changes. Disable is reversible. Retirement reserves the service/action
-identity permanently. An administrator cannot recycle a retired name onto a different
+identity permanently. Every retained import, whatever its status or adapter
+availability, must not share its service ID with `broker`, a native provider
+kind the binary selects (configured or not), a gateway, or a configured
+credential. Startup, configuration reload and import writes reject such a
+collision with a diagnostic naming both owners; a failed reload keeps the
+active configuration, and the operator resolves the retained identity first. An administrator cannot recycle a retired name onto a different
 upstream tool.
 
 An upstream tool whose former action is retired can be reviewed under a fresh action

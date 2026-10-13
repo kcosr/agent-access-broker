@@ -3222,16 +3222,15 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
         if service == "broker" || !is_service_name(service) {
             errors.push(format!("gateways.{service} uses an invalid service name"));
         }
-        // Development backends stay reserved even while unconfigured, so
-        // enabling one never renames a gateway's service.
-        let development_kind = config
-            .providers
-            .registry()
-            .get(service)
-            .is_some_and(|registration| registration.development_only);
-        if development_kind || provider_services.contains(service) {
+        // Every selected native kind stays reserved even while unconfigured,
+        // so configuring its provider never renames a gateway's service.
+        if config.providers.registry().get(service).is_some() {
             errors.push(format!(
-                "gateways.{service} must not collide with a provider service"
+                "gateways.{service} collides with the selected native provider kind {service}"
+            ));
+        } else if provider_services.contains(service) {
+            errors.push(format!(
+                "gateways.{service} collides with the configured provider service {service}"
             ));
         }
         if gateway.display_name.trim().is_empty() {

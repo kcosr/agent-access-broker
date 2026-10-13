@@ -52,6 +52,13 @@ All notable changes to this project are documented in this file.
   `OpenApiAdapter` and `MCP_OAUTH_DIALECT` are no longer exported, and the MCP
   registration supplies the `mcp_oauth` dialect. Selecting that dialect again
   with `.oauth(..)` is rejected as a duplicate.
+- Gateway names may no longer match any native provider kind the binary
+  selects, even without a `[providers.<kind>]` table; previously only
+  configured providers and development kinds were reserved. Rename a
+  `[gateways.<name>]` entry called `jira`, `confluence`, `gitlab`,
+  `cloudbees_ci`, `gmail`, `teams` or `oauth_stub` (`fake` was already
+  reserved). A native provider registration with kind `broker` is rejected when
+  the binary's registry is built, even if never configured.
 
 ### Added
 
@@ -61,6 +68,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Startup, reload and import-write diagnostics for a retained imported service
+  identity collision now name both owners, such as
+  `retained imported service jira collides with the selected native provider kind jira`.
 - Broker process lifecycle, HTTP, MCP, management, gateway, and reload events
   now log under `agent_access_broker_host::…` targets instead of
   `agent_access_broker` and `agent_access_broker::…`; lifecycle events such as

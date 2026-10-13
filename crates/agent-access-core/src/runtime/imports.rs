@@ -582,18 +582,10 @@ impl BrokerRuntime {
         }
         for record in &catalog.services {
             let name = &record.definition.service;
-            if services.contains_key(name)
-                || config.gateways.contains_key(name)
-                || config.providers.registry().get(name).is_some()
-                || name == "broker"
-                || config.credentials.service.contains_key(name)
-                || config.credentials.lookup.contains_key(name)
-                || config.credentials.per_user.contains_key(name)
-            {
-                return Err(ManagedStoreError::InputInvalid(
-                    "imported service identity collides with a configured service or credential"
-                        .into(),
-                ));
+            if let Some(owner) = imported_service_collision(&config, &services, name) {
+                return Err(ManagedStoreError::InputInvalid(format!(
+                    "imported service {name} collides with {owner}"
+                )));
             }
             let old = self.imported_catalog.service(name);
             let newly_enabled = record.status == ImportedServiceStatus::Enabled

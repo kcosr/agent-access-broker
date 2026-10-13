@@ -1833,16 +1833,9 @@ impl BrokerRuntime {
             .unwrap_or_default();
         for record in &imported_catalog.services {
             let name = &record.definition.service;
-            if services.contains_key(name)
-                || config.providers.registry().get(name).is_some()
-                || name == "broker"
-                || config.credentials.service.contains_key(name)
-                || config.credentials.per_user.contains_key(name)
-                || config.credentials.lookup.contains_key(name)
-            {
+            if let Some(owner) = imported_service_collision(&config, &services, name) {
                 return Err(RuntimeError::ManagedStore {
-                    message: "imported service collides with configured service or credentials"
-                        .into(),
+                    message: format!("retained imported service {name} collides with {owner}"),
                 });
             }
             let descriptor = imports::descriptor(record, &config);
@@ -6351,6 +6344,38 @@ fn register_service_provider(
 /// registered providers are paired with, plus configured gateways. Each
 /// descriptor is validated once here and then shared by admission,
 /// discovery, and catalog projection.
+/// The other owner of an imported service identity, if any, named for a
+/// diagnostic: the reserved control-plane namespace, a selected native kind
+/// (configured or not), a gateway, another configured service or a
+/// configured credential. Every retained import is checked, whatever its
+/// status or adapter availability.
+pub(crate) fn imported_service_collision(
+    config: &BrokerConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    name: &str,
+) -> Option<String> {
+    if name == "broker" {
+        return Some("the reserved broker control-plane namespace".into());
+    }
+    if config.providers.registry().get(name).is_some() {
+        return Some(format!("the selected native provider kind {name}"));
+    }
+    if config.gateways.contains_key(name) {
+        return Some(format!("gateways.{name}"));
+    }
+    if services.contains_key(name) {
+        return Some(format!("the configured service {name}"));
+    }
+    [
+        ("credentials.service", &config.credentials.service),
+        ("credentials.per_user", &config.credentials.per_user),
+        ("credentials.lookup", &config.credentials.lookup),
+    ]
+    .into_iter()
+    .find(|(_, credentials)| credentials.contains_key(name))
+    .map(|(mode, _)| format!("{mode}.{name}"))
+}
+
 fn build_service_descriptors(
     config: &BrokerConfig,
     providers: &BTreeMap<String, ServiceProvider>,

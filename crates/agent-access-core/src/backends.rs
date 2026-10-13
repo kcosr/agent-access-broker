@@ -40,6 +40,11 @@ impl BackendRegistry {
                     "backend kind {} is not a valid service name",
                     registration.kind
                 ));
+            } else if registration.kind == "broker" {
+                // Reserved even when selected but never configured.
+                errors.push(
+                    "backend kind broker is reserved for the Broker control-plane namespace".into(),
+                );
             }
             if kinds.insert(registration.kind, ()).is_some() {
                 errors.push(format!(

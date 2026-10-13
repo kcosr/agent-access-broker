@@ -5059,14 +5059,44 @@ fn the_fake_service_opt_in_alone_configures_no_fake_backend() {
 }
 
 #[test]
-fn development_backend_kinds_stay_reserved_for_gateways() {
-    let raw = format!(
-        "{MINIMAL_BROKER_CONFIG}\n[gateways.fake]\nkind = \"git_http\"\ndisplay_name = \"Fake\"\nbroker_hosts = [\"git.example.com\"]\nupstream_base_url = \"https://gitlab.example.com\"\nallowed_upstream_hosts = [\"https://gitlab.example.com/**\"]\n"
-    );
-    let config = parse_test_config(&raw).unwrap();
-    assert_contains(
-        validate_broker_config(&config).unwrap_err().errors(),
-        "gateways.fake must not collide with a provider service",
+fn every_selected_native_kind_stays_reserved_for_gateways() {
+    let gateway = |service: &str| {
+        format!(
+            "{MINIMAL_BROKER_CONFIG}\n[gateways.{service}]\nkind = \"git_http\"\ndisplay_name = \"Gateway\"\nbroker_hosts = [\"git.example.com\"]\nupstream_base_url = \"https://gitlab.example.com\"\nallowed_upstream_hosts = [\"https://gitlab.example.com/**\"]\n"
+        )
+    };
+    // Development and production kinds alike, with no provider table.
+    for service in ["fake", "jira", "cloudbees_ci", "oauth_stub"] {
+        let config = parse_test_config(&gateway(service)).unwrap();
+        assert!(config.providers.get_kind(service).is_none());
+        assert_contains(
+            validate_broker_config(&config).unwrap_err().errors(),
+            &format!(
+                "gateways.{service} collides with the selected native provider kind {service}"
+            ),
+        );
+    }
+    // A kind this build does not select stays available to a gateway.
+    let config = parse_test_config(&gateway("source")).unwrap();
+    assert!(validate_broker_config(&config).err().is_none_or(|error| {
+        !error
+            .errors()
+            .iter()
+            .any(|error| error.contains("collides"))
+    }));
+}
+
+#[test]
+fn the_broker_namespace_is_reserved_even_for_an_unconfigured_native_kind() {
+    static BROKER_KIND: BackendRegistration = BackendRegistration {
+        kind: "broker",
+        resource_types: &[],
+        parse: parse_backend_config::<FakeProviderConfig>,
+        development_only: false,
+    };
+    assert_eq!(
+        BackendRegistry::new([&FAKE_BACKEND, &BROKER_KIND]).unwrap_err(),
+        ["backend kind broker is reserved for the Broker control-plane namespace"]
     );
 }
 

@@ -769,3 +769,85 @@ fn retained_unavailable_oauth_binding_does_not_block_other_import_administration
             .is_err()
     );
 }
+
+#[test]
+fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
+    // A native kind selected without a provider table still owns its name.
+    static OBSERVABILITY_KIND: agent_access_provider::BackendRegistration =
+        agent_access_provider::BackendRegistration {
+            kind: "observability",
+            resource_types: &[],
+            parse: agent_access_provider::parse_backend_config::<
+                agent_access_fake::FakeProviderConfig,
+            >,
+            development_only: false,
+        };
+    let fixture = fixture();
+    let mut colliding = fixture.config.clone();
+    colliding.providers = ProvidersConfig::new(Arc::new(
+        agent_access_core::BackendRegistry::new([&OBSERVABILITY_KIND])
+            .unwrap()
+            .with_imported_adapters([agent_access_core::imports::imported_adapter_registration(
+                &super::conformance_import::CONFORMANCE_IMPORT_ADAPTER,
+                None,
+            )])
+            .unwrap(),
+    ));
+    assert!(colliding.providers.get_kind("observability").is_none());
+    let expected = "retained imported service observability collides with the selected native provider kind observability";
+    let rejection = |result: Result<BrokerRuntime, agent_access_core::RuntimeError>| match result {
+        Ok(_) => panic!("a colliding composition must not start"),
+        Err(error) => error.to_string(),
+    };
+    let startup = rejection(BrokerRuntime::new(colliding.clone()));
+    assert!(startup.contains(expected), "{startup}");
+    let reload = rejection(BrokerRuntime::new_for_reload(colliding, &fixture.runtime));
+    assert!(reload.contains(expected), "{reload}");
+    // The failed candidates leave the published runtime serving the import.
+    assert!(
+        fixture
+            .runtime
+            .imported_catalog()
+            .service("observability")
+            .is_some()
+    );
+
+    // Creating an import under a selected, unconfigured native kind.
+    let runtime = &fixture.runtime;
+    assert!(runtime.config().providers.get_kind("jira").is_none());
+    let mut definition = definition();
+    definition.service = "jira".into();
+    let record = agent_access_core::ImportedServiceRecord {
+        definition: definition.clone(),
+        status: ImportedServiceStatus::Draft,
+        version: 1,
+        actions: vec![],
+        slot_versions: Default::default(),
+        created_at: String::new(),
+        created_by: "admin".into(),
+        updated_at: String::new(),
+        updated_by: "admin".into(),
+    };
+    let prepared = runtime
+        .prepare_imported_service_change(&record, None)
+        .unwrap();
+    let Err(error) =
+        runtime
+            .managed_store()
+            .unwrap()
+            .create_imported_service(definition, "admin", |catalog| {
+                runtime.with_imported_catalog(catalog.clone(), prepared)
+            })
+    else {
+        panic!("an import must not take a selected native kind's name");
+    };
+    assert!(
+        matches!(
+            &error,
+            ManagedStoreError::InputInvalid(message)
+                if message == "imported service jira collides with the selected native provider kind jira"
+        ),
+        "{error:?}"
+    );
+    assert!(runtime.imported_catalog().service("jira").is_none());
+}
