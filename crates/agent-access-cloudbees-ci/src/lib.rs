@@ -2,16 +2,17 @@
 //! artifact, and trigger actions across configured controllers, authorized
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BoundedDownload, BuildContext,
-    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
-    EgressRoute, ExecutionCredential, Provider, ProviderBuildError, ProviderError,
-    ProviderFailureStatus, ProviderInvocation, ProviderLimits, ProviderReasonDefinition,
-    ProviderResult, ProviderResultStream, ReasonCode, RedirectRules, ResourceScopeCapabilities,
-    ResourceScopes, ResourceType, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamRetryAfter, ValidationContext,
-    complete_upstream_trace, current_provider_action, is_service_name, parse_backend_config,
-    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BoundedDownload,
+    BuildContext, ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration,
+    EgressProxyConfig, EgressRoute, ExecutionCredential, Provider, ProviderBuildError,
+    ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
+    ProviderReasonDefinition, ProviderResult, ProviderResultStream, ReasonCode, RedirectRules,
+    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
+    is_service_name, parse_backend_config, read_bounded_body, upstream_rate_limited,
+    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -324,23 +325,21 @@ impl CloudbeesCiProvider {
                 duration_ms: started.elapsed().as_millis() as u64,
             });
         }
-        let mut response = response;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            ProviderError::error(
-                if error.is_timeout() {
-                    ReasonCode::UpstreamTimeout
-                } else {
-                    ReasonCode::UpstreamConnectionFailed
-                },
-                "CloudBees CI response failed",
-            )
-        })? {
-            if bytes.len() as u64 + chunk.len() as u64 > cap {
-                return Err(size_error());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = read_bounded_body(response, cap, None)
+            .await
+            .map_err(|error| match error {
+                BodyReadError::TooLarge => size_error(),
+                BodyReadError::Transport {
+                    timed_out: true, ..
+                } => ProviderError::error(
+                    ReasonCode::UpstreamTimeout,
+                    "CloudBees CI response failed",
+                ),
+                _ => ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "CloudBees CI response failed",
+                ),
+            })?;
         Ok(Reply {
             status,
             bytes,

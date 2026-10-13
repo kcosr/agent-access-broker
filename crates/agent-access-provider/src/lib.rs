@@ -282,9 +282,9 @@ pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{
-    ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace, file_upload_body,
-    take_upstream_trace,
+    BodyReadError, ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
+    file_upload_body, read_bounded_body, take_upstream_trace,
 };
 pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
 pub use upstream_rate_limit::{

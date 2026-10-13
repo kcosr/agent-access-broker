@@ -676,7 +676,12 @@ Respect the `ProviderLimits` the build context lends: `max_upstream_response_byt
 for JSON bodies read into memory, `max_download_bytes` and
 `streaming_idle_timeout_ms` for streams, `request_timeout_ms` and
 `max_http_body_bytes`. Read bodies chunk by chunk against the cap; never trust
-a `Content-Length` alone.
+a `Content-Length` alone. `read_bounded_body(response, byte_cap, idle_timeout)`
+does both: it rejects a declared length over the cap before reading, stops
+reading past the cap, optionally bounds each chunk by an idle timeout, and
+returns a `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with
+`timed_out` set when the client's deadline expired) for you to map to your own
+outcome.
 
 Return a raw download with `ProviderResultStream::from_bounded_response(content_type,
 response, BoundedDownload::new(label, byte_cap, cap_reason, idle_timeout)
@@ -1178,14 +1183,15 @@ use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::Response;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, Provider,
-    ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
+    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BuildContext,
+    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
+    Provider, ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
     ProviderReasonDefinition, ProviderResult, ReasonCode, ResourceScopeCapabilities,
     ResourceScopes, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
     ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext,
-    complete_upstream_trace, module_metadata, parse_backend_config, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    complete_upstream_trace, module_metadata, parse_backend_config, read_bounded_body,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1373,20 +1379,18 @@ fn note_inputs(action: &str, inputs: &Value) -> Result<NoteInputs, ProviderError
 
 impl NotesProvider {
     /// Reads a JSON body within the response limit.
-    async fn read_json(&self, mut response: Response) -> Result<Value, ProviderError> {
+    async fn read_json(&self, response: Response) -> Result<Value, ProviderError> {
         let protocol = |message| ProviderError::error(ReasonCode::UpstreamProtocolFailed, message);
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| {
-            ProviderError::error(
-                ReasonCode::UpstreamConnectionFailed,
-                "notes response failed",
-            )
-        })? {
-            if (body.len() + chunk.len()) as u64 > self.max_response_bytes {
-                return Err(protocol("notes response exceeds the response limit"));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(response, self.max_response_bytes, None)
+            .await
+            .map_err(|error| match error {
+                BodyReadError::TooLarge => protocol("notes response exceeds the response limit"),
+                // A transport failure, or a failure this version does not know.
+                _ => ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "notes response failed",
+                ),
+            })?;
         serde_json::from_slice(&body).map_err(|_| protocol("notes response is not JSON"))
     }
 }

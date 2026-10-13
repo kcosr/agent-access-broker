@@ -13,16 +13,16 @@ use agent_access_provider::presentation::{
 };
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
-    BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext, ClientProfile,
-    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
+    BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
+    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
     NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
     ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
     ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
     ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
     UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
     attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
-    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -536,44 +536,24 @@ impl ConformanceProvider {
         outcome
     }
 
-    async fn read_json_body(
-        &self,
-        mut response: reqwest::Response,
-    ) -> Result<Value, ProviderError> {
+    async fn read_json_body(&self, response: reqwest::Response) -> Result<Value, ProviderError> {
         if !response.status().is_success() {
             return Err(status_error(response.status()));
         }
         let protocol = |message| ProviderError::error(ReasonCode::UpstreamProtocolFailed, message);
-        if response
-            .content_length()
-            .is_some_and(|length| length > self.max_response_bytes)
-        {
-            return Err(protocol("conformance response exceeds the limit"));
-        }
-        let mut body = Vec::new();
-        loop {
-            let chunk = tokio::time::timeout(self.idle_timeout, response.chunk())
-                .await
-                .map_err(|_| {
-                    ProviderError::error(
-                        ReasonCode::UpstreamTimeout,
-                        "conformance response stalled",
-                    )
-                })?
-                .map_err(|_| {
-                    ProviderError::error(
-                        ReasonCode::UpstreamConnectionFailed,
-                        "conformance response failed",
-                    )
-                })?;
-            let Some(chunk) = chunk else {
-                break;
-            };
-            if (body.len() + chunk.len()) as u64 > self.max_response_bytes {
-                return Err(protocol("conformance response exceeds the limit"));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(response, self.max_response_bytes, Some(self.idle_timeout))
+            .await
+            .map_err(|error| match error {
+                BodyReadError::TooLarge => protocol("conformance response exceeds the limit"),
+                BodyReadError::IdleTimeout => ProviderError::error(
+                    ReasonCode::UpstreamTimeout,
+                    "conformance response stalled",
+                ),
+                _ => ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "conformance response failed",
+                ),
+            })?;
         serde_json::from_slice(&body).map_err(|_| protocol("conformance response is not JSON"))
     }
 

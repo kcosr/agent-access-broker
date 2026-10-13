@@ -3568,20 +3568,13 @@ pub(crate) async fn confluence_response_bytes_untraced(
         };
     }
     validate_confluence_body_response(&response, byte_cap)?;
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+    read_bounded_body(response, byte_cap, None)
         .await
-        .map_err(|_| ConfluenceBackendError::Transport("response read failed".to_string()))?
-    {
-        let next_len = bytes.len() + chunk.len();
-        if next_len as u64 > byte_cap {
-            return Err(ConfluenceBackendError::ResponseTooLarge);
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
+        .map_err(|error| match error {
+            BodyReadError::TooLarge => ConfluenceBackendError::ResponseTooLarge,
+            BodyReadError::IdleTimeout => ConfluenceBackendError::Timeout,
+            _ => ConfluenceBackendError::Transport("response read failed".to_string()),
+        })
 }
 
 pub(crate) fn confluence_operation_exposes_validation(operation: &str) -> bool {

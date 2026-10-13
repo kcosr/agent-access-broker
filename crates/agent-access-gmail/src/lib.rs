@@ -613,26 +613,22 @@ fn protocol() -> ProviderError {
         "Gmail response is invalid or exceeds a bound",
     )
 }
+/// Reads a JSON body within the operation's remaining byte budget, which it
+/// then charges.
 async fn read_response(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     budget: &mut u64,
 ) -> Result<Value, ProviderError> {
-    if response.content_length().is_some_and(|n| n > *budget) {
-        return Err(protocol());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| {
-        ProviderError::error(
-            ReasonCode::UpstreamConnectionFailed,
-            "Gmail response interrupted",
-        )
-    })? {
-        if chunk.len() as u64 > *budget {
-            return Err(protocol());
-        }
-        *budget -= chunk.len() as u64;
-        bytes.extend_from_slice(&chunk);
-    }
+    let bytes = read_bounded_body(response, *budget, None)
+        .await
+        .map_err(|error| match error {
+            BodyReadError::TooLarge => protocol(),
+            _ => ProviderError::error(
+                ReasonCode::UpstreamConnectionFailed,
+                "Gmail response interrupted",
+            ),
+        })?;
+    *budget -= bytes.len() as u64;
     serde_json::from_slice(&bytes).map_err(|_| protocol())
 }
 fn api_error(status: u16, value: &Value, retry_after: Option<UpstreamRetryAfter>) -> ProviderError {

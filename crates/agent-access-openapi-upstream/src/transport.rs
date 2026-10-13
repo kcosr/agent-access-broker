@@ -4,7 +4,6 @@ use crate::{
 };
 use agent_access_core::imports::*;
 use agent_access_provider::*;
-use futures_util::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, Response};
 use serde_json::{Value, json};
@@ -343,24 +342,15 @@ pub(crate) fn auth(
     Ok(HeaderMap::from_iter([(name, value)]))
 }
 pub(crate) async fn read_body(response: Response, limit: usize) -> Result<Vec<u8>, ProviderError> {
-    if response.content_length().is_some_and(|n| n > limit as u64) {
-        return Err(protocol_error());
-    }
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| {
-            ProviderError::error(
+    read_bounded_body(response, limit as u64, None)
+        .await
+        .map_err(|error| match error {
+            BodyReadError::TooLarge => protocol_error(),
+            _ => ProviderError::error(
                 ReasonCode::UpstreamConnectionFailed,
                 "upstream HTTP body did not complete",
-            )
-        })?;
-        if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(protocol_error());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
+            ),
+        })
 }
 pub(crate) fn input_error() -> ProviderError {
     ProviderError::deny(

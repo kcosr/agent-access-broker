@@ -504,6 +504,59 @@ pub async fn file_upload_body(path: &Path) -> std::io::Result<(reqwest::Body, Up
     Ok((reqwest::Body::wrap_stream(stream), progress))
 }
 
+/// Why [`read_bounded_body`] returned no body. The caller maps each case to
+/// its own outcome.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BodyReadError {
+    /// The declared `Content-Length`, or the bytes read, exceed the cap.
+    #[error("upstream response body exceeds the byte cap")]
+    TooLarge,
+    /// No chunk arrived within the idle timeout.
+    #[error("upstream response body stalled")]
+    IdleTimeout,
+    /// Reading the body failed. `timed_out` is set when the client's own
+    /// deadline expired while reading.
+    #[error("upstream response body could not be read: {detail}")]
+    Transport { timed_out: bool, detail: String },
+}
+
+/// Reads `response`'s whole body into memory: a declared `Content-Length`
+/// over `byte_cap` fails before reading, and so does reading more than
+/// `byte_cap` bytes. With an `idle_timeout`, each chunk must arrive within it.
+pub async fn read_bounded_body(
+    mut response: Response,
+    byte_cap: u64,
+    idle_timeout: Option<Duration>,
+) -> Result<Vec<u8>, BodyReadError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > byte_cap)
+    {
+        return Err(BodyReadError::TooLarge);
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = match idle_timeout {
+            Some(idle_timeout) => tokio::time::timeout(idle_timeout, response.chunk())
+                .await
+                .map_err(|_| BodyReadError::IdleTimeout)?,
+            None => response.chunk().await,
+        }
+        .map_err(|error| BodyReadError::Transport {
+            timed_out: error.is_timeout(),
+            detail: error.without_url().to_string(),
+        })?;
+        let Some(chunk) = chunk else {
+            return Ok(body);
+        };
+        if (body.len() as u64).saturating_add(chunk.len() as u64) > byte_cap {
+            return Err(BodyReadError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+}
+
 /// Records the trace [`UpstreamClient`] attached to `response`, with the
 /// reason the caller classified it with. Later calls do nothing.
 pub fn complete_upstream_trace(response: &mut Response, reason_code: Option<ProviderReason>) {
@@ -914,6 +967,91 @@ mod tests {
         assert_eq!(error, UpstreamError::Timeout);
         assert_eq!(started.elapsed(), idle / 2 + idle);
         recorder.abort();
+    }
+
+    /// A server answering one request with `response`, then holding the
+    /// connection open or closing it.
+    fn raw_server(response: &'static [u8], hold: bool) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match socket.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                }
+            }
+            socket.write_all(response).unwrap();
+            socket.flush().unwrap();
+            if hold {
+                std::thread::sleep(Duration::from_secs(30));
+            }
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        });
+        format!("http://{address}/body")
+    }
+
+    #[tokio::test]
+    async fn bounded_body_reads_stop_at_the_cap_and_type_their_failures() {
+        let server = MockServer::start().await;
+        Mock::given(path("/body"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("12345678"))
+            .mount(&server)
+            .await;
+        let fetch = |url: String| async move {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+        };
+        let declared = format!("{}/body", server.uri());
+        assert_eq!(
+            read_bounded_body(fetch(declared.clone()).await, 8, None)
+                .await
+                .unwrap(),
+            b"12345678"
+        );
+        // Over the cap by its declared length, and by the bytes read.
+        assert_eq!(
+            read_bounded_body(fetch(declared).await, 4, None).await,
+            Err(BodyReadError::TooLarge)
+        );
+        let chunked = raw_server(
+            b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n8\r\n12345678\r\n0\r\n\r\n",
+            false,
+        );
+        assert_eq!(
+            read_bounded_body(fetch(chunked).await, 4, None).await,
+            Err(BodyReadError::TooLarge)
+        );
+        let truncated = b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nab";
+        let stalled = raw_server(truncated, true);
+        assert_eq!(
+            read_bounded_body(fetch(stalled).await, 1024, Some(Duration::from_millis(100))).await,
+            Err(BodyReadError::IdleTimeout)
+        );
+        let closed = raw_server(truncated, false);
+        let error = read_bounded_body(fetch(closed).await, 1024, Some(Duration::from_secs(10)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                BodyReadError::Transport {
+                    timed_out: false,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

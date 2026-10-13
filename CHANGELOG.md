@@ -378,6 +378,11 @@ All notable changes to this project are documented in this file.
   label, a byte cap with the late reason it reports, an idle timeout and an
   optional expected size. Stalls, read failures, cap overruns and size
   mismatches fail late with code-only reasons.
+- The provider SDK reads a bounded response body into memory with
+  `read_bounded_body(response, byte_cap, idle_timeout)`, which rejects a
+  declared `Content-Length` over the cap before reading and returns a typed
+  `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with `timed_out`)
+  for the provider to map.
 
 ### Changed
 
