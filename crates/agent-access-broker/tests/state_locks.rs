@@ -1,4 +1,5 @@
-use agent_access_broker::broker_build_status;
+use agent_access_broker::{build_identity, composition};
+use agent_access_broker_host::BrokerApplication;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use std::fs;
@@ -217,7 +218,9 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     assert!(starting.get("adminListen").is_none());
     assert_eq!(starting["reloadTimeoutMs"].as_u64(), Some(30_000));
     assert_eq!(starting["bodyHardCapBytes"], Value::Null);
-    let build = serde_json::to_value(broker_build_status()).unwrap();
+    // The status the assembly's own application derives.
+    let application = BrokerApplication::new(composition().unwrap(), build_identity()).unwrap();
+    let build = serde_json::to_value(application.status()).unwrap();
     let assembly = &build["assembly"];
     assert_eq!(starting["assemblyName"], assembly["name"]);
     assert_eq!(starting["assemblyVersion"], assembly["version"]);

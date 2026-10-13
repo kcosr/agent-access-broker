@@ -1,3 +1,5 @@
+use agent_access_broker::{build_identity, composition};
+use agent_access_broker_host::BrokerApplication;
 use agent_access_broker_host::test_support::{IsolatedBroker, RunningBroker};
 use agent_access_provider::REQUEST_ID_HEADER;
 use reqwest::StatusCode;
@@ -21,10 +23,9 @@ async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
     let value = response_json(response).await;
-    assert_eq!(
-        value,
-        serde_json::to_value(agent_access_broker::broker_build_status()).unwrap()
-    );
+    // The status the assembly's own application derives.
+    let application = BrokerApplication::new(composition().unwrap(), build_identity()).unwrap();
+    assert_eq!(value, serde_json::to_value(application.status()).unwrap());
     assert_eq!(value["assembly"]["name"], "agent-access-broker");
     assert_eq!(value["assembly"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["host"]["crate"], "agent-access-broker-host");
@@ -91,11 +92,7 @@ async fn status_validates_request_id_without_resolving_execution_context() {
 /// The assembly's own composition and identity, serving a static-principal
 /// configuration over loopback TCP.
 async fn start() -> RunningBroker {
-    let application = IsolatedBroker::new(
-        agent_access_broker::composition().unwrap(),
-        agent_access_broker::build_identity(),
-    )
-    .unwrap();
+    let application = IsolatedBroker::new(composition().unwrap(), build_identity()).unwrap();
     let token_path = application
         .directory()
         .secret_file("identity.token", TOKEN)

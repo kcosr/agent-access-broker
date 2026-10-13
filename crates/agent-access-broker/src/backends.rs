@@ -69,6 +69,7 @@ pub fn backend_registry() -> BackendRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_broker_host::BrokerApplication;
     use agent_access_core::McpConfig;
     use agent_access_core::mcp::{
         McpView, ProjectionMode, ToolRegistry, action_eligible, evaluate_scoped_mcp_readiness,
@@ -110,41 +111,49 @@ mod tests {
 
     #[test]
     fn registrations_name_their_declaring_packages() {
-        let registry = backend_registry();
-        let natives = registry
-            .registrations()
-            .map(|registration| (registration.kind(), registration.module()))
-            .collect::<Vec<_>>();
-        let dialects = ["google", "stub", "mcp_oauth"].map(|id| {
-            let dialect = registry.oauth_dialect(id).unwrap();
-            (dialect.id(), dialect.module())
-        });
-        let adapters = import_adapters().map(|adapter| (adapter.kind(), adapter.module()));
-        let packages = natives
+        // The build status inventories each registered role under the
+        // package its registration names, including the MCP selection's
+        // companion dialect.
+        let application =
+            BrokerApplication::new(composition().unwrap(), crate::build_identity()).unwrap();
+        let status = serde_json::to_value(application.status()).unwrap();
+        let packages = status["modules"]
+            .as_array()
+            .unwrap()
             .iter()
-            .chain(&dialects)
-            .chain(&adapters)
-            .map(|(id, module)| {
-                assert_eq!(module.crate_version(), env!("CARGO_PKG_VERSION"), "{id}");
-                (*id, module.crate_name())
+            .map(|module| {
+                assert_eq!(module["version"], env!("CARGO_PKG_VERSION"), "{module}");
+                let roles = module["roles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|role| {
+                        format!(
+                            "{} {}",
+                            role["role"].as_str().unwrap(),
+                            role["id"].as_str().unwrap()
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "{}: {}",
+                    module["crate"].as_str().unwrap(),
+                    roles.join(", ")
+                )
             })
             .collect::<Vec<_>>();
         assert_eq!(
             packages,
             [
-                ("jira", "agent-access-jira"),
-                ("confluence", "agent-access-confluence"),
-                ("gitlab", "agent-access-gitlab"),
-                ("cloudbees_ci", "agent-access-cloudbees-ci"),
-                ("fake", "agent-access-fake"),
-                ("gmail", "agent-access-gmail"),
-                ("teams", "agent-access-teams"),
-                ("oauth_stub", "agent-access-fake"),
-                ("google", "agent-access-gmail"),
-                ("stub", "agent-access-fake"),
-                ("mcp_oauth", "agent-access-mcp-upstream"),
-                ("mcp_http", "agent-access-mcp-upstream"),
-                ("openapi_http", "agent-access-openapi-upstream"),
+                "agent-access-cloudbees-ci: native cloudbees_ci",
+                "agent-access-confluence: native confluence",
+                "agent-access-fake: native fake, native oauth_stub, oauth stub",
+                "agent-access-gitlab: native gitlab",
+                "agent-access-gmail: native gmail, oauth google",
+                "agent-access-jira: native jira",
+                "agent-access-mcp-upstream: oauth mcp_oauth, import mcp_http",
+                "agent-access-openapi-upstream: import openapi_http",
+                "agent-access-teams: native teams",
             ]
         );
     }

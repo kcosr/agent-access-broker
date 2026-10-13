@@ -86,7 +86,9 @@ mod tests {
 
     #[test]
     fn an_unstamped_build_reports_every_revision_unavailable() {
-        let status = serde_json::to_value(broker_build_status()).unwrap();
+        let application =
+            BrokerApplication::new(crate::composition().unwrap(), build_identity()).unwrap();
+        let status = serde_json::to_value(application.status()).unwrap();
         if env!("AGENT_ACCESS_EMBEDDED_BUILD_PROVENANCE") != "unavailable" {
             return;
         }
