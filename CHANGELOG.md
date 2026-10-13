@@ -153,9 +153,13 @@ All notable changes to this project are documented in this file.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph
-  before building: `cargo tree --locked --target <host> -p agent-access-broker
-  -p agent-access -e normal,build,features` must enable no crate's
-  `test-support` feature and link no `reference` crate.
+  before building: the resolved features of every normal and build unit of
+  `agent-access-broker` and `agent-access` (`cargo tree -e normal,build
+  --format '{p}\t{f}'`) must not include `test-support`, and the graph must link
+  no `reference` crate. It also requires each host, SDK and module package that
+  the status stamps with the qualified commit to resolve, in `cargo metadata`,
+  to exactly one tracked path package in the checkout, rejecting a same-version
+  package from another source and two origins sharing a crate name and version.
 
 ### Changed
 

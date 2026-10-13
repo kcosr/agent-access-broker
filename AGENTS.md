@@ -509,11 +509,13 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 
 The verifier checks the exact pinned local compiler/Cargo versions and physical
 paths, rejects ambient compiler/flag/profile overrides, rejects a release
-dependency graph that enables a `test-support` feature or links a `reference`
-crate, and uses locked dependencies with required source provenance. It builds
-native executables under `target/<host-triple>/release`, checks CLI startup and
-authenticated Broker status, and records discovered Cargo configuration digests.
-It is not a hermetic build; see the [provenance boundaries](docs/operator-guide.md#build-provenance-and-deployed-status).
+dependency graph whose resolved features include `test-support` or that links a
+`reference` crate, and uses locked dependencies with required source provenance;
+the stamped host, SDK and module packages must resolve to tracked path packages
+in the checkout. It builds native executables under
+`target/<host-triple>/release`, checks CLI startup and authenticated Broker
+status, and records discovered Cargo configuration digests. It is not a hermetic
+build; see the [provenance boundaries](docs/operator-guide.md#build-provenance-and-deployed-status).
 
 To run the separate optional remote check:
 

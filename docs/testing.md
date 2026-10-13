@@ -382,16 +382,20 @@ the expected immutable commit or exact tag:
 node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
-The verifier first rejects a release dependency graph (normal and build edges of
-`agent-access-broker` and `agent-access`) that enables a `test-support` feature or
-links a `reference` crate. It then builds Broker and CLI release executables
-locally with locked dependencies and required provenance. It starts the Broker on
-loopback with a temporary minimal identity and asserts that `/v1/broker/status`
-names the `agent-access-broker` assembly at the expected package version, with
-the expected commit as evidence-backed provenance for the assembly, host, SDK and
-every module. It checks CLI startup with `--help` and fails if the checkout is
-dirty or `HEAD` changes. It does not publish artifacts or perform the source
-release.
+The verifier first rejects a release dependency graph (normal and build units of
+`agent-access-broker` and `agent-access`) whose resolved features include
+`test-support` on any package, or that links a `reference` crate. It then builds
+Broker and CLI release executables locally with locked dependencies and required
+provenance. It starts the Broker on loopback with a temporary minimal identity and
+asserts that `/v1/broker/status` names the `agent-access-broker` assembly at the
+expected package version, with the expected commit as evidence-backed provenance
+for the assembly, host, SDK and every module, and that each of those packages
+resolves to exactly one tracked path package in the checkout. It checks CLI
+startup with `--help` and fails if the checkout is dirty or `HEAD` changes. It
+does not publish artifacts or perform the source release. Its script tests run
+`cargo tree` on a small generated workspace to show that test support enabled
+through a release package's default features is rejected while a dev-only
+activation is allowed.
 
 To opt into a configured remote build service explicitly:
 

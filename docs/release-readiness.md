@@ -178,12 +178,13 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
 The local verifier checks the exact pinned compiler/Cargo versions and physical
-paths, rejects ambient compiler/flag/profile overrides, rejects any `test-support`
-feature or `reference` crate in the release dependency graph, and builds both
-native executables under `target/<host-triple>/release` with locked
-dependencies. It checks CLI startup and authenticated Broker status and records
-discovered Cargo configuration digests. These are bounded provenance checks, not a hermetic-build
-attestation; configuration includes, profile/linker settings, native tools,
+paths, rejects ambient compiler/flag/profile overrides, rejects any resolved
+`test-support` feature or `reference` crate in the release dependency graph,
+checks that the stamped host, SDK and module packages resolve to tracked path
+packages in the checkout, and builds both native executables under
+`target/<host-triple>/release` with locked dependencies. It checks CLI startup
+and authenticated Broker status and records discovered Cargo configuration
+digests. These are bounded provenance checks, not a hermetic-build attestation; configuration includes, profile/linker settings, native tools,
 build scripts, and system libraries are not fully attested. See the
 [operator guide](operator-guide.md#build-provenance-and-deployed-status) for the
 full contract. The optional `--build-service` check leaves remote compiler/Cargo

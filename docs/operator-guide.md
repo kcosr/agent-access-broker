@@ -438,15 +438,22 @@ an explicit native host target under `target/<host-triple>/release`. The verifie
 prints compiler/Cargo versions and paths plus paths and SHA-256 digests of
 discovered Cargo configuration files. Before building, it runs
 `cargo tree --locked --target <host-triple> -p agent-access-broker -p agent-access
--e normal,build,features` with the validated Cargo and fails when the release
-graph enables any crate's `test-support` feature or links a workspace crate whose
-`[package.metadata.agent-access] role` is `reference`; dev-dependency edges are
-not part of that graph. After the build it rechecks the clean, unchanged `HEAD`,
-checks CLI startup with `--help`, and starts the Broker on loopback with a
-temporary static identity. Authenticated status must name the
-`agent-access-broker` assembly at the expected version, and report the expected
-commit as `evidence` for the assembly, host, SDK and every module. Temporary
-processes and files are cleaned up.
+-e normal,build --format '{p}\t{f}'` with the validated Cargo. Without dev edges
+Cargo resolves no dev units, and `{f}` lists each package's resolved features,
+including those a release package's default features enable. The check fails
+when any package has the `test-support` feature or the graph links a workspace
+crate whose `[package.metadata.agent-access] role` is `reference`. The verifier
+also records the resolved package identities and source origins of that
+normal/build graph from `cargo metadata --filter-platform <host-triple>`. After
+the build it rechecks the clean, unchanged `HEAD`, checks CLI startup with
+`--help`, and starts the Broker on loopback with a temporary static identity.
+Authenticated status must name the `agent-access-broker` assembly at the expected
+version and report the expected commit as `evidence` for the assembly, host, SDK
+and every module. Each stamped host, SDK and module package must resolve to
+exactly one origin, a path package whose manifest Git tracks in the qualified
+checkout; a same-version package from another source, or two origins sharing a
+crate name and version, fails the check. Temporary processes and files are
+cleaned up.
 
 These checks do not establish a hermetic build. Cargo configuration includes,
 profile/linker settings, native tools, build scripts, and system libraries are
