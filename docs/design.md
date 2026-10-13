@@ -352,12 +352,15 @@ single-attempt and explicitly bounded clients), none for streamed downloads
 (the backend bounds each chunk), and a connect timeout for uploads, whose
 bodies fail after the streaming idle timeout without progress. Backends see
 only the sanitized route (mode and proxy origin) for audit, never proxy
-credentials. Every request, including each hop of
+credentials. Every request sent through the client, including each hop of
 a redirect chain followed with `get_following_redirects`, must match the
-backend's `allowed_upstream_hosts`. Credentials go only to the service's own
-origin; redirect hops to other origins carry correlation headers only when the
-backend opts in (Jira does, for Atlassian media hosts; CloudBees CI does not,
-for artifact storage). Each request records one
+backend's `allowed_upstream_hosts`. The redirect helper applies the backend's
+credentials only to hops on the service's own origin; on ordinary requests the
+backend attaches credentials itself and must check the origin first (see
+[credentials and origins](provider-sdk.md#credentials-and-origins)). Redirect
+hops to other origins carry correlation headers only when the backend opts in
+(Jira does, for Atlassian media hosts; CloudBees CI does not, for artifact
+storage). Each request records one
 `upstream_request_completed` trace, either when the backend has classified the
 response or when the response is dropped. The trace captures the provider hook
 that sent the request, including from work moved onto other tasks with

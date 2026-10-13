@@ -251,7 +251,7 @@ its builder methods:
 | `.search_contained()` | That the host computes a search boundary and the provider constrains its query to it. |
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
 | `.resource_attributes()` | That dispatch needs the private attributes of the one admitted exact resource. |
-| `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. Such responses are never cached. |
+| `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
 | `.requires_stable_signing_key()` | That the action issues durable handles, so the Broker must hold a stable key. |
 | `.documentation(json)`, `.presentation(..)`, `.attribution(..)`, `.upstream_resource_ownership(..)` | Extended usage text, rich rendering, attribution footers and static ownership metadata. |
 
@@ -306,14 +306,15 @@ the action. The `ScopeRequest` carries the service and action, inputs validated
 against the schema, the host-selected execution context, the minimal caller
 identity, correlation and, only for `LookupRequirement::ScopeResolution`
 actions with a viable grant path, the host-selected lookup credential. It
-carries no admitted authority and no execution credential. A provider never
-chooses another lookup credential or falls back to a shared one.
+carries no admitted authority and no execution credential. A provider must not
+use another lookup credential or fall back to a shared one.
 
 - A local resolver parses the inputs and returns at once:
   `ScopeResolution::resources(scopes)`, where `ResourceScopes` maps each scope
   name to its canonical values.
 - An action-only provider returns `ScopeResolution::no_resources()`.
-- A provider that looks up upstream metadata uses only the lookup credential.
+- A provider that looks up upstream metadata must use only the lookup
+  credential.
   The host keeps lookup failures concealed until resource authorization has
   succeeded.
 
@@ -470,7 +471,8 @@ token serves, so the provider must check that on every use:
    current and renews stale access.
 2. Read `access()` and check its `target()` and `audience()` against the values
    the provider requires. Deny with `credential_invalid` when they differ.
-3. Present its `token()` only to the provider's own origin.
+3. Attach its `token()` only to requests for the provider's own origin, after
+   the origin check in [credentials and origins](#credentials-and-origins).
 
 ```rust
 use agent_access_provider::{DelegatedCredential, ProviderError, ReasonCode};
@@ -532,11 +534,12 @@ UpstreamClient::build(
 - `label` names the client in diagnostics, such as `providers.notes`. It
   decides nothing.
 - `provider` is the name traces record.
-- `base` is the service's base URL. Only its origin receives credentials and
-  correlation headers.
+- `base` is the service's base URL. `request()` adds the invocation's
+  correlation headers only on this origin. The client does not decide where
+  credentials go; see [credentials and origins](#credentials-and-origins).
 - `egress` declares the route the client needs; see below.
-- `allowed_upstream_hosts` are URL patterns that every request, including every
-  redirect hop, must match.
+- `allowed_upstream_hosts` are URL patterns. The client's send methods and its
+  redirect helper refuse every request and redirect hop outside them.
 - `profile` bounds time and retries; see below.
 - `.with_status_reasons(..)` optionally declares default trace classifications
   for statuses the provider leaves unclassified, such as 409 for a version
@@ -544,8 +547,8 @@ UpstreamClient::build(
 
 The host captures the generation's limits, outbound TLS trust and proxy
 environment, applies the profile, disables automatic redirects and returns the
-client with a sanitized route. A provider never sees proxy credentials or TLS
-files; `egress_route()` reports only the mode and proxy origin for audit. Build
+client with a sanitized route. The SDK never hands a provider proxy credentials
+or TLS files; `egress_route()` reports only the mode and proxy origin for audit. Build
 several clients when the protocol needs them: one per profile, per destination
 or per credential route.
 
@@ -585,7 +588,9 @@ local test servers; it is not a general proxy bypass.
   correlation headers only on the service's own origin.
 - `client.send(builder, UpstreamCall::new("note.view"))` sends it within the
   profile. `send_with_deadline` adds a header deadline for streaming clients,
-  and `send_upload` sends a streamed body with progress tracking.
+  and `send_upload` sends a streamed body with progress tracking. Always send
+  through these methods: the builder's own `send` would bypass the allowlist
+  and the trace.
 - An `UpstreamError` means no usable response. `NotSent` proves the request
   never reached the upstream; `Timeout` and `Transport` may have been received
   and acted on. `reason_code()` gives the standard reason to report. Keep a
@@ -594,7 +599,7 @@ local test servers; it is not a general proxy bypass.
   operation)` follows a GET chain by hand under
   `RedirectRules::new(max_redirects, deadline, authorize)`. Every hop must be
   allowlisted, carry no embedded credentials and pass any `with_vet` check.
-  Only hops on the service's own origin receive `authorize`'s credentials.
+  The helper calls `authorize` only for hops on the service's own origin.
   Other origins receive correlation headers only with
   `correlating_other_origins()`. Atlassian attachment downloads opt in for
   media hosts; CloudBees CI artifact downloads do not.
@@ -609,6 +614,52 @@ host checks each classification against the hook that sent the request (see
 Task-local invocation context does not follow `tokio::spawn`. Run work you move
 to another task with `InvocationScope::current().run(future)`. That keeps its
 correlation, hook, deadline and tracing span, so its traces stay attributed.
+
+### Credentials and origins
+
+`UpstreamClient` enforces the allowlist and places correlation headers by
+origin, but credential placement is the provider's obligation. `send` delivers
+every header the provider added to the builder to any allowlisted URL,
+including a secondary origin such as a media or artifact host. A token attached
+with `bearer_auth` to a request for such a URL reaches that host.
+
+- Build request URLs from `client.base()`. Treat a URL from an upstream response
+  or a caller input, such as a pagination link or a download location, as
+  untrusted.
+- Attach credentials to an ordinary request only when the URL's origin equals
+  the client's base origin, as `same_origin(&url, client.base())` checks.
+- For a redirect chain, pass credentials in the `authorize` callback of
+  `get_following_redirects` rather than on the first request. The helper
+  applies it only to hops on the base origin.
+
+```rust
+use agent_access_provider::deps::http::Method;
+use agent_access_provider::deps::reqwest::RequestBuilder;
+use agent_access_provider::deps::url::Url;
+use agent_access_provider::{ProviderError, ReasonCode, UpstreamClient, same_origin};
+
+/// A GET for an upstream-supplied link that carries the token only on the
+/// client's own origin.
+fn authorized_get(
+    client: &UpstreamClient,
+    link: Url,
+    token: &str,
+) -> Result<RequestBuilder, ProviderError> {
+    if !same_origin(&link, client.base()) {
+        return Err(ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "the upstream returned a link on another origin",
+        ));
+    }
+    Ok(client.request(Method::GET, link).bearer_auth(token))
+}
+```
+
+The shipped providers follow this split. Confluence rejects an upstream
+pagination link on another origin before it sends the link with credentials.
+Jira and Confluence attachment downloads follow redirects to Atlassian media
+origins with correlation headers but without credentials, and CloudBees CI
+artifact downloads send neither to artifact storage.
 
 ### Limits and throttling
 
@@ -909,8 +960,8 @@ Errors can carry a bounded `result` with `with_result`, and upstream facts with
 
 Neither the host nor the CLI replays an operation: not after a failed
 read-back, a timeout, cancellation, forced shutdown or a local output failure.
-A provider does not repeat a mutation either, except through a documented
-explicit recovery such as Gmail's single 401 recovery. Use `SingleAttempt`
+A provider must not repeat a mutation itself either, except through a
+documented explicit recovery such as Gmail's single 401 recovery. Use `SingleAttempt`
 clients for requests that must not repeat.
 
 ## Testing
@@ -1315,6 +1366,7 @@ impl Provider for NotesProvider {
             ));
         };
 
+        // Built from the client base, so the token stays on its origin.
         let mut url = self.client.base().clone();
         url.path_segments_mut()
             .expect("base URLs have a path")
