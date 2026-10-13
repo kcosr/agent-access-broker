@@ -34,7 +34,7 @@ pub(crate) struct AppState {
     pub(crate) reloadable: Arc<ReloadableState>,
 }
 
-pub struct ReloadableState {
+pub(crate) struct ReloadableState {
     pub(crate) config_path: PathBuf,
     /// Backends this process links; every reload parses with them.
     pub(crate) backends: Arc<BackendRegistry>,
@@ -795,7 +795,7 @@ impl ReloadableState {
     }
 
     /// The broker's effective node ID. Reload never changes it.
-    pub fn node_id(&self) -> String {
+    pub(crate) fn node_id(&self) -> String {
         self.current().runtime.node_id().to_string()
     }
 
@@ -942,19 +942,15 @@ impl ReloadableState {
         *history = live.iter().map(Arc::downgrade).collect();
     }
 
-    pub fn close_operation_admission(&self) {
-        self.operations.close();
-    }
-
-    pub async fn shutdown_operations(&self, timeout: Duration) -> usize {
+    pub(crate) async fn shutdown_operations(&self, timeout: Duration) -> usize {
         self.operations.shutdown(timeout).await
     }
 
-    pub fn cancel_terminal_audits(&self) -> usize {
+    pub(crate) fn cancel_terminal_audits(&self) -> usize {
         self.audit_registry.cancel_terminal_audits()
     }
 
-    pub async fn shutdown_audit(&self, timeout: Duration) -> Result<(), RuntimeError> {
+    pub(crate) async fn shutdown_audit(&self, timeout: Duration) -> Result<(), RuntimeError> {
         self.audit_registry.shutdown_and_drain(timeout).await
     }
 }

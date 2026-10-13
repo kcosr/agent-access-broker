@@ -1,4 +1,3 @@
-use crate::BrokerBuildStatus;
 use crate::handlers::auth::{auth_local_login, auth_logout, auth_password_change, auth_session};
 use crate::handlers::data::{
     broker_status, capabilities, healthz, invoke, me, readyz, resource_types, service,
@@ -50,17 +49,20 @@ use crate::handlers::oidc::{microsoft_oidc_callback, microsoft_oidc_start};
 use crate::handlers::portal::{portal_asset, portal_index};
 use crate::handlers::spec::{spec_catalog, spec_openapi, spec_send_schema};
 use crate::observability::{ListenerKind, RequestTracingLayer};
-use crate::reload::{
-    DEFAULT_RELOAD_TIMEOUT, DEFAULT_SHUTDOWN_TIMEOUT, admin_config_reload, admin_config_status,
-};
+use crate::reload::{admin_config_reload, admin_config_status};
 use crate::state::{AppState, ReloadableState, RuntimeSnapshot};
-use agent_access_core::{BrokerRuntime, StateLockSet};
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
-use std::path::PathBuf;
 use std::sync::Arc;
 
-pub fn build_router(runtime: BrokerRuntime, build_status: BrokerBuildStatus) -> Router {
+/// The public router over one runtime, outside any serving lifecycle, for
+/// host tests that route requests to a specific runtime instance, such as a
+/// superseded generation's runtime.
+#[cfg(test)]
+pub(crate) fn runtime_router(runtime: agent_access_core::BrokerRuntime) -> Router {
+    /// The serving defaults of `--reload-timeout-ms` and
+    /// `--shutdown-timeout-ms`.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let body_hard_cap = runtime.max_http_body_bytes();
     let audit_registry = runtime.audit_registry();
     let backends = Arc::clone(runtime.config().providers.registry());
@@ -68,30 +70,18 @@ pub fn build_router(runtime: BrokerRuntime, build_status: BrokerBuildStatus) -> 
         1,
         "sha256:static".to_string(),
         runtime.with_config_generation(1),
-        StateLockSet::empty(),
+        agent_access_core::StateLockSet::empty(),
     );
     let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
+        std::path::PathBuf::new(),
         backends,
-        build_status,
+        crate::broker_build_status(),
         snapshot,
         body_hard_cap,
-        DEFAULT_RELOAD_TIMEOUT,
-        DEFAULT_SHUTDOWN_TIMEOUT,
+        TIMEOUT,
+        TIMEOUT,
         audit_registry,
     ));
-    build_public_router(state)
-}
-
-/// The public router over one runtime, outside any serving lifecycle, for
-/// host tests that route requests to a specific runtime instance, such as a
-/// superseded generation's runtime.
-#[cfg(test)]
-pub(crate) fn runtime_router(runtime: BrokerRuntime) -> Router {
-    build_router(runtime, crate::broker_build_status())
-}
-
-pub fn build_public_router(state: Arc<ReloadableState>) -> Router {
     public_router(state).0
 }
 
@@ -484,7 +474,7 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
     (router, endpoint)
 }
 
-pub fn build_gateway_router(state: Arc<ReloadableState>) -> Router {
+pub(crate) fn build_gateway_router(state: Arc<ReloadableState>) -> Router {
     let node_id = state.node_id();
     Router::new()
         .fallback(gateway_dispatch)

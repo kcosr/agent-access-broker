@@ -18774,7 +18774,7 @@ async fn services_request(app: Router, remote: &str, request_id: &str) -> axum::
 
 // Behavior tests perform real filesystem work and runtime construction under
 // parallel suite load. Use production admission budgets; deadline-specific
-// tests keep calling build_reloadable_state with explicit timeout values.
+// tests set explicit reload and shutdown timeouts on their test brokers.
 /// A test broker serving the configuration file at `config_path`.
 async fn reload_test_broker(
     config_path: PathBuf,

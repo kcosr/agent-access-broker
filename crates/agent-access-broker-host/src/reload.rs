@@ -27,8 +27,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub(crate) const DEFAULT_RELOAD_TIMEOUT: Duration = Duration::from_secs(30);
-pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RELOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -42,26 +40,6 @@ pub(crate) struct ReloadAttemptSummary {
     previous_generation: u64,
     active_generation: u64,
     message: Option<String>,
-}
-
-pub async fn build_reloadable_state(
-    config_path: PathBuf,
-    backends: Arc<BackendRegistry>,
-    build_status: BrokerBuildStatus,
-    body_hard_cap: Option<u64>,
-    reload_timeout: Duration,
-    shutdown_timeout: Duration,
-) -> anyhow::Result<Arc<ReloadableState>> {
-    start_reloadable_state(
-        config_path,
-        backends,
-        build_status,
-        body_hard_cap,
-        reload_timeout,
-        shutdown_timeout,
-        StartupHooks::default(),
-    )
-    .await
 }
 
 /// Loads, validates and locks the startup configuration and builds its
@@ -642,7 +620,7 @@ fn validate_body_hard_cap_value(value: u64) -> anyhow::Result<usize> {
         .map_err(|_| anyhow::anyhow!("--max-http-body-hard-cap-bytes is too large"))
 }
 
-pub fn validate_reload_timeout(timeout: Duration) -> anyhow::Result<()> {
+pub(crate) fn validate_reload_timeout(timeout: Duration) -> anyhow::Result<()> {
     if timeout.is_zero() {
         anyhow::bail!("--reload-timeout-ms must be non-zero");
     }
@@ -652,7 +630,7 @@ pub fn validate_reload_timeout(timeout: Duration) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn validate_shutdown_timeout(timeout: Duration) -> anyhow::Result<()> {
+pub(crate) fn validate_shutdown_timeout(timeout: Duration) -> anyhow::Result<()> {
     if timeout.is_zero() {
         anyhow::bail!("--shutdown-timeout-ms must be non-zero");
     }

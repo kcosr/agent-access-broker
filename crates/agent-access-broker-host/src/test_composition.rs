@@ -1,7 +1,6 @@
 //! What an assembly supplies to the host, for host tests: a backend registry
 //! and a composition mirroring the upstream selection, and the build status
-//! of an unstamped test assembly. Integration tests include this file
-//! by path, so it names host types through its parent module.
+//! of an unstamped test assembly.
 use super::{AssemblyIdentity, BrokerApplication, BrokerBuildStatus, BrokerComposition};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
