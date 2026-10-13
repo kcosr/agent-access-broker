@@ -177,7 +177,9 @@ pub trait BackendConfig: Any + Debug + Send + Sync {
     fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError>;
 }
 
-/// The parts of the broker configuration a backend validates against.
+/// The parts of the broker configuration a backend validates against. The
+/// host creates it; backend tests build one with [`Self::new`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct ValidationContext<'a> {
     /// `deployment.environment`.
@@ -188,7 +190,21 @@ pub struct ValidationContext<'a> {
     pub credentials: ServiceCredentialKinds<'a>,
 }
 
-impl ValidationContext<'_> {
+impl<'a> ValidationContext<'a> {
+    pub fn new(
+        environment: &'a str,
+        policy_authority: &'a str,
+        limits: &'a ProviderLimits,
+        credentials: ServiceCredentialKinds<'a>,
+    ) -> Self {
+        Self {
+            environment,
+            policy_authority,
+            limits,
+            credentials,
+        }
+    }
+
     pub fn production(&self) -> bool {
         self.environment == "production"
     }
@@ -196,10 +212,17 @@ impl ValidationContext<'_> {
 
 /// Credential kinds configured under `credentials.service.<service>` and
 /// `credentials.per_user.<service>`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceCredentialKinds<'a> {
     pub service: Option<&'a str>,
     pub per_user: Option<&'a str>,
+}
+
+impl<'a> ServiceCredentialKinds<'a> {
+    pub fn new(service: Option<&'a str>, per_user: Option<&'a str>) -> Self {
+        Self { service, per_user }
+    }
 }
 
 /// Host services a backend builds its provider from for one runtime

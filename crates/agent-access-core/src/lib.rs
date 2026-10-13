@@ -1237,13 +1237,12 @@ impl Default for LimitsConfig {
 
 impl From<&LimitsConfig> for ProviderLimits {
     fn from(limits: &LimitsConfig) -> Self {
-        Self {
-            max_http_body_bytes: limits.max_http_body_bytes,
-            max_download_bytes: limits.max_download_bytes,
-            max_upstream_response_bytes: limits.max_upstream_response_bytes,
-            request_timeout_ms: limits.request_timeout_ms,
-            streaming_idle_timeout_ms: limits.streaming_idle_timeout_ms,
-        }
+        Self::default()
+            .with_max_http_body_bytes(limits.max_http_body_bytes)
+            .with_max_download_bytes(limits.max_download_bytes)
+            .with_max_upstream_response_bytes(limits.max_upstream_response_bytes)
+            .with_request_timeout_ms(limits.request_timeout_ms)
+            .with_streaming_idle_timeout_ms(limits.streaming_idle_timeout_ms)
     }
 }
 
@@ -4315,23 +4314,23 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
                 "providers.{kind} is a development backend and requires deployment.enable_fake_service"
             ));
         }
-        let context = ValidationContext {
-            policy_authority: &config.policy.authority,
-            environment: &config.deployment.environment,
-            limits: &limits,
-            credentials: ServiceCredentialKinds {
-                service: config
+        let context = ValidationContext::new(
+            &config.deployment.environment,
+            &config.policy.authority,
+            &limits,
+            ServiceCredentialKinds::new(
+                config
                     .credentials
                     .service
                     .get(kind)
                     .map(|credential| credential.kind.as_str()),
-                per_user: config
+                config
                     .credentials
                     .per_user
                     .get(kind)
                     .map(|credential| credential.kind.as_str()),
-            },
-        };
+            ),
+        );
         backend.validate(&context, errors);
     }
 }

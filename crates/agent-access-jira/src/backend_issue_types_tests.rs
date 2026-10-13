@@ -188,10 +188,7 @@ async fn issue_types_bounds_response_and_sanitizes_upstream_failures() {
     let api = MockServer::start().await;
     let backend = backend(
         &api,
-        ProviderLimits {
-            max_upstream_response_bytes: 64,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_max_upstream_response_bytes(64),
     );
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page()))

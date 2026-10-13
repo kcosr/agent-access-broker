@@ -9,6 +9,17 @@ use url::{Host, Url};
 
 /// Broker-wide limits a backend must respect. The broker derives them from
 /// its `[limits]` section.
+///
+/// The public fields are what a backend reads. Start from the defaults and
+/// override limits with the `with_*` builders:
+///
+/// ```
+/// use agent_access_provider::ProviderLimits;
+///
+/// let limits = ProviderLimits::default().with_request_timeout_ms(5_000);
+/// assert_eq!(limits.request_timeout_ms, 5_000);
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderLimits {
     pub max_http_body_bytes: u64,
@@ -31,6 +42,40 @@ impl Default for ProviderLimits {
     }
 }
 
+impl ProviderLimits {
+    pub const fn with_max_http_body_bytes(mut self, bytes: u64) -> Self {
+        self.max_http_body_bytes = bytes;
+        self
+    }
+
+    pub const fn with_max_download_bytes(mut self, bytes: u64) -> Self {
+        self.max_download_bytes = bytes;
+        self
+    }
+
+    pub const fn with_max_upstream_response_bytes(mut self, bytes: u64) -> Self {
+        self.max_upstream_response_bytes = bytes;
+        self
+    }
+
+    pub const fn with_request_timeout_ms(mut self, milliseconds: u64) -> Self {
+        self.request_timeout_ms = milliseconds;
+        self
+    }
+
+    pub const fn with_streaming_idle_timeout_ms(mut self, milliseconds: u64) -> Self {
+        self.streaming_idle_timeout_ms = milliseconds;
+        self
+    }
+}
+
+/// A backend's `attachments` configuration table.
+///
+/// Configuration schema is intentionally exhaustive: its fields are the
+/// documented keys of a table that rejects unknown keys, so adding one is a
+/// configuration contract change that every consumer rendering or validating
+/// the table must handle. Build it from [`Default`] with struct update syntax
+/// or by deserializing it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentLimitsConfig {
@@ -67,6 +112,10 @@ pub fn default_download_max_bytes() -> u64 {
     100 * 1024 * 1024
 }
 
+/// A backend's `search` configuration table.
+///
+/// Configuration schema is intentionally exhaustive, like
+/// [`AttachmentLimitsConfig`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchLimitsConfig {

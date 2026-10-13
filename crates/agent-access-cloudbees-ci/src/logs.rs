@@ -1215,11 +1215,9 @@ mod tests {
                     egress_proxy: None,
                     allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
                 },
-                ProviderLimits {
-                    request_timeout_ms: total,
-                    streaming_idle_timeout_ms: idle,
-                    ..ProviderLimits::default()
-                },
+                ProviderLimits::default()
+                    .with_request_timeout_ms(total)
+                    .with_streaming_idle_timeout_ms(idle),
             )
             .unwrap();
             let error = read(&ci, inputs("tail")).await.unwrap_err();

@@ -300,15 +300,12 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
     );
     let mut errors = vec![];
     config().validate(
-        &ValidationContext {
-            environment: "production",
-            policy_authority: "toml",
-            limits: &ProviderLimits::default(),
-            credentials: ServiceCredentialKinds {
-                service: Some("bearer"),
-                per_user: None,
-            },
-        },
+        &ValidationContext::new(
+            "production",
+            "toml",
+            &ProviderLimits::default(),
+            ServiceCredentialKinds::new(Some("bearer"), None),
+        ),
         &mut errors,
     );
     assert_eq!(errors.len(), 2);
@@ -346,10 +343,7 @@ fn build_creates_one_single_attempt_client_per_configured_origin() {
 
 async fn transport(server: &MockServer) -> HttpTransport {
     let base = Url::parse(&format!("{}/", server.uri())).unwrap();
-    let limits = ProviderLimits {
-        request_timeout_ms: 200,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_request_timeout_ms(200);
     let client = UpstreamClient::build(
         UpstreamClientSpec {
             label: "teams.test",

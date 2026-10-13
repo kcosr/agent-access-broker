@@ -1144,12 +1144,12 @@ mod tests {
             config.shelves = shelves.into_iter().map(String::from).collect();
             let mut errors = Vec::new();
             config.validate(
-                &ValidationContext {
-                    environment: "development",
-                    policy_authority: "toml",
-                    limits: &ProviderLimits::default(),
-                    credentials: Default::default(),
-                },
+                &ValidationContext::new(
+                    "development",
+                    "toml",
+                    &ProviderLimits::default(),
+                    Default::default(),
+                ),
                 &mut errors,
             );
             assert_eq!(
@@ -1224,10 +1224,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn json_traces_record_how_the_body_turned_out() {
-        let limits = ProviderLimits {
-            max_upstream_response_bytes: 64,
-            ..ProviderLimits::default()
-        };
+        let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
         for (body, reason) in [
             (r#"{"title":"T","body":"B"}"#.to_string(), None),
             ("not json".to_string(), Some("upstream_protocol_failed")),
@@ -1293,10 +1290,7 @@ mod tests {
         });
         let provider = provider(
             &base,
-            ProviderLimits {
-                streaming_idle_timeout_ms: 200,
-                ..ProviderLimits::default()
-            },
+            ProviderLimits::default().with_streaming_idle_timeout_ms(200),
         );
         let content = b"payload";
         let part = BrokerBodyPart {

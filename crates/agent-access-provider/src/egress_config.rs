@@ -1,6 +1,10 @@
 use serde::Deserialize;
 use url::Url;
 
+/// A backend's `egress_proxy` configuration table.
+///
+/// Configuration schema is intentionally exhaustive, like
+/// [`AttachmentLimitsConfig`](crate::AttachmentLimitsConfig).
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressProxyConfig {

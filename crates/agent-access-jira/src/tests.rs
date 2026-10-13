@@ -1461,10 +1461,7 @@ async fn issue_create_result_size_failure_keeps_side_effect_audit() {
         .lock()
         .unwrap()
         .insert("PROJ-2".to_string(), readback);
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        ..Default::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
 
     let error = provider
@@ -5960,10 +5957,7 @@ async fn response_byte_cap_fails_without_returning_content() {
             description: None,
         },
     );
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 8,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(8);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let error = provider
         .invoke(
@@ -6811,10 +6805,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         ),
     );
 
-    let limits = ProviderLimits {
-        max_download_bytes: 4,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_download_bytes(4);
     let provider = JiraProvider::with_backend(jira_config(), limits, backend);
     let error = provider
         .invoke(
@@ -6845,11 +6836,9 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         "10055".to_string(),
         JiraAttachmentContent::from_bytes("evidence.txt", "text/plain", large_bytes),
     );
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        max_download_bytes: 128,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default()
+        .with_max_upstream_response_bytes(64)
+        .with_max_download_bytes(128);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let result = provider
         .invoke(
@@ -7975,10 +7964,7 @@ async fn http_backend_streams_jira_attachment_upload_from_file() {
     config.allowed_upstream_hosts = vec![format!("{}/rest/api/3/**", api.uri())];
     let backend = HttpJiraBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_request_timeout_ms(1),
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
@@ -9033,10 +9019,7 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     config.allowed_upstream_hosts = vec![format!("{origin}/rest/api/3/**")];
     let backend = HttpJiraBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            streaming_idle_timeout_ms: 200,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_streaming_idle_timeout_ms(200),
         Url::parse(&format!("{origin}/rest/api/3/")).unwrap(),
     );
     let capture = agent_access_provider::test_support::install_trace_capture().start();

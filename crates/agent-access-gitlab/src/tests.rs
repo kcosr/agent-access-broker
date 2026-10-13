@@ -241,11 +241,9 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
     let backend = HttpGitlabBackend::for_tests(
         config.clone(),
-        ProviderLimits {
-            request_timeout_ms: 10,
-            streaming_idle_timeout_ms: 1000,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default()
+            .with_request_timeout_ms(10)
+            .with_streaming_idle_timeout_ms(1000),
     )
     .unwrap();
     assert!(
@@ -256,11 +254,9 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     );
     let backend = HttpGitlabBackend::for_tests(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1000,
-            streaming_idle_timeout_ms: 5,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default()
+            .with_request_timeout_ms(1000)
+            .with_streaming_idle_timeout_ms(5),
     )
     .unwrap();
     assert!(matches!(
@@ -287,10 +283,7 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
         config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
         let backend = HttpGitlabBackend::for_tests(
             config,
-            ProviderLimits {
-                streaming_idle_timeout_ms: idle_ms,
-                ..ProviderLimits::default()
-            },
+            ProviderLimits::default().with_streaming_idle_timeout_ms(idle_ms),
         )
         .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();

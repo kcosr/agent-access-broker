@@ -1760,10 +1760,7 @@ mod tests {
             let _ = headers_sent.send(());
             tokio::time::sleep(Duration::from_secs(10)).await;
         });
-        let limits = ProviderLimits {
-            request_timeout_ms: 5_000,
-            ..ProviderLimits::default()
-        };
+        let limits = ProviderLimits::default().with_request_timeout_ms(5_000);
         let provider = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
@@ -2850,10 +2847,7 @@ mod tests {
             .await;
         let ci = provider_with_limits(
             &server.uri(),
-            ProviderLimits {
-                request_timeout_ms: 300,
-                ..ProviderLimits::default()
-            },
+            ProviderLimits::default().with_request_timeout_ms(300),
         );
         let error = ci
             .invoke(invocation("build.trigger", job_inputs(json!({}))))

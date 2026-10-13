@@ -850,11 +850,9 @@ mod tests {
                     egress_proxy: None,
                     allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
                 },
-                ProviderLimits {
-                    max_download_bytes: if mode == "oversize" { 2 } else { 10 },
-                    streaming_idle_timeout_ms: 100,
-                    ..ProviderLimits::default()
-                },
+                ProviderLimits::default()
+                    .with_max_download_bytes(if mode == "oversize" { 2 } else { 10 })
+                    .with_streaming_idle_timeout_ms(100),
             )
             .unwrap();
             let result = ci

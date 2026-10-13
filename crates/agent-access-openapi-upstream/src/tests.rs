@@ -14,11 +14,11 @@ use tokio::task::JoinHandle;
 /// The build host imported OpenAPI tests share: a short request timeout and
 /// a 256 KiB response cap.
 fn test_host() -> test_support::TestHost {
-    test_support::TestHost::with_limits(ProviderLimits {
-        max_upstream_response_bytes: 256 * 1024,
-        request_timeout_ms: 500,
-        ..Default::default()
-    })
+    test_support::TestHost::with_limits(
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(256 * 1024)
+            .with_request_timeout_ms(500),
+    )
 }
 #[derive(Clone)]
 struct StateData {

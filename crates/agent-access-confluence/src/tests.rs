@@ -4509,10 +4509,7 @@ async fn search_rejects_non_current_pages() {
 
 #[tokio::test]
 async fn page_view_enforces_response_byte_cap() {
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
     let backend = Arc::new(StubConfluenceBackend {
         page: ConfluencePage {
             id: "123456".to_string(),
@@ -5675,10 +5672,7 @@ async fn http_backend_streams_confluence_attachment_upload_from_file() {
     config.allowed_upstream_hosts = vec![format!("{}/wiki/rest/api/**", api.uri())];
     let backend = HttpConfluenceBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_request_timeout_ms(1),
         Url::parse(&format!("{}/wiki/rest/api/", api.uri())).unwrap(),
     );
     let upload_path = std::env::temp_dir().join(format!(
@@ -5817,11 +5811,9 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
     let large_bytes = vec![b'x'; 80];
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(128),
-        ProviderLimits {
-            max_upstream_response_bytes: 64,
-            max_download_bytes: 128,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(64)
+            .with_max_download_bytes(128),
         Arc::new(AttachmentDownloadBackend {
             attachment: confluence_attachment("att123", large_bytes.len() as u64, "text/plain"),
             content: confluence_attachment_content(&large_bytes, "text/plain"),

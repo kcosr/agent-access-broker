@@ -201,10 +201,7 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
     *backend.issue_type_page.lock().unwrap() = Some(page(0, 1));
     let provider = JiraProvider::with_backend(
         jira_config(),
-        ProviderLimits {
-            max_upstream_response_bytes: 32,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_max_upstream_response_bytes(32),
         backend,
     );
     let error = provider

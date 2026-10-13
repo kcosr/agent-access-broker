@@ -22,11 +22,11 @@ mod compatibility;
 /// The build host imported MCP tests share: a short request timeout and a
 /// 256 KiB response cap.
 fn test_host() -> test_support::TestHost {
-    test_support::TestHost::with_limits(ProviderLimits {
-        max_upstream_response_bytes: 256 * 1024,
-        request_timeout_ms: 1_000,
-        ..Default::default()
-    })
+    test_support::TestHost::with_limits(
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(256 * 1024)
+            .with_request_timeout_ms(1_000),
+    )
 }
 
 fn definition(endpoint: &str) -> ImportedServiceDefinition {
