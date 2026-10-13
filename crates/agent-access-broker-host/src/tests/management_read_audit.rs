@@ -346,7 +346,7 @@ async fn successful_reads_work_while_audit_writes_fail() {
 
 #[tokio::test]
 async fn admin_reads_and_policy_dry_runs_write_no_audit_records() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let before = fixture.records().len();
     let invalid_proposal = GRANT_PROPOSAL.replace(r#""echo""#, r#""no-such-action""#);
     let effective_access = r#"{"service":"fake","actions":["echo"],"executionContexts":["default"],
@@ -430,7 +430,7 @@ async fn admin_reads_and_policy_dry_runs_write_no_audit_records() {
 
 #[tokio::test]
 async fn denied_and_failed_reads_stay_audited() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     for (token, method, uri, body, status) in [
         // A user_manage token calling admin and policy reads.
         (
@@ -549,7 +549,7 @@ pub(super) fn read_post_body(catalog_operation: &str) -> Option<&'static str> {
 /// is recorded under the response's `brokerRequestId`.
 #[tokio::test]
 async fn every_catalog_read_route_follows_its_audit_classification() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     // Real IDs, so detail reads succeed: alice's agent token, a grant, and
     // one of alice's own audited requests.
     let (_, tokens) = fixture

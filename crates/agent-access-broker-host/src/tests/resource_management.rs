@@ -24,7 +24,7 @@ async fn catalog_request(
 
 #[tokio::test]
 async fn resource_catalog_crud_preserves_versions_uniqueness_and_manual_unlink() {
-    let fixture = managed_policy_admin_fixture();
+    let fixture = managed_policy_admin_fixture().await;
     let app = &fixture.app;
     let token = &fixture.admin_token;
     let resource = json!({"id":"all-repositories","resourceType":"git_repository",
@@ -180,7 +180,7 @@ async fn resource_catalog_crud_preserves_versions_uniqueness_and_manual_unlink()
 
 #[tokio::test]
 async fn delegated_catalog_reads_filter_types_and_catalog_mutations_require_global_admin() {
-    let fixture = service_policy_management_fixture();
+    let fixture = service_policy_management_fixture().await;
     let app = &fixture.app;
     let assigned = catalog_request(
         app,
@@ -336,7 +336,7 @@ async fn delegated_catalog_reads_filter_types_and_catalog_mutations_require_glob
 
 #[tokio::test]
 async fn resource_policy_api_rejects_retired_scopes_and_invalid_selector_shapes() {
-    let fixture = managed_policy_admin_fixture();
+    let fixture = managed_policy_admin_fixture().await;
     for body in [
         json!({"id":"page","resourceType":"confluence_page","selector":{"kind":"exact","value":"12345"},"allowedExecutionContexts":["default"]}),
         json!({"id":"issue","resourceType":"jira_issue","selector":{"kind":"exact","value":"TEST-1"},"allowedExecutionContexts":["default"]}),
@@ -423,7 +423,7 @@ async fn runtime_catalog_and_resource_types_route_publish_registered_types() {
 
     // Every registered type is published, including types no visible
     // service uses.
-    let agent = spec_agent_fixture(&["fake"], false);
+    let agent = spec_agent_fixture(&["fake"], false).await;
     let runtime_catalog = spec_get(
         agent.app,
         "/v1/spec/catalog",
@@ -439,7 +439,7 @@ async fn runtime_catalog_and_resource_types_route_publish_registered_types() {
 
     // Resource editors and labels read the dedicated route, which needs no
     // execution context.
-    let fixture = managed_policy_admin_fixture();
+    let fixture = managed_policy_admin_fixture().await;
     let listed = catalog_request(
         &fixture.app,
         &fixture.admin_token,
@@ -473,7 +473,7 @@ async fn runtime_catalog_and_resource_types_route_publish_registered_types() {
 
 #[tokio::test]
 async fn resource_policy_api_rejects_unregistered_types_and_type_invalid_selectors() {
-    let fixture = managed_policy_admin_fixture();
+    let fixture = managed_policy_admin_fixture().await;
     let app = &fixture.app;
     let token = &fixture.admin_token;
     for (id, resource_type, selector, message) in [
@@ -588,6 +588,7 @@ async fn resource_policy_api_rejects_unregistered_types_and_type_invalid_selecto
 }
 
 struct ResourceAttributeFixture {
+    _broker: TestBroker,
     app: Router,
     admin_token: String,
     user_token: String,
@@ -595,11 +596,8 @@ struct ResourceAttributeFixture {
     audit_path: PathBuf,
 }
 
-fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
+async fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
     let audit_path = temp_path("resource-attribute-audit");
-    if fail_audit {
-        std::fs::create_dir(&audit_path).unwrap();
-    }
     let hash_key = temp_path("resource-attribute-token-key");
     let csrf_key = temp_path("resource-attribute-csrf-key");
     let password_key = temp_path("resource-attribute-password-key");
@@ -660,7 +658,8 @@ fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
         allowed_upstream_hosts: vec!["https://test.environment.api.powerplatform.com/**".into()],
         egress_proxy: None,
     });
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
         .reset_local_password(
@@ -722,8 +721,15 @@ fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixture {
             created_by: "admin".into(),
         })
         .unwrap();
+    if fail_audit {
+        // Startup refuses an unwritable audit store, so audit writes start
+        // failing once the broker serves.
+        std::fs::remove_file(&audit_path).unwrap();
+        std::fs::create_dir(&audit_path).unwrap();
+    }
     ResourceAttributeFixture {
-        app: build_router(runtime, broker_build_status()),
+        app: broker.app(),
+        _broker: broker,
         admin_token,
         user_token,
         store,
@@ -736,7 +742,7 @@ const REVEAL_ROUTE: &str = "/v1/admin/policy/resources/release/attributes/webhoo
 
 #[tokio::test]
 async fn resource_attribute_admin_reveal_replace_and_redacted_reads() {
-    let fixture = resource_attribute_fixture(false);
+    let fixture = resource_attribute_fixture(false).await;
     let response = catalog_request(
         &fixture.app,
         &fixture.user_token,
@@ -858,7 +864,7 @@ async fn resource_attribute_admin_reveal_replace_and_redacted_reads() {
 
 #[tokio::test]
 async fn resource_attribute_browser_reveal_requires_csrf_and_audit_before_decrypt() {
-    let fixture = resource_attribute_fixture(false);
+    let fixture = resource_attribute_fixture(false).await;
     let login = fixture
         .app
         .clone()
@@ -933,7 +939,7 @@ async fn resource_attribute_browser_reveal_requires_csrf_and_audit_before_decryp
             assert_eq!(result["reasonCode"], "csrf_invalid");
         }
     }
-    let fixture = resource_attribute_fixture(true);
+    let fixture = resource_attribute_fixture(true).await;
     // If decryption were reached, this would return a ciphertext error instead.
     rusqlite::Connection::open(fixture.store.path())
         .unwrap()
@@ -978,7 +984,7 @@ async fn resource_attribute_browser_reveal_requires_csrf_and_audit_before_decryp
 
 #[tokio::test]
 async fn teams_policy_catalog_and_grants_need_no_separate_execution_credential() {
-    let fixture = resource_attribute_fixture(false);
+    let fixture = resource_attribute_fixture(false).await;
     let response = catalog_request(
         &fixture.app,
         &fixture.admin_token,
@@ -1055,7 +1061,7 @@ fn completed_catalog_management(path: &Path, request_id: &str) -> Value {
 async fn resource_catalog_completion_history_round_trips_sqlite_and_jsonl() {
     // The same actual HTTP create is exercised against both configured writers.
     let sqlite = catalog_audit_fixture().await;
-    let jsonl = managed_policy_admin_fixture();
+    let jsonl = managed_policy_admin_fixture().await;
     for (app, token, path) in [
         (&sqlite.app, &sqlite.admin_token, &sqlite.audit_path),
         (&jsonl.app, &jsonl.admin_token, &jsonl.audit_path),

@@ -2,7 +2,7 @@
 use super::conformance_import::{
     HOST_ONLY_DISCOVERY_TOKEN, INVALID_SETTINGS_DISCOVERY_TOKEN, UNREACHABLE_DISCOVERY_TOKEN,
 };
-use super::imports_foundation::{Fixture, definition, fixture, update};
+use super::imports_foundation::{Fixture, definition, fixture, import_broker, update};
 use super::*;
 use agent_access_core::imports::ImportedDiscoveryCredential;
 use agent_access_core::*;
@@ -93,7 +93,8 @@ async fn accept_preview(
 async fn admin_import_flow_is_versioned_explicit_and_persistent() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     let mut definition = definition();
     definition.service = "toolbox".into();
     let (status, created) = request(
@@ -265,10 +266,8 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
             |_| Ok(()),
         )
         .unwrap();
-    let app = build_router(
-        BrokerRuntime::new(fixture.config.clone()).unwrap(),
-        broker_build_status(),
-    );
+    let broker = TestBroker::start_config(&fixture.config.clone()).await;
+    let app = broker.app();
     let current = detail(&app, &token, "observability").await;
     let (status, body) = request(
         &app,
@@ -357,7 +356,8 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
 async fn import_restoration_requires_confirmation_and_retired_tools_get_new_identity() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     for suffix in ["actions/inspect/status", "status"] {
         let current = detail(&app, &token, "observability").await;
         let path = format!("/v1/admin/imports/observability/{suffix}");
@@ -472,7 +472,8 @@ async fn deleted_grants_do_not_block_restoration_or_appear_in_import_preview() {
             })
             .unwrap();
     }
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     for suffix in ["actions/inspect/status", "status"] {
         for status in ["disabled", "enabled"] {
             let current = detail(&app, &token, "observability").await;
@@ -518,7 +519,8 @@ async fn deleted_grants_do_not_block_restoration_or_appear_in_import_preview() {
 async fn discovery_reports_adapter_outcomes_and_host_preparation_failures_apart() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     let current = detail(&app, &token, "observability").await;
     let mut secret = versions(&current);
     secret["token"] = json!(UNREACHABLE_DISCOVERY_TOKEN);
@@ -595,7 +597,8 @@ async fn discovery_reports_adapter_outcomes_and_host_preparation_failures_apart(
 async fn discovery_holds_adapters_to_the_verification_contract() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     let mut current = detail(&app, &token, "observability").await;
     for (discovery_token, status, decision, reason, message) in [
         (
@@ -677,10 +680,8 @@ async fn openapi_discovery_throttling_stays_an_upstream_rate_limit() {
         .imports
         .allowed_endpoints
         .extend([api.clone(), document.clone()]);
-    let app = build_router(
-        BrokerRuntime::new(config.clone()).unwrap(),
-        broker_build_status(),
-    );
+    let broker = import_broker(&config).await;
+    let app = broker.app();
     let mut definition = definition();
     definition.service = "documents".into();
     definition.adapter_kind = "openapi_http".into();
@@ -777,7 +778,8 @@ async fn import_management_requires_admin_and_gate_off_preserves_cleanup() {
     let token = admin_token(&fixture);
     let mut config = fixture.config.clone();
     config.imports.enabled = false;
-    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    let broker = TestBroker::start_config(&config).await;
+    let app = broker.app();
     assert_eq!(
         request(
             &app,
@@ -848,7 +850,8 @@ async fn import_management_requires_admin_and_gate_off_preserves_cleanup() {
 async fn personal_discovery_rotation_invalidates_preview_without_service_edit() {
     let fixture = fixture();
     let token = admin_token(&fixture);
-    let app = build_router(fixture.runtime.clone(), broker_build_status());
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
     let current = detail(&app, &token, "observability").await;
     let mut definition = definition();
     definition.discovery = ImportedDiscoveryCredential::PerUser {
@@ -977,13 +980,17 @@ async fn imported_service_metadata_follows_the_reviewed_definition() {
         let alice = user_manage_token(&runtime, "alice");
         let bob = user_manage_token(&runtime, "bob");
         async move {
-            let app = build_router(runtime, broker_build_status());
+            let broker = import_broker(runtime.config()).await;
+            let app = broker.app();
             let (status, options) =
                 request(&app, &alice, Method::GET, "/v1/tokens/options", None).await;
             assert_eq!(status, StatusCode::OK, "{options}");
             let (status, targets) =
                 request(&app, &bob, Method::GET, "/v1/credentials/targets", None).await;
             assert_eq!(status, StatusCode::OK, "{targets}");
+            // The router holds the broker state; release it before stopping.
+            drop(app);
+            broker.stop().await;
             (options["result"].clone(), targets["result"].clone())
         }
     };

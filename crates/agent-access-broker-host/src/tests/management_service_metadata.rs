@@ -6,13 +6,14 @@ use super::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 struct MetadataFixture {
+    _broker: TestBroker,
     app: Router,
     alice_user_token: String,
     admin_token: String,
 }
 
 /// Alice's only grants are in `external`; the configured default is `internal`.
-fn metadata_fixture() -> MetadataFixture {
+async fn metadata_fixture() -> MetadataFixture {
     let hash_key_path = temp_path("service-metadata-hash-key");
     let store_path = temp_path("service-metadata-store.sqlite");
     let audit_path = temp_path("service-metadata.audit.sqlite");
@@ -162,8 +163,10 @@ fn metadata_fixture() -> MetadataFixture {
     let admin_token = issue("admin", agent_access_core::BrokerTokenClass::Admin);
     drop(store);
 
+    let broker = TestBroker::start_config(&config).await;
     MetadataFixture {
-        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
+        app: broker.app(),
+        _broker: broker,
         alice_user_token,
         admin_token,
     }
@@ -258,7 +261,7 @@ fn assert_credential_target_metadata(targets: &Value) {
 
 #[tokio::test]
 async fn token_options_carry_service_metadata_outside_the_default_context() {
-    let fixture = metadata_fixture();
+    let fixture = metadata_fixture().await;
     let options = management_result(
         &fixture.app,
         &fixture.alice_user_token,
@@ -278,7 +281,7 @@ async fn token_options_carry_service_metadata_outside_the_default_context() {
 
 #[tokio::test]
 async fn credential_targets_carry_service_metadata_outside_the_default_context() {
-    let fixture = metadata_fixture();
+    let fixture = metadata_fixture().await;
     let targets = management_result(
         &fixture.app,
         &fixture.alice_user_token,

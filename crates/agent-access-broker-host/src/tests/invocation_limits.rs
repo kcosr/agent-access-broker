@@ -12,6 +12,7 @@ pub(super) const ALICE: &str = "alice-invocation-token";
 pub(super) const BOB: &str = "bob-invocation-token";
 
 pub(super) struct LimitFixture {
+    broker: TestBroker,
     pub(super) app: Router,
     pub(super) state: Arc<ReloadableState>,
     clock: Arc<ManualClock>,
@@ -21,7 +22,7 @@ pub(super) struct LimitFixture {
 
 /// Two TOML static principals behind one source address, with a manual
 /// limiter clock.
-pub(super) fn limit_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> LimitFixture {
+pub(super) async fn limit_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> LimitFixture {
     let directory = tempfile::tempdir().unwrap();
     create_private_dir(directory.path());
     let audit_path = directory.path().join("audit.jsonl");
@@ -59,28 +60,18 @@ pub(super) fn limit_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> LimitF
         .unwrap()
         .token_ref = Some(format!("file:{}", provider_path.display()));
     configure(&mut config);
-    let runtime = BrokerRuntime::new(config).unwrap();
     let clock = ManualClock::new();
-    let state = Arc::new(
-        ReloadableState::from_snapshot(
-            PathBuf::new(),
-            std::sync::Arc::new(crate::backend_registry()),
-            broker_build_status(),
-            RuntimeSnapshot::new(
-                1,
-                "invocation-limits".into(),
-                runtime.clone().with_config_generation(1),
-                StateLockSet::empty(),
-            ),
-            runtime.max_http_body_bytes(),
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-            runtime.audit_registry(),
-        )
-        .with_invocation_limiter(InvocationLimiter::with_clock(clock.clone())),
-    );
+    let broker = TestBroker::start_with(
+        TestBroker::config_builder(&config)
+            .reload_timeout(Duration::from_secs(5))
+            .shutdown_timeout(Duration::from_secs(5))
+            .invocation_limiter(InvocationLimiter::with_clock(clock.clone())),
+    )
+    .await;
+    let state = broker.state();
     LimitFixture {
-        app: build_public_router(state.clone()),
+        app: broker.app(),
+        broker,
         state,
         clock,
         audit_path,
@@ -93,20 +84,18 @@ impl LimitFixture {
         invoke_fake_project_with_token(self.app.clone(), request_id, token, "TEST").await
     }
 
-    /// Publishes a changed configuration the way a reload does, keeping the
-    /// shared limiter.
-    pub(super) fn publish(&self, generation: u64, change: impl FnOnce(&mut BrokerConfig)) {
+    /// Reloads a changed configuration as generation `generation`, keeping
+    /// the shared limiter.
+    pub(super) async fn publish(&self, generation: u64, change: impl FnOnce(&mut BrokerConfig)) {
         let mut config = self.state.current().runtime.config().clone();
         change(&mut config);
-        let runtime = BrokerRuntime::new(config)
-            .unwrap()
-            .with_config_generation(generation);
-        self.state.active.store(RuntimeSnapshot::new(
-            generation,
-            format!("invocation-limits-{generation}"),
-            runtime,
-            StateLockSet::empty(),
-        ));
+        let running = self.broker.running();
+        running
+            .rewrite_config(ConfigDoc::from_config(&config).render())
+            .unwrap();
+        let outcome = running.reload().await.unwrap();
+        assert!(outcome.is_success(), "{outcome:?}");
+        assert_eq!(self.state.current().generation, generation);
     }
 }
 
@@ -145,7 +134,7 @@ pub(super) async fn assert_limited(response: axum::response::Response, requests:
 
 #[tokio::test]
 async fn invoke_counts_every_io_form_and_denials_but_not_discovery_or_unknown_services() {
-    let fixture = limit_fixture(|config| set_fake_limit(config, 4, "1m"));
+    let fixture = limit_fixture(|config| set_fake_limit(config, 4, "1m")).await;
     for round in 0..3 {
         for uri in [
             "/v1/services",
@@ -249,7 +238,7 @@ async fn invoke_counts_every_io_form_and_denials_but_not_discovery_or_unknown_se
 async fn principals_behind_one_source_address_have_independent_windows() {
     // Regression: a shared source budget used to lock out every principal
     // behind one proxy address.
-    let fixture = limit_fixture(|config| set_fake_limit(config, 2, "1m"));
+    let fixture = limit_fixture(|config| set_fake_limit(config, 2, "1m")).await;
     for index in 0..2 {
         assert_eq!(
             fixture
@@ -281,7 +270,8 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
             requests: 3,
             window: "1m".into(),
         }];
-    });
+    })
+    .await;
     let runtime = fixture.state.current().runtime.clone();
     let alice = runtime.effective_invocation_limits("alice").await.unwrap();
     assert_eq!(
@@ -316,7 +306,9 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
     assert_limited(fixture.invoke("bob-limited", BOB).await, 2).await;
 
     // Raising the service limit applies to the next request and keeps history.
-    fixture.publish(2, |config| set_fake_limit(config, 4, "1m"));
+    fixture
+        .publish(2, |config| set_fake_limit(config, 4, "1m"))
+        .await;
     assert_eq!(
         fixture.invoke("bob-raised-0", BOB).await.status(),
         StatusCode::OK
@@ -330,9 +322,11 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
     assert_limited(fixture.invoke("alice-override-kept", ALICE).await, 3).await;
 
     // Removing the override falls back to the service limit.
-    fixture.publish(3, |config| {
-        config.limits.invocations.principal_overrides.clear();
-    });
+    fixture
+        .publish(3, |config| {
+            config.limits.invocations.principal_overrides.clear();
+        })
+        .await;
     assert_eq!(
         fixture.invoke("alice-fallback", ALICE).await.status(),
         StatusCode::OK
@@ -340,7 +334,9 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
     assert_limited(fixture.invoke("alice-fallback-limited", ALICE).await, 4).await;
 
     // A different window resets the key's history.
-    fixture.publish(4, |config| set_fake_limit(config, 1, "2m"));
+    fixture
+        .publish(4, |config| set_fake_limit(config, 1, "2m"))
+        .await;
     assert_eq!(
         fixture.invoke("bob-new-window", BOB).await.status(),
         StatusCode::OK
@@ -356,7 +352,7 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
 
 #[tokio::test]
 async fn rate_limited_invocation_returns_the_contract_body_header_and_audit() {
-    let fixture = limit_fixture(|config| set_fake_limit(config, 2, "1m"));
+    let fixture = limit_fixture(|config| set_fake_limit(config, 2, "1m")).await;
     for index in 0..2 {
         assert_eq!(
             fixture

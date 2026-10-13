@@ -1,30 +1,19 @@
-use agent_access_broker::broker_build_status;
-use agent_access_broker_host::build_router;
-use agent_access_core::{BrokerRuntime, load_broker_config};
+use agent_access_broker_host::test_support::{IsolatedBroker, RunningBroker};
 use agent_access_provider::REQUEST_ID_HEADER;
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL};
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
-use std::net::SocketAddr;
-use tempfile::TempDir;
-use tower::ServiceExt;
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use reqwest::StatusCode;
+use reqwest::header::{AUTHORIZATION, CACHE_CONTROL};
 
 const TOKEN: &str = "broker-status-test-token";
 
 #[tokio::test]
 async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
-    let fixture = fixture();
+    let broker = start().await;
 
-    let missing_identity = status_request(&fixture.app, Some("status-no-identity"), None).await;
+    let missing_identity = status_request(&broker, Some("status-no-identity"), None).await;
     assert_eq!(missing_identity.status(), StatusCode::UNAUTHORIZED);
 
     let response = status_request(
-        &fixture.app,
+        &broker,
         Some("status-success"),
         Some(&format!("Bearer {TOKEN}")),
     )
@@ -32,7 +21,10 @@ async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
     let value = response_json(response).await;
-    assert_eq!(value, serde_json::to_value(broker_build_status()).unwrap());
+    assert_eq!(
+        value,
+        serde_json::to_value(agent_access_broker::broker_build_status()).unwrap()
+    );
     assert_eq!(value["assembly"]["name"], "agent-access-broker");
     assert_eq!(value["assembly"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["host"]["crate"], "agent-access-broker-host");
@@ -60,28 +52,24 @@ async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
     assert!(
         !value
             .to_string()
-            .contains(&*fixture._temp.path().to_string_lossy())
+            .contains(&*broker.directory().path().to_string_lossy())
     );
+    stop(broker).await;
 }
 
 #[tokio::test]
 async fn status_validates_request_id_without_resolving_execution_context() {
-    let fixture = fixture();
+    let broker = start().await;
 
-    let missing_request_id =
-        status_request(&fixture.app, None, Some(&format!("Bearer {TOKEN}"))).await;
+    let missing_request_id = status_request(&broker, None, Some(&format!("Bearer {TOKEN}"))).await;
     assert_eq!(missing_request_id.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         response_json(missing_request_id).await["reasonCode"],
         "request_id_missing"
     );
 
-    let invalid_request_id = status_request(
-        &fixture.app,
-        Some("bad id"),
-        Some(&format!("Bearer {TOKEN}")),
-    )
-    .await;
+    let invalid_request_id =
+        status_request(&broker, Some("bad id"), Some(&format!("Bearer {TOKEN}"))).await;
     assert_eq!(invalid_request_id.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         response_json(invalid_request_id).await["reasonCode"],
@@ -91,30 +79,31 @@ async fn status_validates_request_id_without_resolving_execution_context() {
     // This fixture requires an execution context and has no default. Status is
     // immutable process metadata, so normal identity is sufficient.
     let without_context = status_request(
-        &fixture.app,
+        &broker,
         Some("status-without-context"),
         Some(&format!("Bearer {TOKEN}")),
     )
     .await;
     assert_eq!(without_context.status(), StatusCode::OK);
+    stop(broker).await;
 }
 
-struct Fixture {
-    app: axum::Router,
-    _temp: TempDir,
-}
-
-fn fixture() -> Fixture {
-    let temp = TempDir::new().unwrap();
-    set_private_permissions(temp.path());
-    let token_path = temp.path().join("identity.token");
-    std::fs::write(&token_path, TOKEN).unwrap();
-    set_private_permissions(&token_path);
-    let config_path = temp.path().join("broker.toml");
-    std::fs::write(
-        &config_path,
-        format!(
-            r#"
+/// The assembly's own composition and identity, serving a static-principal
+/// configuration over loopback TCP.
+async fn start() -> RunningBroker {
+    let application = IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
+    )
+    .unwrap();
+    let token_path = application
+        .directory()
+        .secret_file("identity.token", TOKEN)
+        .unwrap();
+    // Each broker locks its upload spool, so the fixture keeps its own.
+    let spool = application.directory().join("spool");
+    let document = format!(
+        r#"
 [deployment]
 environment = "development"
 
@@ -137,54 +126,40 @@ allowed_values = ["internal"]
 
 [policy]
 authority = "toml"
+
+[limits]
+upload_spool_dir = "{}"
 "#,
-            token_path.display()
-        ),
-    )
-    .unwrap();
-    set_private_permissions(&config_path);
-    let config = load_broker_config(
-        &config_path,
-        &std::sync::Arc::new(agent_access_broker::backend_registry()),
-    )
-    .unwrap();
-    Fixture {
-        app: build_router(BrokerRuntime::new(config).unwrap(), broker_build_status()),
-        _temp: temp,
-    }
+        token_path.display(),
+        spool.display()
+    );
+    application.config_document(document).start().await.unwrap()
+}
+
+async fn stop(broker: RunningBroker) {
+    broker.shutdown();
+    broker.join().await.unwrap();
 }
 
 async fn status_request(
-    app: &axum::Router,
+    broker: &RunningBroker,
     request_id: Option<&str>,
     authorization: Option<&str>,
-) -> axum::response::Response {
-    let mut request = Request::builder()
-        .uri("/v1/broker/status")
-        .extension(ConnectInfo(
-            "127.0.0.1:41100".parse::<SocketAddr>().unwrap(),
-        ));
+) -> reqwest::Response {
+    let mut request = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("{}/v1/broker/status", broker.public_url()));
     if let Some(request_id) = request_id {
         request = request.header(REQUEST_ID_HEADER, request_id);
     }
     if let Some(authorization) = authorization {
         request = request.header(AUTHORIZATION, authorization);
     }
-    app.clone()
-        .oneshot(request.body(Body::empty()).unwrap())
-        .await
-        .unwrap()
+    request.send().await.unwrap()
 }
 
-async fn response_json(response: axum::response::Response) -> serde_json::Value {
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&body).unwrap()
-}
-
-fn set_private_permissions(path: &std::path::Path) {
-    #[cfg(unix)]
-    {
-        let mode = if path.is_dir() { 0o700 } else { 0o600 };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
+async fn response_json(response: reqwest::Response) -> serde_json::Value {
+    response.json().await.unwrap()
 }

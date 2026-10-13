@@ -62,6 +62,7 @@ async fn upstream(
 struct Fixture {
     _directory: tempfile::TempDir,
     audit_path: PathBuf,
+    broker: TestBroker,
     runtime: BrokerRuntime,
     app: Router,
     tokens: BTreeMap<String, String>,
@@ -274,7 +275,8 @@ async fn fixture(limit: Option<u32>) -> Fixture {
         (principal.into(),issued.token)
     }).collect();
     drop(initial);
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
     for service in ["one", "two"] {
         for (principal, mode) in [
             ("alice", "service"),
@@ -309,7 +311,8 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     Fixture {
         _directory: directory,
         audit_path,
-        app: build_router(runtime.clone(), broker_build_status()),
+        app: broker.app(),
+        broker,
         runtime,
         tokens,
         upstream: upstream_state,

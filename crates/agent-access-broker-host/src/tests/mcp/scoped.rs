@@ -1,6 +1,6 @@
 //! Service connection boundaries through the real HTTP router and SDK sessions.
 use super::*;
-use agent_access_provider::{ScopeRequest, ScopeResolution};
+use agent_access_provider::{ScopeRequest, ScopeResolution, ServiceProvider};
 
 const SCOPED: &str = "/mcp/fake";
 
@@ -93,7 +93,7 @@ pub(in crate::tests) async fn call(
 
 #[tokio::test]
 async fn scoped_http_names_helpers_calls_and_aggregate_limits_share_one_boundary() {
-    let fixture = Fixture::new(|config| fake_invocation_limit(config, 2));
+    let fixture = Fixture::new(|config| fake_invocation_limit(config, 2)).await;
     let scoped = initialize(&fixture, SCOPED, TOKEN_A).await;
     let aggregate = initialize(&fixture, "/mcp", TOKEN_A).await;
     let listing = rpc(&fixture, SCOPED, &scoped, 2, "tools/list", json!({})).await;
@@ -222,7 +222,8 @@ async fn scoped_http_sessions_are_view_bound_and_quotas_span_both_routes() {
     let fixture = Fixture::new(|config| {
         config.mcp.max_sessions = 2;
         config.mcp.max_sessions_per_principal = 2;
-    });
+    })
+    .await;
     let scoped = initialize(&fixture, SCOPED, TOKEN_A).await;
     let aggregate = initialize(&fixture, "/mcp", TOKEN_A).await;
     let full = fixture
@@ -280,7 +281,7 @@ async fn scoped_http_sessions_are_view_bound_and_quotas_span_both_routes() {
 
 #[tokio::test]
 async fn scoped_http_rejects_noncanonical_paths_and_authenticates_before_target_discovery() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     for path in [
         "/mcp/%66ake",
         "/mcp/f%61ke",
@@ -339,7 +340,7 @@ async fn scoped_http_rejects_noncanonical_paths_and_authenticates_before_target_
         .await;
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     let unknown_body = response_json(unknown).await;
-    publish_reload(&fixture, |config| config.policy.grants.clear());
+    publish_reload(&fixture, |config| config.policy.grants.clear()).await;
     let hidden = fixture
         .send(at(
             SCOPED,
@@ -353,13 +354,14 @@ async fn scoped_http_rejects_noncanonical_paths_and_authenticates_before_target_
         .await;
     assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
     assert_eq!(response_json(hidden).await, unknown_body);
-    assert!(!fixture.audit_path.exists());
+    // Nothing but the reload is recorded.
+    assert!(read_audit_records_without_reloads(&fixture.audit_path).is_empty());
 }
 
 #[tokio::test]
 async fn scoped_http_hidden_session_keeps_ping_cancel_and_delete_without_canceling_other_views() {
     let provider = ControlledProvider::new(true);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = initialize(&fixture, SCOPED, TOKEN_A).await;
     let response=fixture.send(at(SCOPED,request(Method::POST,Some(TOKEN_A),Some(&session),Some(json!({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"echo","arguments":{"inputs":{"project":"TEST","message":"controlled"}}}}))))).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -367,7 +369,7 @@ async fn scoped_http_hidden_session_keeps_ping_cancel_and_delete_without_canceli
     // Cross-view cancellation never reaches the pending operation.
     let wrong=fixture.send(request(Method::POST,Some(TOKEN_A),Some(&session),Some(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":30}})))).await;
     assert_eq!(wrong.status(), StatusCode::NOT_FOUND);
-    publish_reload(&fixture, |config| config.policy.grants.clear());
+    publish_reload(&fixture, |config| config.policy.grants.clear()).await;
     assert_eq!(
         rpc(&fixture, SCOPED, &session, 31, "ping", json!({})).await["result"],
         json!({})
@@ -412,11 +414,12 @@ async fn scoped_http_hidden_session_keeps_ping_cancel_and_delete_without_canceli
         0
     );
     assert_eq!(provider.executions.load(Ordering::SeqCst), 0);
-    let records = read_audit_records(&fixture.audit_path);
+    let records = read_audit_records_without_reloads(&fixture.audit_path);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["reasonCode"], "operation_cancelled");
 }
 
+#[derive(Clone)]
 struct ScopedCatalogProvider {
     file_only: bool,
     reserved: bool,
@@ -456,31 +459,46 @@ impl Provider for ScopedCatalogProvider {
         panic!("catalog fixture must not execute")
     }
 }
-fn publish_catalog(fixture: &Fixture, provider: ScopedCatalogProvider) {
-    let previous = fixture.state.current();
-    let generation = previous.generation + 1;
-    let runtime =
-        BrokerRuntime::with_providers(previous.runtime.config().clone(), vec![Arc::new(provider)])
-            .unwrap();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        generation,
-        "scoped-catalog".into(),
-        runtime.with_config_generation(generation),
-        StateLockSet::empty(),
-    ));
+/// The catalog provider the fixture's next generations serve as `fake`; until
+/// one is published, `fake` is the registration's own provider.
+#[derive(Clone, Default)]
+struct CatalogSlot(Arc<std::sync::Mutex<Option<ScopedCatalogProvider>>>);
+
+async fn catalog_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> (Fixture, CatalogSlot) {
+    let slot = CatalogSlot::default();
+    let served = slot.clone();
+    let fixture = Fixture::start(configure, |application| {
+        application.provider_fixture(
+            "fake",
+            ProviderFixture::factory(move |context| match served.0.lock().unwrap().clone() {
+                Some(provider) => ServiceProvider::from(Arc::new(provider)),
+                None => context.registered_provider().unwrap(),
+            }),
+        )
+    })
+    .await;
+    (fixture, slot)
+}
+
+/// Reloads with `provider` serving `fake`.
+async fn publish_catalog(fixture: &Fixture, slot: &CatalogSlot, provider: ScopedCatalogProvider) {
+    *slot.0.lock().unwrap() = Some(provider);
+    publish_reload(fixture, |_| {}).await;
 }
 
 #[tokio::test]
 async fn scoped_http_file_only_view_is_describable_and_unready_view_keeps_cleanup() {
-    let fixture = Fixture::new(|_| {});
+    let (fixture, catalog) = catalog_fixture(|_| {}).await;
     publish_catalog(
         &fixture,
+        &catalog,
         ScopedCatalogProvider {
             file_only: true,
             reserved: false,
             revision: 0,
         },
-    );
+    )
+    .await;
     let session = initialize(&fixture, SCOPED, TOKEN_A).await;
     assert_eq!(
         rpc(&fixture, SCOPED, &session, 40, "tools/list", json!({})).await["result"]["tools"]
@@ -506,12 +524,14 @@ async fn scoped_http_file_only_view_is_describable_and_unready_view_keeps_cleanu
     );
     publish_catalog(
         &fixture,
+        &catalog,
         ScopedCatalogProvider {
             file_only: false,
             reserved: true,
             revision: 0,
         },
-    );
+    )
+    .await;
     // The reserved provider is caller-hidden, but makes the whole service unready.
     assert_eq!(
         rpc(&fixture, SCOPED, &session, 43, "tools/list", json!({})).await["error"]["message"],
@@ -560,15 +580,18 @@ async fn scoped_http_file_only_view_is_describable_and_unready_view_keeps_cleanu
 
 #[tokio::test]
 async fn scoped_http_cursor_rejects_other_view_and_changed_definitions() {
-    let fixture = Fixture::new(|config| config.mcp.max_response_bytes = 64 * 1024);
+    let (fixture, catalog) =
+        catalog_fixture(|config| config.mcp.max_response_bytes = 64 * 1024).await;
     publish_catalog(
         &fixture,
+        &catalog,
         ScopedCatalogProvider {
             file_only: false,
             reserved: false,
             revision: 1,
         },
-    );
+    )
+    .await;
     let scoped = initialize(&fixture, SCOPED, TOKEN_A).await;
     let aggregate = initialize(&fixture, "/mcp", TOKEN_A).await;
     let first = rpc(&fixture, SCOPED, &scoped, 50, "tools/list", json!({})).await;
@@ -600,12 +623,14 @@ async fn scoped_http_cursor_rejects_other_view_and_changed_definitions() {
     );
     publish_catalog(
         &fixture,
+        &catalog,
         ScopedCatalogProvider {
             file_only: false,
             reserved: false,
             revision: 2,
         },
-    );
+    )
+    .await;
     assert_eq!(
         rpc(
             &fixture,

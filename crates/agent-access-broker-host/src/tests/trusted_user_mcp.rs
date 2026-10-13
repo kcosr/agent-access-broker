@@ -20,6 +20,7 @@ const CALLER: &str = "x-agent-access-caller-authorization";
 
 struct Fixture {
     _directory: tempfile::TempDir,
+    broker: TestBroker,
     runtime: BrokerRuntime,
     app: Router,
     store: ManagedStore,
@@ -27,11 +28,19 @@ struct Fixture {
     agent_token: String,
 }
 
-fn fixture() -> Fixture {
-    fixture_with(|_, _| {})
+async fn fixture() -> Fixture {
+    fixture_with(|_, _| {}).await
 }
 
-fn fixture_with(configure: impl FnOnce(&mut BrokerConfig, &Path)) -> Fixture {
+async fn fixture_with(configure: impl FnOnce(&mut BrokerConfig, &Path)) -> Fixture {
+    fixture_start(configure, |application| application).await
+}
+
+/// [`fixture_with`] with additions to the isolated broker application.
+async fn fixture_start(
+    configure: impl FnOnce(&mut BrokerConfig, &Path),
+    customize: impl FnOnce(IsolatedBroker) -> IsolatedBroker,
+) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     create_private_dir(directory.path());
     let key = directory.path().join("key");
@@ -190,11 +199,12 @@ fn fixture_with(configure: impl FnOnce(&mut BrokerConfig, &Path)) -> Fixture {
     };
     let admin_token = issue("admin", BrokerTokenClass::Admin);
     let agent_token = issue("alice", BrokerTokenClass::AgentInvoke);
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_with(customize(TestBroker::config_builder(&config))).await;
     Fixture {
         _directory: directory,
-        app: build_router(runtime.clone(), broker_build_status()),
-        runtime,
+        app: broker.app(),
+        runtime: broker.runtime(),
+        broker,
         store,
         admin_token,
         agent_token,
@@ -306,47 +316,48 @@ impl Provider for ContextProvider {
     }
 }
 
-fn asserted_relay_fixture() -> (Fixture, Arc<ContextProvider>, PathBuf) {
-    let mut f = fixture_with(|config, directory| {
-        let contexts = ["default", "internal", "external", "restricted"];
-        config.execution_context = Some(ExecutionContextConfig {
-            allowed_values: contexts.iter().map(|value| (*value).into()).collect(),
-            // Asserted callers must supply context even with a direct-client default.
-            default_context: Some("default".into()),
-        });
-        config.policy.resources = fixture_resources(&contexts);
-        config.policy.grants[0].execution_contexts =
-            Some(contexts.iter().map(|value| (*value).into()).collect());
-        let secret = directory.join("asserted-relay");
-        std::fs::write(&secret, ASSERTED_RELAY.strip_prefix("Bearer ").unwrap()).unwrap();
-        config.identity.trusted_callers.insert(
-            "asserted_relay".into(),
-            TrustedCallerConfig {
-                credential_ref: format!("file:{}", secret.display()),
-                credential_transport: TrustedCallerCredentialTransport::CallerAuthorization,
-                username_namespace: Some("managed_linux".into()),
-                context_mode: TrustedCallerContextMode::Asserted,
-                execution_context: None,
-                allowed_execution_contexts: Some(vec!["internal".into(), "external".into()]),
-                allow_forwarded_identity: false,
-            },
-        );
-        config.audit = Some(agent_access_core::AuditConfig::new(
-            agent_access_core::AuditStoreType::Jsonl,
-            directory.join("audit.jsonl").display().to_string(),
-        ));
-    });
+async fn asserted_relay_fixture() -> (Fixture, Arc<ContextProvider>, PathBuf) {
     let provider = Arc::new(ContextProvider::default());
-    f.runtime =
-        BrokerRuntime::with_providers(f.runtime.config().clone(), vec![provider.clone()]).unwrap();
-    f.app = build_router(f.runtime.clone(), broker_build_status());
+    let f = fixture_start(
+        |config, directory| {
+            let contexts = ["default", "internal", "external", "restricted"];
+            config.execution_context = Some(ExecutionContextConfig {
+                allowed_values: contexts.iter().map(|value| (*value).into()).collect(),
+                // Asserted callers must supply context even with a direct-client default.
+                default_context: Some("default".into()),
+            });
+            config.policy.resources = fixture_resources(&contexts);
+            config.policy.grants[0].execution_contexts =
+                Some(contexts.iter().map(|value| (*value).into()).collect());
+            let secret = directory.join("asserted-relay");
+            std::fs::write(&secret, ASSERTED_RELAY.strip_prefix("Bearer ").unwrap()).unwrap();
+            config.identity.trusted_callers.insert(
+                "asserted_relay".into(),
+                TrustedCallerConfig {
+                    credential_ref: format!("file:{}", secret.display()),
+                    credential_transport: TrustedCallerCredentialTransport::CallerAuthorization,
+                    username_namespace: Some("managed_linux".into()),
+                    context_mode: TrustedCallerContextMode::Asserted,
+                    execution_context: None,
+                    allowed_execution_contexts: Some(vec!["internal".into(), "external".into()]),
+                    allow_forwarded_identity: false,
+                },
+            );
+            config.audit = Some(agent_access_core::AuditConfig::new(
+                agent_access_core::AuditStoreType::Jsonl,
+                directory.join("audit.jsonl").display().to_string(),
+            ));
+        },
+        |application| with_provider_instances(application, [provider.clone()]),
+    )
+    .await;
     let audit_path = f._directory.path().join("audit.jsonl");
     (f, provider, audit_path)
 }
 
 #[tokio::test]
 async fn trusted_user_asserted_relay_context_is_required_authorized_pinned_and_audited() {
-    let (f, provider, audit_path) = asserted_relay_fixture();
+    let (f, provider, audit_path) = asserted_relay_fixture().await;
     let mut expected_contexts = BTreeMap::new();
     for (path_index, path) in ["/mcp", "/mcp/fake"].into_iter().enumerate() {
         let tool = if path == "/mcp" {
@@ -533,7 +544,8 @@ async fn trusted_user_caller_credentials_alone_never_authenticate_or_consume_ses
         let f = fixture_with(|config, _| {
             config.mcp.max_sessions = 1;
             config.mcp.max_sessions_per_principal = 1;
-        });
+        })
+        .await;
         let agent = format!("Bearer {}", f.agent_token);
         for (headers, action, reason) in [
             (
@@ -587,7 +599,7 @@ async fn trusted_user_caller_credentials_alone_never_authenticate_or_consume_ses
 
 #[tokio::test]
 async fn trusted_user_direct_relay_exact_names_and_authorities_work_without_inventory() {
-    let f = fixture();
+    let f = fixture().await;
     assert!(!f.store.identity_token_metadata("alice").unwrap().configured);
     for path in ["/mcp", "/mcp/fake"] {
         for (carrier, credential, username, principal) in [
@@ -642,7 +654,7 @@ async fn trusted_user_direct_relay_exact_names_and_authorities_work_without_inve
 
 #[tokio::test]
 async fn trusted_user_authentication_failure_matrix_preserves_exact_tuples() {
-    let f = fixture();
+    let f = fixture().await;
     let admin = format!("Bearer {}", f.admin_token);
     let agent = format!("Bearer {}", f.agent_token);
     let cases = [
@@ -757,7 +769,7 @@ async fn trusted_user_authentication_failure_matrix_preserves_exact_tuples() {
 
 #[tokio::test]
 async fn trusted_user_malformed_protected_fields_never_enter_mcp_protocol() {
-    let f = fixture();
+    let f = fixture().await;
     let oversized = "a".repeat(129);
     for username in [
         "",
@@ -867,7 +879,7 @@ async fn trusted_user_malformed_protected_fields_never_enter_mcp_protocol() {
 
 #[tokio::test]
 async fn trusted_user_unsupported_routes_reject_before_other_authentication() {
-    let f = fixture();
+    let f = fixture().await;
     let admin = format!("Bearer {}", f.admin_token);
     for path in [
         "/v1/healthz",
@@ -901,7 +913,7 @@ async fn trusted_user_unsupported_routes_reject_before_other_authentication() {
 
 #[tokio::test]
 async fn trusted_user_storage_failure_is_unavailable_without_private_diagnostics() {
-    let f = fixture();
+    let f = fixture().await;
     rusqlite::Connection::open(f.store.path())
         .unwrap()
         .execute_batch(
@@ -928,32 +940,24 @@ async fn trusted_user_storage_failure_is_unavailable_without_private_diagnostics
 
 #[tokio::test]
 async fn trusted_user_git_rejection_preserves_gateway_framing() {
-    let f = fixture();
-    let mut config = f.runtime.config().clone();
-    config
-        .gateways
-        .insert("gitlab_git".into(), test_git_gateway_config());
-    config.credentials.service.insert(
-        "gitlab_git".into(),
-        config.credentials.service["fake"].clone(),
-    );
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "trusted-user-git".into(),
-            runtime.clone(),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        Duration::from_secs(30),
-        Duration::from_secs(30),
-        runtime.audit_registry(),
-    ));
-    let gateway = build_gateway_router(state);
+    let f = fixture_start(
+        |config, _| {
+            config
+                .gateways
+                .insert("gitlab_git".into(), test_git_gateway_config());
+            config.credentials.service.insert(
+                "gitlab_git".into(),
+                config.credentials.service["fake"].clone(),
+            );
+        },
+        |application| {
+            application
+                .gateway_listener()
+                .expect("loopback gateway listener")
+        },
+    )
+    .await;
+    let gateway = f.broker.gateway_app();
     let mut req = request(
         "/sip/service.git/info/refs?service=git-upload-pack",
         Method::GET,

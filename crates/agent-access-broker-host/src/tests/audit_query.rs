@@ -22,6 +22,7 @@ pub(super) enum Backend {
 /// (admin role), `bob` (service policy manager of `fake`), and `alice` and
 /// `carol` (plain managed users).
 pub(super) struct AuditFixture {
+    pub(super) broker: TestBroker,
     pub(super) app: Router,
     pub(super) state: Arc<ReloadableState>,
     pub(super) audit_path: Option<PathBuf>,
@@ -32,11 +33,11 @@ pub(super) struct AuditFixture {
     pub(super) carol: String,
 }
 
-pub(super) fn audit_fixture(backend: Backend) -> AuditFixture {
-    audit_fixture_with(backend, |_, _| {})
+pub(super) async fn audit_fixture(backend: Backend) -> AuditFixture {
+    audit_fixture_with(backend, |_, _| {}).await
 }
 
-fn audit_fixture_with(
+pub(super) async fn audit_fixture_with(
     backend: Backend,
     configure: impl FnOnce(&mut BrokerConfig, Option<&Path>),
 ) -> AuditFixture {
@@ -170,26 +171,11 @@ fn audit_fixture_with(
     let carol = issue("carol", UserManage);
     drop(store);
 
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let body_hard_cap = runtime.max_http_body_bytes();
-    let audit_registry = runtime.audit_registry();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "sha256:static".to_string(),
-            runtime.with_config_generation(1),
-            StateLockSet::empty(),
-        ),
-        body_hard_cap,
-        crate::reload::DEFAULT_RELOAD_TIMEOUT,
-        crate::reload::DEFAULT_SHUTDOWN_TIMEOUT,
-        audit_registry,
-    ));
+    let broker = TestBroker::start_config(&config).await;
+    let state = broker.state();
     AuditFixture {
-        app: build_public_router(state.clone()),
+        app: broker.app(),
+        broker,
         state,
         audit_path,
         admin,
@@ -367,7 +353,7 @@ async fn audit_routes_in_specs(
 
 #[tokio::test]
 async fn audit_query_routes_exist_only_with_sqlite_audit_and_management() {
-    let sqlite = audit_fixture(Backend::Sqlite);
+    let sqlite = audit_fixture(Backend::Sqlite).await;
     assert_eq!(
         audit_routes_in_specs(&sqlite, &sqlite.admin, "").await,
         [
@@ -405,7 +391,7 @@ async fn audit_query_routes_exist_only_with_sqlite_audit_and_management() {
     assert!(route["resultSchema"]["properties"]["nextCursor"].is_object());
 
     for backend in [Backend::Jsonl, Backend::Disabled] {
-        let fixture = audit_fixture(backend);
+        let fixture = audit_fixture(backend).await;
         for (token, query) in [
             (&fixture.admin, ""),
             (&fixture.admin, "?visibility=all"),
@@ -445,7 +431,8 @@ async fn audit_query_routes_exist_only_with_sqlite_audit_and_management() {
     // Management disabled keeps today's response.
     let disabled = audit_fixture_with(Backend::Sqlite, |config, _| {
         config.management.enabled = false;
-    });
+    })
+    .await;
     for route in [ADMIN_EVENTS, ADMIN_OPTIONS, SELF_OPTIONS] {
         let (status, body) = disabled.get(&disabled.admin, route).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -519,7 +506,7 @@ async fn browser_sessions_read_audit_without_the_csrf_header() {
 
 #[tokio::test]
 async fn visibility_follows_admin_service_manager_and_self_tiers() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     // Real requests: the admin grants alice fake.echo (policy records
     // scoped to fake), alice invokes it with her agent token and issues
     // herself a token (no scope service), and bob manages a grant for fake.
@@ -705,7 +692,7 @@ async fn visibility_follows_admin_service_manager_and_self_tiers() {
 
 #[tokio::test]
 async fn timelines_validate_the_request_id_and_parameters() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let id = uuid::Uuid::new_v4().to_string();
     fixture
         .append(synthetic(&id, 20, "alice", "fake", "echo"))
@@ -742,7 +729,7 @@ async fn timelines_validate_the_request_id_and_parameters() {
 
 #[tokio::test]
 async fn cursors_continue_with_the_first_request_bounds_and_bind_route_and_caller() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     for (id, seconds) in [("p1", 10), ("p2", 20), ("p3", 30), ("p4", 40), ("p5", 50)] {
         fixture
             .append(synthetic(id, seconds, "pager", "fake", "echo"))
@@ -863,7 +850,7 @@ async fn cursors_continue_with_the_first_request_bounds_and_bind_route_and_calle
 #[tokio::test]
 async fn successful_queries_are_neither_audited_nor_logged() {
     let captured = install_trace_capture().start();
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let id = uuid::Uuid::new_v4().to_string();
     for seconds in [10, 20, 30] {
         fixture
@@ -975,7 +962,7 @@ async fn successful_queries_are_neither_audited_nor_logged() {
 
 #[tokio::test]
 async fn denied_and_invalid_audit_queries_are_audited() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let secret = "private-search-text";
     for (token, uri, status, reason) in [
         (
@@ -1080,7 +1067,8 @@ async fn busy_and_slow_audit_queries_fail_as_documented_and_are_audited() {
                 deadline: Duration::from_secs(5),
             },
         );
-    });
+    })
+    .await;
     for route in [ADMIN_EVENTS] {
         let (status, body) = limited.get(&limited.admin, route).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
@@ -1099,7 +1087,8 @@ async fn busy_and_slow_audit_queries_fail_as_documented_and_are_audited() {
                 ..AuditQueryLimits::default()
             },
         );
-    });
+    })
+    .await;
     for (token, uri) in [
         (&slow.admin, ADMIN_EVENTS.to_string()),
         (
@@ -1121,7 +1110,7 @@ async fn busy_and_slow_audit_queries_fail_as_documented_and_are_audited() {
 
 #[tokio::test]
 async fn audit_queries_work_while_audit_writes_fail() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let id = uuid::Uuid::new_v4().to_string();
     fixture
         .append(synthetic(&id, 10, "alice", "fake", "echo"))
@@ -1175,7 +1164,7 @@ async fn config_status_reports_the_node_and_audit_store_without_its_path() {
         (Backend::Jsonl, json!({"type": "jsonl"})),
         (Backend::Disabled, Value::Null),
     ] {
-        let fixture = audit_fixture(backend);
+        let fixture = audit_fixture(backend).await;
         let (status, body) = fixture.get(&fixture.admin, "/v1/admin/config/status").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["result"]["nodeId"], fixture.state.node_id());
@@ -1206,9 +1195,10 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
         );
     };
     write_config("TEST", &first_db);
-    let state = build_reload_test_state(config_path.clone(), Some(4096))
+    let state_broker = reload_test_broker(config_path.clone(), Some(4096))
         .await
         .unwrap();
+    let state = state_broker.state();
     let records = ["c1", "c2", "c3"]
         .into_iter()
         .enumerate()
@@ -1234,8 +1224,8 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
         .unwrap();
     drop(creator);
 
-    let list = |state: &Arc<ReloadableState>, query: String, request_id: &'static str| {
-        let app = build_public_router(state.clone());
+    let list = |broker: &TestBroker, query: String, request_id: &'static str| {
+        let app = broker.app();
         async move {
             let response = admin_request(
                 app,
@@ -1248,8 +1238,8 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
             (response.status(), response_json(response).await)
         }
     };
-    let reload = |state: &Arc<ReloadableState>, request_id: &'static str| {
-        let app = build_public_router(state.clone());
+    let reload = |broker: &TestBroker, request_id: &'static str| {
+        let app = broker.app();
         async move {
             let response = admin_request(
                 app,
@@ -1264,7 +1254,7 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
         }
     };
     let (status, first) = list(
-        &state,
+        &state_broker,
         "principal=pager&limit=1".to_string(),
         "audit-cursor-first",
     )
@@ -1280,7 +1270,7 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
     // A reload of the same database keeps the cursor valid.
     write_config("NEXT", &first_db);
     let reloaded = captured
-        .run(reload(&state, "audit-cursor-reload-same"))
+        .run(reload(&state_broker, "audit-cursor-reload-same"))
         .await;
     assert_eq!(reloaded["result"]["nodeId"], state.node_id());
     assert_eq!(
@@ -1297,7 +1287,7 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
         string_field(&completed, "nodeId"),
         Some(state.node_id().as_str())
     );
-    let (status, page) = list(&state, continue_query.clone(), "audit-cursor-same").await;
+    let (status, page) = list(&state_broker, continue_query.clone(), "audit-cursor-same").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(
         request_ids(page["result"]["items"].as_array().unwrap()),
@@ -1306,31 +1296,26 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
 
     // Another database rejects it, although its IDs and timestamps match.
     write_config("TEST", &second_db);
-    reload(&state, "audit-cursor-reload-other").await;
-    let (status, page) = list(&state, continue_query.clone(), "audit-cursor-other").await;
+    reload(&state_broker, "audit-cursor-reload-other").await;
+    let (status, page) = list(&state_broker, continue_query.clone(), "audit-cursor-other").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(page["error"]["message"], CURSOR_INVALID);
 
     // Back on the first database, and after a restart, it is valid again.
     write_config("NEXT", &first_db);
-    reload(&state, "audit-cursor-reload-back").await;
-    let (status, page) = list(&state, continue_query.clone(), "audit-cursor-back").await;
+    reload(&state_broker, "audit-cursor-reload-back").await;
+    let (status, page) = list(&state_broker, continue_query.clone(), "audit-cursor-back").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(
         request_ids(page["result"]["items"].as_array().unwrap()),
         ["c2"]
     );
-    state
-        .current()
-        .runtime
-        .shutdown_audit(Duration::from_secs(10))
-        .await
-        .unwrap();
     drop(state);
-    let restarted = build_reload_test_state(config_path.clone(), Some(4096))
+    state_broker.stop().await;
+    let restarted_broker = reload_test_broker(config_path.clone(), Some(4096))
         .await
         .unwrap();
-    let (status, page) = list(&restarted, continue_query, "audit-cursor-restart").await;
+    let (status, page) = list(&restarted_broker, continue_query, "audit-cursor-restart").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(
         request_ids(page["result"]["items"].as_array().unwrap()),
@@ -1340,7 +1325,7 @@ async fn cursors_are_bound_to_the_audit_database_across_reloads_and_restarts() {
 
 #[tokio::test]
 async fn service_managers_see_admin_actions_on_their_services() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     // Admin-only actions that name `fake`: a manager assignment and a
     // per-principal service limit.
     let (status, designated) = fixture
@@ -1446,7 +1431,7 @@ async fn service_managers_see_admin_actions_on_their_services() {
 
 #[tokio::test]
 async fn audit_options_are_canonical_before_history_and_obey_audit_visibility() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     assert!(fixture.records().is_empty());
     let (status, global) = fixture.get(&fixture.admin, ADMIN_OPTIONS).await;
     assert_eq!(status, StatusCode::OK);
@@ -1575,7 +1560,8 @@ async fn canonical_audit_options_never_acquire_an_audit_reader() {
                 deadline: Duration::ZERO,
             },
         );
-    });
+    })
+    .await;
     for (token, route) in [
         (&fixture.admin, ADMIN_OPTIONS),
         (&fixture.bob, ADMIN_OPTIONS),
@@ -1599,7 +1585,8 @@ async fn management_caller_rejections_use_broker_in_response_logs_and_audit_with
     let captured = install_trace_capture().start();
     let fixture = audit_fixture_with(Backend::Sqlite, |config, _| {
         config.limits.max_concurrent_requests_per_principal = 1;
-    });
+    })
+    .await;
     // Bob is authorized for this management route, so admission reaches the
     // per-caller limiter. Alice would fail authorization before that guard.
     // Authenticated callers are exempt from authentication-attempt rate limits.
@@ -1652,7 +1639,8 @@ async fn management_caller_rejections_use_broker_in_response_logs_and_audit_with
 async fn management_authentication_rate_rejections_remain_anonymous_broker_events() {
     let fixture = audit_fixture_with(Backend::Sqlite, |config, _| {
         config.limits.auth_requests_per_source_per_minute = 1;
-    });
+    })
+    .await;
     let (status, _) = fixture
         .get("invalid-token", "/v1/admin/policy/grants")
         .await;
@@ -1685,7 +1673,8 @@ async fn management_authentication_rate_rejections_remain_anonymous_broker_event
 async fn anonymous_management_concurrency_rejections_remain_global_admin_only() {
     let fixture = audit_fixture_with(Backend::Sqlite, |config, _| {
         config.limits.max_concurrent_requests = 1;
-    });
+    })
+    .await;
     let permit = fixture
         .state
         .shared_ingress

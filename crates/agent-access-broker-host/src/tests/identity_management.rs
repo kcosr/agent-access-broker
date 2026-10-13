@@ -1,5 +1,5 @@
 //! Trusted-identity administration exercises real routing, authority and storage.
-use super::audit_query::{AuditFixture, Backend, audit_fixture};
+use super::audit_query::{AuditFixture, Backend, audit_fixture_with};
 use super::*;
 use agent_access_core::{
     BrokerTokenClass, PrincipalAccessPatchRequest, PrincipalRole, TrustedCallerConfig,
@@ -10,53 +10,44 @@ const GATE: &str = "/v1/admin/principals/alice/identity-access";
 const BINDINGS: &str = "/v1/admin/principals/alice/identity-bindings";
 const CREATE: &str = r#"{"namespace":"Managed.Linux","username":"Alice+team@example.test"}"#;
 
-fn fixture() -> AuditFixture {
-    let mut fixture = audit_fixture(Backend::Sqlite);
-    let mut config = fixture.state.current().runtime.config().clone();
-    for (id, transport) in [
-        (
-            "direct",
-            TrustedCallerCredentialTransport::AuthorizationUser,
-        ),
-        (
-            "relay",
-            TrustedCallerCredentialTransport::CallerAuthorization,
-        ),
-    ] {
-        let path = temp_path(&format!("identity-management-{id}.secret"));
-        std::fs::write(&path, format!("synthetic-caller-secret-{id}-0123456789")).unwrap();
-        config.identity.trusted_callers.insert(
-            id.into(),
-            TrustedCallerConfig {
-                credential_ref: format!("file:{}", path.display()),
-                credential_transport: transport,
-                username_namespace: Some("Managed.Linux".into()),
-                context_mode: TrustedCallerContextMode::Fixed,
-                execution_context: Some("default".into()),
-                allowed_execution_contexts: None,
-                allow_forwarded_identity: false,
-            },
-        );
-    }
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "sha256:static".into(),
-            runtime.clone().with_config_generation(1),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        crate::reload::DEFAULT_RELOAD_TIMEOUT,
-        crate::reload::DEFAULT_SHUTDOWN_TIMEOUT,
-        runtime.audit_registry(),
-    ));
-    fixture.app = build_public_router(state.clone());
-    fixture.state = state;
-    fixture
+async fn fixture() -> AuditFixture {
+    audit_fixture_with(Backend::Sqlite, |config, _| {
+        // Reloading the caller configuration checks credential readiness.
+        let token = temp_path("identity-management-fake-token");
+        std::fs::write(&token, "synthetic-fake-service-token").unwrap();
+        config
+            .credentials
+            .service
+            .get_mut("fake")
+            .unwrap()
+            .token_ref = Some(format!("file:{}", token.display()));
+        for (id, transport) in [
+            (
+                "direct",
+                TrustedCallerCredentialTransport::AuthorizationUser,
+            ),
+            (
+                "relay",
+                TrustedCallerCredentialTransport::CallerAuthorization,
+            ),
+        ] {
+            let path = temp_path(&format!("identity-management-{id}.secret"));
+            std::fs::write(&path, format!("synthetic-caller-secret-{id}-0123456789")).unwrap();
+            config.identity.trusted_callers.insert(
+                id.into(),
+                TrustedCallerConfig {
+                    credential_ref: format!("file:{}", path.display()),
+                    credential_transport: transport,
+                    username_namespace: Some("Managed.Linux".into()),
+                    context_mode: TrustedCallerContextMode::Fixed,
+                    execution_context: Some("default".into()),
+                    allowed_execution_contexts: None,
+                    allow_forwarded_identity: false,
+                },
+            );
+        }
+    })
+    .await
 }
 
 async fn admin(
@@ -105,7 +96,7 @@ fn auditor(fixture: &AuditFixture) -> String {
 
 #[tokio::test]
 async fn identity_management_gate_is_independent_and_version_checked() {
-    let fixture = fixture();
+    let fixture = fixture().await;
     let (status, gate) = admin(&fixture, Method::GET, GATE, None).await;
     assert_eq!(status, StatusCode::OK, "{gate}");
     assert_eq!(gate["result"]["paused"], false);
@@ -211,7 +202,7 @@ async fn identity_management_gate_is_independent_and_version_checked() {
 
 #[tokio::test]
 async fn identity_management_binding_cas_ownership_and_namespace_availability() {
-    let fixture = fixture();
+    let fixture = fixture().await;
     let (status, created) = admin(&fixture, Method::POST, BINDINGS, Some(CREATE)).await;
     assert_eq!(status, StatusCode::OK, "{created}");
     let binding = created["result"]["bindingId"].as_str().unwrap();
@@ -269,11 +260,12 @@ async fn identity_management_binding_cas_ownership_and_namespace_availability() 
     assert_eq!(listed["result"]["bindings"][0]["enabled"], false);
 
     // Removing caller configuration retains the binding but makes it unavailable.
-    let mut config = fixture.state.current().runtime.config().clone();
+    let configured = fixture.state.current().runtime.config().clone();
+    let mut config = configured.clone();
     config.identity.trusted_callers.clear();
-    let unavailable_app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    fixture.broker.reload_config(&config).await;
     let response = authed_json_request(
-        unavailable_app,
+        fixture.app.clone(),
         Method::GET,
         BINDINGS,
         "namespace-unavailable",
@@ -289,6 +281,7 @@ async fn identity_management_binding_cas_ownership_and_namespace_availability() 
         unavailable["result"]["bindings"][0]["namespaceAvailable"],
         false
     );
+    fixture.broker.reload_config(&configured).await;
 
     let (status, deleted) = admin(
         &fixture,
@@ -309,7 +302,7 @@ async fn identity_management_binding_cas_ownership_and_namespace_availability() 
 
 #[tokio::test]
 async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writes() {
-    let fixture = fixture();
+    let fixture = fixture().await;
     let token = auditor(&fixture);
     for path in [GATE, BINDINGS] {
         let (status, body) = fixture
@@ -396,7 +389,7 @@ async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writ
 
 #[tokio::test]
 async fn identity_management_audit_preflight_failure_prevents_mutation() {
-    let fixture = fixture();
+    let fixture = fixture().await;
     let blocker = rusqlite::Connection::open(fixture.audit_path.as_ref().unwrap()).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let (status, read) = admin(&fixture, Method::GET, GATE, None).await;
@@ -487,7 +480,7 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
 
 #[tokio::test]
 async fn identity_management_committed_write_keeps_success_when_completion_audit_fails() {
-    let fixture = fixture();
+    let fixture = fixture().await;
     let mutation_guard = fixture.state.policy_mutation_lock.lock().await;
     let app = fixture.app.clone();
     let token = fixture.admin.clone();

@@ -37,7 +37,7 @@ static VERIFIER_BACKEND: BackendRegistration = BackendRegistration::new(
 /// domain reason the stored token names.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct VerifierConfig {}
+pub(super) struct VerifierConfig {}
 
 impl BackendConfig for VerifierConfig {
     fn kind(&self) -> &'static str {
@@ -115,7 +115,8 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
     config.providers = ProvidersConfig::new(Arc::new(registry))
         .with(agent_access_fake::FakeProviderConfig::default())
         .with(VerifierConfig::default());
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
@@ -150,7 +151,7 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
             )
             .unwrap();
     }
-    let app = build_router(runtime, broker_build_status());
+    let app = broker.app();
 
     for (name, status, decision, reason) in [
         (

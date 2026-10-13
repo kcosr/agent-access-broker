@@ -344,6 +344,28 @@ impl IsolatedBroker {
         self
     }
 
+    /// Host tests' Microsoft OIDC transport and clock for the startup
+    /// generation.
+    #[cfg(test)]
+    pub(crate) fn microsoft_oidc_components(
+        mut self,
+        transport: Arc<dyn crate::state::MicrosoftOidcTransport>,
+        clock: Arc<dyn agent_access_core::microsoft_oidc::MicrosoftOidcClock>,
+    ) -> Self {
+        self.test_hooks.microsoft_oidc = Some((transport, clock));
+        self
+    }
+
+    /// Host tests' invocation limiter, such as one with a manual clock.
+    #[cfg(test)]
+    pub(crate) fn invocation_limiter(
+        mut self,
+        limiter: crate::ingress::invocation_limits::InvocationLimiter,
+    ) -> Self {
+        self.test_hooks.invocation_limiter = Some(limiter);
+        self
+    }
+
     /// Starts serving on the caller's Tokio runtime. Fails as the broker
     /// process would at startup, for example on an invalid configuration or
     /// a held state lock.

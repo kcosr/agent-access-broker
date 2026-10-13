@@ -609,28 +609,6 @@ impl RuntimeSnapshot {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(crate) async fn new_with_microsoft_oidc_components(
-        generation: u64,
-        config_hash: String,
-        runtime: BrokerRuntime,
-        state_locks: Arc<StateLockSet>,
-        transport: Arc<dyn MicrosoftOidcTransport>,
-        clock: Arc<dyn MicrosoftOidcClock>,
-    ) -> Result<Arc<Self>, ManagedStoreError> {
-        let snapshot = Self::new_microsoft_oidc_candidate_with_components(
-            generation,
-            config_hash,
-            runtime,
-            state_locks,
-            Some(transport),
-            Some(clock),
-        )
-        .await?;
-        snapshot.reconcile_microsoft_oidc_provider()?;
-        Ok(snapshot)
-    }
 }
 
 impl ReloadableState {

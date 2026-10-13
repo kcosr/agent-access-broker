@@ -77,97 +77,98 @@ impl Provider for UserProvider {
     }
 }
 
-fn fixture(max_sessions: usize) -> (Fixture, ManagedStore, Arc<UserProvider>) {
-    let fixture = Fixture::new(|config| {
-        let directory = PathBuf::from(&config.limits.upload_spool_dir);
-        let directory = directory.parent().unwrap();
-        config.identity.authority = "managed".into();
-        config.identity.sources = vec![IdentitySourceConfig {
-            name: "broker".into(),
-            kind: "broker_tokens".into(),
-            header: "Authorization".into(),
-            scheme: "Bearer".into(),
-            principals: vec![],
-        }];
-        config.managed_store = Some(ManagedStoreConfig {
-            kind: "sqlite".into(),
-            path: directory.join("managed.sqlite").display().to_string(),
-            auto_migrate: true,
-            require_registered_principal_for_invocation: true,
-        });
-        config.broker_tokens = Some(BrokerTokensConfig {
-            hash_key_ref: format!(
-                "file:{}",
-                config.credential_encryption.as_ref().unwrap().keys[0]
-                    .path
-                    .as_ref()
-                    .unwrap()
-            ),
-            ..Default::default()
-        });
-        for (name, secret, transport) in [
-            (
-                "direct",
-                DIRECT,
-                TrustedCallerCredentialTransport::AuthorizationUser,
-            ),
-            (
-                "relay",
-                RELAY,
-                TrustedCallerCredentialTransport::CallerAuthorization,
-            ),
-        ] {
-            let path = directory.join(name);
-            std::fs::write(&path, secret).unwrap();
-            config.identity.trusted_callers.insert(
-                name.into(),
-                TrustedCallerConfig {
-                    credential_ref: format!("file:{}", path.display()),
-                    credential_transport: transport,
-                    username_namespace: Some("linux".into()),
-                    context_mode: TrustedCallerContextMode::Fixed,
-                    execution_context: Some("default".into()),
-                    allowed_execution_contexts: None,
-                    allow_forwarded_identity: name == "relay",
-                },
-            );
-        }
-        config.mcp.max_sessions = max_sessions;
-        config.mcp.max_sessions_per_principal = max_sessions;
-        config.policy.grants[0].subjects = vec!["user:alice".into(), "user:bob".into()];
-        let mut bootstrap = config.clone();
-        bootstrap.policy.grants.clear();
-        let runtime = BrokerRuntime::new(bootstrap).unwrap();
-        let store = runtime.managed_store().unwrap();
-        for principal in ["alice", "bob"] {
-            store
-                .create_principal(PrincipalWriteRequest {
-                    principal_id: principal.into(),
-                    kind: "user".into(),
-                    role: PrincipalRole::User,
-                    self_service_enabled: None,
-                    display_name: None,
-                    email: None,
-                    external_subject: None,
-                    created_by: "fixture".into(),
-                })
-                .unwrap();
-            store
-                .create_username_binding(principal, "linux", principal, "fixture")
-                .unwrap();
-        }
-    });
+async fn fixture(max_sessions: usize) -> (Fixture, ManagedStore, Arc<UserProvider>) {
     let provider = UserProvider::new();
-    let previous = fixture.state.current();
-    let config = previous.runtime.config().clone();
-    let runtime = BrokerRuntime::with_providers(config, vec![provider.clone()]).unwrap();
-    let store = runtime.managed_store().unwrap().clone();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "trusted-user".into(),
-        runtime.with_config_generation(1),
-        StateLockSet::empty(),
-    ));
+    let fixture = Fixture::with_providers(
+        |config| {
+            let directory = PathBuf::from(&config.limits.upload_spool_dir);
+            let directory = directory.parent().unwrap();
+            config.identity.authority = "managed".into();
+            config.identity.sources = vec![IdentitySourceConfig {
+                name: "broker".into(),
+                kind: "broker_tokens".into(),
+                header: "Authorization".into(),
+                scheme: "Bearer".into(),
+                principals: vec![],
+            }];
+            config.managed_store = Some(ManagedStoreConfig {
+                kind: "sqlite".into(),
+                path: directory.join("managed.sqlite").display().to_string(),
+                auto_migrate: true,
+                require_registered_principal_for_invocation: true,
+            });
+            config.broker_tokens = Some(BrokerTokensConfig {
+                hash_key_ref: format!(
+                    "file:{}",
+                    config.credential_encryption.as_ref().unwrap().keys[0]
+                        .path
+                        .as_ref()
+                        .unwrap()
+                ),
+                ..Default::default()
+            });
+            for (name, secret, transport) in [
+                (
+                    "direct",
+                    DIRECT,
+                    TrustedCallerCredentialTransport::AuthorizationUser,
+                ),
+                (
+                    "relay",
+                    RELAY,
+                    TrustedCallerCredentialTransport::CallerAuthorization,
+                ),
+            ] {
+                let path = directory.join(name);
+                std::fs::write(&path, secret).unwrap();
+                config.identity.trusted_callers.insert(
+                    name.into(),
+                    TrustedCallerConfig {
+                        credential_ref: format!("file:{}", path.display()),
+                        credential_transport: transport,
+                        username_namespace: Some("linux".into()),
+                        context_mode: TrustedCallerContextMode::Fixed,
+                        execution_context: Some("default".into()),
+                        allowed_execution_contexts: None,
+                        allow_forwarded_identity: name == "relay",
+                    },
+                );
+            }
+            config.mcp.max_sessions = max_sessions;
+            config.mcp.max_sessions_per_principal = max_sessions;
+            config.policy.grants[0].subjects = vec!["user:alice".into(), "user:bob".into()];
+            let mut bootstrap = config.clone();
+            bootstrap.policy.grants.clear();
+            let runtime = BrokerRuntime::new(bootstrap).unwrap();
+            let store = runtime.managed_store().unwrap();
+            for principal in ["alice", "bob"] {
+                store
+                    .create_principal(PrincipalWriteRequest {
+                        principal_id: principal.into(),
+                        kind: "user".into(),
+                        role: PrincipalRole::User,
+                        self_service_enabled: None,
+                        display_name: None,
+                        email: None,
+                        external_subject: None,
+                        created_by: "fixture".into(),
+                    })
+                    .unwrap();
+                store
+                    .create_username_binding(principal, "linux", principal, "fixture")
+                    .unwrap();
+            }
+        },
+        vec![provider.clone()],
+    )
+    .await;
+    let store = fixture
+        .state
+        .current()
+        .runtime
+        .managed_store()
+        .unwrap()
+        .clone();
     (fixture, store, provider)
 }
 
@@ -273,20 +274,10 @@ fn binding_enabled_aba(store: &ManagedStore) {
         )
         .unwrap();
 }
-fn reload(fixture: &Fixture, provider: Arc<UserProvider>, change: impl FnOnce(&mut BrokerConfig)) {
-    let previous = fixture.state.current();
-    let mut config = previous.runtime.config().clone();
-    change(&mut config);
-    let generation = previous.generation + 1;
-    let runtime = BrokerRuntime::with_providers(config, vec![provider])
-        .unwrap()
-        .with_config_generation(generation);
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        generation,
-        format!("generation-{generation}"),
-        runtime,
-        StateLockSet::empty(),
-    ));
+/// Reloads the fixture's configuration, changed by `change`; the user
+/// provider keeps serving `fake` in the new generation.
+async fn reload(fixture: &Fixture, change: impl FnOnce(&mut BrokerConfig)) {
+    publish_reload(fixture, change).await;
 }
 async fn assert_assertion_denied(response: axum::response::Response) {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -300,13 +291,13 @@ async fn assert_assertion_denied(response: axum::response::Response) {
 
 #[tokio::test]
 async fn trusted_user_read_and_write_dispatch_as_mapped_human_for_both_transports() {
-    let (fixture, store, provider) = fixture(8);
+    let (fixture, store, provider) = fixture(8).await;
     store.remove_identity_token("alice").unwrap();
     for relayed in [false, true] {
         let session = initialize(&fixture, relayed).await;
         for (id, write) in [(10, false), (11, true)] {
             provider.write_mode.store(write, Ordering::SeqCst);
-            reload(&fixture, provider.clone(), |_| {});
+            reload(&fixture, |_| {}).await;
             let listing = rpc_body(
                 fixture
                     .send(user_request(
@@ -334,7 +325,7 @@ async fn trusted_user_read_and_write_dispatch_as_mapped_human_for_both_transport
     }
     assert_eq!(provider.executions.load(Ordering::SeqCst), 4);
     assert_eq!(provider.writes.load(Ordering::SeqCst), 2);
-    let records = read_audit_records(&fixture.audit_path);
+    let records = read_audit_records_without_reloads(&fixture.audit_path);
     assert_eq!(
         records.iter().filter(|r| r["decision"] == "allow").count(),
         4
@@ -355,7 +346,7 @@ async fn trusted_user_read_and_write_dispatch_as_mapped_human_for_both_transport
 
 #[tokio::test]
 async fn trusted_user_old_sessions_never_revive_after_gate_and_mapping_aba_at_capacity() {
-    let (fixture, store, _) = fixture(1);
+    let (fixture, store, _) = fixture(1).await;
     let mut session = initialize(&fixture, false).await;
     for change in [
         gate_aba as fn(&ManagedStore),
@@ -378,7 +369,7 @@ async fn trusted_user_old_sessions_never_revive_after_gate_and_mapping_aba_at_ca
 
 #[tokio::test]
 async fn trusted_user_body_intake_cannot_rebind_to_replacement_human() {
-    let (fixture, store, provider) = fixture(4);
+    let (fixture, store, provider) = fixture(4).await;
     let session = initialize(&fixture, false).await;
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -424,7 +415,7 @@ async fn trusted_user_body_intake_cannot_rebind_to_replacement_human() {
 #[tokio::test]
 async fn trusted_user_final_admission_rechecks_gate_mapping_and_caller_aba() {
     for mutation in 0..3 {
-        let (fixture, store, provider) = fixture(4);
+        let (fixture, store, provider) = fixture(4).await;
         let session = initialize(&fixture, false).await;
         let barrier = Arc::new(crate::state::McpAdmissionBarrier {
             reached: tokio::sync::Notify::new(),
@@ -442,22 +433,24 @@ async fn trusted_user_final_admission_rechecks_gate_mapping_and_caller_aba() {
             0 => gate_aba(&store),
             1 => mapping_aba(&store),
             _ => {
-                reload(&fixture, provider.clone(), |config| {
+                reload(&fixture, |config| {
                     config
                         .identity
                         .trusted_callers
                         .get_mut("direct")
                         .unwrap()
                         .username_namespace = Some("other".into())
-                });
-                reload(&fixture, provider.clone(), |config| {
+                })
+                .await;
+                reload(&fixture, |config| {
                     config
                         .identity
                         .trusted_callers
                         .get_mut("direct")
                         .unwrap()
                         .username_namespace = Some("linux".into())
-                });
+                })
+                .await;
             }
         }
         barrier.release.add_permits(1);
@@ -472,7 +465,7 @@ async fn trusted_user_final_admission_rechecks_gate_mapping_and_caller_aba() {
 
 #[tokio::test]
 async fn trusted_user_session_reaping_does_not_cancel_already_admitted_write() {
-    let (fixture, store, provider) = fixture(1);
+    let (fixture, store, provider) = fixture(1).await;
     let session = initialize(&fixture, false).await;
     provider.block.store(true, Ordering::SeqCst);
     let response = fixture
@@ -524,10 +517,10 @@ async fn trusted_user_session_reaping_does_not_cancel_already_admitted_write() {
 
 #[tokio::test]
 async fn trusted_user_unchanged_caller_reload_preserves_session_but_loaded_secret_aba_does_not() {
-    let (fixture, _, provider) = fixture(1);
+    let (fixture, _, _) = fixture(1).await;
     let session = initialize(&fixture, false).await;
     let epoch = fixture.state.current().caller_security_epoch;
-    reload(&fixture, provider.clone(), |_| {});
+    reload(&fixture, |_| {}).await;
     assert_eq!(fixture.state.current().caller_security_epoch, epoch);
     assert_eq!(
         fixture
@@ -552,9 +545,9 @@ async fn trusted_user_unchanged_caller_reload_preserves_session_but_loaded_secre
         .unwrap()
         .to_owned();
     std::fs::write(&path, "rotated-caller-secret-0123456789").unwrap();
-    reload(&fixture, provider.clone(), |_| {});
+    reload(&fixture, |_| {}).await;
     std::fs::write(&path, DIRECT).unwrap();
-    reload(&fixture, provider, |_| {});
+    reload(&fixture, |_| {}).await;
     assert_eq!(fixture.state.current().caller_security_epoch, epoch + 2);
     assert_eq!(
         fixture
@@ -572,7 +565,7 @@ async fn trusted_user_unchanged_caller_reload_preserves_session_but_loaded_secre
 
 #[tokio::test]
 async fn trusted_user_unavailable_cleanup_retains_unconfirmed_sessions() {
-    let (fixture, _, _) = fixture(1);
+    let (fixture, _, _) = fixture(1).await;
     let session = initialize(&fixture, false).await;
     let path = fixture
         .state
@@ -631,8 +624,8 @@ async fn trusted_user_unavailable_cleanup_retains_unconfirmed_sessions() {
 
 #[tokio::test]
 async fn mcp_ordinary_and_fingerprint_reject_declared_and_actual_trailers() {
-    let ordinary = Fixture::new(|_| {});
-    let (managed, store, _) = fixture(4);
+    let ordinary = Fixture::new(|_| {}).await;
+    let (managed, store, _) = fixture(4).await;
     let ring = CredentialKeyRing::load(
         managed
             .state
@@ -690,7 +683,7 @@ async fn mcp_ordinary_and_fingerprint_reject_declared_and_actual_trailers() {
 #[tokio::test]
 async fn trusted_user_discovery_queue_rechecks_the_original_mapping() {
     for method in ["tools/list", "tools/call"] {
-        let (fixture, store, provider) = fixture(4);
+        let (fixture, store, provider) = fixture(4).await;
         let session = initialize(&fixture, false).await;
         let barrier = Arc::new(crate::state::McpAdmissionBarrier {
             reached: tokio::sync::Notify::new(),
@@ -720,7 +713,7 @@ async fn trusted_user_discovery_queue_rechecks_the_original_mapping() {
 #[tokio::test]
 async fn trusted_user_inventory_changes_preserve_username_sessions_and_expire_fingerprint_sessions()
 {
-    let (fixture, store, _) = fixture(4);
+    let (fixture, store, _) = fixture(4).await;
     let ring = CredentialKeyRing::load(
         fixture
             .state
@@ -783,7 +776,7 @@ async fn trusted_user_inventory_changes_preserve_username_sessions_and_expire_fi
 
 #[tokio::test]
 async fn trusted_user_service_scoped_sessions_keep_original_tool_names_and_view_ownership() {
-    let (fixture, _, provider) = fixture(4);
+    let (fixture, _, provider) = fixture(4).await;
     for relayed in [false, true] {
         let scoped = |session: Option<&str>, message| {
             let mut request = user_request(relayed, session, message);
@@ -809,7 +802,7 @@ async fn trusted_user_service_scoped_sessions_keep_original_tool_names_and_view_
         );
         for (id, write) in [(80, false), (81, true)] {
             provider.write_mode.store(write, Ordering::SeqCst);
-            reload(&fixture, provider.clone(), |_| {});
+            reload(&fixture, |_| {}).await;
             let mut message = call(id);
             message["params"]["name"] = json!("echo");
             let result = rpc_body(fixture.send(scoped(Some(&session), message)).await).await;
@@ -837,7 +830,7 @@ async fn trusted_user_service_scoped_sessions_keep_original_tool_names_and_view_
 
 #[tokio::test]
 async fn trusted_user_aliases_share_principal_capacity_without_sharing_session_owners() {
-    let (fixture, store, _) = fixture(1);
+    let (fixture, store, _) = fixture(1).await;
     store
         .create_username_binding("alice", "linux", "alias", "fixture")
         .unwrap();
@@ -866,7 +859,7 @@ async fn trusted_user_aliases_share_principal_capacity_without_sharing_session_o
 
 #[tokio::test]
 async fn trusted_user_remapped_human_reclaims_stale_global_capacity_immediately() {
-    let (fixture, store, _) = fixture(1);
+    let (fixture, store, _) = fixture(1).await;
     let _old_session = initialize(&fixture, false).await;
     let binding = store
         .list_username_bindings("alice")
@@ -886,11 +879,12 @@ async fn trusted_user_remapped_human_reclaims_stale_global_capacity_immediately(
 
 #[tokio::test]
 async fn trusted_user_cancelled_post_body_waiter_retains_principal_store_work_capacity() {
-    let (fixture, _, provider) = fixture(4);
-    reload(&fixture, provider, |config| {
+    let (fixture, _, _) = fixture(4).await;
+    reload(&fixture, |config| {
         config.mcp.max_control_requests = 2;
         config.mcp.max_control_requests_per_principal = 1;
-    });
+    })
+    .await;
     let session = initialize(&fixture, false).await;
     let barrier = Arc::new(crate::state::McpBlockingBarrier::default());
     struct ReleaseOnDrop(Arc<crate::state::McpBlockingBarrier>);
@@ -944,7 +938,7 @@ async fn trusted_user_cancelled_post_body_waiter_retains_principal_store_work_ca
 async fn trusted_user_live_cancellation_and_delete_work_for_each_transport_and_view() {
     for relayed in [false, true] {
         for path in ["/mcp", "/mcp/fake"] {
-            let (fixture, _, provider) = fixture(1);
+            let (fixture, _, provider) = fixture(1).await;
             let send = |session: Option<&str>, message: Value| {
                 let mut request = user_request(relayed, session, message);
                 *request.uri_mut() = path.parse().unwrap();
@@ -1042,10 +1036,8 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
         (PreProtocolPhase::Discovery, "tools/list"),
         (PreProtocolPhase::Discovery, "tools/call"),
     ] {
-        let (fixture, _, provider) = fixture(2);
-        reload(&fixture, provider, |config| {
-            config.mcp.protocol_timeout_ms = 250
-        });
+        let (fixture, _, _) = fixture(2).await;
+        reload(&fixture, |config| config.mcp.protocol_timeout_ms = 250).await;
         let session = if phase == PreProtocolPhase::View {
             None
         } else {
@@ -1104,13 +1096,14 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
 
 #[tokio::test]
 async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expiry_progresses() {
-    let (fixture, _, provider) = fixture(2);
-    reload(&fixture, provider, |config| {
+    let (fixture, _, _) = fixture(2).await;
+    reload(&fixture, |config| {
         config.mcp.protocol_timeout_ms = 250;
         config.mcp.max_control_requests = 3;
         config.mcp.max_control_requests_per_principal = 1;
         config.mcp.session_idle_timeout_ms = 2_000;
-    });
+    })
+    .await;
     let session = initialize(&fixture, false).await;
     let first = Arc::new(crate::state::McpBlockingBarrier::default());
     let release_first = ReleaseBlockingOnDrop(first.clone());
@@ -1200,7 +1193,7 @@ async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expir
 async fn trusted_user_initialize_runs_between_background_prune_batches() {
     use futures_util::FutureExt;
 
-    let (fixture, _, _) = fixture(66);
+    let (fixture, _, _) = fixture(66).await;
     // A full background sweep now needs two authoritative store batches.
     for _ in 0..65 {
         initialize(&fixture, false).await;

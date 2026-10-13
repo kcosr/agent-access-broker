@@ -1,6 +1,8 @@
 //! Google consent and Gmail through the real managed broker/router.
 use super::*;
 use crate::backend_registry;
+// The shared fixture still routes requests to its own runtime.
+use crate::build_router;
 use wiremock::{
     Mock, ResponseTemplate,
     matchers::{body_string_contains, method, path},
@@ -178,13 +180,13 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
             grant.subjects = vec!["user:bob".into()];
             config.policy.grants.push(grant);
         }
-        let runtime = BrokerRuntime::with_providers(
-            config,
+        let broker = TestBroker::start_with_providers(
+            &config,
             [agent_access_gmail::test_support::provider(&f.server.uri())],
         )
-        .unwrap();
+        .await;
         let response = authed_json_request(
-            build_router(runtime, broker_build_status()),
+            broker.app(),
             Method::POST,
             "/v1/invoke/gmail/account.view",
             "bob-read",
@@ -199,6 +201,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
             response_json(response).await
         );
         assert_eq!(f.server.received_requests().await.unwrap().len(), before);
+        broker.stop().await;
     }
 }
 

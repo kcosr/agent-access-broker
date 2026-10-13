@@ -83,6 +83,14 @@ pub fn build_router(runtime: BrokerRuntime, build_status: BrokerBuildStatus) -> 
     build_public_router(state)
 }
 
+/// The public router over one runtime, outside any serving lifecycle, for
+/// host tests that route requests to a specific runtime instance, such as a
+/// superseded generation's runtime.
+#[cfg(test)]
+pub(crate) fn runtime_router(runtime: BrokerRuntime) -> Router {
+    build_router(runtime, crate::broker_build_status())
+}
+
 pub fn build_public_router(state: Arc<ReloadableState>) -> Router {
     public_router(state).0
 }

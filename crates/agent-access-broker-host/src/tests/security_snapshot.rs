@@ -8,7 +8,7 @@ use axum::http::HeaderMap;
 
 #[tokio::test]
 async fn revoked_token_finishes_only_operations_prepared_before_revocation() {
-    let fixture = token_context_fixture();
+    let fixture = token_context_fixture().await;
     let snapshot = fixture.state.current();
     let runtime = &snapshot.runtime;
     let store = runtime.managed_store().unwrap();

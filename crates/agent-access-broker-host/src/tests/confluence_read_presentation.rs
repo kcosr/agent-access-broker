@@ -64,7 +64,7 @@ const NATIVE_SENTINEL: &str = "CONFLUENCEREADNATIVESENTINEL8C5E32";
 
 #[tokio::test]
 async fn confluence_read_capabilities_are_consistent_across_runtime_specs() {
-    let fixture = spec_agent_fixture(&["confluence"], false);
+    let fixture = spec_agent_fixture(&["confluence"], false).await;
     let app = fixture.app;
     let token = fixture.agent_token;
 
@@ -169,7 +169,7 @@ async fn confluence_read_capabilities_are_consistent_across_runtime_specs() {
 
 #[tokio::test]
 async fn confluence_formats_transform_success_and_mismatch_and_reject_before_provider_access() {
-    let fixture = presentation_fixture("");
+    let fixture = presentation_fixture("").await;
 
     let unsupported = presentation_request(
         fixture.app.clone(),
@@ -259,7 +259,7 @@ async fn confluence_rendered_content_is_absent_from_tracing_audit_and_errors() {
     let captured = install_trace_capture().start();
 
     let audit_path = temp_path("confluence-normalized-read.audit.jsonl");
-    let fixture = presentation_fixture(audit_path.to_str().unwrap());
+    let fixture = presentation_fixture(audit_path.to_str().unwrap()).await;
     let malformed = captured
         .run(presentation_request(
             fixture.app,
@@ -387,6 +387,7 @@ fn confluence_broker_config(audit_file: &str) -> BrokerConfig {
 }
 
 struct PresentationFixture {
+    _broker: TestBroker,
     app: Router,
     scope_resolutions: Arc<AtomicUsize>,
     invocations: Arc<AtomicUsize>,
@@ -397,7 +398,7 @@ struct TestConfluenceReadPresentationProvider {
     invocations: Arc<AtomicUsize>,
 }
 
-fn presentation_fixture(audit_file: &str) -> PresentationFixture {
+async fn presentation_fixture(audit_file: &str) -> PresentationFixture {
     let scope_resolutions = Arc::new(AtomicUsize::new(0));
     let invocations = Arc::new(AtomicUsize::new(0));
     let provider = TestConfluenceReadPresentationProvider {
@@ -410,9 +411,10 @@ fn presentation_fixture(audit_file: &str) -> PresentationFixture {
         "search".to_string(),
         "verify".to_string(),
     ];
-    let runtime = BrokerRuntime::with_providers(config, vec![Arc::new(provider)]).unwrap();
+    let broker = TestBroker::start_with_providers(&config, vec![Arc::new(provider)]).await;
     PresentationFixture {
-        app: build_router(runtime, broker_build_status()),
+        app: broker.app(),
+        _broker: broker,
         scope_resolutions,
         invocations,
     }

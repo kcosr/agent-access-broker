@@ -9,9 +9,12 @@ use agent_access_core::{
 };
 use agent_access_provider::test_support::bearer_credential;
 
+/// Invokes through `runtime` itself. The test follows import publication
+/// across runtime instances, including superseded ones that no serving
+/// broker owns, so it routes to each instance directly.
 async fn invoke(runtime: &BrokerRuntime, token: &str, service: &str) -> (StatusCode, Value) {
     let response = authed_json_request(
-        build_router(runtime.clone(), broker_build_status()),
+        crate::router::runtime_router(runtime.clone()),
         Method::POST,
         &format!("/v1/invoke/{service}/inspect"),
         &format!("import-publication-{service}"),

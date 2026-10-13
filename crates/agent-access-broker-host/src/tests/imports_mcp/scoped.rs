@@ -42,9 +42,8 @@ async fn fixture_http() -> Fixture {
     let mut config = fixture.runtime.config().clone();
     config.mcp.enabled = true;
     config.mcp.public_url = Some("https://broker.example.test/mcp".into());
-    let runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
-    fixture.app = build_router(runtime.clone(), broker_build_status());
-    fixture.runtime = runtime;
+    fixture.broker.reload_config(&config).await;
+    fixture.runtime = fixture.broker.runtime();
     fixture
 }
 fn wire(
@@ -287,7 +286,8 @@ async fn scoped_imports_same_raw_name_uses_selected_service_current_credentials_
         assert_eq!(headers["authorization"], expected_token);
         assert_eq!(request["params"]["name"], "read_item");
     }
-    let records = read_audit_records(&fixture.audit_path);
+    // The fixture enables HTTP MCP by a reload, which is audited too.
+    let records = read_audit_records_without_reloads(&fixture.audit_path);
     assert_eq!(records.len(), 3);
     assert!(records.iter().all(|record| record["action"] == "inspect"
         && record["providerAudit"]["importedService"].is_object()));
@@ -417,24 +417,9 @@ async fn scoped_imports_refresh_quarantine_same_id_review_and_replacement_rechec
 
 #[tokio::test]
 async fn scoped_imports_operator_reload_blocks_existing_sessions_and_preserves_grants() {
-    let mut fixture = fixture_http().await;
+    let fixture = fixture_http().await;
     let base_config = fixture.runtime.config().clone();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "operator-gate-fixture".into(),
-            fixture.runtime.clone().with_config_generation(1),
-            StateLockSet::empty(),
-        ),
-        fixture.runtime.max_http_body_bytes(),
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-        fixture.runtime.audit_registry(),
-    ));
-    fixture.app = build_public_router(state.clone());
+    let state = fixture.broker.state();
     let session = initialize(&fixture, "alice", "one").await;
     assert_eq!(
         mcp::structured(&read(&fixture, "alice", "one", &session, 30).await)["decision"],
@@ -451,17 +436,6 @@ async fn scoped_imports_operator_reload_blocks_existing_sessions_and_preserves_g
     let store = fixture.runtime.managed_store().unwrap();
     let grants = serde_json::to_value(store.policy_grants().unwrap()).unwrap();
 
-    let publish = |config| {
-        let previous = state.current();
-        let generation = previous.generation + 1;
-        let runtime = BrokerRuntime::new_for_reload(config, &previous.runtime).unwrap();
-        state.active.store(RuntimeSnapshot::new(
-            generation,
-            "operator-gate-reload".into(),
-            runtime.with_config_generation(generation),
-            StateLockSet::empty(),
-        ));
-    };
     for gate in ["endpoint", "kind", "service", "imports"] {
         let mut config = base_config.clone();
         match gate {
@@ -474,7 +448,7 @@ async fn scoped_imports_operator_reload_blocks_existing_sessions_and_preserves_g
             "imports" => config.imports.enabled = false,
             _ => unreachable!(),
         }
-        publish(config);
+        fixture.broker.reload_config(&config).await;
         let listing = rpc(
             &fixture,
             "alice",
@@ -536,7 +510,7 @@ async fn scoped_imports_operator_reload_blocks_existing_sessions_and_preserves_g
         );
     }
     // Restoring operator permission reuses the same session and retained grant.
-    publish(base_config);
+    fixture.broker.reload_config(&base_config).await;
     assert_eq!(
         mcp::structured(&read(&fixture, "alice", "one", &session, 35).await)["decision"],
         "allow"

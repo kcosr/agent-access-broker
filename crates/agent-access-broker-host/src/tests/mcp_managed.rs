@@ -122,8 +122,9 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
         issue(BrokerTokenClass::UserManage),
         issue(BrokerTokenClass::Admin),
     ];
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let app = build_router(runtime.clone(), broker_build_status());
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
+    let app = broker.app();
 
     for token in &management {
         let headers = mcp::request(Method::POST, Some(&token.token), None, None)

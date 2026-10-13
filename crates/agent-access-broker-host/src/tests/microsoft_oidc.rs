@@ -1,16 +1,13 @@
-use super::{fake_config, response_json, temp_path};
-use crate::state::{
-    MicrosoftOidcTransport, MicrosoftOidcTransportError, ReloadableState, RuntimeSnapshot,
-};
-use crate::{broker_build_status, build_public_router};
+use super::{TestBroker, fake_config, response_json, temp_path};
+use crate::state::{MicrosoftOidcTransport, MicrosoftOidcTransportError};
 use agent_access_core::microsoft_oidc::{
     MICROSOFT_OIDC_CALLBACK_PATH, MICROSOFT_OIDC_HOST, MicrosoftOidcClock,
     MicrosoftOidcProviderMetadata,
 };
 use agent_access_core::{
-    BrokerRuntime, BrokerTokensConfig, ExternalGroupBindingCreateRequest, GroupWriteRequest,
-    IdentityConfig, IdentitySourceConfig, ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode,
-    ManagementConfig, MicrosoftOidcConfig, StateLockSet,
+    BrokerTokensConfig, ExternalGroupBindingCreateRequest, GroupWriteRequest, IdentityConfig,
+    IdentitySourceConfig, ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode, ManagementConfig,
+    MicrosoftOidcConfig,
 };
 use axum::Router;
 use axum::body::Body;
@@ -35,11 +32,9 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tower::ServiceExt;
 use url::Url;
 
@@ -661,6 +656,7 @@ fn json_response(value: Value) -> Result<HttpResponse, FakeProviderError> {
 }
 
 struct OidcBrowserFixture {
+    _broker: TestBroker,
     app: Router,
     provider: FakeMicrosoftOidcProvider,
     clock: TestClock,
@@ -759,34 +755,17 @@ async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
         })
         .unwrap();
 
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let body_hard_cap = runtime.max_http_body_bytes();
-    let audit_registry = runtime.audit_registry();
     let clock = TestClock::new(FIXED_NOW);
     let provider = FakeMicrosoftOidcProvider::new(clock.clone());
     provider.set_discovery_outage(discovery_outage);
-    let snapshot = RuntimeSnapshot::new_with_microsoft_oidc_components(
-        1,
-        "sha256:microsoft-oidc-test".to_string(),
-        runtime,
-        StateLockSet::empty(),
-        Arc::new(provider.clone()),
-        Arc::new(clock.clone()),
+    let broker = TestBroker::start_with(
+        TestBroker::config_builder(&config)
+            .microsoft_oidc_components(Arc::new(provider.clone()), Arc::new(clock.clone())),
     )
-    .await
-    .unwrap();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        snapshot,
-        body_hard_cap,
-        Duration::from_secs(30),
-        Duration::from_secs(30),
-        audit_registry,
-    ));
+    .await;
     OidcBrowserFixture {
-        app: build_public_router(state),
+        app: broker.app(),
+        _broker: broker,
         provider,
         clock,
         store,

@@ -8,6 +8,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 struct Fixture {
+    broker: Option<TestBroker>,
     runtime: BrokerRuntime,
     _dir: tempfile::TempDir,
     app: Router,
@@ -16,11 +17,57 @@ struct Fixture {
     admin_token: String,
     agent_token: String,
 }
-fn fixture() -> Fixture {
-    fixture_with_config(|_| {})
+/// Which listener's router a fixture serves as `app`.
+#[derive(Clone, Copy)]
+enum Served {
+    Public,
+    Gateway,
 }
 
-fn fixture_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Fixture {
+async fn fixture() -> Fixture {
+    fixture_with_config(|_| {}).await
+}
+
+async fn fixture_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Fixture {
+    fixture_serving(configure, Served::Public).await
+}
+
+async fn start_serving(config: &BrokerConfig, served: Served) -> (TestBroker, Router) {
+    match served {
+        Served::Public => {
+            let broker = TestBroker::start_config(config).await;
+            let app = broker.app();
+            (broker, app)
+        }
+        Served::Gateway => {
+            let broker = TestBroker::start_with(
+                TestBroker::config_builder(config)
+                    .gateway_listener()
+                    .expect("loopback gateway listener"),
+            )
+            .await;
+            let app = broker.gateway_app();
+            (broker, app)
+        }
+    }
+}
+
+impl Fixture {
+    /// Restarts on the fixture's state with `config`, as a broker process
+    /// restart would, serving `served`'s router as `app`.
+    async fn restart(&mut self, config: &BrokerConfig, served: Served) {
+        // The router holds the broker state, and with it the state locks.
+        self.app = Router::new();
+        if let Some(broker) = self.broker.take() {
+            broker.stop().await;
+        }
+        let (broker, app) = start_serving(config, served).await;
+        self.app = app;
+        self.broker = Some(broker);
+    }
+}
+
+async fn fixture_serving(configure: impl FnOnce(&mut BrokerConfig), served: Served) -> Fixture {
     let dir = tempfile::TempDir::new().unwrap();
     #[cfg(unix)]
     {
@@ -104,7 +151,8 @@ fn fixture_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Fixture {
             actor: ("test").into(),
         })
         .unwrap();
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let (broker, app) = start_serving(&config, served).await;
+    let runtime = broker.runtime();
     let raw = store
         .reveal_identity_token("alice", runtime.credential_key_ring().unwrap())
         .unwrap();
@@ -143,8 +191,9 @@ fn fixture_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Fixture {
         .unwrap()
         .token;
     Fixture {
+        broker: Some(broker),
         _dir: dir,
-        app: build_router(runtime.clone(), broker_build_status()),
+        app,
         runtime,
         store,
         hash,
@@ -190,7 +239,7 @@ async fn request(
 const PROXY: &str = "Bearer trusted-proxy-credential-0123456789";
 #[tokio::test]
 async fn managed_identity_ingress_rejects_spoofing_and_management_escalation() {
-    let f = fixture();
+    let f = fixture().await;
     for p in [None, Some("Bearer wrong")] {
         assert_eq!(
             request(&f, "/v1/me", Method::GET, p, Some(&f.hash), None, None)
@@ -273,7 +322,7 @@ async fn managed_identity_ingress_rejects_spoofing_and_management_escalation() {
 }
 #[tokio::test]
 async fn managed_identity_pause_and_remove_are_live_and_explicit_token_remains_authoritative() {
-    let f = fixture();
+    let f = fixture().await;
     f.store
         .set_identity_access_paused(
             "alice",
@@ -351,14 +400,14 @@ async fn managed_identity_pause_and_remove_are_live_and_explicit_token_remains_a
 }
 #[tokio::test]
 async fn managed_identity_admin_inventory_reveal_is_explicit_and_no_store() {
-    let mut f = fixture();
+    let mut f = fixture().await;
     let audit_path = f._dir.path().join("inventory-audit.jsonl");
     let mut config = f.runtime.config().clone();
     config.audit = Some(agent_access_core::AuditConfig::new(
         agent_access_core::AuditStoreType::Jsonl,
         audit_path.display().to_string(),
     ));
-    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    f.restart(&config, Served::Public).await;
     let auth = format!("Bearer {}", f.admin_token);
     let path = "/v1/admin/principals/alice/identity-token";
     let metadata = request(&f, path, Method::GET, Some(PROXY), None, Some(&auth), None).await;
@@ -406,7 +455,7 @@ async fn managed_identity_admin_inventory_reveal_is_explicit_and_no_store() {
 
 #[tokio::test]
 async fn managed_identity_duplicate_headers_fail_closed() {
-    let f = fixture();
+    let f = fixture().await;
     for name in [
         "x-agent-access-caller-authorization",
         "x-aw-identity-token-sha256",
@@ -449,7 +498,8 @@ async fn managed_identity_http_mcp_authenticates_without_bearer_and_rechecks_pau
                 credential_mode: "service".into(),
                 priority: None,
             });
-        });
+        })
+        .await;
         let initialize = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"managed-identity-test","version":"1"}}});
         let make = |message: Value, session: Option<&str>| {
             let mut builder = Request::builder()
@@ -511,25 +561,12 @@ async fn managed_identity_http_mcp_authenticates_without_bearer_and_rechecks_pau
 
 #[tokio::test]
 async fn managed_identity_queued_rotation_rejects_retired_runtime_generation() {
-    let f = fixture();
+    let f = fixture().await;
     let ring = f.runtime.credential_key_ring().unwrap().clone();
     let original = f.store.reveal_identity_token("alice", &ring).unwrap();
-    let snapshot = RuntimeSnapshot::new(
-        1,
-        "generation-one".into(),
-        f.runtime.clone(),
-        StateLockSet::empty(),
-    );
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        snapshot.clone(),
-        f.runtime.max_http_body_bytes(),
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        f.runtime.audit_registry(),
-    ));
+    let state = f.broker.as_ref().unwrap().state();
+    let snapshot = state.current();
+    let state_locks = Arc::clone(&snapshot.state_locks);
     let guard = state.policy_mutation_lock.lock().await;
     let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let attempted_write = attempted.clone();
@@ -546,12 +583,13 @@ async fn managed_identity_queued_rotation_rejects_retired_runtime_generation() {
         futures_util::poll!(&mut queued),
         std::task::Poll::Pending
     ));
-    // Publish exactly while the mutation is queued, as a coordinated reload does.
+    // Publish exactly while the mutation is queued, as a coordinated reload
+    // does while it holds the same fence.
     state.publish_snapshot(RuntimeSnapshot::new(
         2,
         "generation-two".into(),
         f.runtime.clone(),
-        StateLockSet::empty(),
+        state_locks,
     ));
     drop(guard);
     assert!(matches!(
@@ -567,23 +605,9 @@ async fn managed_identity_queued_rotation_rejects_retired_runtime_generation() {
 
 #[tokio::test]
 async fn managed_identity_cancelled_waiter_keeps_reload_fence_until_write_finishes() {
-    let f = fixture();
-    let snapshot = RuntimeSnapshot::new(
-        1,
-        "generation-one".into(),
-        f.runtime.clone(),
-        StateLockSet::empty(),
-    );
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        snapshot.clone(),
-        f.runtime.max_http_body_bytes(),
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        f.runtime.audit_registry(),
-    ));
+    let f = fixture().await;
+    let state = f.broker.as_ref().unwrap().state();
+    let snapshot = state.current();
     let (started, started_rx) = tokio::sync::oneshot::channel();
     let (release, release_rx) = std::sync::mpsc::channel();
     let expected = uuid::Uuid::new_v4().to_string();
@@ -642,14 +666,14 @@ async fn trusted_caller_rejection_is_traced_correlated_and_audited_on_all_routes
     let _capture_guard = crate::observability::tracing_capture_test_lock()
         .lock()
         .await;
-    let mut f = fixture();
+    let mut f = fixture().await;
     let audit_path = f._dir.path().join("proxy-audit.jsonl");
     let mut config = f.runtime.config().clone();
     config.audit = Some(agent_access_core::AuditConfig::new(
         agent_access_core::AuditStoreType::Jsonl,
         audit_path.display().to_string(),
     ));
-    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    f.restart(&config, Served::Public).await;
     let traced = Arc::new(AtomicBool::new(false));
     let subscriber = tracing_subscriber::registry().with(RequestSpan(traced.clone()));
     let _registration_guard = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
@@ -696,10 +720,10 @@ async fn trusted_caller_rejection_is_traced_correlated_and_audited_on_all_routes
 
 #[tokio::test]
 async fn trusted_caller_rejection_uses_existing_source_rate_guard() {
-    let mut f = fixture();
+    let mut f = fixture().await;
     let mut config = f.runtime.config().clone();
     config.limits.auth_requests_per_source_per_minute = 1;
-    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    f.restart(&config, Served::Public).await;
     let first = request(
         &f,
         "/v1/healthz",
@@ -744,7 +768,8 @@ async fn trusted_caller_gateway_rejection_is_audited_and_rate_limited_without_ch
             .unwrap()
             .allow_forwarded_identity = true;
         config.limits.auth_requests_per_source_per_minute = 1;
-    });
+    })
+    .await;
     for (id, status, reason) in [
         (
             "proxy-git-first",
@@ -920,7 +945,8 @@ async fn trusted_caller_http_and_mcp_handoff_matrix_preserves_direct_token_acces
             credential_mode: "service".into(),
             priority: None,
         });
-    });
+    })
+    .await;
     let authorization = format!("Bearer {}", f.agent_token);
     for path in ["/v1/capabilities", "/mcp", "/mcp/fake"] {
         for (case, headers, authenticated) in handoff_cases(&authorization, &f.hash) {
@@ -956,7 +982,7 @@ async fn trusted_caller_http_and_mcp_handoff_matrix_preserves_direct_token_acces
 
 #[tokio::test]
 async fn trusted_caller_health_accepts_direct_requests_but_checks_any_proxy_credential() {
-    let f = fixture();
+    let f = fixture().await;
     for headers in [vec![], vec![("x-agent-access-caller-authorization", PROXY)]] {
         let response = handoff_request(f.app.clone(), "/v1/healthz", &headers).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -990,7 +1016,8 @@ async fn trusted_caller_direct_default_is_conservative_and_absent_default_fails_
             credential_mode: "service".into(),
             priority: None,
         });
-    });
+    })
+    .await;
     let authorization = format!("Bearer {}", f.agent_token);
     for (headers, sees_internal_service) in [
         (vec![("authorization", authorization.as_str())], false),
@@ -1026,7 +1053,7 @@ async fn trusted_caller_direct_default_is_conservative_and_absent_default_fails_
     }
     let mut config = f.runtime.config().clone();
     config.execution_context.as_mut().unwrap().default_context = None;
-    f.app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    f.restart(&config, Served::Public).await;
     for (path, status) in [
         ("/v1/capabilities", StatusCode::FORBIDDEN),
         ("/mcp", StatusCode::BAD_REQUEST),
@@ -1066,7 +1093,8 @@ async fn trusted_caller_browser_login_and_session_work_without_proxy_headers() {
             },
             ..Default::default()
         };
-    });
+    })
+    .await;
     f.store
         .enable_local_password(
             f.runtime.local_password_hasher().unwrap(),
@@ -1125,59 +1153,45 @@ async fn trusted_caller_browser_login_and_session_work_without_proxy_headers() {
     }
 }
 
-fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture {
-    let mut f = fixture_with_config(|config| {
-        external_default(config);
-        if !default_context {
-            config.execution_context.as_mut().unwrap().default_context = None;
-        }
-        let mut gateway = test_git_gateway_config();
-        gateway.allow_forwarded_identity = token_free;
-        config.gateways.insert("gitlab_git".into(), gateway);
-        let upstream_token = PathBuf::from(&config.managed_store.as_ref().unwrap().path)
-            .with_file_name("git-upstream-token");
-        std::fs::write(&upstream_token, "synthetic-git-upstream-token").unwrap();
-        config.credentials.service.insert(
-            "gitlab_git".into(),
-            CredentialConfig {
-                kind: "bearer_token".into(),
-                token_ref: Some(format!("file:{}", upstream_token.display())),
-                username_ref: None,
-                provider: None,
-                path: None,
-                read_only: None,
-                credential_name: None,
-                profile: None,
-            },
-        );
-        config.policy.grants.push(PolicyGrantConfig {
-            subjects: vec!["user:alice".into()],
-            execution_contexts: Some(vec!["external".into(), "internal".into()]),
-            service: "gitlab_git".into(),
-            actions: vec!["repo.fetch".into()],
-            resources: selected_resources(&[("repository", &["sip/service"])]),
-            credential_mode: "service".into(),
-            priority: None,
-        });
-    });
-    let runtime = f.runtime.clone();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "managed-git-handoff".into(),
-            runtime.clone(),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        Duration::from_secs(30),
-        Duration::from_secs(30),
-        runtime.audit_registry(),
-    ));
-    f.app = build_gateway_router(state);
-    f
+async fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture {
+    fixture_serving(
+        |config| {
+            external_default(config);
+            if !default_context {
+                config.execution_context.as_mut().unwrap().default_context = None;
+            }
+            let mut gateway = test_git_gateway_config();
+            gateway.allow_forwarded_identity = token_free;
+            config.gateways.insert("gitlab_git".into(), gateway);
+            let upstream_token = PathBuf::from(&config.managed_store.as_ref().unwrap().path)
+                .with_file_name("git-upstream-token");
+            std::fs::write(&upstream_token, "synthetic-git-upstream-token").unwrap();
+            config.credentials.service.insert(
+                "gitlab_git".into(),
+                CredentialConfig {
+                    kind: "bearer_token".into(),
+                    token_ref: Some(format!("file:{}", upstream_token.display())),
+                    username_ref: None,
+                    provider: None,
+                    path: None,
+                    read_only: None,
+                    credential_name: None,
+                    profile: None,
+                },
+            );
+            config.policy.grants.push(PolicyGrantConfig {
+                subjects: vec!["user:alice".into()],
+                execution_contexts: Some(vec!["external".into(), "internal".into()]),
+                service: "gitlab_git".into(),
+                actions: vec!["repo.fetch".into()],
+                resources: selected_resources(&[("repository", &["sip/service"])]),
+                credential_mode: "service".into(),
+                priority: None,
+            });
+        },
+        Served::Gateway,
+    )
+    .await
 }
 
 async fn git_handoff(f: &Fixture, headers: &[(&str, &str)]) -> axum::response::Response {
@@ -1198,7 +1212,7 @@ async fn git_handoff(f: &Fixture, headers: &[(&str, &str)]) -> axum::response::R
 
 #[tokio::test]
 async fn trusted_caller_git_handoff_matrix_preserves_basic_and_managed_identity() {
-    let f = managed_git_fixture(true, true);
+    let f = managed_git_fixture(true, true).await;
     let basic = format!(
         "Basic {}",
         BASE64.encode(format!("agent-access:{}", f.agent_token))
@@ -1239,7 +1253,7 @@ async fn trusted_caller_git_handoff_matrix_preserves_basic_and_managed_identity(
 
 #[tokio::test]
 async fn trusted_caller_git_opt_out_still_protects_context_and_proxy_headers() {
-    let f = managed_git_fixture(false, true);
+    let f = managed_git_fixture(false, true).await;
     let basic = format!(
         "Basic {}",
         BASE64.encode(format!("agent-access:{}", f.agent_token))
@@ -1292,7 +1306,7 @@ async fn trusted_caller_git_opt_out_still_protects_context_and_proxy_headers() {
 
 #[tokio::test]
 async fn trusted_caller_git_without_default_context_does_not_invent_one() {
-    let f = managed_git_fixture(true, false);
+    let f = managed_git_fixture(true, false).await;
     let basic = format!(
         "Basic {}",
         BASE64.encode(format!("agent-access:{}", f.agent_token))
@@ -1329,7 +1343,8 @@ async fn trusted_dispatch_caller_enforces_assertions_without_granting_identity()
             .get_mut("identity_ingress")
             .unwrap()
             .allowed_execution_contexts = Some(vec!["external".into()]);
-    });
+    })
+    .await;
     let token = format!("Bearer {}", f.agent_token);
     let caller = ("x-agent-access-caller-authorization", PROXY);
     let auth = ("authorization", token.as_str());
@@ -1396,7 +1411,7 @@ async fn trusted_dispatch_caller_enforces_assertions_without_granting_identity()
 
 #[tokio::test]
 async fn fixed_caller_rejects_even_matching_context_assertions() {
-    let f = fixture();
+    let f = fixture().await;
     let authorization = format!("Bearer {}", f.agent_token);
     for path in ["/v1/healthz", "/v1/me", "/v1/capabilities", "/mcp"] {
         let response = handoff_request(
@@ -1417,7 +1432,7 @@ async fn fixed_caller_rejects_even_matching_context_assertions() {
 
 #[tokio::test]
 async fn trusted_caller_git_capabilities_apply_even_with_valid_basic_identity() {
-    let mut f = managed_git_fixture(true, true);
+    let mut f = managed_git_fixture(true, true).await;
     let mut config = f.runtime.config().clone();
     let mut dispatch = config.identity.trusted_callers["identity_ingress"].clone();
     dispatch.allow_forwarded_identity = false;
@@ -1429,23 +1444,7 @@ async fn trusted_caller_git_capabilities_apply_even_with_valid_basic_identity() 
         .identity
         .trusted_callers
         .insert("agent_dispatch".into(), dispatch);
-    let runtime = BrokerRuntime::new(config).unwrap();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "git-caller-capabilities".into(),
-            runtime.clone(),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        Duration::from_secs(30),
-        Duration::from_secs(30),
-        runtime.audit_registry(),
-    ));
-    f.app = build_gateway_router(state);
+    f.restart(&config, Served::Gateway).await;
     let basic = format!(
         "Basic {}",
         BASE64.encode(format!("agent-access:{}", f.agent_token))

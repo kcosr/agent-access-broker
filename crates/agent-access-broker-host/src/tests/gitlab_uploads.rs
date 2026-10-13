@@ -11,7 +11,7 @@ async fn project_upload_catalog_and_transport_are_filtered_by_token_actions() {
             json!({
                 "gitlab": {"actions": actions, "resources":{"resourceIds":["repository-sip-service"],"resourceGroupIds":[]}}
             }),
-        );
+        ).await;
         let catalog = response_json(
             spec_get(
                 fixture.app.clone(),
@@ -251,7 +251,8 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
         expires_at: None, created_by: "test".to_string(),
     }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
     drop(store);
-    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    let broker = TestBroker::start_config(&config).await;
+    let app = broker.app();
     let response = denied_upload(app.clone(), &issued.token, "sip/service").await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let response = response_json(response).await;

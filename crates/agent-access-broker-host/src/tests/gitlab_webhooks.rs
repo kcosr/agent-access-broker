@@ -22,7 +22,7 @@ const WEBHOOK_SECRET_SENTINEL: &str = "gitlab-webhook-secret-sentinel-c6f8a1";
 
 #[tokio::test]
 async fn webhook_actions_have_caller_filtered_catalog_openapi_and_send_parity() {
-    let fixture = spec_agent_fixture(&["gitlab"], false);
+    let fixture = spec_agent_fixture(&["gitlab"], false).await;
     let catalog = response_json(
         spec_get(
             fixture.app.clone(),
@@ -139,7 +139,8 @@ async fn webhook_actions_have_caller_filtered_catalog_openapi_and_send_parity() 
                 "resources":{"resourceIds":["repository-sip-service"],"resourceGroupIds":[]}
             }
         }),
-    );
+    )
+    .await;
     let restricted_catalog = response_json(
         spec_get(
             restricted.app.clone(),
@@ -377,11 +378,10 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
         credential_mode: "service".to_string(),
         priority: None,
     });
-    let app = build_router(
-        BrokerRuntime::with_providers(config, vec![Arc::new(BrokerWebhookContractProvider)])
-            .unwrap(),
-        broker_build_status(),
-    );
+    let broker =
+        TestBroker::start_with_providers(&config, vec![Arc::new(BrokerWebhookContractProvider)])
+            .await;
+    let app = broker.app();
 
     let create = webhook_invoke_request(
         app.clone(),
@@ -582,19 +582,16 @@ async fn webhook_destination_reload_denies_introduction_but_preserves_existing_m
         &["https://hooks.example.com/gitlab/**"],
     );
 
-    let state = build_reloadable_state(
-        config_path.clone(),
-        std::sync::Arc::new(crate::backend_registry()),
-        broker_build_status(),
-        Some(10_485_760),
-        // This tests policy after reload, not reload latency. Candidate
-        // admission uses real filesystem and worker threads on a shared host.
-        Duration::from_secs(10),
-        Duration::from_secs(1),
+    let broker = TestBroker::start_with(
+        TestBroker::builder_at(config_path.clone())
+            .body_hard_cap(10_485_760)
+            // This tests policy after reload, not reload latency. Candidate
+            // admission uses real filesystem and worker threads on a shared host.
+            .reload_timeout(Duration::from_secs(10))
+            .shutdown_timeout(Duration::from_secs(1)),
     )
-    .await
-    .unwrap();
-    let app = build_public_router(state);
+    .await;
+    let app = broker.app();
 
     let allowed_create = webhook_invoke_request(
         app.clone(),

@@ -641,7 +641,8 @@ async fn service_limit_routes_are_unavailable_under_toml_identity_authority() {
             initial_admin: agent_access_core::InitialAdminConfig::default(),
             ..agent_access_core::ManagementConfig::default()
         };
-    });
+    })
+    .await;
     for (method, uri) in [
         (Method::GET, "/v1/admin/principals/bob/service-limits"),
         (Method::PUT, "/v1/admin/principals/bob/service-limits/fake"),
@@ -717,7 +718,8 @@ async fn me_lists_visible_service_limits_under_toml_authority_without_override_m
                 requests: 3,
                 window: "90s".into(),
             }];
-    });
+    })
+    .await;
     let alice = me(&fixture.app, ALICE, None).await;
     assert_eq!(alice.status(), StatusCode::OK);
     let alice = response_json(alice).await;
@@ -734,9 +736,11 @@ async fn me_lists_visible_service_limits_under_toml_authority_without_override_m
     );
 
     // Services the caller cannot see are omitted, like /v1/services.
-    fixture.publish(2, |config| {
-        config.policy.grants[0].subjects = vec!["user:alice".to_string()];
-    });
+    fixture
+        .publish(2, |config| {
+            config.policy.grants[0].subjects = vec!["user:alice".to_string()];
+        })
+        .await;
     let bob = response_json(me(&fixture.app, BOB, None).await).await;
     assert_eq!(bob["principal"], "bob");
     assert_eq!(bob["serviceLimits"], json!([]));
@@ -764,7 +768,8 @@ async fn me_service_limits_follow_the_request_execution_context_without_requirin
         install_context_caller(config);
         config.policy.resources = fixture_resources(&["internal", "external"]);
         config.policy.grants[0].execution_contexts = Some(vec!["internal".to_string()]);
-    });
+    })
+    .await;
     let expected = json!([{"service":"fake","requests":2,"windowSeconds":60}]);
     let internal = response_json(me(&fixture.app, ALICE, Some("internal")).await).await;
     assert_eq!(internal["serviceLimits"], expected);

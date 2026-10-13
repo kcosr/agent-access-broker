@@ -1,12 +1,10 @@
 //! Real Git smart-HTTP regression coverage. Requires `git` (including http-backend).
 //! All repositories, credentials, configuration, listeners, and TLS trust are test-owned.
-use agent_access_broker_host::{
-    AssemblyIdentity, BrokerApplication, BrokerBuildStatus, BrokerComposition,
-    build_gateway_router, build_reloadable_state,
-};
+use agent_access_broker_host::test_support::IsolatedBroker;
+use agent_access_broker_host::{AssemblyIdentity, BrokerComposition};
 use agent_access_core::{
-    BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, ManagedStore,
-    ManagedStoreOpenMode, PrincipalRole, PrincipalWriteRequest, load_broker_config,
+    BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig, ManagedStore,
+    ManagedStoreConfig, ManagedStoreOpenMode, PrincipalRole, PrincipalWriteRequest,
 };
 use base64::{
     Engine as _,
@@ -29,10 +27,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
-use test_composition::{backend_registry, broker_build_status};
-
-#[path = "../src/test_composition.rs"]
-mod test_composition;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UPSTREAM_TOKEN: &str = "isolated-git-gateway-test-upstream-token";
@@ -108,27 +102,20 @@ async fn git_http_gateway_child() {
 
     let origin = GitOrigin::start(root);
     let (config_path, token) = broker_config(root, origin.address);
-    let state = build_reloadable_state(
-        config_path,
-        Arc::new(backend_registry()),
-        broker_build_status(),
-        None,
-        Duration::from_secs(30),
-        Duration::from_secs(30),
+    // The configuration selects only the Git gateway, which needs no native
+    // provider module.
+    let broker = IsolatedBroker::new(
+        BrokerComposition::builder().build().unwrap(),
+        AssemblyIdentity::new("example-assembly", "9.8.7"),
     )
+    .unwrap()
+    .config_path(config_path)
+    .gateway_listener()
+    .expect("loopback gateway listener")
+    .start()
     .await
     .unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://localhost:{}", listener.local_addr().unwrap().port());
-    let app = build_gateway_router(state.clone());
-    let broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    }));
+    let base = format!("http://localhost:{}", broker.gateway_addr().unwrap().port());
     let authorization = format!(
         "http.extraHeader=Authorization: Basic {}",
         STANDARD.encode(format!("agent-access:{token}"))
@@ -245,10 +232,10 @@ async fn git_http_gateway_child() {
         "/group/redirect.git/info/refs?service=git-upload-pack"
     );
 
-    drop(broker);
-    state.close_operation_admission();
-    assert_eq!(state.shutdown_operations(Duration::from_secs(5)).await, 0);
-    state.shutdown_audit(Duration::from_secs(5)).await.unwrap();
+    broker.shutdown();
+    let drained = broker.join().await.unwrap();
+    assert_eq!(drained.unfinished_operations(), 0);
+    assert_eq!(drained.audit_error(), None);
 }
 
 fn assert_fetch_requests(requests: &[UpstreamRequest]) {
@@ -266,13 +253,6 @@ fn assert_fetch_requests(requests: &[UpstreamRequest]) {
             && request.fetch_command),
         "{requests:?}"
     );
-}
-
-struct BrokerTask(tokio::task::JoinHandle<()>);
-impl Drop for BrokerTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 fn broker_config(root: &Path, origin: SocketAddr) -> (PathBuf, String) {
@@ -372,9 +352,14 @@ upload_spool_dir = {spool}
     )
     .unwrap();
     private_permissions(&path);
-    let config = load_broker_config(&path, &Arc::new(backend_registry())).unwrap();
+    // Seed the store the configuration names before the broker locks it.
     let store = ManagedStore::open(
-        config.managed_store.as_ref().unwrap(),
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: root.join("managed.sqlite").display().to_string(),
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        },
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -390,7 +375,12 @@ upload_spool_dir = {spool}
             created_by: "test".into(),
         })
         .unwrap();
-    let token = store.issue_broker_token(&BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap(), BrokerTokenIssueRequest {
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", root.join("hash-key").display()),
+        ..Default::default()
+    })
+    .unwrap();
+    let token = store.issue_broker_token(&hasher, BrokerTokenIssueRequest {
         principal_id: "git-tester".into(), name: "test token".into(), token_class: BrokerTokenClass::AgentInvoke,
         scopes: json!({"allowedServices": ["git"], "allowedExecutionContexts": ["default"]}),
         expires_at: None, created_by: "test".into(),

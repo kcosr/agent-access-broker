@@ -101,6 +101,7 @@ fn validation_errors(config: &BrokerConfig) -> Vec<String> {
 
 struct Conformance {
     _dir: tempfile::TempDir,
+    _broker: TestBroker,
     server: MockServer,
     app: Router,
 }
@@ -119,9 +120,11 @@ async fn conformance() -> Conformance {
     .unwrap();
     config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
     validate_broker_config(&config).unwrap();
-    let app = build_router(BrokerRuntime::new(config).unwrap(), broker_build_status());
+    let broker = TestBroker::start_config(&config).await;
+    let app = broker.app();
     Conformance {
         _dir: dir,
+        _broker: broker,
         server,
         app,
     }
@@ -696,7 +699,8 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
             credential_mode: "service".into(),
             priority: None,
         });
-    });
+    })
+    .await;
     Mock::given(method("GET"))
         .and(path("/items/shelf-one/item-one"))
         .respond_with(
@@ -854,6 +858,7 @@ const REPLACED_KEY: &str = "replaced-key-sentinel-9876543210";
 /// enabled: private attributes live in the managed resource catalog.
 struct ManagedConformance {
     dir: tempfile::TempDir,
+    _broker: TestBroker,
     server: MockServer,
     app: Router,
     admin_token: String,
@@ -966,7 +971,8 @@ async fn managed_conformance() -> ManagedConformance {
             actor: ("test").into(),
         })
         .unwrap();
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
     let issue = |principal: &str, class, scopes: Value| {
         store
             .issue_broker_token(
@@ -995,8 +1001,9 @@ async fn managed_conformance() -> ManagedConformance {
     );
     ManagedConformance {
         dir,
+        app: broker.app(),
+        _broker: broker,
         server,
-        app: build_router(runtime, broker_build_status()),
         admin_token,
         agent_token,
     }

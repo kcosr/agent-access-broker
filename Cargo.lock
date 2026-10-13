@@ -106,14 +106,12 @@ dependencies = [
  "agent-access-openapi-upstream",
  "agent-access-provider",
  "agent-access-teams",
- "axum",
  "base64 0.22.1",
- "http-body-util",
+ "reqwest",
  "rusqlite",
  "serde_json",
  "tempfile",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -162,6 +160,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml",
  "tower",
  "tracing",
  "tracing-core",

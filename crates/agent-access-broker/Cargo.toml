@@ -22,11 +22,10 @@ agent-access-openapi-upstream = { path = "../agent-access-openapi-upstream" }
 agent-access-provider = { path = "../agent-access-provider" }
 
 [dev-dependencies]
-axum.workspace = true
+agent-access-broker-host = { path = "../agent-access-broker-host", features = ["test-support"] }
 base64.workspace = true
-http-body-util.workspace = true
+reqwest.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
-tower.workspace = true

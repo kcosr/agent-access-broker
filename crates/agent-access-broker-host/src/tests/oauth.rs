@@ -19,6 +19,7 @@ const SOURCE: &str = "127.0.0.1:43200";
 
 struct OAuthFixture {
     _dir: tempfile::TempDir,
+    _broker: TestBroker,
     audit_path: PathBuf,
     runtime: BrokerRuntime,
     app: Router,
@@ -204,7 +205,8 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
             .unwrap();
         store.add_group("alice", group, "test").unwrap();
     }
-    let runtime = BrokerRuntime::new(config).unwrap();
+    let broker = TestBroker::start_config(&config).await;
+    let runtime = broker.runtime();
     if let Some(subject) = subject {
         runtime
             .create_managed_policy_grant(agent_access_core::ManagedPolicyGrantCreateRequest {
@@ -248,7 +250,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         )
         .unwrap()
         .token;
-    let app = build_router(runtime.clone(), broker_build_status());
+    let app = broker.app();
     let login = app
         .clone()
         .oneshot(
@@ -281,6 +283,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         .to_string();
     OAuthFixture {
         _dir: dir,
+        _broker: broker,
         audit_path,
         runtime,
         app,

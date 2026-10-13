@@ -105,7 +105,7 @@ fn auditor(fixture: &AuditFixture) -> String {
 
 #[tokio::test]
 async fn auditor_all_admin_reads_and_safe_previews_are_admitted_but_every_write_is_denied() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let token = auditor(&fixture);
     let routes = http_route_specs(fixture.state.current().runtime.resource_types());
     let ids = BTreeMap::from([(
@@ -197,7 +197,7 @@ async fn auditor_all_admin_reads_and_safe_previews_are_admitted_but_every_write_
 
 #[tokio::test]
 async fn auditor_credentials_and_catalog_keep_their_distinct_boundaries() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     auditor(&fixture);
     let issue_body = json!({
         "name": "auditor API token",
@@ -364,7 +364,7 @@ async fn browser_auditor_keeps_authentication_when_personal_access_is_disabled()
 
 #[tokio::test]
 async fn disabled_self_service_is_enforced_on_direct_personal_routes_and_hidden_from_catalog() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     fixture
         .state
         .current()
@@ -437,7 +437,7 @@ async fn disabled_self_service_is_enforced_on_direct_personal_routes_and_hidden_
 
 #[tokio::test]
 async fn access_patch_guards_last_admin_revokes_old_admin_tokens_and_audits_committed_facts() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let auditor_token = auditor(&fixture);
     let patch = |body: &'static str| {
         fixture.request(
@@ -515,7 +515,7 @@ async fn access_patch_guards_last_admin_revokes_old_admin_tokens_and_audits_comm
 
 #[tokio::test]
 async fn administrator_token_transitions_ignore_owner_personal_access_but_keep_owner_scope() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     for owner in ["alice", "admin"] {
@@ -578,7 +578,7 @@ async fn administrator_token_transitions_ignore_owner_personal_access_but_keep_o
 
 #[tokio::test]
 async fn administrator_can_delete_credentials_after_disabling_the_owner() {
-    let fixture = audit_fixture(Backend::Sqlite);
+    let fixture = audit_fixture(Backend::Sqlite).await;
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     let directory = tempfile::tempdir().unwrap();

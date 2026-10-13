@@ -227,9 +227,12 @@ pub(super) fn fixture() -> Fixture {
         tokens,
     }
 }
+/// Invokes the import through a test broker started, as a restart would, on
+/// `runtime`'s configuration and the fixture's state.
 async fn invoke(runtime: &BrokerRuntime, token: &str, id: &str) -> (StatusCode, Value) {
+    let broker = import_broker(runtime.config()).await;
     let response = authed_json_request(
-        build_router(runtime.clone(), broker_build_status()),
+        broker.app(),
         Method::POST,
         "/v1/invoke/observability/inspect",
         id,
@@ -238,7 +241,19 @@ async fn invoke(runtime: &BrokerRuntime, token: &str, id: &str) -> (StatusCode, 
         Some(r#"{"inputs":{"message":"synthetic input"}}"#),
     )
     .await;
-    (response.status(), response_json(response).await)
+    let outcome = (response.status(), response_json(response).await);
+    broker.stop().await;
+    outcome
+}
+
+/// A test broker on `config` and the fixture's state.
+pub(super) async fn import_broker(config: &BrokerConfig) -> TestBroker {
+    TestBroker::start_with(
+        TestBroker::config_builder(config)
+            .reload_timeout(Duration::from_secs(5))
+            .shutdown_timeout(Duration::from_secs(5)),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -266,8 +281,9 @@ async fn imported_foundation_reconstructs_service_and_per_user_authority_on_rest
         !status.is_success(),
         "missing user credential must never fall back to service authority: {body}"
     );
+    let broker = import_broker(&fixture.config).await;
     let response = authed_json_request(
-        build_router(fixture.runtime.clone(), broker_build_status()),
+        broker.app(),
         Method::GET,
         "/v1/spec/catalog",
         "import-catalog",
@@ -400,22 +416,8 @@ async fn imported_foundation_admin_disable_is_durable_and_unrelated_policy_edits
 #[tokio::test]
 async fn imported_foundation_cancelled_waiter_does_not_abandon_commit_or_publication() {
     let fixture = fixture();
-    let runtime = fixture.runtime.clone();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        Arc::new(super::conformance_import::registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "import-fixture".into(),
-            runtime.clone(),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-        runtime.audit_registry(),
-    ));
+    let broker = import_broker(&fixture.config).await;
+    let state = broker.state();
     let old = state.current();
     let request = update(
         old.runtime.imported_catalog(),
@@ -534,22 +536,8 @@ async fn unsupported_personal_binding_keeps_precedence_and_ambiguity_fail_closed
 #[tokio::test]
 async fn ordinary_policy_edits_preserve_token_store_snapshot_identity() {
     let fixture = fixture();
-    let runtime = fixture.runtime.clone();
-    let state = Arc::new(ReloadableState::from_snapshot(
-        PathBuf::new(),
-        Arc::new(super::conformance_import::registry()),
-        broker_build_status(),
-        RuntimeSnapshot::new(
-            1,
-            "policy-identity".into(),
-            runtime.clone(),
-            StateLockSet::empty(),
-        ),
-        runtime.max_http_body_bytes(),
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-        runtime.audit_registry(),
-    ));
+    let broker = import_broker(&fixture.config).await;
+    let state = broker.state();
     let admitted = state.current();
     state
         .managed_policy_mutation_from_snapshot(admitted.clone(), move |runtime| {

@@ -1,14 +1,25 @@
 //! Naming omissions leave the real HTTP MCP session and unaffected tools usable.
 use super::*;
 use agent_access_provider::{
-    BackendConfig, BuildContext, EgressProxyConfig, ProviderBuildError, ScopeRequest,
-    ScopeResolution, ValidationContext,
+    BackendConfig, BackendRegistration, BuildContext, EgressProxyConfig, ProviderBuildError,
+    ScopeRequest, ScopeResolution, ValidationContext, parse_backend_config,
 };
 
-#[derive(Clone, Debug)]
-struct NamingBackend {
-    collision: bool,
+/// A test backend selected as `fake`: the fake service with extra actions
+/// whose MCP names are too long or collide when `collision` is set.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NamingBackend {
+    pub(crate) collision: bool,
 }
+
+static NAMING_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_fake::FAKE_BACKEND.module(),
+    "fake",
+    parse_backend_config::<NamingBackend>,
+)
+.with_resource_types(agent_access_fake::FAKE_BACKEND.resource_types())
+.development_only();
 
 impl BackendConfig for NamingBackend {
     fn kind(&self) -> &'static str {
@@ -74,12 +85,15 @@ fn configure(config: &mut BrokerConfig, collision: bool) {
         .into_iter()
         .map(|action| action.action)
         .collect();
-    config.providers.insert(backend);
+    config.providers = agent_access_core::ProvidersConfig::new(Arc::new(
+        crate::test_composition::backend_registry_replacing(&NAMING_BACKEND),
+    ))
+    .with(backend);
 }
 
 #[tokio::test]
 async fn aggregate_omissions_describe_safely_and_refresh_after_a_conflict_is_removed() {
-    let fixture = Fixture::new(|config| configure(config, true));
+    let fixture = Fixture::new(|config| configure(config, true)).await;
     let session = fixture.initialize().await;
     let listed = fixture.rpc(&session, 2, "tools/list", json!({})).await;
     let tools = listed["result"]["tools"].as_array().unwrap();
@@ -141,7 +155,7 @@ async fn aggregate_omissions_describe_safely_and_refresh_after_a_conflict_is_rem
         .await;
     assert_eq!(structured(&allowed)["decision"], "allow");
 
-    publish_reload(&fixture, |config| configure(config, false));
+    publish_reload(&fixture, |config| configure(config, false)).await;
     let refreshed = fixture.rpc(&session, 7, "tools/list", json!({})).await;
     assert!(
         refreshed["result"]["tools"]
@@ -170,7 +184,7 @@ async fn aggregate_omissions_describe_safely_and_refresh_after_a_conflict_is_rem
         .await;
     assert_eq!(structured(&allowed)["decision"], "allow");
     assert_eq!(
-        read_audit_records(&fixture.audit_path)
+        read_audit_records_without_reloads(&fixture.audit_path)
             .iter()
             .filter(|record| record["decision"] == "allow")
             .count(),

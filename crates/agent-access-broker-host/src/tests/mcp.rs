@@ -3,7 +3,7 @@ use super::*;
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
-mod names;
+pub(super) mod names;
 mod trusted_user;
 
 const HOST: &str = "broker.example.test";
@@ -12,6 +12,7 @@ const TOKEN_B: &str = "mcp-test-token-bravo";
 const VERSION: &str = "2025-11-25";
 
 pub(super) struct Fixture {
+    broker: TestBroker,
     pub(super) app: Router,
     token_path: PathBuf,
     state: Arc<ReloadableState>,
@@ -20,7 +21,28 @@ pub(super) struct Fixture {
 }
 
 impl Fixture {
-    pub(super) fn new(configure: impl FnOnce(&mut BrokerConfig)) -> Self {
+    pub(super) async fn new(configure: impl FnOnce(&mut BrokerConfig)) -> Self {
+        Self::start(configure, |application| application).await
+    }
+
+    /// [`Self::new`] with each provider serving, through the fixture
+    /// control, the configured service its descriptor names.
+    pub(super) async fn with_providers(
+        configure: impl FnOnce(&mut BrokerConfig),
+        providers: impl IntoIterator<Item = impl TestProvider>,
+    ) -> Self {
+        Self::start(configure, |application| {
+            with_provider_instances(application, providers)
+        })
+        .await
+    }
+
+    /// [`Self::new`] with additions to the isolated broker application,
+    /// such as provider fixtures.
+    pub(super) async fn start(
+        configure: impl FnOnce(&mut BrokerConfig),
+        customize: impl FnOnce(IsolatedBroker) -> IsolatedBroker,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         create_private_dir(directory.path());
         let token_path = directory.path().join("token-a");
@@ -61,24 +83,16 @@ impl Fixture {
         config.mcp.enabled = true;
         config.mcp.public_url = Some(format!("https://{HOST}/mcp"));
         configure(&mut config);
-        let runtime = BrokerRuntime::new(config).unwrap();
-        let state = Arc::new(ReloadableState::from_snapshot(
-            PathBuf::new(),
-            std::sync::Arc::new(crate::backend_registry()),
-            broker_build_status(),
-            RuntimeSnapshot::new(
-                1,
-                "mcp-wire-fixture".into(),
-                runtime.clone().with_config_generation(1),
-                StateLockSet::empty(),
-            ),
-            runtime.max_http_body_bytes(),
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-            runtime.audit_registry(),
-        ));
+        let broker = TestBroker::start_with(customize(
+            TestBroker::config_builder(&config)
+                .reload_timeout(Duration::from_secs(5))
+                .shutdown_timeout(Duration::from_secs(5)),
+        ))
+        .await;
+        let state = broker.state();
         Self {
-            app: build_public_router(state.clone()),
+            app: broker.app(),
+            broker,
             state,
             token_path,
             audit_path,
@@ -237,7 +251,7 @@ pub(super) fn structured(result: &Value) -> &Value {
 
 #[tokio::test]
 async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 2, "tools/list", json!({})).await;
     let tools = listing["result"]["tools"].as_array().unwrap();
@@ -346,7 +360,7 @@ async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions()
 
 #[tokio::test]
 async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_session() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
     let name = agent_access_core::mcp::tool_name("fake", "echo");
     for (index, arguments) in [
@@ -394,7 +408,8 @@ async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_sessio
 async fn mcp_auth_host_origin_and_duplicate_security_headers_fail_closed() {
     let fixture = Fixture::new(|config| {
         config.mcp.allowed_origins = vec!["https://client.example.test".into()]
-    });
+    })
+    .await;
     for token in [None, Some("not-a-valid-token")] {
         let response = fixture
             .send(request(Method::POST, token, None, Some(json!({}))))
@@ -488,7 +503,7 @@ async fn mcp_auth_host_origin_and_duplicate_security_headers_fail_closed() {
 
 #[tokio::test]
 async fn mcp_sessions_are_token_bound_and_get_delete_follow_the_selected_profile() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
     let mut origin = request(Method::GET, Some(TOKEN_A), Some(&session), None);
     origin.headers_mut().insert(
@@ -532,7 +547,7 @@ async fn mcp_sessions_are_token_bound_and_get_delete_follow_the_selected_profile
 
 #[tokio::test]
 async fn mcp_protocol_negotiation_and_unknown_method_errors_preserve_session() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize_version(TOKEN_A, "2099-01-01").await;
     let mut invalid = request(
         Method::POST,
@@ -559,23 +574,14 @@ async fn mcp_protocol_negotiation_and_unknown_method_errors_preserve_session() {
 
 #[tokio::test]
 async fn mcp_static_token_reload_and_idle_expiry_do_not_keep_stale_authority() {
-    let fixture = Fixture::new(|config| config.mcp.session_idle_timeout_ms = 1000);
+    let fixture = Fixture::new(|config| config.mcp.session_idle_timeout_ms = 1000).await;
     let session = fixture.initialize().await;
     std::fs::write(&fixture.token_path, "replacement-token-after-rotation").unwrap();
-    // Static token references load with the runtime, so publish a new runtime
-    // generation just as successful config reload does. Managed tokens instead
-    // validate their current store state on each request.
-    let previous = fixture.state.current();
-    let runtime =
-        BrokerRuntime::new_for_reload(previous.runtime.config().clone(), &previous.runtime)
-            .unwrap()
-            .with_config_generation(2);
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        2,
-        "rotated-token".into(),
-        runtime,
-        StateLockSet::empty(),
-    ));
+    // Static token references load with the runtime, so reload the unchanged
+    // configuration. Managed tokens instead validate their current store state
+    // on each request.
+    publish_reload(&fixture, |_| {}).await;
+    assert_eq!(fixture.state.current().generation, 2);
     let revoked = fixture
         .send(request(
             Method::POST,
@@ -601,7 +607,7 @@ async fn mcp_static_token_reload_and_idle_expiry_do_not_keep_stale_authority() {
 
 #[tokio::test]
 async fn mcp_request_and_result_budgets_are_enforced_without_replaying_provider_work() {
-    let tiny = Fixture::new(|config| config.mcp.max_request_bytes = 1024);
+    let tiny = Fixture::new(|config| config.mcp.max_request_bytes = 1024).await;
     let session = tiny.initialize().await;
     let too_large=tiny.send(request(Method::POST,Some(TOKEN_A),Some(&session),Some(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":agent_access_core::mcp::tool_name("fake","echo"),"arguments":{"inputs":{"project":"TEST","message":"x".repeat(2048)}}}})))).await;
     assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -612,7 +618,7 @@ async fn mcp_request_and_result_budgets_are_enforced_without_replaying_provider_
             .is_none()
     );
 
-    let bounded = Fixture::new(|config| config.mcp.max_response_bytes = 64 * 1024);
+    let bounded = Fixture::new(|config| config.mcp.max_response_bytes = 64 * 1024).await;
     let session = bounded.initialize().await;
     let result = bounded
         .call(
@@ -652,7 +658,8 @@ async fn mcp_session_quota_is_shared_by_tokens_for_one_principal_and_released_on
     let fixture = Fixture::new(|config| {
         config.mcp.max_sessions = 1;
         config.mcp.max_sessions_per_principal = 1;
-    });
+    })
+    .await;
     let session = fixture.initialize().await;
     let second=fixture.send(request(Method::POST,Some(TOKEN_B),None,Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"second-token","version":"1"}}})))).await;
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -668,7 +675,7 @@ async fn mcp_session_quota_is_shared_by_tokens_for_one_principal_and_released_on
 
 #[tokio::test]
 async fn mcp_disabled_route_is_reserved_and_exposes_no_tools() {
-    let fixture = Fixture::new(|config| config.mcp.enabled = false);
+    let fixture = Fixture::new(|config| config.mcp.enabled = false).await;
     for path in ["/mcp", "/mcp/fake"] {
         let mut request = request(
             Method::POST,
@@ -699,7 +706,7 @@ fn fake_invocation_limit(config: &mut BrokerConfig, requests: u64) {
 
 #[tokio::test]
 async fn mcp_tool_calls_are_counted_once_and_protocol_messages_are_not_counted() {
-    let fixture = Fixture::new(|config| fake_invocation_limit(config, 2));
+    let fixture = Fixture::new(|config| fake_invocation_limit(config, 2)).await;
     let session = fixture.initialize().await;
     let native = agent_access_core::mcp::tool_name("fake", "echo");
     let arguments = json!({"inputs":{"project":"TEST","message":"counted"}});
@@ -827,21 +834,22 @@ impl Provider for ControlledProvider {
         agent_access_fake::FakeProvider.invoke(request).await
     }
 }
-fn controlled_fixture(provider: Arc<ControlledProvider>) -> Fixture {
-    let fixture = Fixture::new(|config| {
-        config.limits.max_concurrent_requests = 1;
-        config.limits.max_concurrent_requests_per_principal = 1;
-    });
-    let previous = fixture.state.current();
-    let runtime =
-        BrokerRuntime::with_providers(previous.runtime.config().clone(), vec![provider]).unwrap();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "controlled-mcp".into(),
-        runtime.with_config_generation(1),
-        StateLockSet::empty(),
-    ));
-    fixture
+async fn controlled_fixture(provider: Arc<ControlledProvider>) -> Fixture {
+    controlled_fixture_with(provider, |_| {}).await
+}
+async fn controlled_fixture_with(
+    provider: Arc<ControlledProvider>,
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> Fixture {
+    Fixture::with_providers(
+        |config| {
+            config.limits.max_concurrent_requests = 1;
+            config.limits.max_concurrent_requests_per_principal = 1;
+            configure(config);
+        },
+        vec![provider],
+    )
+    .await
 }
 async fn start_controlled_call(
     fixture: &Fixture,
@@ -865,7 +873,7 @@ async fn cancel_controlled_call(fixture: &Fixture, session: &str, id: u64) {
 #[tokio::test]
 async fn mcp_disconnect_preserves_dispatched_work_permit_and_one_terminal_audit() {
     let provider = ControlledProvider::new(false);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 20).await;
     provider.wait_entered().await;
@@ -906,7 +914,7 @@ async fn mcp_disconnect_preserves_dispatched_work_permit_and_one_terminal_audit(
 #[tokio::test]
 async fn mcp_cancellation_after_dispatch_is_advisory_and_does_not_repeat_work() {
     let provider = ControlledProvider::new(false);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 30).await;
     provider.wait_entered().await;
@@ -936,7 +944,7 @@ async fn mcp_cancellation_after_dispatch_is_advisory_and_does_not_repeat_work() 
 #[tokio::test]
 async fn mcp_cancellation_before_dispatch_skips_provider_and_finalizes_audit() {
     let provider = ControlledProvider::new(true);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 40).await;
     provider.wait_entered().await;
@@ -986,19 +994,11 @@ impl Provider for CatalogProvider {
 }
 #[tokio::test]
 async fn mcp_tools_pagination_is_complete_and_cursor_is_credential_bound_and_authenticated() {
-    let fixture = Fixture::new(|config| config.mcp.max_response_bytes = 64 * 1024);
-    let previous = fixture.state.current();
-    let runtime = BrokerRuntime::with_providers(
-        previous.runtime.config().clone(),
+    let fixture = Fixture::with_providers(
+        |config| config.mcp.max_response_bytes = 64 * 1024,
         vec![Arc::new(CatalogProvider)],
     )
-    .unwrap();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "catalog-mcp".into(),
-        runtime.with_config_generation(1),
-        StateLockSet::empty(),
-    ));
+    .await;
     let session = fixture.initialize().await;
     let first = fixture.rpc(&session, 50, "tools/list", json!({})).await;
     let first_tools = first["result"]["tools"].as_array().unwrap();
@@ -1060,7 +1060,8 @@ async fn mcp_intake_deadline_cannot_be_extended_by_trickling_body_bytes() {
     let fixture = Fixture::new(|config| {
         config.mcp.protocol_timeout_ms = 200;
         config.limits.streaming_idle_timeout_ms = 1000;
-    });
+    })
+    .await;
     let session = fixture.initialize().await;
     let mut slow = request(Method::POST, Some(TOKEN_A), Some(&session), None);
     *slow.body_mut() = Body::from_stream(stream::unfold(0, |sent| async move {
@@ -1086,7 +1087,8 @@ async fn mcp_stalled_intake_is_bounded_per_principal_and_drop_releases_capacity(
     let fixture = Fixture::new(|config| {
         config.mcp.max_control_requests = 1;
         config.mcp.max_control_requests_per_principal = 1;
-    });
+    })
+    .await;
     let session = fixture.initialize().await;
     let entered = Arc::new(tokio::sync::Semaphore::new(0));
     let mut stalled = request(Method::POST, Some(TOKEN_A), Some(&session), None);
@@ -1158,45 +1160,42 @@ impl Provider for FileCatalogProvider {
 }
 #[tokio::test]
 async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
-    let fixture = Fixture::new(|_| {});
-    let previous = fixture.state.current();
-    let mut config = previous.runtime.config().clone();
-    config.policy.grants[0].service = "jira".into();
-    config.policy.grants[0].actions = vec![
-        "issue.view".into(),
-        "attachment.add".into(),
-        "attachment.download".into(),
-    ];
-    let mut credential = config.credentials.service["fake"].clone();
-    credential.kind = "basic_api_token".into();
-    credential.username_ref = credential.token_ref.clone();
-    config
-        .credentials
-        .service
-        .insert("jira".into(), credential.clone());
-    credential.read_only = Some(true);
-    config.credentials.lookup.insert("jira".into(), credential);
-    config
-        .providers
-        .insert(agent_access_jira::JiraProviderConfig {
-            tenant_host: "example.atlassian.net".into(),
-            cloud_id: None,
-            egress_proxy: None,
-            allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".into()],
-            attachments: Default::default(),
-            content: Default::default(),
-            search: Default::default(),
-            comments: Default::default(),
-            issue_links: Default::default(),
-        });
-    let runtime =
-        BrokerRuntime::with_providers(config, vec![Arc::new(FileCatalogProvider)]).unwrap();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "file-catalog-mcp".into(),
-        runtime.with_config_generation(1),
-        StateLockSet::empty(),
-    ));
+    let fixture = Fixture::with_providers(
+        |config| {
+            config.policy.grants[0].service = "jira".into();
+            config.policy.grants[0].actions = vec![
+                "issue.view".into(),
+                "attachment.add".into(),
+                "attachment.download".into(),
+            ];
+            let mut credential = config.credentials.service["fake"].clone();
+            credential.kind = "basic_api_token".into();
+            credential.username_ref = credential.token_ref.clone();
+            config
+                .credentials
+                .service
+                .insert("jira".into(), credential.clone());
+            credential.read_only = Some(true);
+            config.credentials.lookup.insert("jira".into(), credential);
+            config
+                .providers
+                .insert(agent_access_jira::JiraProviderConfig {
+                    tenant_host: "example.atlassian.net".into(),
+                    cloud_id: None,
+                    egress_proxy: None,
+                    allowed_upstream_hosts: vec![
+                        "https://example.atlassian.net/rest/api/3/**".into(),
+                    ],
+                    attachments: Default::default(),
+                    content: Default::default(),
+                    search: Default::default(),
+                    comments: Default::default(),
+                    issue_links: Default::default(),
+                });
+        },
+        vec![Arc::new(FileCatalogProvider)],
+    )
+    .await;
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 70, "tools/list", json!({})).await;
     let tools = listing["result"]["tools"].as_array().unwrap();
@@ -1250,32 +1249,25 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
             .await;
         assert_eq!(direct["error"]["code"], -32602);
     }
-    assert!(!fixture.audit_path.exists());
+    // Startup's readiness probe creates the store; nothing is recorded.
+    assert!(read_audit_records(&fixture.audit_path).is_empty());
 }
 
-fn publish_reload(fixture: &Fixture, configure: impl FnOnce(&mut BrokerConfig)) {
-    let previous = fixture.state.current();
-    let mut config = previous.runtime.config().clone();
+/// Reloads the fixture's configuration, changed by `configure`, as SIGUSR2
+/// does.
+async fn publish_reload(fixture: &Fixture, configure: impl FnOnce(&mut BrokerConfig)) {
+    let mut config = fixture.state.current().runtime.config().clone();
     configure(&mut config);
-    let generation = previous.generation + 1;
-    let runtime = BrokerRuntime::new_for_reload(config, &previous.runtime)
-        .unwrap()
-        .with_config_generation(generation);
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        generation,
-        "wire-reload".into(),
-        runtime,
-        StateLockSet::empty(),
-    ));
+    fixture.broker.reload_config(&config).await;
 }
 #[tokio::test]
 async fn mcp_ordinary_reload_preserves_session_and_admitted_preparation_delivery() {
     let provider = ControlledProvider::new(true);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 80).await;
     provider.wait_entered().await;
-    publish_reload(&fixture, |_| {});
+    publish_reload(&fixture, |_| {}).await;
     assert_eq!(
         fixture.rpc(&session, 81, "ping", json!({})).await["result"],
         json!({})
@@ -1283,13 +1275,16 @@ async fn mcp_ordinary_reload_preserves_session_and_admitted_preparation_delivery
     provider.release.add_permits(1);
     assert_eq!(structured(&rpc_body(response).await)["decision"], "allow");
     assert_eq!(provider.executions.load(Ordering::SeqCst), 1);
-    assert_eq!(read_audit_records(&fixture.audit_path).len(), 1);
+    assert_eq!(
+        read_audit_records_without_reloads(&fixture.audit_path).len(),
+        1
+    );
 }
 #[tokio::test]
 async fn mcp_policy_reload_preserves_session_and_refreshes_discovery() {
-    let fixture = Fixture::new(|_| {});
+    let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
-    publish_reload(&fixture, |config| config.policy.grants.clear());
+    publish_reload(&fixture, |config| config.policy.grants.clear()).await;
     let listing = fixture.rpc(&session, 82, "tools/list", json!({})).await;
     assert_eq!(listing["result"]["tools"].as_array().unwrap().len(), 5);
     let resources = fixture.call(&session, 83, "services_list", json!({})).await;
@@ -1298,13 +1293,14 @@ async fn mcp_policy_reload_preserves_session_and_refreshes_discovery() {
 #[tokio::test]
 async fn mcp_security_reload_expires_session_but_drains_admitted_preparation() {
     let provider = ControlledProvider::new(true);
-    let fixture = controlled_fixture(provider.clone());
+    let fixture = controlled_fixture(provider.clone()).await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 84).await;
     provider.wait_entered().await;
     publish_reload(&fixture, |config| {
         config.mcp.allowed_origins = vec!["https://allowed.example.test".into()]
-    });
+    })
+    .await;
     let stale = fixture
         .send(request(
             Method::POST,
@@ -1325,13 +1321,14 @@ async fn mcp_security_reload_expires_session_but_drains_admitted_preparation() {
         0
     );
     assert_eq!(provider.executions.load(Ordering::SeqCst), 1);
-    let records = read_audit_records(&fixture.audit_path);
+    let records = read_audit_records_without_reloads(&fixture.audit_path);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["decision"], "allow");
 }
 #[tokio::test]
 async fn mcp_auth_failure_budget_does_not_charge_or_block_successful_requests() {
-    let fixture = Fixture::new(|config| config.limits.auth_requests_per_source_per_minute = 1);
+    let fixture =
+        Fixture::new(|config| config.limits.auth_requests_per_source_per_minute = 1).await;
     let session = fixture.initialize().await;
     for id in 90..94 {
         assert_eq!(
@@ -1365,20 +1362,9 @@ async fn mcp_auth_failure_budget_does_not_charge_or_block_successful_requests() 
 #[tokio::test]
 async fn mcp_cancellation_and_delete_survive_invocation_exhaustion_and_keep_explicit_cancel() {
     let provider = ControlledProvider::new(true);
-    let fixture = controlled_fixture(provider.clone());
-    // Publish a one-call invocation budget before creating any session.
-    let previous = fixture.state.current();
-    let mut config = previous.runtime.config().clone();
-    fake_invocation_limit(&mut config, 1);
-    let runtime = BrokerRuntime::with_providers(config, vec![provider.clone()])
-        .unwrap()
-        .with_config_generation(1);
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "cancel-rate-wire".into(),
-        runtime,
-        StateLockSet::empty(),
-    ));
+    // A one-call invocation budget before any session exists.
+    let fixture =
+        controlled_fixture_with(provider.clone(), |config| fake_invocation_limit(config, 1)).await;
     let session = fixture.initialize().await; // Protocol messages are not counted.
     let response = start_controlled_call(&fixture, &session, 95).await; // Spends the budget.
     provider.wait_entered().await;
@@ -1423,19 +1409,10 @@ async fn mcp_cancellation_and_delete_survive_invocation_exhaustion_and_keep_expl
 #[tokio::test]
 async fn mcp_sse_keepalives_preserve_long_calls_with_short_transport_idle_timeout() {
     let provider = ControlledProvider::new(false);
-    let fixture = controlled_fixture(provider.clone());
-    let previous = fixture.state.current();
-    let mut config = previous.runtime.config().clone();
-    config.limits.streaming_idle_timeout_ms = 200;
-    let runtime = BrokerRuntime::with_providers(config, vec![provider.clone()])
-        .unwrap()
-        .with_config_generation(1);
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "short-idle-wire".into(),
-        runtime,
-        StateLockSet::empty(),
-    ));
+    let fixture = controlled_fixture_with(provider.clone(), |config| {
+        config.limits.streaming_idle_timeout_ms = 200;
+    })
+    .await;
     let session = fixture.initialize().await;
     let response = start_controlled_call(&fixture, &session, 97).await;
     provider.wait_entered().await;
@@ -1481,7 +1458,8 @@ async fn mcp_sessions_bind_trusted_caller_and_loaded_secret_revision() {
                 },
             );
         }
-    });
+    })
+    .await;
     let send = |secret: &str, session: Option<&str>, initialize: bool| {
         let mut request = request(
             Method::POST,
@@ -1537,7 +1515,7 @@ async fn mcp_sessions_bind_trusted_caller_and_loaded_secret_revision() {
     // The reference and all capabilities stay unchanged. Only loaded secret
     // material changes, so config-profile hashing alone cannot invalidate it.
     std::fs::write(&caller_path, rotated).unwrap();
-    publish_reload(&fixture, |_| {});
+    publish_reload(&fixture, |_| {}).await;
     assert_eq!(
         fixture
             .send(send(secret, Some(&session), false))
@@ -1566,36 +1544,30 @@ async fn http_caller_admission_envelopes_prove_zero_provider_invocations() {
     let directory = tempfile::tempdir().unwrap();
     let caller_path = directory.path().join("caller");
     std::fs::write(&caller_path, "caller-test-secret-0123456789").unwrap();
-    let fixture = Fixture::new(|config| {
-        config.execution_context = Some(ExecutionContextConfig {
-            allowed_values: vec!["default".into(), "internal".into()],
-            default_context: Some("default".into()),
-        });
-        config.policy.grants[0].execution_contexts = Some(vec!["default".into()]);
-        config.identity.trusted_callers.insert(
-            "dispatch".into(),
-            TrustedCallerConfig {
-                credential_transport: Default::default(),
-                username_namespace: None,
-                credential_ref: format!("file:{}", caller_path.display()),
-                context_mode: TrustedCallerContextMode::Asserted,
-                execution_context: None,
-                allowed_execution_contexts: Some(vec!["default".into()]),
-                allow_forwarded_identity: false,
-            },
-        );
-    });
     let provider = ControlledProvider::new(false);
-    let previous = fixture.state.current();
-    let runtime =
-        BrokerRuntime::with_providers(previous.runtime.config().clone(), vec![provider.clone()])
-            .unwrap();
-    fixture.state.publish_snapshot(RuntimeSnapshot::new(
-        1,
-        "admission-proof".into(),
-        runtime,
-        StateLockSet::empty(),
-    ));
+    let fixture = Fixture::with_providers(
+        |config| {
+            config.execution_context = Some(ExecutionContextConfig {
+                allowed_values: vec!["default".into(), "internal".into()],
+                default_context: Some("default".into()),
+            });
+            config.policy.grants[0].execution_contexts = Some(vec!["default".into()]);
+            config.identity.trusted_callers.insert(
+                "dispatch".into(),
+                TrustedCallerConfig {
+                    credential_transport: Default::default(),
+                    username_namespace: None,
+                    credential_ref: format!("file:{}", caller_path.display()),
+                    context_mode: TrustedCallerContextMode::Asserted,
+                    execution_context: None,
+                    allowed_execution_contexts: Some(vec!["default".into()]),
+                    allow_forwarded_identity: false,
+                },
+            );
+        },
+        vec![provider.clone()],
+    )
+    .await;
     let caller = (
         CALLER_AUTHORIZATION_HEADER,
         "Bearer caller-test-secret-0123456789",
@@ -1743,24 +1715,12 @@ async fn post_dispatch_reasons_never_become_admission_proofs_on_http_or_mcp() {
         // Keep the canonical fake.echo action so configuration validation uses
         // its real policy contract; vary only the injected transport descriptor.
         for raw_download in [false, true] {
-            let fixture = Fixture::new(|_| {});
             let provider = Arc::new(PostDispatchReasonProvider {
                 reason,
                 raw_download,
                 executions: AtomicUsize::new(0),
             });
-            let previous = fixture.state.current();
-            let runtime = BrokerRuntime::with_providers(
-                previous.runtime.config().clone(),
-                vec![provider.clone()],
-            )
-            .unwrap();
-            fixture.state.publish_snapshot(RuntimeSnapshot::new(
-                1,
-                "post-dispatch-reason".into(),
-                runtime,
-                StateLockSet::empty(),
-            ));
+            let fixture = Fixture::with_providers(|_| {}, vec![provider.clone()]).await;
             // A provider cannot report these host-only reasons: the Broker
             // replaces them with its provider contract failure, still
             // attributed to the provider operation and with an unknown,

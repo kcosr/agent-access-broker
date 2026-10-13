@@ -36,7 +36,7 @@ fn rest_and_mcp_owned_results_populate_the_originating_request_span() {
         .build()
         .unwrap()
         .block_on(async {
-            let fixture = mcp::Fixture::new(|_| {});
+            let fixture = mcp::Fixture::new(|_| {}).await;
             let session = fixture.initialize().await;
             for (transport, project, expected_decision) in [
                 ("rest", "TEST", "allow"),

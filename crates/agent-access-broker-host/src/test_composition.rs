@@ -14,6 +14,7 @@ use agent_access_jira::JIRA_BACKEND;
 use agent_access_provider::{BackendRegistration, OAuthDialectRegistration};
 use agent_access_teams::TEAMS_BACKEND;
 
+/// The natives the assembly selects, in its listing order.
 static NATIVES: [&BackendRegistration; 8] = [
     &JIRA_BACKEND,
     &CONFLUENCE_BACKEND,
@@ -37,7 +38,25 @@ fn import_adapters() -> [ImportedAdapterRegistration; 2] {
 }
 
 pub(crate) fn backend_registry() -> BackendRegistry {
-    BackendRegistry::new(NATIVES)
+    registry_of(NATIVES)
+}
+
+/// The assembly's selection with `replacement` in place of the native of the
+/// same kind, for tests serving a test-local backend under a linked kind.
+pub(crate) fn backend_registry_replacing(
+    replacement: &'static BackendRegistration,
+) -> BackendRegistry {
+    registry_of(NATIVES.map(|native| {
+        if native.kind() == replacement.kind() {
+            replacement
+        } else {
+            native
+        }
+    }))
+}
+
+fn registry_of(natives: [&'static BackendRegistration; 8]) -> BackendRegistry {
+    BackendRegistry::new(natives)
         .expect("linked backends register consistently")
         .with_oauth_dialects(OAUTH_DIALECTS)
         .expect("linked OAuth dialects register consistently")
