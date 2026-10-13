@@ -6,6 +6,41 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- The native provider contract changes, so existing provider implementations must be
+  updated:
+  - **Scope resolution.** `Provider::resolve_scopes`, `resolve_scopes_with_lookup`
+    and `resolve_scopes_with_lookup_context` are replaced by one required
+    `async fn resolve_scopes(&self, request: ScopeRequest<'_>) -> Result<ScopeResolution, ProviderError>`.
+    `ScopeRequest` carries the action, validated inputs, host-selected execution
+    context, minimal identity, correlation and an optional host-selected lookup
+    credential. `ScopeResolution` returns canonical resource scopes
+    (`resources`/`no_resources`) and optional provider state (`with_state`).
+  - **Provider state.** JSON `provider_preflight` is replaced by the in-process
+    `ProviderState` (typed `new`, `downcast_ref`, `require` and `optional`, with
+    redacted Debug). Missing or wrongly typed state fails closed as a contract
+    failure.
+  - **Body admission.** Multipart admission
+    (`authorize_body_parts(&AdmittedRequest, Option<&ProviderState>)`) returns
+    `BodyAdmission::new(specs, StateDisposition::{Keep, Replace(..), Clear})`;
+    the disposition is explicit and never inferred.
+  - **Admitted invocation.** Invocations carry a read-only admitted context with
+    a typed `CredentialMode` (`Service`/`PerUser`; external spellings unchanged)
+    and an exact `InvocationAuthority` (`ActionOnly`, `Resources` or `Search`).
+    `ProviderInvocation` has private fields read through accessors.
+  - **Live values are no longer serializable.** Live invocation, credential,
+    stream and preflight values no longer implement `Serialize`/`Deserialize`.
+    `SearchAuthorization` no longer carries a credential mode, and the lossy
+    all-except-to-`"*"` helper is removed from the provider API.
+  - **Execution credentials.** These are typed and privately constructed:
+    `ExecutionCredential::view()` yields `CredentialView::Basic { username, token }`
+    or `Bearer { token }`, with redacted Debug. Execution material is selected
+    through `ExecutionAccess::{None, Static, Delegated}`. Lookup credentials are
+    static-only. Stored credential rows and the `basic_api_token`/`bearer_token`
+    kind spellings are unchanged, so stored credentials keep working.
+  - **Delegated leases.** `DelegatedLease` gains the required
+    `binding_identity() -> DelegatedBindingId`. The identity survives routine
+    refresh, and changes on new consent, replacement or reconnect.
+
 - OAuth loopback exceptions now require a literal IPv4/IPv6 loopback address.
   `http://localhost` is rejected for MCP OAuth endpoints and OAuth destinations;
   use `http://127.0.0.1` or `http://[::1]` with `allow_insecure_loopback = true`.
