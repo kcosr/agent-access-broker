@@ -839,7 +839,7 @@ async fn dispatch_rechecks_access_lent_at_preparation() {
         .await;
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::CredentialInvalid)
+        Some(ReasonCode::CredentialInvalid.into())
     );
     assert!(fixture.requests_after_consent().await.is_empty());
 }

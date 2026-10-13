@@ -287,7 +287,7 @@ credential_mode="service"
             if status == "applied_unverified" {
                 response.status = 502;
                 response.envelope.reason_code =
-                    Some(agent_access_provider::ReasonCode::MutationVerificationFailed);
+                    Some(agent_access_provider::ReasonCode::MutationVerificationFailed.into());
             }
             let result = broker(
                 response.clone(),
@@ -355,7 +355,7 @@ credential_mode="service"
         ] {
             response.status = 429;
             response.envelope.decision = agent_access_provider::Decision::Error;
-            response.envelope.reason_code = Some(reason);
+            response.envelope.reason_code = Some(reason.into());
             response.envelope.error = Some(agent_access_core::ErrorBody {
                 message: message.into(),
             });
@@ -370,7 +370,8 @@ credential_mode="service"
         }
         // Other errors keep the JSON text copy of the envelope.
         response.status = 502;
-        response.envelope.reason_code = Some(agent_access_provider::ReasonCode::UpstreamFailed);
+        response.envelope.reason_code =
+            Some(agent_access_provider::ReasonCode::UpstreamFailed.into());
         let result = broker(response, &control, 64 * 1024, &[]);
         assert_eq!(
             serde_json::from_str::<Value>(&text(&result)).unwrap(),

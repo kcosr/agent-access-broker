@@ -227,7 +227,7 @@ impl BrokerRuntime {
                 AuditAppendMode::OwnedTerminal(permit),
             )
             .await;
-        if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             // A failure to acknowledge audit is not proof that the provider did
             // nothing. Preserve safe completion evidence without copying results.
             let mut evidence = json!({
@@ -244,6 +244,8 @@ impl BrokerRuntime {
             && let Some(stage) = response
                 .envelope
                 .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard)
                 .and_then(trusted_callers::PreDispatchFailure::for_reason)
         {
             response = stage.apply(response);
@@ -456,7 +458,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::OperationTimeout)
+            Some(ReasonCode::OperationTimeout.into())
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(!control.dispatched());
@@ -557,7 +559,7 @@ mod tests {
             } else {
                 assert_eq!(
                     response.envelope.reason_code,
-                    Some(ReasonCode::UpstreamFailed)
+                    Some(ReasonCode::UpstreamFailed.into())
                 );
                 assert_eq!(response.envelope.result.unwrap()["knownOutcome"], true);
                 assert_eq!(record["providerAudit"]["knownOutcome"], true);
@@ -589,7 +591,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 response.envelope.reason_code,
-                Some(ReasonCode::OperationTimeout)
+                Some(ReasonCode::OperationTimeout.into())
             );
             assert_eq!(
                 response.envelope.result.unwrap()["executionState"],
@@ -630,7 +632,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::OperationCancelled)
+            Some(ReasonCode::OperationCancelled.into())
         );
         assert_eq!(
             response.envelope.result.unwrap()["executionState"],
@@ -687,7 +689,7 @@ mod tests {
         assert_eq!(response.envelope.decision, Decision::Error);
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::AuditUnavailable)
+            Some(ReasonCode::AuditUnavailable.into())
         );
         assert!(response.envelope.resource_scopes.is_empty());
         assert!(response.envelope.result.is_none());
@@ -711,7 +713,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::AuditUnavailable)
+            Some(ReasonCode::AuditUnavailable.into())
         );
         assert_ne!(response.envelope.service, "broker");
         let result = response.envelope.result.unwrap();

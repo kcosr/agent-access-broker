@@ -504,7 +504,7 @@ async fn trusted_user_unavailable_is_canonical_retryable_admission_error() {
     assert_eq!(response.envelope.action, "request.admit");
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::IdentityUnavailable)
+        Some(ReasonCode::IdentityUnavailable.into())
     );
     assert!(response.envelope.result.is_none());
     assert!(response.envelope.resource_scopes.is_empty());

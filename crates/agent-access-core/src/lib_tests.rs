@@ -3,7 +3,7 @@ use agent_access_cloudbees_ci::*;
 use agent_access_fake::*;
 use agent_access_provider::{
     ActionDescriptor, ActionIo, BackendRegistration, GIT_REPOSITORY_RESOURCE, LookupRequirement,
-    ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
+    ReasonCode, ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
 };
 use base64::Engine as _;
 

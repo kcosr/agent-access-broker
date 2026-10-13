@@ -400,7 +400,7 @@ pub(crate) fn envelope_response(
     );
     observability::record_service_action(&response.envelope.service, &response.envelope.action);
     observability::record_decision(response.envelope.decision.as_str());
-    if let Some(reason_code) = response.envelope.reason_code {
+    if let Some(reason_code) = &response.envelope.reason_code {
         observability::record_reason_code(reason_code.as_str());
     }
     observability::record_status(response.status);
@@ -469,7 +469,7 @@ fn request_id_error_envelope(
             service,
             action,
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some(message.to_string()),
             result: None,
             error: Some(agent_access_core::ErrorBody {
@@ -496,7 +496,7 @@ pub(crate) fn input_error_envelope(
             service: String::new(),
             action: String::new(),
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some(message.to_string()),
             result: None,
             error: Some(agent_access_core::ErrorBody {
@@ -544,7 +544,7 @@ pub(crate) fn not_found_envelope(
             service,
             action: String::new(),
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some("service is not visible for this identity".to_string()),
             result: None,
             error: Some(agent_access_core::ErrorBody {

@@ -705,7 +705,7 @@ impl PreDispatchFailure {
     }
     pub(super) fn apply(self, mut response: BrokerResponse<Value>) -> BrokerResponse<Value> {
         // Required admission audit failure supersedes the initial denial.
-        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             Self::Admission
         } else {
             self
@@ -817,7 +817,7 @@ impl BrokerRuntime {
             .err()
             .and_then(|error| PreDispatchFailure::for_reason(error.reason_code));
         let response = self.finalize(context, result).await;
-        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             Some(PreDispatchFailure::Admission)
         } else {
             stage

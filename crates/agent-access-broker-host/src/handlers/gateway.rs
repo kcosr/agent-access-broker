@@ -16,7 +16,7 @@ use agent_access_core::{
 };
 use agent_access_provider::{
     BROKER_REQUEST_ID_HEADER, CredentialView, ExecutionCredential, ProviderError,
-    REQUEST_ID_HEADER, ReasonCode, ResourceScopes, url_allowed_by_patterns,
+    REQUEST_ID_HEADER, ReasonCode, ReasonCodeId, ResourceScopes, url_allowed_by_patterns,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -333,7 +333,7 @@ pub(crate) async fn gateway_dispatch(
             return gateway_error_response(
                 StatusCode::BAD_REQUEST,
                 &broker_request_id,
-                Some(ReasonCode::RequestIdInvalid),
+                Some(ReasonCode::RequestIdInvalid.into()),
                 reason,
                 false,
             );
@@ -346,7 +346,7 @@ pub(crate) async fn gateway_dispatch(
             return gateway_error_response(
                 StatusCode::NOT_FOUND,
                 &broker_request_id,
-                Some(ReasonCode::GatewayHostUnmatched),
+                Some(ReasonCode::GatewayHostUnmatched.into()),
                 "gateway host is not configured",
                 false,
             );
@@ -355,7 +355,7 @@ pub(crate) async fn gateway_dispatch(
             return gateway_error_response(
                 StatusCode::BAD_REQUEST,
                 &broker_request_id,
-                Some(ReasonCode::GatewayHostInvalid),
+                Some(ReasonCode::GatewayHostInvalid.into()),
                 reason,
                 false,
             );
@@ -439,7 +439,7 @@ pub(crate) async fn gateway_dispatch(
                 )
                 .await;
             observability::record_decision(response.envelope.decision.as_str());
-            if let Some(reason_code) = response.envelope.reason_code {
+            if let Some(reason_code) = &response.envelope.reason_code {
                 observability::record_reason_code(reason_code.as_str());
             }
             observability::record_status(response.status);
@@ -2745,7 +2745,7 @@ fn decoded_path_segments(path: &str) -> Result<Vec<String>, GatewayClassifyError
 pub(crate) fn gateway_runtime_response(
     response: BrokerResponse<serde_json::Value>,
 ) -> Response<Body> {
-    let reason = response.envelope.reason_code;
+    let reason = response.envelope.reason_code.clone();
     let broker_request_id = response.envelope.broker_request_id.clone();
     let retry_after = response_retry_after_header(&response);
     let body = response
@@ -2782,10 +2782,10 @@ fn with_retry_after(
 fn gateway_runtime_response_with_basic_challenge(
     response: BrokerResponse<serde_json::Value>,
 ) -> Response<Body> {
-    let reason = response.envelope.reason_code;
+    let reason = response.envelope.reason_code.clone();
     let broker_request_id = response.envelope.broker_request_id.clone();
     let challenge = matches!(
-        reason,
+        reason.as_ref().and_then(ReasonCodeId::standard),
         Some(ReasonCode::GatewayAuthRequired | ReasonCode::GatewayAuthInvalid)
     );
     let retry_after = response_retry_after_header(&response);
@@ -2811,7 +2811,7 @@ fn gateway_runtime_response_with_basic_challenge(
 fn gateway_error_response(
     status: StatusCode,
     broker_request_id: &str,
-    reason: Option<ReasonCode>,
+    reason: Option<ReasonCodeId>,
     body: &str,
     basic_challenge: bool,
 ) -> Response<Body> {
@@ -2822,7 +2822,7 @@ fn gateway_error_response(
             .headers_mut()
             .insert(BROKER_REQUEST_ID_HEADER, value);
     }
-    if let Some(reason) = reason
+    if let Some(reason) = &reason
         && let Ok(value) = HeaderValue::from_str(reason.as_str())
     {
         response.headers_mut().insert(REASON_CODE_HEADER, value);
@@ -2861,7 +2861,7 @@ mod tests {
         let response = gateway_error_response(
             StatusCode::FORBIDDEN,
             "broker-req-context",
-            Some(ReasonCode::ExecutionContextRequired),
+            Some(ReasonCode::ExecutionContextRequired.into()),
             "execution context is required",
             false,
         );

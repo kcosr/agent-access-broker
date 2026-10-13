@@ -1378,7 +1378,7 @@ async fn append_oidc_audit(
         matched_grant: None,
         credential_mode: Some(None),
         decision,
-        reason_code,
+        reason_code: reason_code.map(Into::into),
         upstream_status: None,
         upstream_duration_ms: None,
         object_ids: None,

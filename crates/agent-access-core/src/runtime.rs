@@ -613,7 +613,7 @@ impl TerminalAuditStream {
         &self,
         phase: &str,
         decision: Decision,
-        reason_code: Option<ReasonCode>,
+        reason_code: Option<ReasonCodeId>,
         message: Option<String>,
     ) {
         self.state.finish(phase, decision, reason_code, message);
@@ -638,7 +638,7 @@ impl Stream for TerminalAuditStream {
                 this.finish(
                     "failed",
                     Decision::Error,
-                    Some(error.reason_code),
+                    Some(error.reason_code.into()),
                     Some(error.message.clone()),
                 );
                 Poll::Ready(Some(Err(error)))
@@ -800,7 +800,7 @@ fn record_span_from_audit(record: &AuditRecord, status: u16) {
     span.record("action", record.action.as_str());
     span.record("principal", record.principal.as_str());
     span.record("decision", record.decision.as_str());
-    if let Some(reason_code) = record.reason_code {
+    if let Some(reason_code) = &record.reason_code {
         span.record("reasonCode", reason_code.as_str());
     }
     if let Some(config_generation) = record.config_generation {
@@ -873,7 +873,11 @@ fn emit_invoke_completed(
 ) {
     let resource_scope_keys = resource_scope_keys_field(&record.resource_scopes);
     let credential_mode = credential_mode_label(&record.credential_mode);
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     match record.decision {
         Decision::Allow | Decision::Deny => emit_invoke_completed_event!(
             tracing::info,
@@ -887,7 +891,7 @@ fn emit_invoke_completed(
         ),
         Decision::Error
             if matches!(
-                record.reason_code,
+                record.reason_code.as_ref().and_then(ReasonCodeId::standard),
                 Some(
                     ReasonCode::RateLimited
                         | ReasonCode::UpstreamRateLimited
@@ -1021,7 +1025,11 @@ fn emit_invoke_stream_terminal(record: &AuditRecord, phase: &str, stream_duratio
     } else {
         "invoke_stream_failed"
     };
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     let stream_bytes = record
         .provider_audit
         .as_ref()
@@ -1056,7 +1064,11 @@ fn emit_invoke_stream_terminal(record: &AuditRecord, phase: &str, stream_duratio
 
 fn emit_gateway_terminal(record: &AuditRecord, phase: &str, duration_ms: u64) {
     let resource_scope_keys = resource_scope_keys_field(&record.resource_scopes);
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     let gateway_bytes = record
         .provider_audit
         .as_ref()
@@ -1153,7 +1165,7 @@ fn emit_audit_terminal_append_failed(
         action = record.action.as_str(),
         principal = record.principal.as_str(),
         decision = record.decision.as_str(),
-        reasonCode = record.reason_code.map(ReasonCode::as_str).unwrap_or(""),
+        reasonCode = record.reason_code.as_ref().map(ReasonCodeId::as_str).unwrap_or(""),
         error = %error,
     );
 }
@@ -2677,7 +2689,7 @@ impl BrokerRuntime {
                 service: "broker".into(),
                 action: failure.admission_action().into(),
                 resource_scopes: ResourceScopes::new(),
-                reason_code: Some(reason_code),
+                reason_code: Some(reason_code.into()),
                 reason: Some(failure.message().to_string()),
                 result: None,
                 error: Some(crate::ErrorBody {
@@ -5873,7 +5885,7 @@ impl BrokerRuntime {
                         service: service.clone(),
                         action: action.clone(),
                         resource_scopes: envelope_resource_scopes,
-                        reason_code: Some(error.reason_code),
+                        reason_code: Some(error.reason_code.into()),
                         reason: Some(error.message.clone()),
                         result: error.result.map(|value| *value),
                         error: error_body,
@@ -5923,7 +5935,7 @@ impl BrokerRuntime {
             matched_grant,
             credential_mode: credential_mode.map(Some),
             decision: envelope.decision.clone(),
-            reason_code: envelope.reason_code,
+            reason_code: envelope.reason_code.clone(),
             upstream_status,
             upstream_duration_ms,
             object_ids,
@@ -8061,7 +8073,7 @@ pub struct AuditRecord {
     pub credential_mode: Option<Option<String>>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<ReasonCode>,
+    pub reason_code: Option<ReasonCodeId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8098,7 +8110,7 @@ fn audit_unavailable_response(
             service,
             action,
             resource_scopes,
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some("audit sink unavailable".to_string()),
             result: None,
             error: Some(crate::ErrorBody {
@@ -9190,7 +9202,7 @@ impl TerminalAuditState {
         &self,
         phase: &str,
         decision: Decision,
-        reason_code: Option<ReasonCode>,
+        reason_code: Option<ReasonCodeId>,
         message: Option<String>,
     ) -> bool {
         let mut inner = self.inner.lock().unwrap();

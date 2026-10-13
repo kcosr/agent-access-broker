@@ -68,9 +68,18 @@ All notable changes to this project are documented in this file.
   `is_development_only()`, `parse_config()`, `id()` and `dialect()`. Each
   registration, including an `ImportedAdapterRegistration`, records its
   declaring package's name and version as `ModuleMetadata`.
+- Response envelopes (`ResponseEnvelope::reason_code`) and audit records
+  (`AuditRecord::reason_code`) carry reasons as a validated `ReasonCodeId`
+  string instead of the `ReasonCode` enum, so records written with a reason
+  from a module that is no longer linked stay readable. The wire spelling is
+  unchanged; compare with `ReasonCodeId::standard()` or
+  `ReasonCodeId::from(ReasonCode::…)`.
 
 ### Added
 
+- The standard reason `broker_provider_contract_failed` (HTTP 500,
+  `decision = error`) identifies a provider outcome that its contract does
+  not allow.
 - Release qualification runs a required `crate-boundaries` gate
   (`node scripts/check-crate-boundaries.mjs`). Every workspace crate declares a
   role, and the check rejects dependencies that cross the role boundaries.

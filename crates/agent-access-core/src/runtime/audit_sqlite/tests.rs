@@ -1376,7 +1376,7 @@ async fn a_full_database_fails_closed_and_recovers_without_a_restart() {
     let denied = invoke("full-denied").await;
     assert_eq!(
         denied.envelope.reason_code,
-        Some(ReasonCode::AuditUnavailable)
+        Some(ReasonCode::AuditUnavailable.into())
     );
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 

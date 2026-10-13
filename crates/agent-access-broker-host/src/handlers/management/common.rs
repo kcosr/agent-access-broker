@@ -1768,7 +1768,7 @@ async fn append_management_audit_with_details(
         matched_grant: None,
         credential_mode: Some(None),
         decision: envelope.decision.clone(),
-        reason_code: envelope.reason_code,
+        reason_code: envelope.reason_code.map(Into::into),
         upstream_status: extra
             .verification
             .map(|verification| verification.upstream_status),

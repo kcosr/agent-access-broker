@@ -1712,7 +1712,7 @@ async fn append_auth_audit(
         matched_grant: None,
         credential_mode: Some(None),
         decision: envelope.decision.clone(),
-        reason_code: envelope.reason_code,
+        reason_code: envelope.reason_code.map(Into::into),
         upstream_status: None,
         upstream_duration_ms: None,
         object_ids: None,

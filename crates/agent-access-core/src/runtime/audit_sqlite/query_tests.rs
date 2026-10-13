@@ -176,7 +176,7 @@ async fn seed_filter_records(fixture: &Fixture) {
         }),
         with(record("a2", 20, "bob", "jira", "issue.view"), |record| {
             record.decision = Decision::Deny;
-            record.reason_code = Some(ReasonCode::ServiceActionDenied);
+            record.reason_code = Some(ReasonCode::ServiceActionDenied.into());
         }),
         with(
             record("a3", 30, "alice", "broker", "admin.policy.grants.create"),
@@ -198,20 +198,20 @@ async fn seed_filter_records(fixture: &Fixture) {
             record("a5", 50, "anonymous", "broker", "admin.store.status"),
             |record| {
                 record.decision = Decision::Deny;
-                record.reason_code = Some(ReasonCode::IdentityRequired);
+                record.reason_code = Some(ReasonCode::IdentityRequired.into());
             },
         ),
         with(
             record("a6", 60, "carol", "gitlab_git", "git.receive_pack"),
             |record| {
                 record.decision = Decision::Error;
-                record.reason_code = Some(ReasonCode::UpstreamFailed);
+                record.reason_code = Some(ReasonCode::UpstreamFailed.into());
                 record.provider_audit = Some(json!({"gateway": {"phase": "started"}}));
             },
         ),
         with(record("a7", 70, "bob", "fake", "echo"), |record| {
             record.decision = Decision::Error;
-            record.reason_code = Some(ReasonCode::AuditUnavailable);
+            record.reason_code = Some(ReasonCode::AuditUnavailable.into());
         }),
         with(
             record("a8", 80, "alice", "jira", "issue.comment.create"),
@@ -1045,7 +1045,7 @@ async fn audit_query_scale() {
                 .to_rfc3339_opts(SecondsFormat::Micros, true);
                 if index % 7 == 0 {
                     record.decision = Decision::Deny;
-                    record.reason_code = Some(ReasonCode::ServiceActionDenied);
+                    record.reason_code = Some(ReasonCode::ServiceActionDenied.into());
                 }
                 record.identity_source = Some(IdentitySourceAudit {
                     namespace: None,

@@ -162,7 +162,7 @@ fn supervisor_failure(
             service: context.operation.service.clone(),
             action: context.operation.action.clone(),
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(ReasonCode::AuditUnavailable),
+            reason_code: Some(ReasonCode::AuditUnavailable.into()),
             reason: Some("operation finalization failed; outcome must be reconciled".into()),
             result: Some(json!({"executionState":"unknown", "retrySafe":false})),
             error: Some(ErrorBody {
@@ -413,7 +413,7 @@ credential_mode="service"
         let response = waiter.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::OperationCancelled)
+            Some(ReasonCode::OperationCancelled.into())
         );
         assert_eq!(
             response.envelope.result.unwrap()["executionState"],

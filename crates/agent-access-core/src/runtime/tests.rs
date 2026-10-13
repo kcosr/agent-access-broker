@@ -103,13 +103,13 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
     let unknown = invoke("missing").await;
     assert_eq!(
         unknown.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 
     let unsupported = invoke("echo").await;
     assert_eq!(
         unsupported.envelope.reason_code,
-        Some(ReasonCode::ResponseFormatUnsupported)
+        Some(ReasonCode::ResponseFormatUnsupported.into())
     );
     assert_eq!(
         unsupported.status,
@@ -166,7 +166,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
 
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::BrokerTokenClassDenied)
+            Some(ReasonCode::BrokerTokenClassDenied.into())
         );
         assert_eq!(
             response.status,
@@ -202,7 +202,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
 
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::ServiceActionDenied)
+            Some(ReasonCode::ServiceActionDenied.into())
         );
         assert_eq!(
             response.envelope.reason.as_deref(),
@@ -1483,7 +1483,7 @@ async fn malformed_gitlab_draft_readback_diagnostic_reaches_invoke_completion_on
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::MutationVerificationFailed)
+        Some(ReasonCode::MutationVerificationFailed.into())
     );
     let result = response.envelope.result.as_ref().unwrap();
     assert_eq!(result["mutationStatus"], "applied_unverified");
@@ -1516,7 +1516,7 @@ async fn malformed_gitlab_draft_readback_diagnostic_survives_mandatory_audit_fai
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::AuditUnavailable)
+        Some(ReasonCode::AuditUnavailable.into())
     );
     let failed = events
         .iter()
@@ -2469,7 +2469,7 @@ async fn jira_dependency_policy_denies_when_either_resolved_project_is_outside_g
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(
         response.envelope.resource_scopes.is_empty(),
@@ -2518,7 +2518,7 @@ async fn jira_parent_policy_denies_when_either_resolved_project_is_outside_grant
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(
         response.envelope.resource_scopes.is_empty(),
@@ -2570,7 +2570,11 @@ async fn jira_issue_update_grant_does_not_authorize_parent_set() {
     assert_eq!(response.status, 403);
     assert!(
         matches!(
-            response.envelope.reason_code,
+            response
+                .envelope
+                .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard),
             Some(ReasonCode::ScopeUnresolved | ReasonCode::ServiceActionDenied)
         ),
         "unexpected denial reason: {:?}",
@@ -2633,7 +2637,11 @@ async fn jira_issue_create_grant_does_not_authorize_child_create() {
     assert_eq!(response.status, 403);
     assert!(
         matches!(
-            response.envelope.reason_code,
+            response
+                .envelope
+                .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard),
             Some(ReasonCode::ScopeUnresolved | ReasonCode::ServiceActionDenied)
         ),
         "unexpected denial reason: {:?}",
@@ -2700,7 +2708,7 @@ async fn same_precedence_per_user_wildcard_and_service_finite_denies_when_scope_
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert_lookup_observations(&observations, &[("pre_scope", "lookup-token")]);
@@ -2755,7 +2763,7 @@ async fn missing_per_user_lookup_credential_fails_without_shared_lookup_fallback
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::CredentialNotProvisioned)
+        Some(ReasonCode::CredentialNotProvisioned.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 }
@@ -2777,7 +2785,7 @@ async fn no_candidate_lookup_backed_action_denies_before_upstream_lookup() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert!(observations.lock().unwrap().is_empty());
@@ -2810,7 +2818,7 @@ async fn execution_context_mismatch_denies_before_upstream_lookup() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert!(observations.lock().unwrap().is_empty());
@@ -2865,7 +2873,7 @@ async fn token_execution_context_mismatch_denies_before_upstream_lookup() {
     );
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ExecutionContextDenied)
+        Some(ReasonCode::ExecutionContextDenied.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 }
@@ -2948,7 +2956,7 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     .await;
     assert_eq!(
         action_denied.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 
@@ -2967,7 +2975,7 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     .await;
     assert_eq!(
         resource_denied.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     let normalized = lookup_scope_denial();
     assert_eq!(
@@ -3135,7 +3143,7 @@ async fn empty_token_search_intersection_denies_without_provider_invocation() {
 
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert!(preflights.lock().unwrap().is_empty());
 }
@@ -3961,7 +3969,7 @@ async fn required_stream_rejects_missing_provider_stream_before_allowed_audit() 
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::UpstreamProtocolFailed)
+        Some(ReasonCode::UpstreamProtocolFailed.into())
     );
     assert!(response.stream.is_none());
     let audit = fs::read_to_string(audit_path).unwrap();
@@ -4268,7 +4276,7 @@ async fn registered_principal_invocation_admission_maps_missing_principal_to_req
     assert_eq!(response.envelope.decision, Decision::Deny);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::PrincipalRequired)
+        Some(ReasonCode::PrincipalRequired.into())
     );
 }
 
@@ -6059,7 +6067,7 @@ async fn gateway_operation_requires_classified_required_scopes_before_credential
 
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::GatewayScopeUnresolved)
+        Some(ReasonCode::GatewayScopeUnresolved.into())
     );
 }
 
@@ -6761,7 +6769,7 @@ async fn managed_policy_mutations_publish_without_runtime_reload() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 }
 
@@ -6872,7 +6880,7 @@ async fn managed_policy_authority_with_no_active_grants_denies_by_default() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 }
 
@@ -6988,7 +6996,7 @@ async fn policy_denies_scope_outside_grant_before_credential_selection() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert_eq!(response.envelope.resource_scopes["project"], vec!["OTHER"]);
     assert!(response.envelope.result.is_none());
@@ -7418,7 +7426,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::CredentialNotProvisioned)
+        Some(ReasonCode::CredentialNotProvisioned.into())
     );
 }
 
@@ -7450,7 +7458,7 @@ async fn fake_input_schema_is_enforced_before_credential_selection() {
     assert_eq!(response.status, 400);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::InputInvalid)
+        Some(ReasonCode::InputInvalid.into())
     );
     let audit = fs::read_to_string(audit_path).unwrap();
     assert!(audit.contains("\"reasonCode\":\"input_invalid\""));

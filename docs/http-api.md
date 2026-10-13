@@ -2213,10 +2213,15 @@ returns HTTP 303 and carries the reason code in the sanitized portal error URL.
 | 415 | `body_format_unsupported`, `response_format_unsupported`, `attachment_media_type_denied`, `gateway_content_type_denied` |
 | 429 | `rate_limited`, `concurrency_limited`, `upstream_rate_limited` |
 | 424 | `upstream_unauthorized`, `upstream_forbidden`, `upstream_failed` |
-| 500 | `operation_failed` |
+| 500 | `operation_failed`, `broker_provider_contract_failed` |
 | 502 | `upstream_connection_failed`, `upstream_protocol_failed`, `gateway_response_cap_exceeded`, `gateway_upstream_denied` |
 | 504 | `upstream_timeout`, `operation_timeout` |
 | 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
+
+`broker_provider_contract_failed` (`decision = error`) means a provider
+reported an outcome its contract does not allow, such as a reason or decision
+it may not emit. The Broker never forwards the provider's own code or message
+in that case; the response carries only a safe diagnostic.
 
 `upstream_rate_limited` means the upstream service throttled the request; the
 Broker's own limits use `rate_limited`. Jira, Confluence, GitLab REST, CloudBees

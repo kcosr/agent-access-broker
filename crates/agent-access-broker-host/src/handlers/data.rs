@@ -789,7 +789,7 @@ fn discovery_error_envelope(
             service,
             action,
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some(message.to_string()),
             result: None,
             error: Some(ErrorBody {
@@ -1639,7 +1639,7 @@ fn missing_stream_envelope(response: BrokerResponse<Value>) -> BrokerResponse<Va
             service: response.envelope.service,
             action: response.envelope.action,
             resource_scopes: response.envelope.resource_scopes,
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some("provider result stream was not available".to_string()),
             result: None,
             error: Some(agent_access_core::ErrorBody {

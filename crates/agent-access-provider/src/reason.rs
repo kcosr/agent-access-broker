@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +20,9 @@ impl Decision {
     }
 }
 
+/// The Broker's standard reasons. Each has a fixed HTTP status and wire
+/// spelling ([`Self::as_str`], which its serde form matches). Responses and
+/// audit records carry the spelling as a [`ReasonCodeId`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonCode {
@@ -121,6 +126,10 @@ pub enum ReasonCode {
     OperationCancelled,
     OperationTimeout,
     OperationFailed,
+    /// A provider reported an outcome its contract does not allow. The Broker
+    /// records a safe diagnostic and never forwards the provider's text or
+    /// code. Host-only.
+    BrokerProviderContractFailed,
     GatewayHostInvalid,
     GatewayHostUnmatched,
     GatewayRuleNotFound,
@@ -249,6 +258,7 @@ impl ReasonCode {
             Self::OperationCancelled => "operation_cancelled",
             Self::OperationTimeout => "operation_timeout",
             Self::OperationFailed => "operation_failed",
+            Self::BrokerProviderContractFailed => "broker_provider_contract_failed",
             Self::GatewayHostInvalid => "gateway_host_invalid",
             Self::GatewayHostUnmatched => "gateway_host_unmatched",
             Self::GatewayRuleNotFound => "gateway_rule_not_found",
@@ -378,7 +388,7 @@ impl ReasonCode {
             | Self::GatewayUpstreamDenied => 502,
             Self::UpstreamTimeout | Self::OperationTimeout => 504,
             Self::OperationCancelled => 408,
-            Self::OperationFailed => 500,
+            Self::OperationFailed | Self::BrokerProviderContractFailed => 500,
             Self::CredentialEncryptFailed
             | Self::IdentityUnavailable
             | Self::CredentialDecryptFailed
@@ -498,6 +508,7 @@ impl ReasonCode {
             Self::OperationCancelled,
             Self::OperationTimeout,
             Self::OperationFailed,
+            Self::BrokerProviderContractFailed,
             Self::GatewayHostInvalid,
             Self::GatewayHostUnmatched,
             Self::GatewayRuleNotFound,
@@ -522,5 +533,197 @@ impl ReasonCode {
             Self::AuditRequestNotFound,
             Self::AuditQueryTimeout,
         ]
+    }
+}
+
+/// The wire identifier of a reason: a standard [`ReasonCode`] spelling or a
+/// provider's domain reason code.
+///
+/// Responses, audit records, filters and historical readers carry this one
+/// string, so they stay readable when the module that defined the reason is
+/// not linked. It is bounded data, not a classification: it has no status or
+/// decision of its own. Its syntax is `^[a-z][a-z0-9_]{0,63}$`; serde reads
+/// and writes the bare string and rejects anything else.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReasonCodeId(Cow<'static, str>);
+
+impl ReasonCodeId {
+    /// The longest identifier, in bytes.
+    pub const MAX_LEN: usize = 64;
+
+    /// Validates `value` as a reason identifier.
+    pub fn new(value: impl Into<Cow<'static, str>>) -> Result<Self, InvalidReasonCodeId> {
+        let value = value.into();
+        if is_reason_code_id(&value) {
+            Ok(Self(value))
+        } else {
+            Err(InvalidReasonCodeId)
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The standard reason with this spelling, if there is one.
+    pub fn standard(&self) -> Option<ReasonCode> {
+        ReasonCode::all()
+            .iter()
+            .copied()
+            .find(|code| code.as_str() == self.as_str())
+    }
+}
+
+/// Whether `value` has reason identifier syntax: `^[a-z][a-z0-9_]{0,63}$`.
+pub const fn is_reason_code_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > ReasonCodeId::MAX_LEN || !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    let mut index = 1;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_') {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+impl From<ReasonCode> for ReasonCodeId {
+    fn from(code: ReasonCode) -> Self {
+        Self(Cow::Borrowed(code.as_str()))
+    }
+}
+
+impl PartialEq<ReasonCode> for ReasonCodeId {
+    fn eq(&self, other: &ReasonCode) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ReasonCodeId> for ReasonCode {
+    fn eq(&self, other: &ReasonCodeId) -> bool {
+        other == self
+    }
+}
+
+impl fmt::Debug for ReasonCodeId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), formatter)
+    }
+}
+
+impl fmt::Display for ReasonCodeId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ReasonCodeId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ReasonCodeId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A string without reason identifier syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidReasonCodeId;
+
+impl fmt::Display for InvalidReasonCodeId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a reason code must match ^[a-z][a-z0-9_]{0,63}$")
+    }
+}
+
+impl std::error::Error for InvalidReasonCodeId {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_spellings_are_identifiers_and_match_serde() {
+        let mut spellings = std::collections::BTreeSet::new();
+        for &code in ReasonCode::all() {
+            let id = ReasonCodeId::from(code);
+            assert!(is_reason_code_id(code.as_str()), "{code:?}");
+            assert_eq!(
+                serde_json::to_value(code).unwrap(),
+                serde_json::json!(code.as_str())
+            );
+            assert_eq!(
+                serde_json::to_value(&id).unwrap(),
+                serde_json::json!(code.as_str())
+            );
+            assert_eq!(
+                serde_json::from_value::<ReasonCode>(serde_json::json!(code.as_str())).unwrap(),
+                code
+            );
+            assert_eq!(id.standard(), Some(code));
+            assert_eq!(id, code);
+            assert!(spellings.insert(code.as_str()), "{code:?} is listed twice");
+        }
+    }
+
+    #[test]
+    fn identifiers_are_bounded_snake_case() {
+        for valid in [
+            "a",
+            "upstream_failed",
+            "cloudbees_ci_log_chunk_exceeded",
+            "x9_",
+        ] {
+            assert!(ReasonCodeId::new(valid).is_ok(), "{valid}");
+        }
+        let longest = "a".repeat(ReasonCodeId::MAX_LEN);
+        assert!(ReasonCodeId::new(longest.clone()).is_ok());
+        for invalid in [
+            String::new(),
+            "_leading".into(),
+            "9digit".into(),
+            "Upper".into(),
+            "has-hyphen".into(),
+            "has space".into(),
+            "caf\u{e9}".into(),
+            format!("{longest}a"),
+        ] {
+            assert_eq!(
+                ReasonCodeId::new(invalid.clone()),
+                Err(InvalidReasonCodeId),
+                "{invalid}"
+            );
+            assert!(
+                serde_json::from_value::<ReasonCodeId>(serde_json::json!(invalid)).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_outside_the_standard_vocabulary_stay_readable() {
+        let id: ReasonCodeId =
+            serde_json::from_value(serde_json::json!("example_module_quota_exceeded")).unwrap();
+        assert_eq!(id.as_str(), "example_module_quota_exceeded");
+        assert_eq!(id.standard(), None);
+        assert_eq!(
+            serde_json::to_string(&id).unwrap(),
+            "\"example_module_quota_exceeded\""
+        );
+    }
+
+    #[test]
+    fn provider_contract_failure_is_a_host_error() {
+        let code = ReasonCode::BrokerProviderContractFailed;
+        assert_eq!(code.as_str(), "broker_provider_contract_failed");
+        assert_eq!(code.http_status(), 500);
     }
 }

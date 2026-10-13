@@ -620,7 +620,7 @@ fn spec_error_envelope(
             service: "spec".to_string(),
             action: document.to_string(),
             resource_scopes: ResourceScopes::new(),
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some(message.to_string()),
             result: None,
             error: Some(ErrorBody {
