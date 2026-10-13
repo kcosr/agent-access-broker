@@ -8,11 +8,15 @@
 //! process environment or touches a store: those stay inside the host.
 //!
 //! It also holds the host's construction port for the values the host hands
-//! providers per request, such as [`ScopeRequest`]s.
+//! providers per request: [`ScopeRequest`]s, static credentials, delegated
+//! binding identities, [`AdmittedRequest`]s and the final
+//! [`ProviderInvocation`].
 use crate::{
-    BuildContext, ClientProfile, CorrelationContext, EgressDeclaration, EgressRoute,
-    ExecutionCredential, InvocationIdentity, ProviderAttributionConfig, ProviderLimits,
-    ScopeRequest, StableSigningKey,
+    AdmittedContext, AdmittedRequest, BrokerBodyPart, BuildContext, ClientProfile,
+    CorrelationContext, CredentialMode, DelegatedBindingId, EgressDeclaration, EgressRoute,
+    ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity,
+    ProviderAttributionConfig, ProviderInvocation, ProviderLimits, ProviderState,
+    ResourceAttributes, ScopeRequest, StableSigningKey,
 };
 use serde_json::Value;
 use std::error::Error;
@@ -223,4 +227,68 @@ pub fn basic_credential(username: String, token: String) -> ExecutionCredential 
 /// A `bearer_token` credential from the host's validated material.
 pub fn bearer_credential(token: String) -> ExecutionCredential {
     ExecutionCredential::bearer(token)
+}
+
+/// The host's admission decision for one operation.
+#[derive(Debug)]
+pub struct AdmittedRequestParts {
+    pub service: String,
+    pub action: String,
+    pub execution_context: String,
+    pub identity: InvocationIdentity,
+    pub correlation: CorrelationContext,
+    pub credential_mode: CredentialMode,
+    /// Built from the action's validated contract, never from provider
+    /// output alone.
+    pub authority: InvocationAuthority,
+    pub inputs: Value,
+    pub execution: ExecutionAccess,
+    pub lookup_credential: Option<ExecutionCredential>,
+}
+
+pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
+    let AdmittedRequestParts {
+        service,
+        action,
+        execution_context,
+        identity,
+        correlation,
+        credential_mode,
+        authority,
+        inputs,
+        execution,
+        lookup_credential,
+    } = parts;
+    AdmittedRequest::new(
+        AdmittedContext::new(
+            service,
+            action,
+            execution_context,
+            identity,
+            correlation,
+            credential_mode,
+            authority,
+        ),
+        inputs,
+        execution,
+        lookup_credential,
+    )
+}
+
+/// The final invocation, built only after staging: body consumption, the
+/// revision fences, and decryption of only the admitted resource's
+/// attributes.
+pub fn invocation(
+    request: AdmittedRequest,
+    body_parts: Vec<BrokerBodyPart>,
+    resource_attributes: ResourceAttributes,
+    state: Option<ProviderState>,
+) -> ProviderInvocation {
+    ProviderInvocation::new(request, body_parts, resource_attributes, state)
+}
+
+/// A delegated binding identity from the host's domain-separated digest of
+/// the lease's binding fields.
+pub fn delegated_binding_id(digest: [u8; 32]) -> DelegatedBindingId {
+    DelegatedBindingId::from_digest(digest)
 }

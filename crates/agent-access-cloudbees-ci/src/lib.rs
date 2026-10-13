@@ -675,20 +675,20 @@ impl Provider for CloudbeesCiProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if !request.body_parts.is_empty() {
+        if !request.body_parts().is_empty() {
             return Err(input_error(
                 "value_invalid",
                 None,
                 "CloudBees CI actions take no file parts",
             ));
         }
-        let mut input = self.parse(&request.action, &request.inputs)?;
+        let mut input = self.parse(request.action(), request.inputs())?;
         let controller = self
             .controllers
             .get(&input.controller)
             .expect("validated controller");
         let credential = request
-            .execution
+            .execution()
             .static_credential()
             .ok_or_else(credential_invalid)?;
         let job_url = Self::job_url(&controller.base, &input.job);
@@ -805,7 +805,7 @@ impl CloudbeesCiProvider {
             );
         }
         let input: &JobInput<'_> = input;
-        if request.action == "build.artifact.download" {
+        if request.action() == "build.artifact.download" {
             let number = input.build_number.expect("required");
             let path = input.artifact_path.expect("required");
             let (artifacts, _) = self
@@ -887,7 +887,7 @@ impl CloudbeesCiProvider {
                 duration_ms,
             };
             let mut result = self.result(
-                &request.action,
+                request.action(),
                 input,
                 value,
                 &reply,
@@ -903,13 +903,13 @@ impl CloudbeesCiProvider {
             result.stream = Some(stream);
             return Ok(result);
         }
-        if reads::is_action(&request.action) {
+        if reads::is_action(request.action()) {
             return self
-                .invoke_read(&request.action, input, controller, credential, job_url)
+                .invoke_read(request.action(), input, controller, credential, job_url)
                 .await;
         }
         let job_api = Self::append(job_url.clone(), &["api", "json"]);
-        let (value, reply) = match request.action.as_str() {
+        let (value, reply) = match request.action() {
             "job.view" => {
                 let (data, reply) = self
                     .json(controller, credential, Self::tree(job_api, "fullName,_class,displayName,url,description,buildable,inQueue,lastBuild[number],property[parameterDefinitions[name,type]]"))
@@ -1170,7 +1170,7 @@ impl CloudbeesCiProvider {
             _ => unreachable!(),
         };
         Ok(self.result(
-            &request.action,
+            request.action(),
             input,
             value,
             &reply,

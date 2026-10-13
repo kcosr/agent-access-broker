@@ -5,10 +5,10 @@ use crate::host::{
     UpstreamClientFactoryError, scope_request,
 };
 use crate::{
-    BuildContext, ClientProfile, CorrelationContext, CredentialView, EgressDeclaration,
-    EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity, OpaqueTokenSigner,
-    Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor,
-    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
+    BuildContext, ClientProfile, CorrelationContext, CredentialView, DelegatedBindingId,
+    EgressDeclaration, EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity,
+    OpaqueTokenSigner, Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest,
+    ServiceDescriptor, ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
 };
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value;
@@ -228,6 +228,12 @@ pub fn credential_username(credential: &ExecutionCredential) -> Option<&str> {
         CredentialView::Basic { username, .. } => Some(username),
         CredentialView::Bearer { .. } => None,
     }
+}
+
+/// A delegated binding identity derived from `seed`, for lease doubles.
+pub fn delegated_binding_id(seed: &str) -> DelegatedBindingId {
+    use sha2::{Digest, Sha256};
+    crate::host::delegated_binding_id(Sha256::digest(seed.as_bytes()).into())
 }
 
 /// A stable signing key of `byte` repeated, for handles and cursors that

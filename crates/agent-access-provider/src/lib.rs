@@ -9,6 +9,7 @@
 //! construction; backends see only the narrow views in this crate. The
 //! [`host`] module is the construction interface the broker host implements.
 
+mod admitted;
 mod attribution;
 mod backend;
 mod capabilities;
@@ -40,6 +41,7 @@ mod upstream_allowlist;
 mod upstream_rate_limit;
 mod upstream_validation;
 
+pub use admitted::*;
 pub use attribution::*;
 pub use backend::*;
 pub use capabilities::*;

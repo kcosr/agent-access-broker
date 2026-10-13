@@ -89,8 +89,8 @@ impl Provider for FixtureConfig {
             .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert!(request.execution.static_credential().is_none());
-        let value = request.resource_attributes.get("endpoint").unwrap();
+        assert!(request.execution().static_credential().is_none());
+        let value = request.resource_attributes().get("endpoint").unwrap();
         assert!(!format!("{request:?}").contains(value));
         assert_invocation_never_serializes();
         self.observed.lock().unwrap().push(value.into());

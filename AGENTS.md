@@ -206,8 +206,10 @@ and audit checks through the real `agent-access` binary.
   client factory, egress declarations and sanitized routes, upstream
   allowlists, correlation, upstream trace events, token signing). Its `host`
   module is the construction interface core implements (`BuildContext`,
-  `UpstreamClientFactory`); it resolves no secrets, loads no TLS files and
-  reads no process environment.
+  `UpstreamClientFactory`) and the only constructor of host-owned values
+  (scope requests, static execution credentials, delegated binding
+  identities, admitted requests, final invocations); it resolves no secrets,
+  loads no TLS files and reads no process environment.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller

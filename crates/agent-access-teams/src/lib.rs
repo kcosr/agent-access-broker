@@ -317,12 +317,16 @@ impl Provider for TeamsProvider {
             .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.local_scopes(&request.action, &request.inputs)?;
-        let (destination, body) = payload::prepare(&request.inputs, self.max_bytes)?;
-        if request.service != "teams"
-            || request.credential_mode != CredentialMode::Service
-            || !request.execution.is_none()
-            || request.resource_scopes.get("destination") != Some(&vec![destination.clone()])
+        self.local_scopes(request.action(), request.inputs())?;
+        let (destination, body) = payload::prepare(request.inputs(), self.max_bytes)?;
+        if request.service() != "teams"
+            || request.credential_mode() != CredentialMode::Service
+            || !request.execution().is_none()
+            || request
+                .authority()
+                .resources()
+                .and_then(|scopes| scopes.get("destination"))
+                != Some(&vec![destination.clone()])
         {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -330,7 +334,7 @@ impl Provider for TeamsProvider {
             ));
         }
         let value = request
-            .resource_attributes
+            .resource_attributes()
             .get("webhookUrl")
             .ok_or_else(|| {
                 ProviderError::deny(

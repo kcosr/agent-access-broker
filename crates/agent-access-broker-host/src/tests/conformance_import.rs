@@ -143,8 +143,11 @@ impl Provider for ImportedConformanceProvider {
             .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.local_scopes(&request.action, &request.inputs)?;
-        let token = request.execution.static_credential().map(credential_token);
+        self.local_scopes(request.action(), request.inputs())?;
+        let token = request
+            .execution()
+            .static_credential()
+            .map(credential_token);
         // Tokens are synthetic test sentinels; responses never expose material.
         let authority = match token {
             Some("import-service-token") => "service",
@@ -157,7 +160,7 @@ impl Provider for ImportedConformanceProvider {
             }
         };
         Ok(ProviderResult {
-            result: json!({"upstreamMcp":{"principal":request.identity.principal,"credentialMode":request.credential_mode,"authority":authority,"transportAuthority":self.transport_authority,"message":request.inputs["message"]}}),
+            result: json!({"upstreamMcp":{"principal":request.identity().principal,"credentialMode":request.credential_mode(),"authority":authority,"transportAuthority":self.transport_authority,"message":request.inputs()["message"]}}),
             stream: None,
             audit: None,
             upstream_status: Some(200),

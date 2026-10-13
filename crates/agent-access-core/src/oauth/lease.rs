@@ -2,11 +2,12 @@
 //! credential.
 use super::{OAuthBinding, OAuthError, OAuthLease, OAuthManager};
 use agent_access_provider::{
-    DelegatedAccess, DelegatedCredential, DelegatedLease, ProviderError, ReasonCode,
-    UpstreamRetryAfter, upstream_retry_hint,
+    DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease, ProviderError,
+    ReasonCode, UpstreamRetryAfter, upstream_retry_hint,
 };
 use async_trait::async_trait;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -17,8 +18,8 @@ pub(crate) struct ManagedOAuthLease {
     /// The invoked service, named when its connection's refresh is throttled.
     service: String,
     current: Mutex<OAuthLease>,
-    connection_id: String,
-    generation: String,
+    /// Fixed at acquisition; replacement access must belong to it.
+    binding: DelegatedBindingId,
     recovered: AtomicBool,
 }
 
@@ -40,9 +41,8 @@ impl ManagedOAuthLease {
             .map_err(|error| oauth_provider_error(&service, error))?;
         Ok(DelegatedCredential::new(Arc::new(Self {
             manager,
+            binding: delegated_binding_identity(&service, &lease),
             service,
-            connection_id: lease.connection_id.clone(),
-            generation: lease.generation.clone(),
             current: Mutex::new(lease),
             recovered: AtomicBool::new(false),
         })))
@@ -56,7 +56,7 @@ impl ManagedOAuthLease {
     }
 
     fn replace(&self, lease: OAuthLease) -> Result<(), ProviderError> {
-        if lease.connection_id != self.connection_id || lease.generation != self.generation {
+        if delegated_binding_identity(&self.service, &lease) != self.binding {
             return Err(self.error(OAuthError::Stale));
         }
         *self
@@ -71,8 +71,37 @@ impl ManagedOAuthLease {
     }
 }
 
+/// Domain-separated SHA-256 over the length-delimited binding fields of a
+/// lease: service, owner, registration, permission profile, configuration
+/// fingerprint, slot generation and connection. Token contents, access
+/// version and expiry, refresh material and the account subject are excluded,
+/// so routine refresh keeps the identity while new consent, replacement and
+/// reconnecting change it.
+pub(crate) fn delegated_binding_identity(service: &str, lease: &OAuthLease) -> DelegatedBindingId {
+    const DOMAIN: &[u8] = b"agent-access-broker/delegated-binding/v1";
+    let mut digest = Sha256::new();
+    for field in [
+        DOMAIN,
+        service.as_bytes(),
+        lease.owner.as_bytes(),
+        lease.binding.registration.as_bytes(),
+        lease.binding.permission_profile.as_bytes(),
+        lease.config_fingerprint.as_bytes(),
+        lease.generation.as_bytes(),
+        lease.connection_id.as_bytes(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    agent_access_provider::host::delegated_binding_id(digest.finalize().into())
+}
+
 #[async_trait]
 impl DelegatedLease for ManagedOAuthLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        self.binding
+    }
+
     fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         let lease = self.current();
         if lease.access_version() != version {

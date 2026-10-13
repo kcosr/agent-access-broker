@@ -1107,10 +1107,14 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
         .build(&def, &[action()], None, &host.context())
         .unwrap();
     let mut alice = invocation(json!({"region":"east"}), "alice-private-token");
-    alice.credential_mode = CredentialMode::PerUser;
+    alice = InvocationBuilder::from(alice)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     let mut bob = invocation(json!({"region":"west"}), "bob-private-token");
-    bob.credential_mode = CredentialMode::PerUser;
-    bob.identity.principal = "bob".into();
+    bob = InvocationBuilder::from(bob)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    bob = InvocationBuilder::from(bob).principal("bob").build();
     let (discovery, alice, bob) = tokio::join!(
         fixture.discover(),
         provider.invoke(alice),
@@ -1519,7 +1523,7 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
             .discover(
                 &oauth_definition(&fixture.endpoint),
                 &ImportedDiscoveryAuthentication::Delegated(
-                    request.execution.delegated().cloned().unwrap(),
+                    request.execution().delegated().cloned().unwrap(),
                 ),
                 None,
                 &test_host().context(),
@@ -1551,6 +1555,9 @@ struct ChangingBindingLease {
 }
 #[async_trait]
 impl DelegatedLease for ChangingBindingLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        self.inner.binding_identity()
+    }
     fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         self.inner.mark_rejected(version)
     }
@@ -1580,13 +1587,15 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
         for change_audience in [false, true] {
             let fixture = CompatFixture::new(Plan::default()).await;
             let (mut request, lease) = leased_invocation(&fixture.endpoint, false);
-            request.execution = ExecutionAccess::Delegated(DelegatedCredential::new(Arc::new(
-                ChangingBindingLease {
-                    inner: lease.clone(),
-                    after,
-                    change_audience,
-                },
-            )));
+            request = InvocationBuilder::from(request)
+                .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
+                    Arc::new(ChangingBindingLease {
+                        inner: lease.clone(),
+                        after,
+                        change_audience,
+                    }),
+                )))
+                .build();
             let provider = McpAdapter
                 .build(
                     &oauth_definition(&fixture.endpoint),

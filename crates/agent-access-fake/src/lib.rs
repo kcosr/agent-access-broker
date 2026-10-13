@@ -100,26 +100,27 @@ impl Provider for FakeProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let Some(message) = request.inputs.get("message").and_then(Value::as_str) else {
+        let Some(message) = request.inputs().get("message").and_then(Value::as_str) else {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
                 "fake.echo requires message",
             ));
         };
         let project = request
-            .resource_scopes
-            .get("project")
+            .authority()
+            .resources()
+            .and_then(|scopes| scopes.get("project"))
             .and_then(|values| values.first())
             .cloned()
             .unwrap_or_default();
         Ok(ProviderResult {
             result: json!({
                 "provider": "fake",
-                "action": request.action,
+                "action": request.action(),
                 "project": project,
                 "message": message,
-                "credentialMode": request.credential_mode,
-                "principal": request.identity.principal,
+                "credentialMode": request.credential_mode(),
+                "principal": request.identity().principal,
             }),
             stream: None,
             audit: Some(json!({

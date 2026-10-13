@@ -354,13 +354,17 @@ async fn input_and_credential_rejections_dispatch_nothing() {
         ReasonCode::InputInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.execution = ExecutionAccess::None;
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::None)
+        .build();
     assert_eq!(
         provider.invoke(request).await.unwrap_err().reason_code,
         ReasonCode::CredentialInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.credential_mode = CredentialMode::PerUser;
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(provider.invoke(request).await.is_err());
     assert!(fixture.state.recorded.lock().unwrap().is_empty());
 }
@@ -389,7 +393,9 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
         .unwrap();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
-        request.credential_mode = CredentialMode::PerUser;
+        request = InvocationBuilder::from(request)
+            .credential_mode(CredentialMode::PerUser)
+            .build();
         provider.invoke(request).await.unwrap();
     }
     let calls = fixture.state.recorded.lock().unwrap();
@@ -749,6 +755,9 @@ struct TestLease {
 }
 #[async_trait]
 impl DelegatedLease for TestLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("mcp-test-binding")
+    }
     fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         self.rejected.lock().unwrap().push(version.into());
         Ok(())
@@ -811,9 +820,17 @@ fn leased_invocation(
         }),
     });
     let mut request = invocation(json!({"region":"east"}), "unused-static-token");
-    request.execution = ExecutionAccess::None;
-    request.credential_mode = CredentialMode::PerUser;
-    request.execution = ExecutionAccess::Delegated(DelegatedCredential::new(lease.clone()));
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::None)
+        .build();
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Delegated(DelegatedCredential::new(
+            lease.clone(),
+        )))
+        .build();
     (request, lease)
 }
 
@@ -837,7 +854,7 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
             .discover(
                 &oauth_definition(&fixture.endpoint),
                 &ImportedDiscoveryAuthentication::Delegated(
-                    request.execution.delegated().cloned().unwrap(),
+                    request.execution().delegated().cloned().unwrap(),
                 ),
                 None,
                 &host.context(),
@@ -936,7 +953,11 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
             lease.access.lock().unwrap().audience = "https://other.example/mcp".into();
         }
         if failure == "fallback" {
-            request.execution = ExecutionAccess::Static(credential("shared-fallback-is-forbidden"));
+            request = InvocationBuilder::from(request)
+                .execution(ExecutionAccess::Static(credential(
+                    "shared-fallback-is-forbidden",
+                )))
+                .build();
         }
         let error = provider.invoke(request).await.err().unwrap();
         assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);

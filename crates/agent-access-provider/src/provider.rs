@@ -1,7 +1,7 @@
 use crate::{
-    BodyAdmission, CorrelationContext, ExecutionCredential, ProviderCredentialVerification,
-    ProviderError, ProviderInvocation, ProviderResult, ReasonCode, ResourceType, ScopeRequest,
-    ScopeResolution, ServiceDescriptor,
+    AdmittedRequest, BodyAdmission, CorrelationContext, ExecutionCredential,
+    ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult,
+    ProviderState, ReasonCode, ResourceType, ScopeRequest, ScopeResolution, ServiceDescriptor,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -54,12 +54,14 @@ pub trait Provider: Send + Sync {
     }
 
     /// Admits multipart body-part metadata before the host consumes the
-    /// body, and states what happens to the operation's provider state.
-    /// Admission cannot change the service, identity, scopes, credential
-    /// selection or policy.
+    /// body, and states what happens to the operation's provider state. It
+    /// sees the admitted request (no body data, no decrypted private
+    /// attributes) and the current state, and cannot change the service,
+    /// identity, authority, credential selection or policy.
     async fn authorize_body_parts(
         &self,
-        _request: &ProviderInvocation,
+        _request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
         Err(ProviderError::deny(
             ReasonCode::BodyMalformed,

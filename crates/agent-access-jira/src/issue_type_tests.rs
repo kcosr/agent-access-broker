@@ -3,7 +3,9 @@ use agent_access_provider::test_support::{credential_token, credential_username}
 
 fn invocation(inputs: Value) -> ProviderInvocation {
     let mut invocation = issue_create_invocation(inputs);
-    invocation.action = "issue_type.list".to_string();
+    invocation = InvocationBuilder::from(invocation)
+        .action("issue_type.list")
+        .build();
     invocation
 }
 
@@ -98,8 +100,12 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
         let mut request = invocation(json!({"project":"PROJ"}));
-        request.credential_mode = mode;
-        request.execution = ExecutionAccess::Static(credential.clone());
+        request = InvocationBuilder::from(request)
+            .credential_mode(mode)
+            .build();
+        request = InvocationBuilder::from(request)
+            .execution(ExecutionAccess::Static(credential.clone()))
+            .build();
         let response = provider.invoke(request).await.unwrap();
         assert_eq!(
             response.result,

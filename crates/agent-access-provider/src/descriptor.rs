@@ -105,7 +105,7 @@ pub struct CredentialDescriptor {
     pub execution_required: bool,
     /// Set when `credentials.per_user.<service>` may be a delegated (`oauth`)
     /// credential, which reaches the provider as
-    /// `ProviderInvocation::delegated_credential` instead of `credential`.
+    /// `ExecutionAccess::Delegated` instead of a static credential.
     pub delegated: Option<DelegatedConnection>,
     /// Credential kinds accepted for `credentials.service.<service>`; empty
     /// means every generally supported kind.

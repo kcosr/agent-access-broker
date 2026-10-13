@@ -280,12 +280,15 @@ impl Provider for BrokerWebhookContractProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("broker-webhook-service-token")
         );
-        match request.action.as_str() {
+        match request.action() {
             "webhook.create" => {
-                assert_eq!(request.inputs["token"], WEBHOOK_SECRET_SENTINEL);
+                assert_eq!(request.inputs()["token"], WEBHOOK_SECRET_SENTINEL);
                 Ok(ProviderResult {
                     result: json!({
                         "mutationStatus": "applied",

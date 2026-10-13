@@ -2071,11 +2071,11 @@ impl Provider for LookupTraceProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution_lookup", request.lookup_credential.as_ref());
-        self.record("execution", request.execution.static_credential());
+        self.record("execution_lookup", request.lookup_credential());
+        self.record("execution", request.execution().static_credential());
         Ok(ProviderResult {
             result: json!({
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
             }),
             stream: None,
             audit: None,
@@ -2140,17 +2140,16 @@ impl Provider for SearchPreflightTraceProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert!(
-            request.state.is_none(),
+            request.state().is_none(),
             "core never writes provider-owned state"
         );
-        self.preflights.lock().unwrap().push(
-            serde_json::to_value(
-                request
-                    .search_authorization
-                    .expect("search invocation carries search authorization"),
-            )
-            .unwrap(),
-        );
+        let search = request
+            .search_authorization()
+            .expect("search invocation carries search authorization");
+        self.preflights
+            .lock()
+            .unwrap()
+            .push(json!({"scopeType": search.scope_type, "scope": search.scope}));
         Ok(ProviderResult {
             result: json!({"issues": []}),
             stream: None,
@@ -2288,7 +2287,7 @@ impl Provider for DependencyPolicyTraceProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution", request.execution.static_credential());
+        self.record("execution", request.execution().static_credential());
         Ok(ProviderResult {
             result: json!({"status": "present"}),
             stream: None,
@@ -3032,7 +3031,7 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
             &identity,
             "confluence",
             "search",
-            &authorization.resource_scopes(),
+            &authorization.resource_scope_summary(),
         )
         .unwrap();
 }
@@ -3618,7 +3617,7 @@ impl Provider for MissingStreamHandleProvider {
         Ok(ProviderResult {
             result: json!({
                 "provider": "fake",
-                "action": request.action,
+                "action": request.action(),
             }),
             stream: Some(ProviderResultStream {
                 content_type: "text/plain".to_string(),
@@ -3660,7 +3659,7 @@ impl Provider for FailingStreamProvider {
         Ok(ProviderResult {
             result: json!({
                 "provider": "fake",
-                "action": request.action,
+                "action": request.action(),
             }),
             stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
             audit: Some(json!({
@@ -3699,7 +3698,7 @@ impl Provider for CompletedStreamProvider {
         Ok(ProviderResult {
             result: json!({
                 "provider": "fake",
-                "action": request.action,
+                "action": request.action(),
             }),
             stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
             audit: Some(json!({
@@ -3736,7 +3735,7 @@ impl Provider for PendingStreamProvider {
         Ok(ProviderResult {
             result: json!({
                 "provider": "fake",
-                "action": request.action,
+                "action": request.action(),
             }),
             stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
             audit: Some(json!({
@@ -7849,9 +7848,9 @@ impl Provider for CorrelationCaptureProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         Ok(ProviderResult {
             result: json!({
-                "agentRequestId": request.correlation.agent_request_id,
-                "brokerRequestId": request.correlation.broker_request_id,
-                "executionContext": request.execution_context,
+                "agentRequestId": request.correlation().agent_request_id,
+                "brokerRequestId": request.correlation().broker_request_id,
+                "executionContext": request.execution_context(),
             }),
             stream: None,
             audit: None,
@@ -7881,13 +7880,14 @@ impl Provider for BodyPartCorrelationCaptureProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &ProviderInvocation,
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
         *self.captured_correlation.lock().unwrap() = current_correlation_context();
         *self.captured_action.lock().unwrap() = current_provider_action();
         assert_eq!(
-            request.correlation,
-            CorrelationContext::new(
+            request.correlation(),
+            &CorrelationContext::new(
                 "agent-body-preflight-id".to_string(),
                 "broker-body-preflight-id".to_string()
             )

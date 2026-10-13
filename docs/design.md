@@ -108,9 +108,11 @@ also includes a same-origin browser portal frontend:
   (`egress_config.rs`), upstream allowlists, correlation headers, upstream
   trace events (`trace.rs`), and opaque token signing (`signing.rs`). Its
   public `host` module (`host.rs`) is the construction interface the host
-  implements: the build context and the upstream client factory port. The SDK
-  resolves no secret references, loads no TLS files and reads no process
-  environment.
+  implements: the build context and the upstream client factory port, plus the
+  values only the host constructs for providers (scope requests, static
+  execution credentials, delegated binding identities, admitted requests and
+  the final invocation). The SDK resolves no secret references, loads no TLS
+  files and reads no process environment.
 - **`agent-access-core`** — the library: the request runtime
   (`runtime.rs`), the audit writer and its storage backends
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries
@@ -306,8 +308,11 @@ only host change. The crate supplies:
   Descriptor validation rejects inconsistent declarations at startup; the
   catalog, OpenAPI, send schema, MCP tools, and managed credential forms are
   projected from it.
-- **A provider**: scope resolution, optional body-part admission, and
-  invocation through `UpstreamClient`s, returning JSON or a bounded stream.
+- **A provider**: one scope-resolution hook (`ScopeRequest` in,
+  `ScopeResolution` with optional in-process `ProviderState` out), optional
+  body-part admission over the admitted request, and invocation through
+  `UpstreamClient`s, returning JSON or a bounded stream. Delegated leases expose
+  an opaque `DelegatedBindingId` for binding signed tokens to the connection.
 
 `crates/agent-access-conformance` is the reference: a test-only backend with a
 namespace-capable resource type, typed configuration, a managed profile, JSON,
@@ -672,10 +677,11 @@ sequenceDiagram
    `credentials.lookup.<service>` credential for the pre-authorization metadata
    lookup.
 8. **Scope resolution.** For search-contained actions, the runtime builds the
-   search boundary from policy and hands it to the provider as the typed
-   `ProviderInvocation.search_authorization` field (scope type, finite or
-   all-except scope, and credential mode). The matched grants stay with the
-   broker and appear only in the audit record's `searchAuthorization`. For
+   search boundary from policy and skips provider scope lookup; the provider
+   receives the complete boundary (scope type and finite or all-except scope)
+   as its admitted `InvocationAuthority::Search`, never the envelope's lossy
+   `["*"]` summary. The matched grants stay with the broker and appear only in
+   the audit record's `searchAuthorization`. For
    other actions, the provider's single `resolve_scopes` hook receives the
    action, validated inputs, host-selected execution context, minimal caller
    identity, correlation, and only the lookup credential the runtime selected;
@@ -694,7 +700,18 @@ sequenceDiagram
    provider-side execution-time confirmation uses the caller's per-user
    credential. If final policy selects `service`, it uses the shared lookup
    credential.
-12. **Provider invoke**, then **finalize/audit**.
+12. **Admitted request.** The runtime builds one read-only, shared admitted
+   context: service and action, execution context, minimal identity,
+   correlation, the typed credential mode, and the exact authority from the
+   action's validated contract (`ActionOnly`, `Resources` with the resolved
+   canonical scopes, or `Search` with the complete boundary). Ordinary scoped
+   actions never receive empty resource authority and action-only actions never
+   receive resources. Multipart admission sees this context with the inputs and
+   selected credentials, but no body data or decrypted private attributes.
+13. **Provider invoke**, then **finalize/audit**. The final invocation is built
+   only after staging: the body is consumed, the revision fences run, and only
+   the admitted resource's private attributes are decrypted. Its fields are
+   private and read through accessors, and it never serializes.
 
 The lookup credential is never returned to the caller; the execution credential
 is placed only into the `ProviderInvocation`.

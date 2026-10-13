@@ -931,16 +931,17 @@ impl Provider for JiraProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &ProviderInvocation,
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
-        if request.action != "attachment.add" {
+        if request.action() != "attachment.add" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "Jira action does not accept multipart body parts",
             ));
         }
         let credential = lookup_credential(request)?;
-        let inputs = parse_attachment_add_inputs(&request.inputs)?;
+        let inputs = parse_attachment_add_inputs(request.inputs())?;
         validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
         let body_part_specs = attachment_body_part_specs(&inputs.attachments);
         let response = self
@@ -978,7 +979,7 @@ impl Provider for JiraProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        match request.action.as_str() {
+        match request.action() {
             "issue_type.list" => self.invoke_issue_type_list(request).await,
             "issue.view" => self.invoke_issue_view(request).await,
             "issue.create" => self.invoke_issue_create(request).await,
@@ -1021,7 +1022,7 @@ impl JiraProvider {
         };
         validate_adf_body(body)?;
         let mutation =
-            append_adf_attribution(body, capability, &request.correlation.broker_request_id)?;
+            append_adf_attribution(body, capability, &request.correlation().broker_request_id)?;
         validate_adf_body(body)?;
         Ok(Some(mutation.audit_value()))
     }
@@ -1030,9 +1031,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let inputs = parse_issue_type_list_inputs(&request.inputs)?;
-        ensure_authorized_project_scope(&inputs.project, &request.resource_scopes)?;
-        let credential = invocation_credential(&request)?;
+        let inputs = parse_issue_type_list_inputs(request.inputs())?;
+        ensure_authorized_project_scope(&inputs.project, request.resource_scopes()?)?;
+        let credential = invocation_credential(request.admitted())?;
         let page_request = JiraIssueTypeListRequest {
             start_at: inputs.start_at,
             max_results: inputs.max_results,
@@ -1070,7 +1071,7 @@ impl JiraProvider {
                 "startAt": page.start_at,
                 "maxResults": page.max_results,
                 "issueTypeCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -1083,9 +1084,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let locator = issue_locator_from_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let locator = issue_locator_from_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
             .issue_metadata(&locator.issue_key, lookup_credential)
@@ -1098,7 +1099,7 @@ impl JiraProvider {
                 "Jira issue response did not include a valid current key and project",
             ));
         }
-        ensure_authorized_issue_metadata(&metadata, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let response = self
             .backend
             .issue(&metadata.key, credential)
@@ -1129,7 +1130,7 @@ impl JiraProvider {
                 "operation": "issue.view",
                 "issueKey": issue.key,
                 "project": issue.project,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -1145,10 +1146,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let scope_inputs = parse_issue_create_scope_inputs(&request.inputs)?;
-        ensure_authorized_project_scope(&scope_inputs.project, &request.resource_scopes)?;
-        let mut inputs = parse_issue_create_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let scope_inputs = parse_issue_create_scope_inputs(request.inputs())?;
+        ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
+        let mut inputs = parse_issue_create_inputs(request.inputs(), &self.config)?;
         let description_provided = inputs.description.is_some();
         let audit_context = IssueCreateAuditContext {
             project: &inputs.project,
@@ -1342,7 +1343,7 @@ impl JiraProvider {
             "project": issue.project,
             "issueTypeId": inputs.issue_type_id,
             "descriptionProvided": description_provided,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -1361,9 +1362,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let scope_inputs = parse_issue_child_create_scope_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let scope_inputs = parse_issue_child_create_scope_inputs(request.inputs(), &self.config)?;
         // Reconfirm immediately before mutation instead of reusing scope-resolution
         // metadata so parent moves are caught before the create request.
         let parent_response = self
@@ -1371,9 +1372,9 @@ impl JiraProvider {
             .await?;
         let parent = parent_response.value;
         let mut upstream_duration_ms = parent_response.duration_ms;
-        ensure_authorized_project_scope(&scope_inputs.project, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&parent, &request.resource_scopes)?;
-        let mut inputs = parse_issue_child_create_inputs(&request.inputs, &self.config)?;
+        ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
+        let mut inputs = parse_issue_child_create_inputs(request.inputs(), &self.config)?;
 
         let description_provided = inputs.description.is_some();
         let audit_context = IssueChildCreateAuditContext {
@@ -1665,7 +1666,7 @@ impl JiraProvider {
             "parentProject": parent.project.as_str(),
             "descriptionProvided": description_provided,
             "verificationStatus": "matched",
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -1684,9 +1685,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let mut inputs = parse_issue_update_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let mut inputs = parse_issue_update_inputs(request.inputs(), &self.config)?;
         let attribution = if let Some(description) = inputs.description.as_mut() {
             self.apply_adf_attribution("issue.update", description, &request)?
         } else if self.attribution.capability("issue.update").is_some() {
@@ -1711,7 +1712,7 @@ impl JiraProvider {
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
         let metadata = metadata_response.value;
-        ensure_authorized_issue_metadata(&metadata, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let update_response = self
             .backend
             .update_issue(
@@ -1766,7 +1767,7 @@ impl JiraProvider {
             "summaryChanged": summary_changed,
             "descriptionChanged": description_changed,
             "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -1792,14 +1793,14 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_issue_parent_set_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_issue_parent_set_inputs(request.inputs(), &self.config)?;
         let (issue, parent, mut upstream_duration_ms) = self
             .confirm_parent_set_issue_metadata(&inputs, lookup_credential)
             .await?;
-        ensure_authorized_issue_metadata(&issue, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&parent, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&issue, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
 
         let update_response = self
             .backend
@@ -1909,7 +1910,7 @@ impl JiraProvider {
                 "parentIssueKey": parent.key.as_str(),
                 "parentProject": parent.project.as_str(),
                 "verificationStatus": "matched",
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(update_response.status),
@@ -1922,14 +1923,14 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_issue_dependency_add_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_issue_dependency_add_inputs(request.inputs(), &self.config)?;
         let (blocking, blocked, mut upstream_duration_ms) = self
             .confirm_dependency_issue_metadata(&inputs, lookup_credential)
             .await?;
-        ensure_authorized_issue_metadata(&blocking, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&blocked, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&blocking, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&blocked, request.resource_scopes()?)?;
 
         let link_types_response = self
             .backend
@@ -2038,7 +2039,7 @@ impl JiraProvider {
                 "blockedIssueKey": blocked.key.as_str(),
                 "blockedProject": blocked.project.as_str(),
                 "verificationStatus": "matched",
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(create_response.status),
@@ -2051,13 +2052,13 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = request.execution.static_credential().ok_or_else(|| {
+        let credential = request.execution().static_credential().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "selected credential material is unavailable",
             )
         })?;
-        let inputs = parse_search_inputs(&request.inputs)?;
+        let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_projects(&inputs)?;
         let authorization = search_authorization(&request)?;
         let effective_scope = effective_search_scope(&authorization, &requested)?;
@@ -2065,7 +2066,7 @@ impl JiraProvider {
             &inputs.query,
             &effective_scope,
             &self.config.search,
-            &authorization.credential_mode,
+            request.credential_mode(),
         )?;
         let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
@@ -2140,7 +2141,7 @@ impl JiraProvider {
                 "sortFields": query.sort_fields,
                 "maxResults": max_results,
                 "resultCount": response.value.issues.len(),
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2160,9 +2161,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_list_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2215,7 +2216,7 @@ impl JiraProvider {
                 "maxResults": list_response.value.max_results,
                 "orderBy": inputs.order_by,
                 "commentCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(list_response.status),
@@ -2232,9 +2233,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_view_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2261,7 +2262,7 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": response.value.id,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2278,10 +2279,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.add")?;
-        let mut inputs = parse_comment_add_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_add_inputs(request.inputs(), &self.config)?;
         let attribution = self.apply_adf_attribution("comment.add", &mut inputs.body, &request)?;
         finalize_jira_content(
             &inputs.body,
@@ -2323,7 +2324,7 @@ impl JiraProvider {
             "project": metadata.project,
             "commentId": response.value.id,
             "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -2346,10 +2347,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.reply")?;
-        let mut inputs = parse_comment_reply_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_reply_inputs(request.inputs(), &self.config)?;
         let requested_parent_comment_id = inputs.parent_comment_id.clone();
         let attribution =
             self.apply_adf_attribution("comment.reply", &mut inputs.body, &request)?;
@@ -2422,7 +2423,7 @@ impl JiraProvider {
             "requestedParentCommentId": requested_parent_comment_id,
             "parentCommentId": effective_parent_comment_id,
             "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -2446,10 +2447,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.update")?;
-        let mut inputs = parse_comment_update_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_update_inputs(request.inputs(), &self.config)?;
         let attribution =
             self.apply_adf_attribution("comment.update", &mut inputs.body, &request)?;
         finalize_jira_content(
@@ -2509,7 +2510,7 @@ impl JiraProvider {
             "visibilityMode": inputs.visibility_mode.audit_value(),
             "visibilityRestricted": visibility_restricted,
             "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
@@ -2532,9 +2533,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_view_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2560,7 +2561,7 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2577,10 +2578,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.list", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.list", request.inputs(), &self.config)?;
         let (metadata, proof_response, metadata_duration_ms) = self
             .confirm_comment_membership(
                 &inputs.locator,
@@ -2620,7 +2621,7 @@ impl JiraProvider {
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2639,10 +2640,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.get", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.get", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "propertyKey is required")
         })?;
@@ -2677,7 +2678,7 @@ impl JiraProvider {
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2697,10 +2698,10 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.set", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.set", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "propertyKey is required")
         })?;
@@ -2739,7 +2740,7 @@ impl JiraProvider {
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2759,11 +2760,11 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs = parse_comment_property_inputs(
             "comment.property.delete",
-            &request.inputs,
+            request.inputs(),
             &self.config,
         )?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
@@ -2800,7 +2801,7 @@ impl JiraProvider {
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(response.status),
@@ -2820,11 +2821,11 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_add_inputs(&request.inputs)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_add_inputs(request.inputs())?;
         let metadata_response =
-            match ProviderState::optional::<JiraIssuePreflight>(request.state.as_ref())? {
+            match ProviderState::optional::<JiraIssuePreflight>(request.state())? {
                 Some(preflight) => JiraBackendResponse {
                     value: preflight.metadata.clone(),
                     status: preflight.upstream_status,
@@ -2838,7 +2839,7 @@ impl JiraProvider {
         let metadata = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
-            &request.body_parts,
+            request.body_parts(),
             &self.config.attachments,
         )?;
         let mut successes = Vec::new();
@@ -2916,7 +2917,7 @@ impl JiraProvider {
                 "successCount": 0,
                 "failureCount": failures.len(),
                 "attachments": attachment_audit,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })));
         }
@@ -2942,7 +2943,7 @@ impl JiraProvider {
             "successCount": successes.len(),
             "failureCount": failures.len(),
             "attachments": attachment_audit,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         let object_ids = json!({
@@ -2987,9 +2988,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_download_inputs(&request.inputs)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_download_inputs(request.inputs())?;
         let metadata = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
             .await?
@@ -3050,7 +3051,7 @@ impl JiraProvider {
             "contentType": content_type,
             "metadataContentType": attachment.content_type,
             "size": downloaded_size,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         if let Some(sha256) = result.get("sha256").cloned() {
@@ -3074,9 +3075,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_list_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
             .issue_metadata(&inputs.locator.issue_key, lookup_credential)
@@ -3138,7 +3139,7 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "attachmentCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status: Some(list_response.status),
@@ -3155,9 +3156,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_verify_inputs(&request.inputs)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_verify_inputs(request.inputs())?;
         let metadata_response = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
             .await?;
@@ -3240,7 +3241,7 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "checked": checked,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })),
             upstream_status,
@@ -4996,10 +4997,8 @@ fn parse_verify_inputs(inputs: &Value) -> Result<VerifyInputs, ProviderError> {
     Ok(parsed)
 }
 
-fn invocation_credential(
-    request: &ProviderInvocation,
-) -> Result<&ExecutionCredential, ProviderError> {
-    request.execution.static_credential().ok_or_else(|| {
+fn invocation_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
+    request.execution().static_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential material is unavailable",
@@ -5007,8 +5006,8 @@ fn invocation_credential(
     })
 }
 
-fn lookup_credential(request: &ProviderInvocation) -> Result<&ExecutionCredential, ProviderError> {
-    request.lookup_credential.as_ref().ok_or_else(|| {
+fn lookup_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
+    request.lookup_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "lookup credential material is unavailable",
@@ -5198,7 +5197,7 @@ fn issue_create_failure_audit_partial(
         "issueTypeId": context.issue_type_id,
         "descriptionProvided": context.description_provided,
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     });
     if let Some(issue_id) = &created.id {
@@ -5267,7 +5266,7 @@ fn issue_child_create_failure_audit_partial(
         "descriptionProvided": context.description_provided,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     });
     if let Some(issue_id) = &created.id {
@@ -5371,7 +5370,7 @@ fn issue_parent_set_failure_audit(
         "parentProject": parent.project,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     })
 }
@@ -5413,7 +5412,7 @@ fn issue_dependency_failure_audit(
         "blockedProject": blocked.project,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     })
 }
@@ -5725,7 +5724,7 @@ fn verification_mismatch_error(
         "status": "mismatch",
         "checked": checked,
         "mismatch": mismatch,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     }))
     .with_object_ids(json!({

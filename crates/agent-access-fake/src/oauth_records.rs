@@ -355,8 +355,8 @@ impl Provider for OAuthRecordsProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.local_scopes(&request.action, &request.inputs)?;
-        let delegated = request.execution.delegated().ok_or_else(|| {
+        self.local_scopes(request.action(), request.inputs())?;
+        let delegated = request.execution().delegated().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "OAuth records need the caller's delegated OAuth connection",
@@ -365,19 +365,19 @@ impl Provider for OAuthRecordsProvider {
         let mut url = self
             .client
             .base()
-            .join(match request.action.as_str() {
+            .join(match request.action() {
                 "account.view" => "me",
                 _ => "api/records",
             })
             .map_err(|_| ProviderError::error(ReasonCode::InputInvalid, "Invalid records route"))?;
-        if request.action == "record.view" {
+        if request.action() == "record.view" {
             url.path_segments_mut()
                 .map_err(|_| {
                     ProviderError::error(ReasonCode::InputInvalid, "Invalid records route")
                 })?
-                .push(request.inputs["id"].as_str().unwrap());
+                .push(request.inputs()["id"].as_str().unwrap());
         }
-        if let Some(collection) = request.inputs.get("collection").and_then(Value::as_str) {
+        if let Some(collection) = request.inputs().get("collection").and_then(Value::as_str) {
             url.query_pairs_mut().append_pair("collection", collection);
         }
         let started = Instant::now();
@@ -392,7 +392,7 @@ impl Provider for OAuthRecordsProvider {
         Ok(ProviderResult {
             result,
             stream: None,
-            audit: Some(json!({"provider":"oauth_stub","operation":request.action})),
+            audit: Some(json!({"provider":"oauth_stub","operation":request.action()})),
             upstream_status: Some(status),
             upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
             object_ids: None,

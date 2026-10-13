@@ -28,9 +28,9 @@ use agent_access_provider::test_support::{
     credential_token, credential_username, install_trace_capture,
 };
 use agent_access_provider::{
-    ActionDescriptor, BROKER_REQUEST_ID_HEADER, BodyAdmission, BrokerBodyPartSpec,
+    ActionDescriptor, AdmittedRequest, BROKER_REQUEST_ID_HEADER, BodyAdmission, BrokerBodyPartSpec,
     CredentialDescriptor, GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError,
-    ProviderInvocation, ProviderResult, ProviderResultStream, REQUEST_ID_HEADER,
+    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, REQUEST_ID_HEADER,
     RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, ResourceSelector, ResourceType,
     ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface, StateDisposition,
     attachment_upload_plan,
@@ -15019,13 +15019,19 @@ impl Provider for TestJiraParentInvokeProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("service-token")
         );
-        assert_eq!(request.resource_scopes["project"], vec!["PROJ".to_string()]);
-        if request.action == "issue.child.create" {
+        assert_eq!(
+            request.resource_scopes().unwrap()["project"],
+            vec!["PROJ".to_string()]
+        );
+        if request.action() == "issue.child.create" {
             assert_eq!(
-                request.resource_scopes["issue"],
+                request.resource_scopes().unwrap()["issue"],
                 vec!["PROJ-100".to_string()]
             );
             return Ok(ProviderResult {
@@ -15066,7 +15072,7 @@ impl Provider for TestJiraParentInvokeProvider {
             });
         }
         assert_eq!(
-            request.resource_scopes["issue"],
+            request.resource_scopes().unwrap()["issue"],
             vec!["PROJ-2".to_string(), "PROJ-100".to_string()]
         );
         Ok(ProviderResult {
@@ -15169,10 +15175,10 @@ impl Provider for TestJiraReadPresentationProvider {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         let safe_audit = json!({
             "provider": "jira",
-            "operation": request.action,
+            "operation": request.action(),
             "project": "PROJ"
         });
-        if request.action == "verify" {
+        if request.action() == "verify" {
             return Err(ProviderError::allow_with_result(
                 ReasonCode::VerificationMismatch,
                 "Jira verification mismatch",
@@ -15189,7 +15195,7 @@ impl Provider for TestJiraReadPresentationProvider {
             .with_audit(safe_audit)
             .with_object_ids(json!({ "issueKey": "PROJ-7" })));
         }
-        assert_eq!(request.action, "issue.view");
+        assert_eq!(request.action(), "issue.view");
         Ok(ProviderResult {
             result: json!({
                 "id": "10007",
@@ -15281,13 +15287,16 @@ impl Provider for TestJiraNormalizedWriteProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert_eq!(request.action, "issue.create");
-        assert_eq!(request.inputs["contentFormat"], "markdown");
+        assert_eq!(request.action(), "issue.create");
+        assert_eq!(request.inputs()["contentFormat"], "markdown");
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("service-token")
         );
-        let source = request.inputs["content"].as_str().unwrap();
+        let source = request.inputs()["content"].as_str().unwrap();
         if source == JIRA_WRITE_INVALID_SOURCE_SENTINEL {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
@@ -15402,13 +15411,16 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert_eq!(request.action, "page.create");
-        assert_eq!(request.inputs["contentFormat"], "markdown");
+        assert_eq!(request.action(), "page.create");
+        assert_eq!(request.inputs()["contentFormat"], "markdown");
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("service-token")
         );
-        let source = request.inputs["content"].as_str().unwrap();
+        let source = request.inputs()["content"].as_str().unwrap();
         if source.len() > 128 {
             assert!(source.contains(CONFLUENCE_WRITE_OVERSIZED_SOURCE_SENTINEL));
             return Err(ProviderError::deny(
@@ -15515,13 +15527,16 @@ impl Provider for TestGitlabNormalizedWriteProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert_eq!(request.action, "issue.create");
-        assert_eq!(request.inputs["contentFormat"], "plain_text");
+        assert_eq!(request.action(), "issue.create");
+        assert_eq!(request.inputs()["contentFormat"], "plain_text");
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("service-token")
         );
-        let source = request.inputs["content"].as_str().unwrap();
+        let source = request.inputs()["content"].as_str().unwrap();
         if source.len() > 128 {
             assert!(source.contains(GITLAB_WRITE_OVERSIZED_SOURCE_SENTINEL));
             return Err(ProviderError::deny(
@@ -15643,12 +15658,15 @@ impl Provider for TestGitlabReviewFailureProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert_eq!(request.action, "merge_request.discussion.inline.add");
+        assert_eq!(request.action(), "merge_request.discussion.inline.add");
         assert_eq!(
-            request.execution.static_credential().map(credential_token),
+            request
+                .execution()
+                .static_credential()
+                .map(credential_token),
             Some("service-token")
         );
-        match request.inputs["content"].as_str().unwrap() {
+        match request.inputs()["content"].as_str().unwrap() {
             GITLAB_REVIEW_MUTATION_SECRET_SENTINEL => Err(ProviderError::error(
                 ReasonCode::MutationVerificationFailed,
                 "upstream mutation could not be fully verified",
@@ -15741,9 +15759,9 @@ impl Provider for TestGitlabSuggestionApplyProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert_eq!(request.action, "merge_request.suggestion.apply");
+        assert_eq!(request.action(), "merge_request.suggestion.apply");
         assert_eq!(
-            request.inputs["commitMessage"],
+            request.inputs()["commitMessage"],
             GITLAB_SUGGESTION_COMMIT_SECRET_SENTINEL
         );
         Ok(ProviderResult {
@@ -16047,11 +16065,12 @@ impl Provider for TestMultipartProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &ProviderInvocation,
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
-        if request.action == "attachment.add" {
+        if request.action() == "attachment.add" {
             let attachments = request
-                .inputs
+                .inputs()
                 .get("attachments")
                 .and_then(Value::as_array)
                 .ok_or_else(|| {
@@ -16126,7 +16145,7 @@ impl Provider for TestMultipartProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let part = request.body_parts.first().ok_or_else(|| {
+        let part = request.body_parts().first().ok_or_else(|| {
             ProviderError::deny(ReasonCode::BodyMalformed, "attachment file part is missing")
         })?;
         let path = part.temp_file_path().ok_or_else(|| {
@@ -16240,7 +16259,8 @@ impl Provider for TestDownloadProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         let project = request
-            .resource_scopes
+            .resource_scopes()
+            .unwrap()
             .get("project")
             .and_then(|values| values.first())
             .cloned()

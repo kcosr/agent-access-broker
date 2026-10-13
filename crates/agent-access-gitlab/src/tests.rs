@@ -382,21 +382,23 @@ async fn project_upload_streams_html_with_selected_credential_and_sanitizes_audi
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
         provider
-            .authorize_body_parts(&request)
+            .authorize_body_parts(request.admitted(), request.state())
             .await
             .unwrap()
             .part_specs()[0]
             .name,
         "session"
     );
-    request.body_parts.push(BrokerBodyPart::from_temp_file(
-        part.name.clone(),
-        part.file_name.clone(),
-        part.content_type.clone(),
-        temp_path.clone(),
-        part.size(),
-        part.sha256_hex(),
-    ));
+    request = InvocationBuilder::from(request)
+        .body_part(BrokerBodyPart::from_temp_file(
+            part.name.clone(),
+            part.file_name.clone(),
+            part.content_type.clone(),
+            temp_path.clone(),
+            part.size(),
+            part.sha256_hex(),
+        ))
+        .build();
     let result = provider.invoke(request).await.unwrap();
     assert_eq!(
         result.result["upload"]["markdown"],
@@ -446,13 +448,13 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
         provider
-            .authorize_body_parts(&request)
+            .authorize_body_parts(request.admitted(), request.state())
             .await
             .unwrap_err()
             .reason_code,
         ReasonCode::ScopeUnresolved
     );
-    request.body_parts.push(part);
+    request = InvocationBuilder::from(request).body_part(part).build();
     assert_eq!(
         provider.invoke(request).await.unwrap_err().reason_code,
         ReasonCode::ScopeUnresolved
@@ -968,7 +970,9 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
     );
 
     let mut changed_request = request.clone();
-    changed_request.action = "merge_request.search".to_string();
+    changed_request = InvocationBuilder::from(changed_request)
+        .action("merge_request.search")
+        .build();
     assert!(
         decode(
             &changed_request,
@@ -981,7 +985,9 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
     let mut changed_principal = request.clone();
-    changed_principal.identity.principal = "agent-2".to_string();
+    changed_principal = InvocationBuilder::from(changed_principal)
+        .principal("agent-2")
+        .build();
     assert!(
         decode(
             &changed_principal,
@@ -994,7 +1000,9 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
     let mut changed_mode = request.clone();
-    changed_mode.credential_mode = CredentialMode::PerUser;
+    changed_mode = InvocationBuilder::from(changed_mode)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(
         decode(
             &changed_mode,
@@ -4747,7 +4755,9 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         })
     );
     let mut per_user = service.clone();
-    per_user.credential_mode = CredentialMode::PerUser;
+    per_user = InvocationBuilder::from(per_user)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert_eq!(
         gitlab_review_context(&per_user, &actor).unwrap().1,
         json!({

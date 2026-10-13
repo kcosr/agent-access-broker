@@ -164,7 +164,7 @@ impl BrokerRuntime {
                         )),
                     )
                 } else {
-                    let body_parts = std::mem::take(&mut prepared.invocation.body_parts);
+                    let body_parts = std::mem::take(&mut prepared.body_parts);
                     let finalization = ProviderFinalizationContext::new(control.inner.deadline);
                     let execution = AssertUnwindSafe(with_provider_finalization(
                         finalization.clone(),

@@ -278,21 +278,21 @@ impl Provider for OpenApiProvider {
         Ok(ScopeResolution::no_resources())
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if request.service != self.definition.service
-            || !request.resource_scopes.is_empty()
-            || !request.body_parts.is_empty()
-            || request.execution.delegated().is_some()
+        if request.service() != self.definition.service
+            || !matches!(request.authority(), InvocationAuthority::ActionOnly)
+            || !request.body_parts().is_empty()
+            || request.execution().delegated().is_some()
         {
             return Err(input_error());
         }
-        let action = self.actions.get(&request.action).ok_or_else(input_error)?;
-        let (url, mut headers) = action.request(&self.endpoint, &request.inputs)?;
+        let action = self.actions.get(request.action()).ok_or_else(input_error)?;
+        let (url, mut headers) = action.request(&self.endpoint, request.inputs())?;
         let binding = self
             .definition
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode.as_str()
+                binding.owner_mode.as_str() == request.credential_mode().as_str()
                     && binding.is_supported()
                     && binding.mechanism == ImportedAuthMechanism::StaticToken
             })
@@ -300,7 +300,7 @@ impl Provider for OpenApiProvider {
         headers.extend(auth(
             &binding.delivery,
             request
-                .execution
+                .execution()
                 .static_credential()
                 .ok_or_else(credential_error)?,
         )?);
@@ -320,7 +320,7 @@ impl Provider for OpenApiProvider {
         if !accepted_media.is_empty() {
             upstream = upstream.header("Accept", accepted_media);
         }
-        if let Some(body) = request.inputs.get("body") {
+        if let Some(body) = request.inputs().get("body") {
             upstream = upstream.json(body);
         }
         let started = Instant::now();
@@ -420,7 +420,7 @@ impl Provider for OpenApiProvider {
                 ))
             });
         let elapsed = started.elapsed().as_millis() as u64;
-        let audit = json!({"adapterKind":"openapi_http","method":action.plan.method,"pathTemplate":action.plan.path,"credentialMode":request.credential_mode,"operationDispatched":dispatched});
+        let audit = json!({"adapterKind":"openapi_http","method":action.plan.method,"pathTemplate":action.plan.path,"credentialMode":request.credential_mode(),"operationDispatched":dispatched});
         match outcome {
             Ok(mut result) => {
                 if !action.definition.read_only {

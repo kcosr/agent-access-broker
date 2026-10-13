@@ -9,6 +9,9 @@ use wiremock::{
 struct Lease;
 #[async_trait]
 impl DelegatedLease for Lease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("gmail-test-binding")
+    }
     fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
         Ok(())
     }

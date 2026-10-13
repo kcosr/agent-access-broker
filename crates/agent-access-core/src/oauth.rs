@@ -3734,6 +3734,99 @@ pub(crate) mod tests {
         assert_eq!(revoked.reason_code, ReasonCode::CredentialInvalid);
     }
 
+    #[tokio::test]
+    async fn delegated_binding_identity_survives_refresh_and_changes_on_reconnect() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        successive_refreshes(&server).await;
+        let credential =
+            ManagedOAuthLease::acquire(manager.clone(), "records".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        let identity = credential.binding_identity();
+        assert_eq!(format!("{identity:?}"), "DelegatedBindingId(<redacted>)");
+
+        // Routine refresh by another invocation and this invocation's own
+        // recovery keep the binding.
+        expire(&manager);
+        manager.acquire("user", &binding()).await.unwrap();
+        credential.revalidate().await.unwrap();
+        assert_eq!(credential.binding_identity(), identity);
+        credential.recover_after_unauthorized().await.unwrap();
+        assert_eq!(credential.binding_identity(), identity);
+
+        // Another service lent the same connection is another binding.
+        let other_service =
+            ManagedOAuthLease::acquire(manager.clone(), "other".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        assert_ne!(other_service.binding_identity(), identity);
+
+        // A disconnect and new consent create a new connection and binding.
+        manager.disconnect("user", "stub").await.unwrap();
+        server.reset().await;
+        connected(&manager, &server).await;
+        let reconnected =
+            ManagedOAuthLease::acquire(manager.clone(), "records".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        assert_ne!(reconnected.binding_identity(), identity);
+        assert!(credential.revalidate().await.is_err());
+    }
+
+    #[test]
+    fn delegated_binding_identity_covers_binding_fields_but_not_access() {
+        let lease = OAuthLease {
+            token: "access-token".into(),
+            owner: "user".into(),
+            binding: binding(),
+            config_fingerprint: "fingerprint".into(),
+            generation: "generation".into(),
+            connection_id: "connection".into(),
+            access_version: "version-1".into(),
+            target: "target".into(),
+            audience: "audience".into(),
+            expires_at: 100,
+        };
+        let identity = lease::delegated_binding_identity("records", &lease);
+        let refreshed = OAuthLease {
+            token: "renewed-token".into(),
+            access_version: "version-2".into(),
+            expires_at: 200,
+            ..lease.clone()
+        };
+        assert_eq!(
+            lease::delegated_binding_identity("records", &refreshed),
+            identity
+        );
+        let changed = |change: fn(&mut OAuthLease)| {
+            let mut changed = lease.clone();
+            change(&mut changed);
+            lease::delegated_binding_identity("records", &changed)
+        };
+        for other in [
+            changed(|lease| lease.owner = "other-user".into()),
+            changed(|lease| lease.binding.registration = "other-registration".into()),
+            changed(|lease| lease.binding.permission_profile = "write".into()),
+            changed(|lease| lease.config_fingerprint = "other-fingerprint".into()),
+            changed(|lease| lease.generation = "other-generation".into()),
+            changed(|lease| lease.connection_id = "other-connection".into()),
+            lease::delegated_binding_identity("other-service", &lease),
+        ] {
+            assert_ne!(other, identity);
+        }
+        // Length delimiting keeps adjacent fields from running together:
+        // "records" + "user" and "recordsu" + "ser" concatenate identically.
+        let shifted = OAuthLease {
+            owner: "ser".into(),
+            ..lease.clone()
+        };
+        assert_ne!(
+            lease::delegated_binding_identity("recordsu", &shifted),
+            identity
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_is_single_flight_and_survives_waiter_cancellation() {
         let (_dir, _store, _ring, manager, server) = fixture().await;

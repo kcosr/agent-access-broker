@@ -570,13 +570,13 @@ impl GitlabProvider {
                 "GitLab provisioning is disabled by the operator",
             ));
         }
-        let action = request.action.as_str();
+        let action = request.action();
         let mut op =
             GitlabProvisioningOperation::from_action(action).ok_or_else(provisioning_invalid)?;
         let schema = provisioning_schema(action, &self.config);
         // Validate here as well as the catalog boundary; direct provider callers must obey the same contract.
-        validate_provisioning_inputs(&request.inputs, &schema)?;
-        let inputs = &request.inputs;
+        validate_provisioning_inputs(request.inputs(), &schema)?;
+        let inputs = request.inputs();
         let user_id = inputs["userId"].as_u64().unwrap_or(0);
         let token_id = inputs["tokenId"].as_u64().unwrap_or(0);
         let mut body = json!({});

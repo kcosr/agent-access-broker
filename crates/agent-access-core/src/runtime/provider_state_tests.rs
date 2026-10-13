@@ -88,9 +88,10 @@ impl Provider for StateProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &ProviderInvocation,
+        _request: &AdmittedRequest,
+        state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
-        *self.admitted_with.lock().unwrap() = Some(describe(request.state.as_ref()));
+        *self.admitted_with.lock().unwrap() = Some(describe(state));
         let state = match self.admission {
             Admission::Keep => StateDisposition::Keep,
             Admission::Replace => {
@@ -111,10 +112,10 @@ impl Provider for StateProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let received = describe(request.state.as_ref());
+        let received = describe(request.state());
         self.invocations.lock().unwrap().push(received.clone());
         if let Requirement::AdmissionState = self.requirement {
-            ProviderState::require::<AdmissionState>(request.state.as_ref())?;
+            ProviderState::require::<AdmissionState>(request.state())?;
         }
         Ok(ProviderResult {
             result: json!({"state": received}),
@@ -233,4 +234,64 @@ async fn admitted_state_stays_with_the_provider_generation_that_created_it() {
     assert_eq!(*first.invocations.lock().unwrap(), ["admission:first"]);
     assert!(second.invocations.lock().unwrap().is_empty());
     assert!(second.admitted_with.lock().unwrap().is_none());
+}
+
+mod admitted_authority {
+    use super::super::admitted_authority;
+    use super::*;
+
+    fn action() -> ActionDescriptor {
+        ActionDescriptor::new("act", "Act", json!({"type": "object"}))
+    }
+
+    fn scopes(values: &[&str]) -> ResourceScopes {
+        BTreeMap::from([(
+            "project".to_string(),
+            values.iter().map(ToString::to_string).collect(),
+        )])
+    }
+
+    #[test]
+    fn scoped_actions_receive_their_resources_and_never_empty_authority() {
+        let scoped = action().scope("project");
+        let authority = admitted_authority(&scoped, &scopes(&["ENG"]), None).unwrap();
+        assert_eq!(authority.resources(), Some(&scopes(&["ENG"])));
+        for empty in [ResourceScopes::new(), scopes(&[])] {
+            let error = admitted_authority(&scoped, &empty, None).unwrap_err();
+            assert_eq!(error.reason_code, ReasonCode::OperationFailed);
+        }
+    }
+
+    #[test]
+    fn action_only_actions_never_inherit_resources() {
+        let authority = admitted_authority(&action(), &ResourceScopes::new(), None).unwrap();
+        assert!(matches!(authority, InvocationAuthority::ActionOnly));
+        let error = admitted_authority(&action(), &scopes(&["*"]), None).unwrap_err();
+        assert_eq!(error.reason_code, ReasonCode::OperationFailed);
+    }
+
+    #[test]
+    fn search_actions_receive_the_complete_boundary() {
+        let search = action().scope("project").search_contained();
+        let boundary = SearchAuthorization {
+            scope_type: "project".to_string(),
+            scope: SearchAuthorizationScope::AllExcept {
+                excluded_values: vec!["SECRET".to_string()],
+            },
+        };
+        // The envelope summary is lossy; the provider's authority is not.
+        let authority =
+            admitted_authority(&search, &scopes(&["*"]), Some(boundary.clone())).unwrap();
+        assert_eq!(authority.search(), Some(&boundary));
+        assert!(authority.resources().is_none());
+        assert!(admitted_authority(&search, &scopes(&["*"]), None).is_err());
+        assert!(
+            admitted_authority(
+                &action().scope("project"),
+                &scopes(&["ENG"]),
+                Some(boundary)
+            )
+            .is_err()
+        );
+    }
 }

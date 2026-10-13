@@ -531,10 +531,10 @@ impl Provider for TestConfluenceReadPresentationProvider {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         let safe_audit = json!({
             "provider": "confluence",
-            "operation": request.action,
+            "operation": request.action(),
             "space": "ENG"
         });
-        if request.action == "verify" {
+        if request.action() == "verify" {
             return Err(ProviderError::allow_with_result(
                 ReasonCode::VerificationMismatch,
                 "Confluence verification mismatch",
@@ -551,8 +551,8 @@ impl Provider for TestConfluenceReadPresentationProvider {
             .with_audit(safe_audit)
             .with_object_ids(json!({ "pageId": "1007" })));
         }
-        assert_eq!(request.action, "page.view");
-        let malformed_adf = request.inputs["pageId"] == "malformed-adf";
+        assert_eq!(request.action(), "page.view");
+        let malformed_adf = request.inputs()["pageId"] == "malformed-adf";
         let body = if malformed_adf {
             json!({
                 "atlas_doc_format": {

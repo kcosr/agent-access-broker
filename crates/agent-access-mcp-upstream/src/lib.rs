@@ -277,10 +277,10 @@ impl Provider for McpProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.validate_action_inputs(&request.action, &request.inputs)?;
-        if request.service != self.definition.service
-            || !request.resource_scopes.is_empty()
-            || !request.body_parts.is_empty()
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        if request.service() != self.definition.service
+            || !matches!(request.authority(), InvocationAuthority::ActionOnly)
+            || !request.body_parts().is_empty()
         {
             return Err(input_error());
         }
@@ -289,25 +289,25 @@ impl Provider for McpProvider {
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode.as_str()
+                binding.owner_mode.as_str() == request.credential_mode().as_str()
                     && binding.is_supported()
             })
             .ok_or_else(credential_error)?;
-        let action = self.actions.get(&request.action).ok_or_else(input_error)?;
+        let action = self.actions.get(request.action()).ok_or_else(input_error)?;
         let auth = match binding.mechanism {
-            ImportedAuthMechanism::StaticToken if request.execution.delegated().is_none() => {
+            ImportedAuthMechanism::StaticToken if request.execution().delegated().is_none() => {
                 auth_headers(
                     &self.definition,
                     &binding.delivery,
                     request
-                        .execution
+                        .execution()
                         .static_credential()
                         .ok_or_else(credential_error)?,
                     self.transport_credential.as_ref(),
                 )?
             }
             ImportedAuthMechanism::Oauth
-                if request.execution.delegated().is_some()
+                if request.execution().delegated().is_some()
                     && binding.owner_mode == ImportedCredentialMode::PerUser
                     && binding.delivery == ImportedCredentialDelivery::Bearer
                     && !self.definition.transport_auth =>
@@ -318,11 +318,11 @@ impl Provider for McpProvider {
         };
         let (modern_arguments, headers) = action
             .input
-            .arguments_and_headers(&request.inputs)
+            .arguments_and_headers(request.inputs())
             .map_err(|_| input_error())?;
         let call = CallArguments {
             name: action.name.clone(),
-            arguments: request.inputs.clone(),
+            arguments: request.inputs().clone(),
             modern_arguments,
             headers,
         };
@@ -330,7 +330,7 @@ impl Provider for McpProvider {
             self.wire.clone(),
             auth,
             request
-                .execution
+                .execution()
                 .delegated()
                 .cloned()
                 .map(|credential| (credential, self.definition.endpoint.clone())),
@@ -362,7 +362,7 @@ impl Provider for McpProvider {
         let state = state.lock().expect("wire state");
         let elapsed = started.elapsed().as_millis() as u64;
         let mut audit = json!({"adapterKind":"mcp_http", "upstreamTool":action.name,
-            "credentialMode":request.credential_mode,
+            "credentialMode":request.credential_mode(),
             "toolDispatched":state.call_dispatched});
         if let Some(version) = state.protocol_version {
             audit["protocolVersion"] = json!(version);

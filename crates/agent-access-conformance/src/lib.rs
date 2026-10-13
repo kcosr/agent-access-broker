@@ -12,12 +12,12 @@ use agent_access_provider::presentation::{
     RenderBudget, RenderContext, RenderError, RenderedBody,
 };
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BodyAdmission, BrokerBodyPart,
-    BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor, CredentialView,
-    EgressDeclaration, EgressProxyConfig, NamespaceSelectorDescriptor, Provider,
+    ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
+    BrokerBodyPart, BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor,
+    CredentialView, EgressDeclaration, EgressProxyConfig, NamespaceSelectorDescriptor, Provider,
     ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
-    ProviderStreamError, ReasonCode, ResourceAttributeDescriptor, ResourceAttributes,
-    ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ProviderState, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
+    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
     ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface,
     StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
     ValidationContext, attachment_upload_plan, complete_upstream_trace, file_upload_body,
@@ -516,7 +516,7 @@ impl ConformanceProvider {
 
     fn token(request: &ProviderInvocation) -> Result<&str, ProviderError> {
         match request
-            .execution
+            .execution()
             .static_credential()
             .map(|credential| credential.view())
         {
@@ -607,8 +607,8 @@ impl ConformanceProvider {
     /// the key from the authorized endpoint's managed entry; it never enters
     /// the result, audit, or errors.
     async fn ping(&self, request: &ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let inputs = ping_inputs(&request.inputs)?;
-        let Some(key) = request.resource_attributes.get("signingKey") else {
+        let inputs = ping_inputs(request.inputs())?;
+        let Some(key) = request.resource_attributes().get("signingKey") else {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
                 "conformance endpoint has no signing key configured",
@@ -787,9 +787,9 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
-        let inputs = upload_inputs(&request.inputs, self.max_upload_bytes)?;
+        let inputs = upload_inputs(request.inputs(), self.max_upload_bytes)?;
         let attachment = &inputs.attachments[0];
-        let [part] = request.body_parts.as_slice() else {
+        let [part] = request.body_parts() else {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "conformance.item.upload takes one file part",
@@ -922,15 +922,16 @@ impl Provider for ConformanceProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &ProviderInvocation,
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
     ) -> Result<BodyAdmission, ProviderError> {
-        if request.action != "item.upload" {
+        if request.action() != "item.upload" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "conformance action does not accept file parts",
             ));
         }
-        let inputs = upload_inputs(&request.inputs, self.max_upload_bytes)?;
+        let inputs = upload_inputs(request.inputs(), self.max_upload_bytes)?;
         let part_specs = inputs
             .attachments
             .into_iter()
@@ -946,16 +947,16 @@ impl Provider for ConformanceProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if request.action == "endpoint.ping" && self.endpoints {
+        if request.action() == "endpoint.ping" && self.endpoints {
             return self.ping(&request).await;
         }
         let item = request
-            .resource_scopes
+            .resource_scopes()?
             .get("item")
             .and_then(|items| items.first())
             .cloned()
             .ok_or_else(|| invalid("conformance item scope is missing"))?;
-        match request.action.as_str() {
+        match request.action() {
             "item.view" => self.view(&request, &item).await,
             "item.download" => self.download(&request, &item).await,
             "item.upload" => self.upload(&request, &item).await,
@@ -1049,16 +1050,18 @@ mod tests {
     const KEY: &str = "endpoint-key-sentinel-0123456789";
 
     fn ping(key: Option<&str>) -> ProviderInvocation {
-        let mut request = invocation(
+        let request = invocation(
             "endpoint.ping",
             json!({"endpoint": "alerts", "message": "hello"}),
             Vec::new(),
         );
-        request.resource_scopes = BTreeMap::from([("endpoint".into(), vec!["alerts".into()])]);
-        request.resource_attributes = key
-            .map(|key| BTreeMap::from([("signingKey".to_string(), key.to_string())]).into())
-            .unwrap_or_default();
-        request
+        InvocationBuilder::from(request)
+            .resources(BTreeMap::from([("endpoint".into(), vec!["alerts".into()])]))
+            .resource_attributes(
+                key.map(|key| BTreeMap::from([("signingKey".to_string(), key.to_string())]).into())
+                    .unwrap_or_default(),
+            )
+            .build()
     }
 
     #[tokio::test]

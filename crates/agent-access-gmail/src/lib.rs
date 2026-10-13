@@ -259,13 +259,13 @@ impl GmailProvider {
         invocation: &ProviderInvocation,
         budget: &mut RequestBudget,
     ) -> Result<Value, ProviderError> {
-        let credential = invocation.execution.delegated().ok_or_else(|| {
+        let credential = invocation.execution().delegated().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "Connect your Gmail account first",
             )
         })?;
-        let action = invocation.action.as_str();
+        let action = invocation.action();
         match action {
             "account.view" => {
                 let v = self
@@ -305,7 +305,7 @@ impl GmailProvider {
                 )
             }
             "message.search" => {
-                let inputs = &invocation.inputs;
+                let inputs = invocation.inputs();
                 let limit = inputs["maxResults"].as_u64().unwrap_or(20);
                 let mut url = self.url("messages");
                 url.query_pairs_mut()
@@ -361,7 +361,7 @@ impl GmailProvider {
             }
             _ => {
                 let (entity, verb) = action.split_once('.').ok_or_else(invalid)?;
-                let id = invocation.inputs["id"].as_str().ok_or_else(invalid)?;
+                let id = invocation.inputs()["id"].as_str().ok_or_else(invalid)?;
                 let path = format!("{}s/{id}", entity);
                 let (method, mut url, body) = match verb {
                     "view" => (Method::GET, self.url(&path), None),
@@ -410,24 +410,24 @@ impl Provider for GmailProvider {
         &self,
         invocation: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        validate_inputs(&invocation.action, &invocation.inputs)?;
+        validate_inputs(invocation.action(), invocation.inputs())?;
         let started = Instant::now();
         let mut budget = RequestBudget {
             remaining: self.max_bytes,
             last_status: None,
         };
-        let audit = json!({"provider":"gmail","operation":invocation.action});
-        let object_ids = invocation.inputs["id"].as_str().map(|id| {
+        let audit = json!({"provider":"gmail","operation":invocation.action()});
+        let object_ids = invocation.inputs()["id"].as_str().map(|id| {
             let entity = invocation
-                .action
+                .action()
                 .split_once('.')
                 .expect("validated action")
                 .0;
             json!({entity:id})
         });
-        let mutation = invocation.action.ends_with(".archive")
-            || invocation.action.ends_with(".trash")
-            || invocation.action.ends_with(".restore");
+        let mutation = invocation.action().ends_with(".archive")
+            || invocation.action().ends_with(".trash")
+            || invocation.action().ends_with(".restore");
         let result = tokio::time::timeout(DEADLINE, self.execute(&invocation, &mut budget))
             .await
             .unwrap_or_else(|_| Err(ProviderError::error(

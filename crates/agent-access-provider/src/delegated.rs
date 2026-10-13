@@ -33,11 +33,41 @@ impl std::fmt::Debug for DelegatedAccess {
     }
 }
 
+/// Opaque identity of the delegated binding a lease was acquired under: the
+/// service, owner, OAuth registration, permission profile, configuration,
+/// connection slot generation and connection. Routine refresh keeps it; new
+/// consent, replacement and reconnecting change it. It supports equality and
+/// a digest for binding signed tokens to the binding, not store access, and
+/// never shows its value in Debug output.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DelegatedBindingId([u8; 32]);
+
+impl DelegatedBindingId {
+    pub(crate) fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DelegatedBindingId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DelegatedBindingId(<redacted>)")
+    }
+}
+
 /// The host side of a delegated credential, lent to one invocation.
 #[async_trait]
 pub trait DelegatedLease: Send + Sync + 'static {
     /// The access the invocation holds now.
     fn access(&self) -> DelegatedAccess;
+
+    /// The binding the lease was acquired under. It never changes for the
+    /// lease's lifetime: access that would belong to another binding fails
+    /// instead of replacing the held access.
+    fn binding_identity(&self) -> DelegatedBindingId;
 
     /// Confirms the held access is still authorized, renewing it when it has
     /// gone stale. The runtime calls this immediately before dispatch.
@@ -65,6 +95,10 @@ impl DelegatedCredential {
         self.0.access()
     }
 
+    pub fn binding_identity(&self) -> DelegatedBindingId {
+        self.0.binding_identity()
+    }
+
     pub async fn revalidate(&self) -> Result<(), ProviderError> {
         self.0.revalidate().await
     }
@@ -75,12 +109,6 @@ impl DelegatedCredential {
 
     pub async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
         self.0.recover_after_unauthorized().await
-    }
-}
-
-impl PartialEq for DelegatedCredential {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 

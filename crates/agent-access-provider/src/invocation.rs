@@ -1,10 +1,6 @@
-use crate::{
-    CorrelationContext, CredentialMode, ExecutionAccess, ExecutionCredential, ResourceScopes,
-};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -108,8 +104,7 @@ pub struct BrokerBodyPartSpec {
 
 /// The caller an invocation runs for. Backends see only the principal and
 /// whether it authenticated, never the broker's full identity context.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvocationIdentity {
     pub principal: String,
     pub authenticated: bool,
@@ -124,53 +119,14 @@ impl InvocationIdentity {
     }
 }
 
-/// One admitted invocation. It never serializes: host request and response
-/// DTOs stay separate, so authority can never be silently omitted.
-#[derive(Debug, Clone)]
-pub struct ProviderInvocation {
-    /// Execution context selected and authorized by the host, never a tool input.
-    pub execution_context: String,
-    pub identity: InvocationIdentity,
-    pub service: String,
-    pub action: String,
-    pub correlation: CorrelationContext,
-    pub inputs: Value,
-    pub body_parts: Vec<BrokerBodyPart>,
-    pub resource_scopes: ResourceScopes,
-    /// Only the admitted exact resource's private attributes, resolved by the host.
-    pub resource_attributes: crate::ResourceAttributes,
-    pub credential_mode: CredentialMode,
-    /// Execution material the host selected: none, static, or a delegated
-    /// lease for services whose descriptor accepts one.
-    pub execution: ExecutionAccess,
-    /// Static lookup material, never a stand-in for execution material.
-    pub lookup_credential: Option<ExecutionCredential>,
-    /// Provider-owned state carried from scope resolution or body-part
-    /// admission to dispatch. The host never inspects or changes it.
-    pub state: Option<crate::ProviderState>,
-    /// Broker-admitted search boundary for search-contained actions.
-    pub search_authorization: Option<SearchAuthorization>,
-}
-
 /// Search boundary handed to a provider for a search-contained action. The
 /// provider must constrain its upstream query and check every result against
-/// this scope.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+/// this scope. Its credential mode is the admitted context's; there is no
+/// second copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchAuthorization {
     pub scope_type: String,
     pub scope: SearchAuthorizationScope,
-    pub credential_mode: String,
-}
-
-impl SearchAuthorization {
-    pub fn resource_scopes(&self) -> ResourceScopes {
-        let values = match &self.scope {
-            SearchAuthorizationScope::Finite { values } => values.clone(),
-            SearchAuthorizationScope::AllExcept { .. } => vec!["*".to_string()],
-        };
-        BTreeMap::from([(self.scope_type.clone(), values)])
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -286,7 +242,10 @@ impl SearchAuthorizationScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ProviderState, StaticCredentialKind};
+    use crate::{
+        AdmittedContext, AdmittedRequest, DelegatedBindingId, ExecutionAccess, ExecutionCredential,
+        ProviderInvocation, ProviderState, StaticCredentialKind,
+    };
 
     /// Fails to compile when `$ty` implements serde's `Serialize` or
     /// `DeserializeOwned`: both impls make the item lookup ambiguous.
@@ -315,6 +274,11 @@ mod tests {
     #[test]
     fn live_invocation_values_do_not_serialize() {
         assert_not_serde!(ProviderInvocation);
+        assert_not_serde!(AdmittedRequest);
+        assert_not_serde!(AdmittedContext);
+        assert_not_serde!(InvocationIdentity);
+        assert_not_serde!(SearchAuthorization);
+        assert_not_serde!(DelegatedBindingId);
         assert_not_serde!(ExecutionCredential);
         assert_not_serde!(ExecutionAccess);
         assert_not_serde!(crate::DelegatedCredential);

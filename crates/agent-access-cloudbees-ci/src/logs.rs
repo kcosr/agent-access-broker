@@ -469,12 +469,19 @@ impl CloudbeesCiProvider {
         deadline: tokio::time::Instant,
     ) -> Result<ProviderResult, ProviderError> {
         let options = input.log.as_ref().expect("parsed log input");
-        let binding = hash(&json!({"service":request.service,"action":request.action,
-            "principal":request.identity,"credentialMode":request.credential_mode,
-            "context":request.execution_context,"provider":self.log_fingerprint,
+        // The principal entry keeps the identity's established JSON shape, so
+        // existing cursors keep their binding hash.
+        let identity = request.identity();
+        let principal =
+            json!({"principal":identity.principal,"authenticated":identity.authenticated});
+        let binding = hash(
+            &json!({"service":request.service(),"action":request.action(),
+            "principal":principal,"credentialMode":request.credential_mode(),
+            "context":request.execution_context(),"provider":self.log_fingerprint,
             "controller":input.controller,"job":input.job,"build":input.build_number,
             "mode":options.mode,"query":options.query.map(|q| hash(&q)),
-            "maxBytes":options.max_bytes,"maxMatches":options.max_matches}));
+            "maxBytes":options.max_bytes,"maxMatches":options.max_matches}),
+        );
         let cursor = options
             .cursor
             .map(|c| decode_cursor(&self.log_signer, c, &binding, self.log_scan_limit))
@@ -797,6 +804,7 @@ mod tests {
     use super::*;
     use crate::tests::{invocation, provider};
     use agent_access_provider::CredentialMode;
+    use agent_access_provider::test_support::InvocationBuilder;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1222,13 +1230,15 @@ mod tests {
         let mut input = inputs("head");
         input["cursor"] = json!(token);
         let mut wrong = invocation("build.log.read", input.clone());
-        wrong.identity.principal = "other".into();
+        wrong = InvocationBuilder::from(wrong).principal("other").build();
         assert_eq!(
             ci.invoke(wrong).await.unwrap_err().reason_code,
             ReasonCode::InputInvalid
         );
         let mut wrong = invocation("build.log.read", input.clone());
-        wrong.execution_context = "external".into();
+        wrong = InvocationBuilder::from(wrong)
+            .execution_context("external")
+            .build();
         assert_eq!(
             ci.invoke(wrong).await.unwrap_err().reason_code,
             ReasonCode::InputInvalid
@@ -1265,7 +1275,9 @@ mod tests {
             );
         }
         let mut wrong = invocation("build.log.read", input.clone());
-        wrong.credential_mode = CredentialMode::PerUser;
+        wrong = InvocationBuilder::from(wrong)
+            .credential_mode(CredentialMode::PerUser)
+            .build();
         assert_eq!(
             ci.invoke(wrong).await.unwrap_err().reason_code,
             ReasonCode::InputInvalid

@@ -354,13 +354,21 @@ async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
         assert!(provider.invoke(invocation(value)).await.is_err());
     }
     let mut call = invocation(input());
-    call.credential_mode = CredentialMode::PerUser;
-    call.execution = ExecutionAccess::None;
+    call = InvocationBuilder::from(call)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    call = InvocationBuilder::from(call)
+        .execution(ExecutionAccess::None)
+        .build();
     assert!(provider.invoke(call).await.is_err());
     assert_eq!(fixture.call_count(), 0);
     let mut call = invocation(input());
-    call.credential_mode = CredentialMode::PerUser;
-    call.execution = ExecutionAccess::Static(credential("alice-secret"));
+    call = InvocationBuilder::from(call)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    call = InvocationBuilder::from(call)
+        .execution(ExecutionAccess::Static(credential("alice-secret")))
+        .build();
     provider.invoke(call).await.unwrap();
     assert_eq!(
         fixture.state.calls.lock().unwrap()[0].headers["authorization"],

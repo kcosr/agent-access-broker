@@ -390,16 +390,26 @@ pub(crate) fn search_scope_boundary(scope: &SearchAuthorizationScope) -> Resourc
 }
 
 impl SearchAuthorizationPlan {
+    /// The provider's view: the scope type and the complete finite or
+    /// all-except boundary. The credential mode travels in the admitted
+    /// context, not here.
     pub fn authorization(&self) -> SearchAuthorization {
         SearchAuthorization {
             scope_type: self.scope_type.clone(),
             scope: self.scope.clone(),
-            credential_mode: self.credential_mode.clone(),
         }
     }
 
-    pub fn resource_scopes(&self) -> ResourceScopes {
-        self.authorization().resource_scopes()
+    /// The envelope and audit `resourceScopes` summary of the boundary:
+    /// finite values, or `["*"]` for an all-except boundary. It is lossy by
+    /// design and never reaches a provider; authorization always uses the
+    /// complete boundary.
+    pub fn resource_scope_summary(&self) -> ResourceScopes {
+        let values = match &self.scope {
+            SearchAuthorizationScope::Finite { values } => values.clone(),
+            SearchAuthorizationScope::AllExcept { .. } => vec!["*".to_string()],
+        };
+        BTreeMap::from([(self.scope_type.clone(), values)])
     }
 }
 
@@ -1521,10 +1531,17 @@ pub struct BrokerRuntime {
     config_generation: Option<u64>,
 }
 
+/// One admitted operation awaiting dispatch. It pins the provider instance
+/// that resolved and admitted it, so provider state never reaches another
+/// generation's provider.
 pub struct PreparedInvocation {
     resource_binding: Option<crate::ResourceAttributeBinding>,
     provider: Arc<dyn Provider>,
-    invocation: ProviderInvocation,
+    request: AdmittedRequest,
+    /// Body parts supplied with the invoke request itself; multipart bodies
+    /// are consumed separately after admission.
+    body_parts: Vec<BrokerBodyPart>,
+    state: Option<ProviderState>,
     response_options: agent_access_provider::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
@@ -4163,7 +4180,7 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         match self.begin_invoke(context, request).await {
             Ok(mut prepared) => {
-                let body_parts = std::mem::take(&mut prepared.invocation.body_parts);
+                let body_parts = std::mem::take(&mut prepared.body_parts);
                 self.finish_prepared_invoke_with_stream_requirement(
                     prepared,
                     body_parts,
@@ -4453,7 +4470,7 @@ impl BrokerRuntime {
                         Err(error),
                     )));
                 }
-                let scopes = search_authorization.resource_scopes();
+                let scopes = search_authorization.resource_scope_summary();
                 let matched_grant = search_authorization
                     .matched_grants
                     .first()
@@ -4634,7 +4651,7 @@ impl BrokerRuntime {
             }
         };
 
-        let (lookup_credential, credential_mode) = match self
+        let (lookup_credential, credential_mode, authority) = match self
             .resolve_lookup_credential_if_required(
                 action_descriptor.lookup,
                 &service,
@@ -4643,8 +4660,13 @@ impl BrokerRuntime {
                 &pre_scope_lookup,
             )
             .await
-            .and_then(|lookup| Ok((lookup, admitted_credential_mode(&policy.credential_mode)?)))
-        {
+            .and_then(|lookup| {
+                Ok((
+                    lookup,
+                    admitted_credential_mode(&policy.credential_mode)?,
+                    admitted_authority(&action_descriptor, &scopes, search_authorization)?,
+                ))
+            }) {
             Ok(selected) => selected,
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
@@ -4695,29 +4717,29 @@ impl BrokerRuntime {
         } else {
             None
         };
-        let invocation = ProviderInvocation {
-            execution_context: execution_context.as_str().to_owned(),
-            resource_attributes: Default::default(),
-            identity: InvocationIdentity {
-                principal: identity.principal.clone(),
-                authenticated: identity.authenticated,
+        let admitted = agent_access_provider::host::admitted_request(
+            agent_access_provider::host::AdmittedRequestParts {
+                service: service.clone(),
+                action: action.clone(),
+                execution_context: execution_context.as_str().to_owned(),
+                identity: InvocationIdentity {
+                    principal: identity.principal.clone(),
+                    authenticated: identity.authenticated,
+                },
+                correlation: correlation.clone(),
+                credential_mode,
+                authority,
+                inputs: request.inputs,
+                execution: credentials,
+                lookup_credential,
             },
-            service: service.clone(),
-            action: action.clone(),
-            correlation: correlation.clone(),
-            inputs: request.inputs,
-            body_parts: request.body_parts,
-            resource_scopes: scopes.clone(),
-            credential_mode,
-            execution: credentials,
-            lookup_credential,
-            state: provider_state,
-            search_authorization,
-        };
+        );
         Ok(PreparedInvocation {
             resource_binding,
             provider,
-            invocation,
+            request: admitted,
+            body_parts: request.body_parts,
+            state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
@@ -4744,20 +4766,20 @@ impl BrokerRuntime {
         &self,
         mut prepared: PreparedInvocation,
     ) -> Result<PreparedInvocation, Box<BrokerResponse<Value>>> {
-        let correlation = prepared.invocation.correlation.clone();
-        let service = prepared.invocation.service.clone();
-        let action = prepared.invocation.action.clone();
+        let context = prepared.request.context().clone();
         let result = with_provider_context(
-            correlation,
-            service,
-            action,
-            prepared.provider.authorize_body_parts(&prepared.invocation),
+            context.correlation().clone(),
+            context.service().to_owned(),
+            context.action().to_owned(),
+            prepared
+                .provider
+                .authorize_body_parts(&prepared.request, prepared.state.as_ref()),
         )
         .await;
         match result {
             Ok(admission) => {
                 let (body_part_specs, disposition) = admission.into_parts();
-                prepared.invocation.state = disposition.apply(prepared.invocation.state.take());
+                prepared.state = disposition.apply(prepared.state.take());
                 prepared.body_part_specs = body_part_specs;
                 Ok(prepared)
             }
@@ -4798,20 +4820,29 @@ impl BrokerRuntime {
 
     async fn execute_prepared_invoke(
         &self,
-        mut prepared: PreparedInvocation,
+        prepared: PreparedInvocation,
         body_parts: Vec<BrokerBodyPart>,
         require_stream: bool,
     ) -> (FinalizeContext, Result<ProviderResult, ProviderError>) {
-        prepared.invocation.body_parts = body_parts;
-        let correlation = prepared.invocation.correlation.clone();
-        let service = prepared.invocation.service.clone();
-        let action = prepared.invocation.action.clone();
-        let response_options = prepared.response_options;
-        let provider = prepared.provider;
-        let mut invocation = prepared.invocation;
-        let resource_binding = prepared.resource_binding;
-        let execution_context = prepared.finalize_context.execution_context.clone();
+        let PreparedInvocation {
+            resource_binding,
+            provider,
+            request,
+            body_parts: _,
+            state,
+            response_options,
+            body_part_specs: _,
+            finalize_context,
+        } = prepared;
+        let correlation = request.correlation().clone();
+        let service = request.service().to_owned();
+        let action = request.action().to_owned();
+        let execution_context = finalize_context.execution_context.clone();
+        // Staging happens before the final invocation exists: the body is
+        // already consumed, then the revision fences run and only the admitted
+        // resource's attributes are decrypted.
         let result = with_provider_context(correlation, service.clone(), action.clone(), async {
+            let mut resource_attributes = ResourceAttributes::default();
             if self
                 .action_descriptor(&service, &action)
                 .is_some_and(|descriptor| descriptor.requires_resource_attributes)
@@ -4843,11 +4874,11 @@ impl BrokerRuntime {
                         "resource configuration is not allowed by the current backend",
                     )
                 })?;
-                invocation.resource_attributes = values;
+                resource_attributes = values;
             }
             // Access lent at preparation may have been revoked, superseded, or
             // expired while the request body was admitted.
-            if let Some(delegated) = invocation.execution.delegated() {
+            if let Some(delegated) = request.execution().delegated() {
                 delegated.revalidate().await?;
             }
             if !self.imported_action_available(&service, &action) {
@@ -4856,7 +4887,14 @@ impl BrokerRuntime {
                     "imported service changed or is unavailable; repeat discovery",
                 ));
             }
-            provider.invoke(invocation).await
+            provider
+                .invoke(agent_access_provider::host::invocation(
+                    request,
+                    body_parts,
+                    resource_attributes,
+                    state,
+                ))
+                .await
         })
         .await;
         let result = result.and_then(|result| {
@@ -4884,7 +4922,7 @@ impl BrokerRuntime {
                 result,
             )
         };
-        (prepared.finalize_context, result)
+        (finalize_context, result)
     }
 
     fn action_presentation(&self, service: &str, action: &str) -> Option<ActionPresentation> {
@@ -7404,6 +7442,37 @@ fn admitted_credential_mode(mode: &str) -> Result<CredentialMode, ProviderError>
             "selected credential mode is not provisioned",
         )
     })
+}
+
+/// The exact authority an admitted action receives, from its validated
+/// contract: a search boundary for search-contained actions, the resolved
+/// resources for ordinary scoped actions, and nothing for action-only ones.
+/// Policy already required those shapes, so any mismatch fails closed.
+fn admitted_authority(
+    action: &ActionDescriptor,
+    scopes: &ResourceScopes,
+    search: Option<SearchAuthorization>,
+) -> Result<InvocationAuthority, ProviderError> {
+    let mismatch = || {
+        ProviderError::error(
+            ReasonCode::OperationFailed,
+            "admitted authority does not match the action contract",
+        )
+    };
+    match (
+        action.search_contained,
+        search,
+        action.resource_scope.as_deref(),
+    ) {
+        (true, Some(search), _) => Ok(InvocationAuthority::Search(search)),
+        (false, None, Some(scope))
+            if scopes.get(scope).is_some_and(|values| !values.is_empty()) =>
+        {
+            Ok(InvocationAuthority::Resources(scopes.clone()))
+        }
+        (false, None, None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+        _ => Err(mismatch()),
+    }
 }
 
 fn single_policy_credential_mode(candidates: &[PolicyCandidate]) -> Result<String, ProviderError> {

@@ -299,8 +299,8 @@ impl Provider for ContextProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.calls.lock().unwrap().push((
-            request.identity.principal.clone(),
-            request.execution_context.clone(),
+            request.identity().principal.clone(),
+            request.execution_context().to_owned(),
         ));
         agent_access_fake::FakeProvider.invoke(request).await
     }

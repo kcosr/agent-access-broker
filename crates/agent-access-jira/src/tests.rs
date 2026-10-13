@@ -168,10 +168,11 @@ fn expanded_jql_accepts_field_operator_groups_and_ordering() {
 
 #[test]
 fn current_user_function_requires_per_user_credential_mode() {
-    let service_error = parse_jql_query("assignee = currentUser()", "service").unwrap_err();
+    let service_error =
+        parse_jql_query("assignee = currentUser()", CredentialMode::Service).unwrap_err();
     assert_eq!(service_error.reason_code, ReasonCode::InputInvalid);
 
-    let per_user = parse_jql_query("assignee = currentUser()", "per_user").unwrap();
+    let per_user = parse_jql_query("assignee = currentUser()", CredentialMode::PerUser).unwrap();
     assert_eq!(per_user.emit(), "assignee = currentUser()");
 }
 
@@ -218,7 +219,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     let bare = build_jira_search_query(
@@ -227,7 +228,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -244,7 +245,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     let bare_reserved = build_jira_search_query(
@@ -253,7 +254,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -369,7 +370,9 @@ fn projects(jql: &str) -> BTreeSet<String> {
 }
 
 fn canonical_jql(jql: &str) -> String {
-    parse_jql_query(jql, "service").unwrap().emit()
+    parse_jql_query(jql, CredentialMode::Service)
+        .unwrap()
+        .emit()
 }
 
 fn set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
@@ -1483,14 +1486,16 @@ async fn issue_create_rejects_project_scope_mismatch_before_backend() {
     let backend = Arc::new(StubJiraBackend::default());
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let mut invocation = issue_create_invocation(json!({
+    let invocation = InvocationBuilder::from(issue_create_invocation(json!({
         "project": "PROJ",
         "issueTypeId": "10001",
         "summary": "Created issue"
-    }));
-    invocation
-        .resource_scopes
-        .insert("project".to_string(), vec!["OTHER".to_string()]);
+    })))
+    .resources(BTreeMap::from([(
+        "project".to_string(),
+        vec!["OTHER".to_string()],
+    )]))
+    .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
@@ -1536,10 +1541,12 @@ async fn issue_create_attribution_is_applied_to_description() {
         "contentFormat": "adf",
         "content": adf_text("description before attribution")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let response = provider.invoke(invocation).await.unwrap();
 
@@ -1624,10 +1631,12 @@ async fn issue_create_enforces_description_body_cap_after_attribution() {
         "contentFormat": "adf",
         "content": adf_text("x")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
@@ -1662,10 +1671,12 @@ async fn issue_child_create_attribution_is_applied_to_description() {
         "contentFormat": "adf",
         "content": adf_text("description before attribution")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let response = provider.invoke(invocation).await.unwrap();
 
@@ -1743,10 +1754,12 @@ async fn issue_child_create_enforces_description_body_cap_after_attribution() {
         "contentFormat": "adf",
         "content": adf_text("x")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
@@ -3481,10 +3494,12 @@ async fn issue_update_enforces_description_body_cap_after_attribution() {
         }),
         vec![],
     );
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
@@ -3527,10 +3542,12 @@ async fn issue_update_attribution_is_visible_in_update_readback_and_issue_view()
         }),
         vec![],
     );
-    update_invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    update_invocation = InvocationBuilder::from(update_invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let update_response = provider.invoke(update_invocation).await.unwrap();
 
@@ -3955,7 +3972,7 @@ async fn search_caps_pagination_and_rejects_out_of_scope_results() {
                     "project".to_string(),
                     vec!["PROJ".to_string()],
                 )]))
-                .search(search_preflight(["PROJ"], "service"))
+                .search(search_preflight(["PROJ"]))
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
                 .build(),
@@ -3994,7 +4011,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         let inputs =
             parse_search_inputs(&json!({"query": {"type": "jql", "value": input}})).unwrap();
         let scope = effective_search_scope(
-            &search_preflight(["PROJ", "OTHER"], "service"),
+            &search_preflight(["PROJ", "OTHER"]),
             &requested_projects(&inputs).unwrap(),
         )
         .unwrap();
@@ -4002,7 +4019,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
             &inputs.query,
             &scope,
             &SearchLimitsConfig::default(),
-            "service",
+            CredentialMode::Service,
         )
         .unwrap();
         assert_eq!(query.jql, expected);
@@ -4011,7 +4028,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         assert_eq!(query.response_scope, scope);
         assert_eq!(query.injected_scope_predicate, "project_in");
         assert!(
-            parse_jql_query(input, "service")
+            parse_jql_query(input, CredentialMode::Service)
                 .unwrap()
                 .project_scope()
                 .is_none()
@@ -4025,7 +4042,9 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         "ORDER BY",
     ] {
         assert_eq!(
-            parse_jql_query(invalid, "service").unwrap_err().reason_code,
+            parse_jql_query(invalid, CredentialMode::Service)
+                .unwrap_err()
+                .reason_code,
             ReasonCode::InputInvalid
         );
     }
@@ -4039,7 +4058,6 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
             scope: SearchAuthorizationScope::AllExcept {
                 excluded_values: excluded.iter().cloned().collect(),
             },
-            credential_mode: "service".to_string(),
         };
         for value in ["", "ORDER BY updated DESC"] {
             let inputs =
@@ -4051,7 +4069,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
                 &inputs.query,
                 &scope,
                 &SearchLimitsConfig::default(),
-                "service",
+                CredentialMode::Service,
             )
             .unwrap_err();
             assert_eq!(error.reason_code, ReasonCode::InputInvalid);
@@ -4061,7 +4079,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
                 &inputs.query,
                 &narrowed,
                 &SearchLimitsConfig::default(),
-                "service",
+                CredentialMode::Service,
             )
             .unwrap();
             assert!(query.jql.starts_with("project IN (PROJ)"));
@@ -4113,7 +4131,7 @@ fn jql_input_errors_give_safe_locations_and_supported_choices() {
         ),
         ("status = secretValue AND", "missing a field"),
     ] {
-        let error = parse_jql_query(query, "service").unwrap_err();
+        let error = parse_jql_query(query, CredentialMode::Service).unwrap_err();
         assert_eq!(error.reason_code, ReasonCode::InputInvalid);
         assert!(error.message.contains(diagnostic), "{}", error.message);
         assert!(error.message.contains("near token"));
@@ -4201,7 +4219,7 @@ fn jira_search_documentation_advertises_parser_supported_grammar() {
             &inputs.query,
             &EffectiveSearchScope::Finite(set(["PROJ"])),
             &SearchLimitsConfig::default(),
-            "service",
+            CredentialMode::Service,
         )
         .unwrap();
     }
@@ -4238,7 +4256,9 @@ async fn scope_only_jira_search_checks_returned_containment() {
             json!({"query": {"type": "jql", "value": "ORDER BY updated DESC"}, "maxResults": 1}),
             vec![],
         );
-        request.search_authorization = Some(search_preflight(["PROJ"], "per_user"));
+        request = InvocationBuilder::from(request)
+            .search(search_preflight(["PROJ"]))
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{result:?}");
         if let Err(error) = result {
@@ -4259,7 +4279,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["PROJ"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -4275,7 +4295,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["PROJ"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4289,7 +4309,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["IN"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4303,7 +4323,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(wildcard.jql, "status = Done ORDER BY updated DESC");
@@ -4319,7 +4339,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4337,7 +4357,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4355,7 +4375,7 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         },
         &boundary,
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4376,7 +4396,7 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         },
         &boundary,
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4388,7 +4408,6 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         scope: SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-        credential_mode: "service".to_string(),
     };
     assert!(effective_search_scope(&authorization, &set(["PRIVATE"])).is_err());
     assert_eq!(
@@ -4426,13 +4445,14 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
             json!({"query":{"type":"jql","value":"status = Done"},"maxResults":1}),
             vec![],
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: vec!["PRIVATE".to_string()],
-            },
-            credential_mode: "per_user".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization {
+                scope_type: "project".to_string(),
+                scope: SearchAuthorizationScope::AllExcept {
+                    excluded_values: vec!["PRIVATE".to_string()],
+                },
+            })
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{project}/{key}: {result:?}");
         if let Err(error) = result {
@@ -4536,13 +4556,14 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             }),
             vec![],
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
-            },
-            credential_mode: "per_user".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization {
+                scope_type: "project".to_string(),
+                scope: SearchAuthorizationScope::AllExcept {
+                    excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
+                },
+            })
+            .build();
         let error = provider.invoke(request).await.unwrap_err();
         assert_eq!(error.decision, Decision::Deny);
         assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
@@ -4642,7 +4663,7 @@ async fn successful_search_returns_bounded_sanitized_issue_fields() {
                     "project".to_string(),
                     vec!["PROJ".to_string()],
                 )]))
-                .search(search_preflight(["PROJ"], "service"))
+                .search(search_preflight(["PROJ"]))
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
                 .build(),
@@ -5635,10 +5656,12 @@ async fn comment_add_applies_configured_attribution_footer() {
         }),
         vec![],
     );
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(invocation).await.unwrap();
 
@@ -8514,16 +8537,12 @@ fn test_lookup_credential() -> ExecutionCredential {
     basic_credential("lookup@example.com", "lookup-token")
 }
 
-fn search_preflight<const N: usize>(
-    projects: [&str; N],
-    credential_mode: &str,
-) -> SearchAuthorization {
+fn search_preflight<const N: usize>(projects: [&str; N]) -> SearchAuthorization {
     SearchAuthorization {
         scope_type: "project".to_string(),
         scope: SearchAuthorizationScope::Finite {
             values: projects.into_iter().map(ToString::to_string).collect(),
         },
-        credential_mode: credential_mode.to_string(),
     }
 }
 
@@ -8547,7 +8566,7 @@ fn per_user_invocation(
         .credential(test_per_user_credential())
         .lookup_credential(test_lookup_credential());
     if action == "search" {
-        builder.search(search_preflight(["PROJ"], "per_user"))
+        builder.search(search_preflight(["PROJ"]))
     } else {
         builder
     }

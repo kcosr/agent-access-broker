@@ -368,8 +368,12 @@ async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readba
             inputs["parentPageId"] = json!(parent_page_id);
         }
         let mut request = invocation("page.create", inputs);
-        request.resource_scopes =
-            ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+        request = InvocationBuilder::from(request)
+            .resources(ResourceScopes::from([(
+                "space".to_string(),
+                vec!["ENG".to_string()],
+            )]))
+            .build();
 
         let result = provider.invoke(request).await.unwrap();
 
@@ -583,7 +587,9 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
                 "content": "<p>body</p>"
             }),
         );
-        request.resource_scopes = space_scopes.clone();
+        request = InvocationBuilder::from(request)
+            .resources(space_scopes.clone())
+            .build();
         let error = ConfluenceProvider::with_backend(
             confluence_config(),
             ProviderLimits::default(),
@@ -656,8 +662,12 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
             "content": "<p>body</p>"
         }),
     );
-    create_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    create_request = InvocationBuilder::from(create_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let create_error = create_provider.invoke(create_request).await.unwrap_err();
 
@@ -697,8 +707,12 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
             "content": "<p>body</p>"
         }),
     );
-    draft_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    draft_request = InvocationBuilder::from(draft_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let draft_error = draft_provider.invoke(draft_request).await.unwrap_err();
 
@@ -999,10 +1013,20 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
             "bodyFormat": "storage"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.execution = ExecutionAccess::Static(credential_with_token("execute-token"));
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "execute-token",
+        )))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1053,12 +1077,18 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
             "content": "<p>comment before attribution</p>"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1096,12 +1126,18 @@ async fn page_create_applies_configured_adf_attribution_footer_and_dedupes() {
             ),
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1145,12 +1181,18 @@ async fn page_update_enforces_adf_body_cap_after_attribution() {
             "content": body,
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(request).await.unwrap_err();
 
@@ -1183,12 +1225,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    page_create.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_create.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_create = InvocationBuilder::from(page_create)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_create = InvocationBuilder::from(page_create)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let page_create_result = provider.invoke(page_create).await.unwrap();
 
     let mut page_update = invocation(
@@ -1204,12 +1252,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    page_update.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_update.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_update = InvocationBuilder::from(page_update)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_update = InvocationBuilder::from(page_update)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let page_update_result = provider.invoke(page_update).await.unwrap();
 
     let mut blog_create = invocation(
@@ -1225,12 +1279,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    blog_create.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    blog_create.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_create = InvocationBuilder::from(blog_create)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    blog_create = InvocationBuilder::from(blog_create)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let blog_create_result = provider.invoke(blog_create).await.unwrap();
 
     let mut blog_update = invocation(
@@ -1246,14 +1306,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    blog_update.resource_scopes = ResourceScopes::from([
-        ("space".to_string(), vec!["ENG".to_string()]),
-        ("blog".to_string(), vec!["7777".to_string()]),
-    ]);
-    blog_update.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_update = InvocationBuilder::from(blog_update)
+        .resources(ResourceScopes::from([
+            ("space".to_string(), vec!["ENG".to_string()]),
+            ("blog".to_string(), vec!["7777".to_string()]),
+        ]))
+        .build();
+    blog_update = InvocationBuilder::from(blog_update)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let blog_update_result = provider.invoke(blog_update).await.unwrap();
 
     assert_storage_attribution_audit(&page_create_result, "add");
@@ -1314,12 +1378,18 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "## Converted\n\n**body**"
         }),
     );
-    page_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_request = InvocationBuilder::from(page_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_request = InvocationBuilder::from(page_request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     provider.invoke(page_request).await.unwrap();
 
     let mut blog_request = invocation(
@@ -1331,12 +1401,18 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "*literal*\nsecond"
         }),
     );
-    blog_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    blog_request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_request = InvocationBuilder::from(blog_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    blog_request = InvocationBuilder::from(blog_request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     provider.invoke(blog_request).await.unwrap();
 
     let page_body = backend.page_create_requests.lock().unwrap()[0]
@@ -1377,8 +1453,12 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "body"
         }),
     );
-    capped_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    capped_request = InvocationBuilder::from(capped_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = capped_provider.invoke(capped_request).await.unwrap_err();
     assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -1442,10 +1522,20 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
             "bodyFormat": "storage"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
-    request.execution = ExecutionAccess::Static(credential_with_token("execute-token"));
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "execute-token",
+        )))
+        .build();
 
     let error = provider.invoke(request).await.unwrap_err();
 
@@ -1466,7 +1556,12 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    denied.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["OPS".to_string()])]);
+    denied = InvocationBuilder::from(denied)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["OPS".to_string()],
+        )]))
+        .build();
     assert_eq!(
         provider.invoke(denied).await.unwrap_err().reason_code,
         ReasonCode::ScopeUnresolved
@@ -1514,8 +1609,12 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    wrong_container.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    wrong_container = InvocationBuilder::from(wrong_container)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
         provider
             .invoke(wrong_container)
@@ -1539,8 +1638,12 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    non_current.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    non_current = InvocationBuilder::from(non_current)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
         provider.invoke(non_current).await.unwrap_err().reason_code,
         ReasonCode::ScopeUnresolved
@@ -1578,8 +1681,12 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             "content": "x".repeat(2048)
         }),
     );
-    body_cap.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    body_cap = InvocationBuilder::from(body_cap)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
         provider.invoke(body_cap).await.unwrap_err().reason_code,
         ReasonCode::BodySizeDenied
@@ -1717,19 +1824,24 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
         &inputs,
         2,
     );
-    let token =
-        encode_confluence_comment_list_token(&signer, &binding, &request, "cursor-2".into())
-            .unwrap();
+    let token = encode_confluence_comment_list_token(
+        &signer,
+        &binding,
+        request.admitted(),
+        "cursor-2".into(),
+    )
+    .unwrap();
 
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &request).unwrap(),
+        decode_confluence_comment_list_token(&signer, &token, &binding, request.admitted())
+            .unwrap(),
         "cursor-2"
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.action = "page.footer_comment.list".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1738,7 +1850,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.kind = ConfluenceCommentKind::Footer;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1747,7 +1859,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.container_id = "654321".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1756,7 +1868,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.space = "OPS".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1765,7 +1877,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.body_format = None;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1774,7 +1886,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.resolution_status = Some("resolved".to_string());
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1783,7 +1895,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.sort = Some("created-date".to_string());
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -1792,25 +1904,29 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
     let mut changed_binding = binding.clone();
     changed_binding.max_results = 1;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
     );
 
     let mut changed_request = request.clone();
-    changed_request.identity.principal = "bob".to_string();
+    changed_request = InvocationBuilder::from(changed_request)
+        .principal("bob")
+        .build();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &changed_request)
+        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
     );
 
     let mut changed_request = request.clone();
-    changed_request.credential_mode = CredentialMode::PerUser;
+    changed_request = InvocationBuilder::from(changed_request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &changed_request)
+        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
             .reason_code,
         ReasonCode::InputInvalid
@@ -2108,7 +2224,6 @@ fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
         scope: SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-        credential_mode: "service".to_string(),
     };
     assert!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()])).is_err()
@@ -2140,13 +2255,14 @@ async fn all_except_confluence_search_checks_returned_containment() {
             "search",
             json!({"query":{"type":"cql","value":"title ~ \"runbook\""},"maxResults":1}),
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "space".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: vec!["PRIVATE".to_string()],
-            },
-            credential_mode: "service".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization {
+                scope_type: "space".to_string(),
+                scope: SearchAuthorizationScope::AllExcept {
+                    excluded_values: vec!["PRIVATE".to_string()],
+                },
+            })
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
         if let Err(error) = result {
@@ -2531,8 +2647,12 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
 
     let page_draft = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut page_binding = invocation("page.draft.update", json!({}));
-    page_binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    page_binding = InvocationBuilder::from(page_binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let page_handle = provider
         .mint_draft_handle(
             ConfluenceDraftContentType::Page,
@@ -2551,7 +2671,9 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
             "content": "x".repeat(17)
         }),
     );
-    page_request.resource_scopes = page_binding.resource_scopes;
+    page_request = InvocationBuilder::from(page_request)
+        .resources(page_binding.resource_scopes().unwrap().clone())
+        .build();
     assert_eq!(
         provider.invoke(page_request).await.unwrap_err().reason_code,
         ReasonCode::BodySizeDenied
@@ -2559,8 +2681,12 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
 
     let blog_draft = draft_content("7777", ConfluenceDraftContentType::Blog);
     let mut blog_binding = invocation("blog.draft.update", json!({}));
-    blog_binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    blog_binding = InvocationBuilder::from(blog_binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let blog_handle = provider
         .mint_draft_handle(
             ConfluenceDraftContentType::Blog,
@@ -2579,7 +2705,9 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
             "content": { "type": "doc", "version": 1, "content": [] }
         }),
     );
-    blog_request.resource_scopes = blog_binding.resource_scopes;
+    blog_request = InvocationBuilder::from(blog_request)
+        .resources(blog_binding.resource_scopes().unwrap().clone())
+        .build();
     assert_eq!(
         provider.invoke(blog_request).await.unwrap_err().reason_code,
         ReasonCode::BodyFormatUnsupported
@@ -2594,15 +2722,19 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     ));
     let content = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut request = invocation("page.draft.view", json!({}));
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let service_payload = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(service_payload.base_version, None);
@@ -2610,13 +2742,15 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     assert!(service_payload.principal.is_none());
     let service_token = encode_confluence_draft_handle(&signer, &service_payload).unwrap();
     let mut other_service_request = request.clone();
-    other_service_request.identity.principal = "other-agent".to_string();
+    other_service_request = InvocationBuilder::from(other_service_request)
+        .principal("other-agent")
+        .build();
     let service_handle = decode_confluence_draft_handle(
         &signer,
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
@@ -2636,7 +2770,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &wrong_service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2644,7 +2778,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "other.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2652,7 +2786,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Blog,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2660,7 +2794,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "654321",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     let rotated_signer = ConfluenceTokenSigner::new(Some(
@@ -2671,7 +2805,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     let mut wrong_space_payload = service_payload.clone();
@@ -2682,15 +2816,15 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &wrong_space_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
     assert_invalid_draft_handle(ensure_authorized_draft_handle(
         &wrong_space_handle,
-        &request.resource_scopes,
+        request.resource_scopes().unwrap(),
     ));
-    let error = ensure_authorized_space(&request.resource_scopes, "OPS").unwrap_err();
+    let error = ensure_authorized_space(request.resource_scopes().unwrap(), "OPS").unwrap_err();
     assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.message,
@@ -2698,14 +2832,18 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     );
 
     let mut per_user_request = request.clone();
-    per_user_request.credential_mode = CredentialMode::PerUser;
-    per_user_request.identity = identity("agent-one");
+    per_user_request = InvocationBuilder::from(per_user_request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    per_user_request = InvocationBuilder::from(per_user_request)
+        .identity(identity("agent-one"))
+        .build();
     let per_user_payload = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &per_user_request,
+        per_user_request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(per_user_payload.principal.as_deref(), Some("agent-one"));
@@ -2715,7 +2853,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &per_user_request,
+        per_user_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
@@ -2724,17 +2862,19 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     ));
     let mut other_per_user_request = per_user_request.clone();
-    other_per_user_request.identity = identity("agent-two");
+    other_per_user_request = InvocationBuilder::from(other_per_user_request)
+        .identity(identity("agent-two"))
+        .build();
     assert_invalid_draft_handle(decode_confluence_draft_handle(
         &signer,
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_per_user_request,
+        other_per_user_request.admitted(),
         "example.atlassian.net",
     ));
 
@@ -2750,32 +2890,43 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
     ));
     let content = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut request = invocation("page.draft.attachment.list", json!({}));
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let handle = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     let token = encode_confluence_draft_attachment_list_token(
         &signer,
         &handle,
-        &request,
+        request.admitted(),
         "cursor=next".to_string(),
     )
     .unwrap();
     assert_eq!(
-        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, &request).unwrap(),
+        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, request.admitted())
+            .unwrap(),
         "cursor=next"
     );
     let mut wrong_action = request.clone();
-    wrong_action.action = "page.draft.attachment.download".to_string();
-    let error =
-        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, &wrong_action)
-            .unwrap_err();
+    wrong_action = InvocationBuilder::from(wrong_action)
+        .action("page.draft.attachment.download")
+        .build();
+    let error = decode_confluence_draft_attachment_list_token(
+        &signer,
+        &token,
+        &handle,
+        wrong_action.admitted(),
+    )
+    .unwrap_err();
     assert_eq!(error.reason_code, ReasonCode::InputInvalid);
 
     let staged = ConfluenceDraftHandlePayload::new(
@@ -2783,7 +2934,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         &content,
         ConfluenceDraftOrigin::Staged,
         Some(7),
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(staged.base_version, Some(7));
@@ -4037,16 +4188,21 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     let page = attachment_list_page();
     let request = invocation("attachment.list", json!({"pageId": "123456"}));
 
-    let valid =
-        encode_confluence_attachment_list_token(&signer, &page, &request, "start=1".to_string())
-            .unwrap();
+    let valid = encode_confluence_attachment_list_token(
+        &signer,
+        &page,
+        request.admitted(),
+        "start=1".to_string(),
+    )
+    .unwrap();
     assert_eq!(
-        decode_confluence_attachment_list_token(&signer, &valid, &page, &request).unwrap(),
+        decode_confluence_attachment_list_token(&signer, &valid, &page, request.admitted())
+            .unwrap(),
         "start=1"
     );
 
     let mut expired =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     expired.expires_at =
         (Utc::now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
     assert_eq!(
@@ -4054,7 +4210,7 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             &signer,
             &signed_attachment_list_token(&signer, &expired),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
         .reason_code,
@@ -4062,14 +4218,14 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     );
 
     let mut cross_page =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_page.page_id = "654321".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_page),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
         .reason_code,
@@ -4077,14 +4233,14 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     );
 
     let mut cross_principal =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_principal.principal = "user:alice@example.com".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_principal),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
         .reason_code,
@@ -4092,14 +4248,14 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     );
 
     let mut cross_credential_mode =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_credential_mode.credential_mode = "per_user".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_credential_mode),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
         .reason_code,
@@ -4107,14 +4263,14 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     );
 
     let mut unsupported_position =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     unsupported_position.next_position = "start=1&limit=1".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &unsupported_position),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
         .reason_code,
@@ -4198,9 +4354,17 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
         backend.clone(),
     );
     let mut request = invocation("attachment.list", json!({"pageId": "123456"}));
-    request.credential_mode = CredentialMode::PerUser;
-    request.execution = ExecutionAccess::Static(credential_with_token("per-user-token"));
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "per-user-token",
+        )))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
 
     provider.invoke(request).await.unwrap();
 
@@ -7589,23 +7753,19 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
         .credential(credential())
         .lookup_credential(credential());
     if action == "search" {
-        builder.search(confluence_search_preflight(["ENG"], "service"))
+        builder.search(confluence_search_preflight(["ENG"]))
     } else {
         builder
     }
     .build()
 }
 
-fn confluence_search_preflight<const N: usize>(
-    spaces: [&str; N],
-    credential_mode: &str,
-) -> SearchAuthorization {
+fn confluence_search_preflight<const N: usize>(spaces: [&str; N]) -> SearchAuthorization {
     SearchAuthorization {
         scope_type: "space".to_string(),
         scope: SearchAuthorizationScope::Finite {
             values: spaces.into_iter().map(ToString::to_string).collect(),
         },
-        credential_mode: credential_mode.to_string(),
     }
 }
 
@@ -7924,8 +8084,12 @@ fn page_move_invocation() -> ProviderInvocation {
         "page.move",
         json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -7934,8 +8098,12 @@ fn sibling_page_move_invocation(position: &str) -> ProviderInvocation {
         "page.move",
         json!({"pageId": "100", "position": position, "targetPageId": "200"}),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -8600,8 +8768,12 @@ fn draft_throttle_provider(
         agent_access_provider::test_support::test_signing_key(7),
     );
     let mut binding = invocation("draft.binding", json!({}));
-    binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    binding = InvocationBuilder::from(binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let handle = provider
         .mint_draft_handle(
             backend.content_type,
@@ -8616,8 +8788,12 @@ fn draft_throttle_provider(
 
 fn draft_invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let mut request = invocation(action, inputs);
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -8686,17 +8862,21 @@ fn draft_attachment_add_invocation(
             })).collect::<Vec<_>>(),
         }),
     );
-    request.body_parts = names
-        .iter()
-        .enumerate()
-        .map(|(index, name)| BrokerBodyPart {
-            name: format!("file{index}"),
-            file_name: Some(format!("{name}.txt")),
-            content_type: Some("text/plain".to_string()),
-            bytes: name.as_bytes().to_vec(),
-            temp_file: None,
-        })
-        .collect();
+    request = InvocationBuilder::from(request)
+        .body_parts(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| BrokerBodyPart {
+                    name: format!("file{index}"),
+                    file_name: Some(format!("{name}.txt")),
+                    content_type: Some("text/plain".to_string()),
+                    bytes: name.as_bytes().to_vec(),
+                    temp_file: None,
+                })
+                .collect(),
+        )
+        .build();
     request
 }
 
@@ -8826,7 +9006,12 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             "content": "<p>reply</p>"
         }),
     );
-    reply.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    reply = InvocationBuilder::from(reply)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = provider.invoke(reply).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
@@ -8853,7 +9038,12 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             "content": "<p>updated</p>"
         }),
     );
-    update.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    update = InvocationBuilder::from(update)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = provider.invoke(update).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
@@ -8929,7 +9119,6 @@ fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
         scope: SearchAuthorizationScope::Finite {
             values: vec!["ENG".to_string(), "OPS".to_string()],
         },
-        credential_mode: "per_user".to_string(),
     };
     let scope =
         effective_search_scope(&authorization, &requested_spaces(&inputs).unwrap()).unwrap();

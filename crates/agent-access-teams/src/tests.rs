@@ -122,8 +122,12 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
         )]))
         .build();
     assert!(provider.invoke(invocation.clone()).await.is_err());
-    invocation.resource_attributes =
-        ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())]));
+    invocation = InvocationBuilder::from(invocation)
+        .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
+            "webhookUrl".into(),
+            ENDPOINT.into(),
+        )])))
+        .build();
     let receipt = provider.invoke(invocation.clone()).await.unwrap();
     assert_eq!(
         receipt.result,
@@ -134,7 +138,9 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     assert!(!serialized.contains("SYNTHETIC_SECRET"));
     assert!(!serialized.contains("Version 2.3"));
     assert!(!serialized.contains("/powerautomate/"));
-    invocation.credential_mode = CredentialMode::PerUser;
+    invocation = InvocationBuilder::from(invocation)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(provider.invoke(invocation).await.is_err());
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
