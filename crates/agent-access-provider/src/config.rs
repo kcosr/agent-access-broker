@@ -255,7 +255,8 @@ impl UrlPatternPolicy {
     }
 
     /// Two patterns that are the same URL once normalized, such as with and
-    /// without the scheme's default port, are an error.
+    /// without the scheme's default port, are an error. Distinct nondefault
+    /// ports stay distinct.
     pub const fn rejecting_duplicates(mut self) -> Self {
         self.reject_duplicates = true;
         self
@@ -321,9 +322,8 @@ pub fn validate_url_patterns(
             }
         }
         if policy.reject_duplicates {
-            if url.port().is_some() && url.port() == url.port_or_known_default() {
-                let _ = url.set_port(None);
-            }
+            // Parsing already lowercases the host and drops a scheme's
+            // default port; any port left is significant.
             url.set_fragment(None);
             if !seen.insert(url.to_string()) {
                 errors.push(format!(
@@ -644,6 +644,9 @@ mod tests {
             "ftp://hooks.example.com/**?tenant=one#part",
             "https://HOOKS.example.com:443/gitlab/**",
             "https://hooks.example.com/gitlab/**",
+            "https://hooks.example.com:8443/gitlab/**",
+            "https://hooks.example.com:9443/gitlab/**",
+            "https://hooks.example.com:8443/gitlab/**",
         ];
         assert_eq!(
             validate(&[], UrlPatternPolicy::new()),
@@ -658,6 +661,7 @@ mod tests {
                 "list entry ftp://hooks.example.com/**?tenant=one#part must not include a query",
                 "list entry ftp://hooks.example.com/**?tenant=one#part must not include a fragment",
                 "list contains duplicate normalized entry https://hooks.example.com/gitlab/**",
+                "list contains duplicate normalized entry https://hooks.example.com:8443/gitlab/**",
             ]
         );
         let mut errors = Vec::new();

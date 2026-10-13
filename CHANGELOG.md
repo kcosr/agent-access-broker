@@ -483,6 +483,11 @@ All notable changes to this project are documented in this file.
   failures preparing discovery, such as an unavailable store or a missing
   encryption key, still report `deny`. Reason codes and HTTP statuses are
   unchanged.
+- GitLab webhook destination patterns that differ only in a nondefault port,
+  such as `https://hooks.example.com:8443/**` and
+  `https://hooks.example.com:9443/**`, are no longer rejected as duplicates.
+  A pattern with an explicit default port, such as `:443` for `https`, is still
+  a duplicate of the same pattern without it.
 
 ### Removed
 

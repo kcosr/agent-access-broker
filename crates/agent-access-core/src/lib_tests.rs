@@ -3527,6 +3527,9 @@ fn gitlab_webhook_destination_policy_is_optional_and_strictly_validated() {
         .allowed_destinations = vec![
         "https://hooks.example.com/gitlab/**".to_string(),
         "http://hooks.internal.example/**".to_string(),
+        // Distinct nondefault ports are distinct destinations.
+        "https://hooks.example.com:8443/gitlab/**".to_string(),
+        "https://hooks.example.com:9443/gitlab/**".to_string(),
     ];
     validate_broker_config(&config).unwrap();
 
