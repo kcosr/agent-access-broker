@@ -4084,10 +4084,23 @@ fn cli_broker_status_gets_exact_endpoint_and_prints_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
+    let unavailable = serde_json::json!({"revision": null, "provenance": "unavailable"});
     let expected = serde_json::json!({
-        "brokerVersion": "0.1.0",
-        "buildCommit": null,
-        "buildProvenance": "unavailable",
+        "assembly": {
+            "name": "agent-access-broker",
+            "version": "0.1.0",
+            "qualification": "unqualified",
+            "source": unavailable
+        },
+        "host": {"crate": "agent-access-broker-host", "version": "0.1.0", "source": unavailable},
+        "sdk": {"crate": "agent-access-provider", "version": "0.1.0", "source": unavailable},
+        "modules": [{
+            "crate": "agent-access-fake",
+            "version": "0.1.0",
+            "roles": [{"role": "native", "id": "fake"}],
+            "source": unavailable
+        }],
+        "inventoryFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "catalogVersion": "agent-access.catalog.v2",
         "sendSchemaVersion": "agent-access.send.v1"
     });

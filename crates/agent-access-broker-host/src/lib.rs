@@ -6,6 +6,7 @@ mod application;
 mod build_status;
 mod composition;
 mod handlers;
+mod identity;
 mod ingress;
 mod lifecycle;
 mod mcp;
@@ -23,9 +24,10 @@ mod tests;
 /// The opaque import selection [`BrokerCompositionBuilder::import_adapter`]
 /// takes; shipped adapter crates return one from `registration()`.
 pub use agent_access_core::imports::ImportedAdapterRegistration;
-pub use application::{AssemblyIdentity, BrokerApplication, BrokerExit};
-pub use build_status::{BrokerBuildStatus, BuildProvenance};
+pub use application::{BrokerApplication, BrokerExit};
+pub use build_status::BrokerBuildStatus;
 pub use composition::{BrokerComposition, BrokerCompositionBuilder, CompositionError};
+pub use identity::{AssemblyIdentity, ModuleProvenance, SourceRevision};
 pub use reload::{build_reloadable_state, validate_shutdown_timeout};
 pub use router::{build_gateway_router, build_public_router, build_router};
 pub use state::ReloadableState;

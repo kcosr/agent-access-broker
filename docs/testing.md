@@ -384,10 +384,11 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 
 The verifier builds Broker and CLI release executables locally with locked
 dependencies and required provenance. It starts the Broker on loopback with a
-temporary minimal identity and asserts that `/v1/broker/status` matches the
-expected package version and commit. It checks CLI startup with `--help` and
-fails if the checkout is dirty or `HEAD` changes. It does not publish artifacts
-or perform the source release.
+temporary minimal identity and asserts that `/v1/broker/status` names the
+`agent-access-broker` assembly at the expected package version, with the expected
+commit as evidence-backed provenance for the assembly, host, SDK and every module.
+It checks CLI startup with `--help` and fails if the checkout is dirty or `HEAD`
+changes. It does not publish artifacts or perform the source release.
 
 To opt into a configured remote build service explicitly:
 

@@ -373,17 +373,45 @@ AGENT_ACCESS_BUILD_PROVENANCE=release
 AGENT_ACCESS_REQUIRE_BUILD_PROVENANCE=1
 ```
 
-The build fails when release provenance is missing or inconsistent. Without
-injected provenance, development builds are valid but report
-`buildCommit: null` and `buildProvenance: "unavailable"`.
+The build fails when release provenance is missing or inconsistent. Set
+`AGENT_ACCESS_BUILD_PROVENANCE=release` only for a build from a clean checkout of
+that exact commit, as the verifier below does: the `agent-access-broker`
+executable then reports the commit as `evidence`-backed for itself, the host,
+the SDK and every module it registers, which all come from this repository.
+Without injected provenance, development builds are valid but report every
+source revision as `unavailable` (`revision: null`).
 
 An authenticated caller can verify the running binary with `agent-access broker
-status` or `GET /v1/broker/status`. The response contains only
-`brokerVersion`, `buildCommit`, `buildProvenance`, `catalogVersion`, and
-`sendSchemaVersion`; it requires a normal identity and request ID but no admin
-right, provider grant, or execution context. The `broker_starting` JSON event
-also contains `brokerVersion` and `buildProvenance`, and includes `buildCommit`
-only for a release-stamped build.
+status` or `GET /v1/broker/status`. It requires a normal identity and request ID
+but no admin right, provider grant, or execution context. The response names
+the assembly (name, version, qualification label and source revision), the
+linked host and SDK packages, and every compiled module package with its roles,
+each with a source revision and its provenance, plus an inventory fingerprint
+and the contract versions; see [the HTTP API](http-api.md) for the exact shape.
+The module list is the compiled inventory, not the enabled configuration. The
+upstream executable declares no qualification label, so it reports
+`unqualified`; qualification evidence is the separate qualification receipt.
+
+The `broker_starting` JSON event identifies the same executable with
+`assemblyName`, `assemblyVersion`, `assemblyProvenance` (`evidence`,
+`declared` or `unavailable`), `qualification`, and `inventoryFingerprint`, and
+includes `assemblyRevision` only when a revision was supplied. The fingerprint
+is the status's `inventoryFingerprint`: it covers the host, SDK and module
+inventory with their revisions and provenance, and it does not change on reload.
+The event also reports `configPath`, `publicListen`, `gatewayListen`,
+`reloadTimeoutMs`, `shutdownTimeoutMs`, and `bodyHardCapBytes` when that cap is
+set.
+
+A distribution that assembles its own executable from the Broker host supplies
+its own identity: its executable name and version, its qualification label,
+its source revision and the revisions of the host and SDK it links, and a
+provenance map keyed by the crate name and version of each registered module
+package, each marked as declared or backed by its build evidence. The executable
+exits `3` at startup, like an invalid composition, when that identity is
+malformed or its map names an unregistered package, lists a package twice or
+gives one conflicting revisions. Renaming the executable never changes where
+the configuration, state, keys or locks are found, and its state locks still
+exclude a differently named executable on the same state.
 
 A source release follows the separate [prepare, qualify, and publish
 workflow](release-readiness.md). Full qualification runs the native provenance
@@ -410,8 +438,10 @@ an explicit native host target under `target/<host-triple>/release`. The verifie
 prints compiler/Cargo versions and paths plus paths and SHA-256 digests of
 discovered Cargo configuration files. It rechecks the clean, unchanged `HEAD`,
 checks CLI startup with `--help`, and starts the Broker on loopback with a
-temporary static identity. Authenticated status must match the expected version,
-commit, and `release` provenance. Temporary processes and files are cleaned up.
+temporary static identity. Authenticated status must name the
+`agent-access-broker` assembly at the expected version, and report the expected
+commit as `evidence` for the assembly, host, SDK and every module. Temporary
+processes and files are cleaned up.
 
 These checks do not establish a hermetic build. Cargo configuration includes,
 profile/linker settings, native tools, build scripts, and system libraries are
@@ -565,8 +595,11 @@ state locks for:
 The broker uses small sibling lock files for managed-store and audit files
 (`<file>.agent-access.lock`) and `.agent-access-broker.spool.lock` inside the
 upload spool directory. Lock files are owner-only regular files and contain
-non-secret diagnostic metadata such as program name, PID, hostname, node ID,
-config path, target paths, and lock file path. The offline
+non-secret diagnostic metadata such as the holding executable's assembly name
+and version (`program`, `programVersion`), PID, hostname, node ID, config path,
+target paths, and lock file path. Lock file names do not depend on the
+executable, so differently named broker executables cannot own the same state
+at once. The offline
 `agent-access-broker audit verify` command takes the audit lock too, so it
 fails while a broker owns the audit database.
 

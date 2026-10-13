@@ -87,6 +87,37 @@ All notable changes to this project are documented in this file.
   `UpstreamTrace::reason_code`, `complete_upstream_trace` and
   `PendingUpstreamTrace::complete` take a `ProviderReason`; convert standard
   reasons with `.into()`.
+- `GET /v1/broker/status` and `agent-access broker status` return an explicit
+  identity structure instead of `brokerVersion`, `buildCommit` and
+  `buildProvenance`, which are removed. The response now has `assembly`
+  (`name`, `version`, `qualification`, `source`), `host` and `sdk` (`crate`,
+  `version`, `source`), `modules` (every compiled module package with its
+  `crate`, `version`, sorted `roles` of `native`, `oauth` or `import`, and
+  `source`), `inventoryFingerprint`, `catalogVersion` and `sendSchemaVersion`.
+  Each `source` is `{"revision", "provenance"}` with `provenance` `evidence`,
+  `declared`, or `unavailable` (with `revision: null`). A release build of
+  `agent-access-broker` reports its commit as `evidence` for the assembly, the
+  host, the SDK and every module, where it previously reported
+  `buildProvenance: "release"`; an unstamped build reports every source as
+  `unavailable`. Authorization and `Cache-Control: no-store` are unchanged.
+- The `broker_starting` log event replaces `brokerVersion`, `buildCommit` and
+  `buildProvenance` with `assemblyName`, `assemblyVersion`,
+  `assemblyProvenance`, `qualification`, `inventoryFingerprint` and, when a
+  revision is supplied, `assemblyRevision`.
+- `AssemblyIdentity` moves its build stamp to explicit source revisions:
+  `with_release_commit` and `build_status()` are removed; use
+  `with_source(SourceRevision::evidence(commit))` (or
+  `SourceRevision::declared`), `with_host_source`, `with_sdk_source`,
+  `with_qualification` and `with_module_provenance(&[ModuleProvenance::new(crate,
+  version, revision)])`. `BrokerApplication::new` now returns
+  `Result<BrokerApplication, CompositionError>` and rejects a malformed identity
+  or a provenance map naming an unregistered package, repeating a package or
+  giving it conflicting revisions; `main` returns the error to exit `3`.
+  `BrokerApplication::status()` returns the derived `BrokerBuildStatus`, which
+  is now opaque and serializable only. `BuildProvenance` is removed.
+- Core's `StateLockSet::acquire_for_config`, `acquire_for_config_reusing` and
+  `acquire_audit_for_config` take a `StateLockHolder` (program name, program
+  version and node ID) in place of the node ID.
 
 ### Added
 
@@ -140,6 +171,13 @@ All notable changes to this project are documented in this file.
   `3` instead of `1` when the configuration cannot be read, parsed, or
   validated at startup, matching `config validate`. Other startup and runtime
   failures still exit `1`, and the `Error: …` message is unchanged.
+- State lock metadata records the holding executable's assembly name as
+  `program` and its version as `programVersion`, and held-lock diagnostics show
+  both. Lock file names are unchanged and independent of the executable name,
+  so differently named executables still exclude each other on one state set.
+- The aggregate HTTP MCP endpoint reports the assembly name and version as
+  `serverInfo`, and service endpoints report the assembly version; both
+  previously used the host package version.
 - Imported MCP connections send `clientInfo`
   `{"name": "agent-access-broker-host", "version": <host version>}`, naming the
   Broker host implementation, instead of `agent-access-broker` with the adapter

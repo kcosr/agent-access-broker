@@ -1110,7 +1110,7 @@ async fn retention_prune_deletes_only_rotated_files() {
     let locks = crate::StateLockSet::acquire_for_config(
         &config,
         Path::new("/tmp/retention-prune.toml"),
-        TEST_NODE_ID,
+        &crate::StateLockHolder::new("runtime-test", "0.0.0", TEST_NODE_ID),
         None,
     )
     .unwrap();
@@ -1162,7 +1162,7 @@ async fn retention_prune_deletes_only_rotated_files() {
     let conflict = crate::StateLockSet::acquire_for_config(
         &config,
         Path::new("/tmp/retention-prune.toml"),
-        TEST_NODE_ID,
+        &crate::StateLockHolder::new("runtime-test", "0.0.0", TEST_NODE_ID),
         None,
     )
     .unwrap_err();

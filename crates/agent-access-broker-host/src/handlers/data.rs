@@ -269,7 +269,7 @@ pub(crate) async fn broker_status(
     {
         Ok(_) => {
             let mut response =
-                (StatusCode::OK, Json(state.reloadable.build_status)).into_response();
+                (StatusCode::OK, Json(&*state.reloadable.build_status)).into_response();
             response
                 .headers_mut()
                 .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

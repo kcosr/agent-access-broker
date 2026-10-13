@@ -151,14 +151,24 @@ export class StatusMetadataMismatch extends Error {
   }
 }
 
+const RELEASE_ASSEMBLY = "agent-access-broker";
+
+// A release build records its one commit, backed by this verifier's clean
+// checkout, for the assembly, the host, the SDK and every compiled module.
 export function assertReleaseStatus(status, expected) {
+  const evidence = (source) => source?.revision === expected.commit && source?.provenance === "evidence";
+  const packages = [status?.host, status?.sdk, ...(Array.isArray(status?.modules) ? status.modules : [])];
   if (
-    status.brokerVersion !== expected.version ||
-    status.buildCommit !== expected.commit ||
-    status.buildProvenance !== "release"
+    status?.assembly?.name !== RELEASE_ASSEMBLY ||
+    status.assembly.version !== expected.version ||
+    !evidence(status.assembly.source) ||
+    status.host?.crate !== "agent-access-broker-host" ||
+    status.sdk?.crate !== "agent-access-provider" ||
+    !Array.isArray(status.modules) || status.modules.length === 0 ||
+    !packages.every((entry) => entry?.version === expected.version && evidence(entry.source))
   ) {
     throw new StatusMetadataMismatch(
-      `status mismatch: expected version=${expected.version} commit=${expected.commit} provenance=release; received ${JSON.stringify(status)}`,
+      `status mismatch: expected ${RELEASE_ASSEMBLY} version=${expected.version} with evidence-backed commit=${expected.commit} for the assembly, host, SDK and every module; received ${JSON.stringify(status)}`,
     );
   }
 }

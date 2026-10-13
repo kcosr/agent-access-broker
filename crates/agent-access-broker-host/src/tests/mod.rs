@@ -3309,6 +3309,7 @@ async fn signal_reload_uses_system_audit_identity() {
     let state = build_reload_test_state(config_path.clone(), Some(4096))
         .await
         .unwrap();
+    let status = serde_json::to_value(&*state.build_status).unwrap();
 
     write_reload_config(
         &config_path,
@@ -3336,6 +3337,8 @@ async fn signal_reload_uses_system_audit_identity() {
 
     assert_eq!(response.status, StatusCode::OK);
     assert_eq!(response.result["generation"], 2);
+    // The build status and its inventory fingerprint never change on reload.
+    assert_eq!(serde_json::to_value(&*state.build_status).unwrap(), status);
     let records = read_audit_records(&audit_path);
     assert!(records.iter().any(|record| {
         record["service"] == "broker"
@@ -3754,6 +3757,10 @@ async fn reload_changing_the_sqlite_audit_path_requires_an_existing_database() {
     }));
 }
 
+/// Another process holding the state locks the tests contend for.
+const TEST_LOCK_HOLDER: agent_access_core::StateLockHolder<'static> =
+    agent_access_core::StateLockHolder::new("test-holder", "0.0.0", "test-holder-node");
+
 #[tokio::test]
 async fn admin_reload_candidate_state_lock_conflict_keeps_active_generation() {
     let config_path = temp_path("reload-lock-conflict.toml");
@@ -3781,7 +3788,7 @@ async fn admin_reload_candidate_state_lock_conflict_keeps_active_generation() {
     let mut holder_config = fake_config(new_audit_path.to_str().unwrap());
     holder_config.limits.upload_spool_dir = hold_spool_dir.display().to_string();
     let _held =
-        StateLockSet::acquire_for_config(&holder_config, &config_path, "test-holder-node", None)
+        StateLockSet::acquire_for_config(&holder_config, &config_path, &TEST_LOCK_HOLDER, None)
             .unwrap();
 
     write_reload_config(
@@ -3840,7 +3847,7 @@ async fn admin_reload_candidate_upload_spool_lock_conflict_keeps_active_generati
     let mut holder_config = fake_config("");
     holder_config.limits.upload_spool_dir = new_spool_dir.display().to_string();
     let _held =
-        StateLockSet::acquire_for_config(&holder_config, &config_path, "test-holder-node", None)
+        StateLockSet::acquire_for_config(&holder_config, &config_path, &TEST_LOCK_HOLDER, None)
             .unwrap();
 
     write_reload_config(
@@ -3906,7 +3913,7 @@ async fn admin_reload_candidate_managed_store_lock_conflict_keeps_active_generat
         auto_migrate: true,
     });
     let _held =
-        StateLockSet::acquire_for_config(&holder_config, &config_path, "test-holder-node", None)
+        StateLockSet::acquire_for_config(&holder_config, &config_path, &TEST_LOCK_HOLDER, None)
             .unwrap();
 
     write_reload_config_with_managed_store(
@@ -3988,7 +3995,7 @@ async fn reload_changing_upload_spool_keeps_old_snapshot_lock_alive() {
     let mut old_spool_only = fake_config("");
     old_spool_only.limits.upload_spool_dir = old_spool_dir.display().to_string();
     let conflict =
-        StateLockSet::acquire_for_config(&old_spool_only, &config_path, "test-holder-node", None)
+        StateLockSet::acquire_for_config(&old_spool_only, &config_path, &TEST_LOCK_HOLDER, None)
             .unwrap_err();
     assert_eq!(conflict.kind(), StateLockFailureKind::Held);
     let old_spool_identity = old_snapshot
@@ -4029,7 +4036,7 @@ async fn reload_changing_upload_spool_keeps_old_snapshot_lock_alive() {
 
     drop(old_snapshot);
     let conflict =
-        StateLockSet::acquire_for_config(&old_spool_only, &config_path, "test-holder-node", None)
+        StateLockSet::acquire_for_config(&old_spool_only, &config_path, &TEST_LOCK_HOLDER, None)
             .unwrap_err();
     assert_eq!(conflict.kind(), StateLockFailureKind::Held);
 }

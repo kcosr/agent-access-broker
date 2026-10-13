@@ -38,19 +38,24 @@ function temporary(t) {
   return root;
 }
 
+function releaseStatus() {
+  const source = { revision: expected.commit, provenance: "evidence" };
+  return {
+    assembly: { name: "agent-access-broker", version: expected.version, qualification: "unqualified", source: { ...source } },
+    host: { crate: "agent-access-broker-host", version: expected.version, source: { ...source } },
+    sdk: { crate: "agent-access-provider", version: expected.version, source: { ...source } },
+    modules: [
+      { crate: "agent-access-fake", version: expected.version, roles: [{ role: "native", id: "fake" }], source: { ...source } },
+      { crate: "agent-access-jira", version: expected.version, roles: [{ role: "native", id: "jira" }], source: { ...source } },
+    ],
+    inventoryFingerprint: `sha256:${"0".repeat(64)}`,
+    catalogVersion: "agent-access.catalog.v2",
+    sendSchemaVersion: "agent-access.send.v1",
+  };
+}
+
 test("accepts the exact release status", () => {
-  assert.doesNotThrow(() =>
-    assertReleaseStatus(
-      {
-        brokerVersion: expected.version,
-        buildCommit: expected.commit,
-        buildProvenance: "release",
-        catalogVersion: "agent-access.catalog.v2",
-        sendSchemaVersion: "agent-access.send.v1",
-      },
-      expected,
-    ),
-  );
+  assert.doesNotThrow(() => assertReleaseStatus(releaseStatus(), expected));
 });
 
 test("provenance verification is local by default and build service requires an explicit option", () => {
@@ -231,23 +236,26 @@ test("checkout validation rejects a Git core.worktree redirect before build admi
 });
 
 test("classifies every metadata mismatch as definitive", () => {
-  for (const status of [
-    {
-      brokerVersion: "0.2.0",
-      buildCommit: expected.commit,
-      buildProvenance: "release",
-    },
-    {
-      brokerVersion: expected.version,
-      buildCommit: "ffffffffffffffffffffffffffffffffffffffff",
-      buildProvenance: "release",
-    },
-    {
-      brokerVersion: expected.version,
-      buildCommit: expected.commit,
-      buildProvenance: "unavailable",
-    },
-  ]) {
+  const unavailable = { revision: null, provenance: "unavailable" };
+  const mutations = [
+    (status) => { status.assembly.version = "0.2.0"; },
+    (status) => { status.assembly.name = "downstream-broker"; },
+    (status) => { status.assembly.source.revision = "ffffffffffffffffffffffffffffffffffffffff"; },
+    (status) => { status.assembly.source = unavailable; },
+    (status) => { status.assembly.source.provenance = "declared"; },
+    (status) => { status.host.source = unavailable; },
+    (status) => { status.host.crate = "agent-access-core"; },
+    (status) => { status.sdk.version = "0.2.0"; },
+    (status) => { status.sdk.source.provenance = "declared"; },
+    (status) => { status.modules[1].source = unavailable; },
+    (status) => { status.modules[0].source.revision = "ffffffffffffffffffffffffffffffffffffffff"; },
+    (status) => { status.modules = []; },
+    (status) => { delete status.modules; },
+    (status) => { delete status.assembly; },
+  ];
+  for (const mutate of mutations) {
+    const status = releaseStatus();
+    mutate(status);
     assert.throws(
       () => assertReleaseStatus(status, expected),
       (error) => {
@@ -255,10 +263,11 @@ test("classifies every metadata mismatch as definitive", () => {
         assert.equal(error.name, "StatusMetadataMismatch");
         assert.equal(
           error.message,
-          `status mismatch: expected version=${expected.version} commit=${expected.commit} provenance=release; received ${JSON.stringify(status)}`,
+          `status mismatch: expected agent-access-broker version=${expected.version} with evidence-backed commit=${expected.commit} for the assembly, host, SDK and every module; received ${JSON.stringify(status)}`,
         );
         return true;
       },
     );
   }
+  assert.throws(() => assertReleaseStatus(null, expected), StatusMetadataMismatch);
 });

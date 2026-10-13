@@ -74,6 +74,14 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
         stderr.contains("nodeId"),
         "stderr did not show the holder's node ID: {stderr}"
     );
+    assert!(
+        stderr.contains(r#""program":"agent-access-broker""#)
+            && stderr.contains(&format!(
+                r#""programVersion":"{}""#,
+                env!("CARGO_PKG_VERSION")
+            )),
+        "stderr did not show the holder's assembly identity: {stderr}"
+    );
 
     let shared_spool = BrokerConfigPaths::new(temp.path(), "shared-spool", false, true)
         .with_spool_dir(first.spool_dir.clone());
@@ -209,19 +217,25 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     assert!(starting.get("adminListen").is_none());
     assert_eq!(starting["reloadTimeoutMs"].as_u64(), Some(30_000));
     assert_eq!(starting["bodyHardCapBytes"], Value::Null);
-    let build = broker_build_status();
-    let build_json = serde_json::to_value(build).unwrap();
+    let build = serde_json::to_value(broker_build_status()).unwrap();
+    let assembly = &build["assembly"];
+    assert_eq!(starting["assemblyName"], assembly["name"]);
+    assert_eq!(starting["assemblyVersion"], assembly["version"]);
+    assert_eq!(starting["qualification"], assembly["qualification"]);
     assert_eq!(
-        starting["brokerVersion"].as_str(),
-        Some(build.broker_version)
+        starting["assemblyProvenance"],
+        assembly["source"]["provenance"]
     );
+    match assembly["source"]["revision"].as_str() {
+        Some(revision) => assert_eq!(starting["assemblyRevision"].as_str(), Some(revision)),
+        None => assert!(starting.get("assemblyRevision").is_none()),
+    }
     assert_eq!(
-        starting["buildProvenance"].as_str(),
-        build_json["buildProvenance"].as_str()
+        starting["inventoryFingerprint"],
+        build["inventoryFingerprint"]
     );
-    match build.build_commit {
-        Some(commit) => assert_eq!(starting["buildCommit"].as_str(), Some(commit)),
-        None => assert!(starting.get("buildCommit").is_none()),
+    for removed in ["brokerVersion", "buildCommit", "buildProvenance"] {
+        assert!(starting.get(removed).is_none(), "{removed}: {starting}");
     }
 
     let listening = event_by_name(&events, "broker_listening");

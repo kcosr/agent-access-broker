@@ -39,7 +39,8 @@ pub struct ReloadableState {
     /// Backends this process links; every reload parses with them.
     pub(crate) backends: Arc<BackendRegistry>,
     /// The linking assembly's build status, served at `/v1/broker/status`.
-    pub(crate) build_status: BrokerBuildStatus,
+    /// It never changes across reloads.
+    pub(crate) build_status: Arc<BrokerBuildStatus>,
     pub(crate) active: ArcSwap<RuntimeSnapshot>,
     /// Serializes caller-security publication against final attested admission.
     /// Never hold this synchronous lock across an await.
@@ -647,7 +648,7 @@ impl ReloadableState {
         Self {
             config_path,
             backends,
-            build_status,
+            build_status: Arc::new(build_status),
             active: ArcSwap::from(Arc::clone(&snapshot)),
             caller_security_publication: StdRwLock::new(()),
             active_lock_set: ArcSwap::from(Arc::clone(&snapshot.state_locks)),

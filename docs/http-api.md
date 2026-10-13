@@ -264,7 +264,7 @@ Health and discovery:
 | `GET` | `/v1/healthz` | Liveness probe (no request-id, no auth) |
 | `GET` | `/v1/readyz` | Readiness probe (no request-id, no auth) |
 | `GET` | `/v1/me` | Resolved identity summary and the caller's service invocation limits |
-| `GET` | `/v1/broker/status` | Immutable Broker build and contract versions |
+| `GET` | `/v1/broker/status` | Immutable assembly, host, SDK and compiled module identity, and contract versions |
 | `GET` | `/v1/resource-types` | Registered resource types, labels, examples, and supported selectors |
 | `GET` | `/v1/capabilities` | Capability bundle (identity summary plus visible services) |
 | `GET` | `/v1/services` | Visible services |
@@ -301,25 +301,81 @@ context. It returns `{"resourceTypes":[...]}` in registration order.
 
 `GET /v1/broker/status` requires normal Broker identity and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution
-context. Its successful response is raw JSON with `Cache-Control: no-store`:
+context. Its successful response is raw JSON with `Cache-Control: no-store`
+describing the running executable. This example is a release build; the module
+list is shortened:
 
 ```json
 {
-  "brokerVersion": "0.1.0",
-  "buildCommit": "3c14665eb32caf14e21373a762da328ea78b79a2",
-  "buildProvenance": "release",
+  "assembly": {
+    "name": "agent-access-broker",
+    "version": "0.1.0",
+    "qualification": "unqualified",
+    "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+  },
+  "host": {
+    "crate": "agent-access-broker-host",
+    "version": "0.1.0",
+    "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+  },
+  "sdk": {
+    "crate": "agent-access-provider",
+    "version": "0.1.0",
+    "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+  },
+  "modules": [
+    {
+      "crate": "agent-access-gmail",
+      "version": "0.1.0",
+      "roles": [{"role": "native", "id": "gmail"}, {"role": "oauth", "id": "google"}],
+      "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+    },
+    {
+      "crate": "agent-access-mcp-upstream",
+      "version": "0.1.0",
+      "roles": [{"role": "oauth", "id": "mcp_oauth"}, {"role": "import", "id": "mcp_http"}],
+      "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+    }
+  ],
+  "inventoryFingerprint": "sha256:6f1c9d0e2b7a4c58e93d1f60a2b4c7e8d9f0a1b2c3d4e5f60718293a4b5c6d7e",
   "catalogVersion": "agent-access.catalog.v2",
   "sendSchemaVersion": "agent-access.send.v1"
 }
 ```
 
-Local or otherwise unstamped builds instead return `buildCommit: null` and
-`buildProvenance: "unavailable"`; the other fields retain the same shape.
-The route intentionally omits mutable or environment-identifying metadata such
-as branch, dirty state, build time, host, and filesystem path. It records the
-ordinary request-span operation `broker.status`, but does not create a provider
-or management audit event. Liveness and readiness remain the minimal,
-unauthenticated probes documented below.
+- `assembly` is the executable that links the Broker host: its `name` and
+  `version`, the `qualification` label its assembler declares (`unqualified`
+  when it declares none; linking a qualified upstream host never confers that
+  label), and its own `source`.
+- `host` and `sdk` are the linked `agent-access-broker-host` and
+  `agent-access-provider` packages, each with its `crate` name, `version` and
+  `source`.
+- `modules` lists every compiled module package, sorted by `crate` and
+  `version`. It is the compiled inventory, not the current configuration: a
+  module is listed whether or not any provider, OAuth registration or import
+  uses it. `roles` lists what the package registers, sorted: a `native`
+  provider kind, an `oauth` dialect ID (including an import's companion
+  dialect), or an `import` adapter kind.
+- Every `source` has a `revision` and a `provenance`. `provenance` is
+  `evidence` when the assembler's recorded build evidence backs the revision,
+  `declared` when the assembler only states it, or `unavailable` with
+  `revision: null` when none was supplied. The Broker never infers a revision.
+  A revision is a full lowercase 40- or 64-hex Git object ID. Revisions are the
+  assembler's labels, not cryptographic attestation.
+- `inventoryFingerprint` is `sha256:` and the hexadecimal SHA-256 of a
+  length-delimited encoding of the host and SDK packages and the module
+  inventory, including each revision and provenance. The assembly fields are
+  not part of it. The same value appears in the `broker_starting` log event.
+- `catalogVersion` and `sendSchemaVersion` are the runtime contract versions.
+
+A local or otherwise unstamped build of the upstream `agent-access-broker`
+reports every `source` as `{"revision": null, "provenance": "unavailable"}`;
+the shape is otherwise the same. The status never changes while the process
+runs, including across configuration reloads. It contains no secret
+references, credentials, local paths, branch, dirty state, build time or host
+name. The route records the ordinary request-span operation `broker.status`,
+but does not create a provider or management audit event. Liveness and
+readiness remain the minimal, unauthenticated probes documented below.
 
 Authenticated runtime specs:
 

@@ -159,9 +159,11 @@ also includes a same-origin browser portal frontend:
   derivation, dynamic config reload, management routing, and HTTP MCP serving.
   It depends on core and never on a backend or import adapter.
 - **`agent-access-broker`** — the service binary: a thin assembly that selects
-  the modules it links (`composition()` in `backends.rs`), stamps its identity
-  and build status (`build_info.rs`), and runs the host application
-  (`main.rs`).
+  the modules it links (`composition()` in `backends.rs`), stamps its assembly
+  identity and the release commit of its workspace modules (`build_info.rs`),
+  and runs the host application (`main.rs`). The host checks that identity
+  against the composition and derives the build status served at
+  `/v1/broker/status`.
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static
@@ -318,6 +320,33 @@ or token is an error, never truncated. The effective grant boundary is not
 bound: the host authorizes every continuation under current policy and the
 provider re-applies its containment and result checks. Each provider's
 documentation states its families' bindings and lifetimes.
+
+### Assembly identity
+
+The executable supplies an `AssemblyIdentity` with its composition to
+`BrokerApplication::new`: its name, version and command description, a
+bounded qualification label (`unqualified` unless the assembler declares one),
+the source revisions it supplies for itself, the host and the SDK, and a module
+provenance map keyed by registered crate name and version. Each revision is a
+full Git object ID marked as declared or backed by the assembler's build
+evidence; an omitted revision is reported as unavailable, never inferred. The
+host rejects, as a composition error that exits `3`, malformed fields, map
+entries naming a package that registers no module (including the host or SDK
+themselves), repeated entries, and conflicting revisions. It derives the build
+status served at `/v1/broker/status`: the assembly, the host and SDK packages,
+and the compiled module inventory with every role each package registers, in
+canonical order, plus an inventory fingerprint over the host, SDK and modules
+with their revisions and provenance. The status lists what is compiled in, not
+what is configured, and no reload changes it. The `broker_starting` event
+carries the assembly identity and that fingerprint.
+
+The assembly identity names the aggregate HTTP MCP server and the program in
+state-lock holder metadata. Lock file names, the configuration path, state and
+keys never depend on it. Imported MCP connections identify the client as the
+host implementation (`agent-access-broker-host` and its version), not the
+assembly or the adapter package. The upstream `agent-access-broker` stamps a
+release build's verified commit, from `AGENT_ACCESS_BUILD_COMMIT`, as
+evidence-backed for itself, the host, the SDK and each of its workspace modules.
 
 ### Adding a backend
 
@@ -1810,7 +1839,10 @@ identities, and acquires non-blocking exclusive advisory locks for every
 configured managed store, the configured audit path (JSONL file or SQLite audit
 database), and the upload spool directory. Lock identity is based on canonical
 local paths, not config string spelling, and stale unlocked lock files left by
-dead processes are reused. Lock holder metadata includes the node ID. The
+dead processes are reused. Lock holder metadata includes the holding
+executable's assembly name and version and the node ID; lock file names never
+depend on the executable, so differently named executables still exclude each
+other on one state set. The
 offline `agent-access-broker audit verify` command takes the same audit lock,
 so it runs only while no broker owns that database.
 

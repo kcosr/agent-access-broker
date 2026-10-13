@@ -250,7 +250,9 @@ and audit checks through the real `agent-access` binary.
   registers it and generates `apps/portal/unit/conformance.fixture.json`
   (regenerate with `UPDATE_PORTAL_FIXTURES=1`).
 - `crates/agent-access-broker-host`: the broker host library: module
-  composition (`src/composition.rs`), the broker application (`src/application.rs`:
+  composition (`src/composition.rs`), the assembly identity it checks against
+  that composition (`src/identity.rs`) and the build status derived from both
+  (`src/build_status.rs`), the broker application (`src/application.rs`:
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown), HTTP routers and handlers, management, HTTP MCP serving,
@@ -261,7 +263,7 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
   assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
   in `src/backends.rs` selects the modules it links and `src/build_info.rs`
-  stamps its identity and build status.
+  stamps its identity, including the release commit for its workspace modules.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.

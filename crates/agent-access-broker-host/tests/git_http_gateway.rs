@@ -1,7 +1,8 @@
 //! Real Git smart-HTTP regression coverage. Requires `git` (including http-backend).
 //! All repositories, credentials, configuration, listeners, and TLS trust are test-owned.
 use agent_access_broker_host::{
-    BrokerBuildStatus, BuildProvenance, build_gateway_router, build_reloadable_state,
+    AssemblyIdentity, BrokerApplication, BrokerBuildStatus, BrokerComposition,
+    build_gateway_router, build_reloadable_state,
 };
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, ManagedStore,

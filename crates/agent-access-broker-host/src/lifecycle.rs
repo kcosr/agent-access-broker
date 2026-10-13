@@ -1,11 +1,11 @@
 //! The `serve` lifecycle: logging, runtime state, listeners, reload requests,
 //! and bounded shutdown with operation drain.
-use crate::application::AssemblyIdentity;
+use crate::BrokerBuildStatus;
 use crate::composition::BrokerComposition;
+use crate::identity::AssemblyIdentity;
 use crate::reload::{build_reloadable_state, validate_shutdown_timeout};
 use crate::router::{build_gateway_router, build_public_router};
 use crate::state::ReloadableState;
-use crate::{BrokerBuildStatus, BuildProvenance};
 use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
@@ -87,9 +87,13 @@ pub(crate) async fn serve(
     logging: LoggingMode,
 ) -> Result<()> {
     logging.install()?;
-    let build = identity.build_status();
-    emit_broker_starting(&build, &options);
-    let result = run_service(&composition, build, options, signals).await;
+    let result = match identity.build_status(&composition) {
+        Ok(build) => {
+            emit_broker_starting(&build, &options);
+            run_service(&composition, build, options, signals).await
+        }
+        Err(error) => Err(error.into()),
+    };
     if let Err(error) = &result {
         tracing::error!(event = "broker_start_failed", error = %error);
     }
@@ -132,61 +136,28 @@ fn env_filter_for_serve_value(value: Option<&str>) -> (EnvFilter, Option<String>
     }
 }
 
+/// Logs the assembly identity, its source revision and provenance when
+/// available, and the inventory fingerprint, which no reload changes.
 fn emit_broker_starting(build: &BrokerBuildStatus, options: &ServeOptions) {
-    let config_path = options.config_path.display();
-    let listen = options.listen;
-    let gateway_listen = options
-        .gateway_listen
-        .map(|addr| addr.to_string())
-        .unwrap_or_default();
-    let reload_timeout_ms = duration_millis(options.reload_timeout);
-    let shutdown_timeout_ms = duration_millis(options.shutdown_timeout);
-    match (options.body_hard_cap, build.build_provenance) {
-        (Some(body_hard_cap), BuildProvenance::Release) => tracing::info!(
-            event = "broker_starting",
-            brokerVersion = build.broker_version,
-            buildCommit = build.build_commit.expect("release builds have a commit"),
-            buildProvenance = "release",
-            configPath = %config_path,
-            publicListen = %listen,
-            gatewayListen = gateway_listen,
-            reloadTimeoutMs = reload_timeout_ms,
-            shutdownTimeoutMs = shutdown_timeout_ms,
-            bodyHardCapBytes = body_hard_cap,
-        ),
-        (None, BuildProvenance::Release) => tracing::info!(
-            event = "broker_starting",
-            brokerVersion = build.broker_version,
-            buildCommit = build.build_commit.expect("release builds have a commit"),
-            buildProvenance = "release",
-            configPath = %config_path,
-            publicListen = %listen,
-            gatewayListen = gateway_listen,
-            reloadTimeoutMs = reload_timeout_ms,
-            shutdownTimeoutMs = shutdown_timeout_ms,
-        ),
-        (Some(body_hard_cap), BuildProvenance::Unavailable) => tracing::info!(
-            event = "broker_starting",
-            brokerVersion = build.broker_version,
-            buildProvenance = "unavailable",
-            configPath = %config_path,
-            publicListen = %listen,
-            gatewayListen = gateway_listen,
-            reloadTimeoutMs = reload_timeout_ms,
-            shutdownTimeoutMs = shutdown_timeout_ms,
-            bodyHardCapBytes = body_hard_cap,
-        ),
-        (None, BuildProvenance::Unavailable) => tracing::info!(
-            event = "broker_starting",
-            brokerVersion = build.broker_version,
-            buildProvenance = "unavailable",
-            configPath = %config_path,
-            publicListen = %listen,
-            gatewayListen = gateway_listen,
-            reloadTimeoutMs = reload_timeout_ms,
-            shutdownTimeoutMs = shutdown_timeout_ms,
-        ),
-    }
+    let assembly = &build.assembly;
+    tracing::info!(
+        event = "broker_starting",
+        assemblyName = assembly.name,
+        assemblyVersion = assembly.version,
+        assemblyRevision = assembly.source.revision,
+        assemblyProvenance = assembly.source.provenance.as_str(),
+        qualification = assembly.qualification,
+        inventoryFingerprint = build.inventory_fingerprint.as_str(),
+        configPath = %options.config_path.display(),
+        publicListen = %options.listen,
+        gatewayListen = options
+            .gateway_listen
+            .map(|addr| addr.to_string())
+            .unwrap_or_default(),
+        reloadTimeoutMs = duration_millis(options.reload_timeout),
+        shutdownTimeoutMs = duration_millis(options.shutdown_timeout),
+        bodyHardCapBytes = options.body_hard_cap,
+    );
 }
 
 fn duration_millis(duration: Duration) -> u64 {

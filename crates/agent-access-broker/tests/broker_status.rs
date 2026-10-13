@@ -33,8 +33,35 @@ async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
     assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
     let value = response_json(response).await;
     assert_eq!(value, serde_json::to_value(broker_build_status()).unwrap());
+    assert_eq!(value["assembly"]["name"], "agent-access-broker");
+    assert_eq!(value["assembly"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["host"]["crate"], "agent-access-broker-host");
+    assert_eq!(value["sdk"]["crate"], "agent-access-provider");
     assert_eq!(value["catalogVersion"], "agent-access.catalog.v2");
     assert_eq!(value["sendSchemaVersion"], "agent-access.send.v1");
+    // The inventory lists what is compiled in, although this configuration
+    // enables no provider.
+    let jira = value["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|module| module["crate"] == "agent-access-jira")
+        .unwrap();
+    assert_eq!(
+        jira["roles"],
+        serde_json::json!([{"role": "native", "id": "jira"}])
+    );
+    assert!(
+        value["inventoryFingerprint"]
+            .as_str()
+            .is_some_and(|fingerprint| fingerprint.starts_with("sha256:"))
+    );
+    // Inventories never carry local paths.
+    assert!(
+        !value
+            .to_string()
+            .contains(&*fixture._temp.path().to_string_lossy())
+    );
 }
 
 #[tokio::test]

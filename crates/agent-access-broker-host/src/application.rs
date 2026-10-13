@@ -1,13 +1,13 @@
 //! The broker application: command parsing, the configuration and audit
 //! commands, and the `serve` process around [`crate::lifecycle`].
+use crate::BrokerBuildStatus;
 use crate::composition::{BrokerComposition, CompositionError};
+use crate::identity::AssemblyIdentity;
 use crate::lifecycle::{self, LoggingMode, ServeOptions, SignalSource};
-use crate::{BrokerBuildStatus, BuildProvenance};
 use agent_access_core::{
-    API_CATALOG_VERSION, AuditStoreType, AuditVerifyReport, BrokerConfig, ConfigError,
-    HostConfigError, RuntimeError, SEND_SCHEMA_VERSION, StateLockSet, load_broker_config,
-    resolve_node_id, validate_broker_config, validate_broker_config_file,
-    verify_sqlite_audit_database,
+    AuditStoreType, AuditVerifyReport, BrokerConfig, ConfigError, HostConfigError, RuntimeError,
+    StateLockSet, load_broker_config, resolve_node_id, validate_broker_config,
+    validate_broker_config_file, verify_sqlite_audit_database,
 };
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::ffi::OsString;
@@ -27,59 +27,8 @@ const EXIT_SUCCESS: u8 = 0;
 const EXIT_FAILURE: u8 = 1;
 /// A command that does not apply to the configuration, or invalid arguments.
 const EXIT_USAGE: u8 = 2;
-/// An invalid configuration or composition.
+/// An invalid configuration, composition or assembly identity.
 const EXIT_CONFIG: u8 = 3;
-
-/// The executable that links the host: its command name and description,
-/// its version, and the source revision its release build recorded.
-///
-/// The identity labels the command line and build status only. The
-/// configuration path, state, keys and locks never depend on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssemblyIdentity {
-    name: &'static str,
-    about: Option<&'static str>,
-    version: &'static str,
-    release_commit: Option<&'static str>,
-}
-
-impl AssemblyIdentity {
-    pub const fn new(name: &'static str, version: &'static str) -> Self {
-        Self {
-            name,
-            about: None,
-            version,
-            release_commit: None,
-        }
-    }
-
-    /// The description shown in command-line help.
-    pub const fn with_about(mut self, about: &'static str) -> Self {
-        self.about = Some(about);
-        self
-    }
-
-    /// The full source revision recorded by a release build with
-    /// provenance. Without one, build provenance is unavailable.
-    pub const fn with_release_commit(mut self, commit: &'static str) -> Self {
-        self.release_commit = Some(commit);
-        self
-    }
-
-    /// The build status served at `/v1/broker/status` and logged at startup.
-    pub fn build_status(&self) -> BrokerBuildStatus {
-        BrokerBuildStatus {
-            broker_version: self.version,
-            build_commit: self.release_commit,
-            build_provenance: match self.release_commit {
-                Some(_) => BuildProvenance::Release,
-                None => BuildProvenance::Unavailable,
-            },
-            catalog_version: API_CATALOG_VERSION,
-            send_schema_version: SEND_SCHEMA_VERSION,
-        }
-    }
-}
 
 /// A broker executable. It owns command parsing, logging, the async runtime,
 /// configuration validation, offline audit verification, and serving with
@@ -88,14 +37,27 @@ impl AssemblyIdentity {
 pub struct BrokerApplication {
     composition: BrokerComposition,
     identity: AssemblyIdentity,
+    status: BrokerBuildStatus,
 }
 
 impl BrokerApplication {
-    pub fn new(composition: BrokerComposition, identity: AssemblyIdentity) -> Self {
-        Self {
+    /// Checks `identity` against `composition`; a rejected identity, like a
+    /// rejected composition, exits 3 when returned from `main`.
+    pub fn new(
+        composition: BrokerComposition,
+        identity: AssemblyIdentity,
+    ) -> Result<Self, CompositionError> {
+        let status = identity.build_status(&composition)?;
+        Ok(Self {
             composition,
             identity,
-        }
+            status,
+        })
+    }
+
+    /// The build status served at `/v1/broker/status`.
+    pub fn status(&self) -> &BrokerBuildStatus {
+        &self.status
     }
 
     /// Runs the command the process arguments name.
@@ -131,8 +93,8 @@ impl BrokerApplication {
     }
 
     fn command(&self) -> clap::Command {
-        let command = Cli::command().name(self.identity.name);
-        match self.identity.about {
+        let command = Cli::command().name(self.identity.name());
+        match self.identity.about() {
             Some(about) => command.about(about),
             None => command,
         }
@@ -180,7 +142,12 @@ impl BrokerApplication {
             eprintln!("audit verify requires [audit] type = \"sqlite\"; {configured}");
             return BrokerExit::status(EXIT_USAGE);
         };
-        match verify_locked_audit_database(&config, config_path, Path::new(&audit.path)) {
+        match verify_locked_audit_database(
+            &config,
+            config_path,
+            &self.status,
+            Path::new(&audit.path),
+        ) {
             Ok(true) => {
                 println!("audit database verified");
                 BrokerExit::status(EXIT_SUCCESS)
@@ -224,11 +191,13 @@ impl BrokerApplication {
 fn verify_locked_audit_database(
     config: &BrokerConfig,
     config_path: &Path,
+    status: &BrokerBuildStatus,
     path: &Path,
 ) -> anyhow::Result<bool> {
     let node_id = resolve_node_id(&config.deployment)?;
-    let _lock = StateLockSet::acquire_audit_for_config(config, config_path, &node_id)
-        .map_err(|error| anyhow::anyhow!(error.operator_message()))?;
+    let _lock =
+        StateLockSet::acquire_audit_for_config(config, config_path, &status.lock_holder(&node_id))
+            .map_err(|error| anyhow::anyhow!(error.operator_message()))?;
     let report = verify_sqlite_audit_database(path).map_err(anyhow::Error::msg)?;
     print_audit_verify_report(path, &report);
     Ok(report.is_ok())
@@ -268,7 +237,7 @@ fn default_config_path() -> PathBuf {
 /// How a broker command ended. Returned from `main`, it reports a failure
 /// that the command has not already printed and exits with the command's
 /// status: 0 on success, 1 on failure, 2 for a usage error, and 3 when the
-/// configuration or the composition is invalid.
+/// configuration, the composition or the assembly identity is invalid.
 #[derive(Debug)]
 #[must_use]
 pub struct BrokerExit {
@@ -296,7 +265,8 @@ impl BrokerExit {
     }
 
     /// Exits 3 when the configuration could not be read, parsed or
-    /// validated, as `config validate` does, and 1 for any other failure.
+    /// validated, as `config validate` does, or the composition or assembly
+    /// identity is invalid, and 1 for any other failure.
     fn failed(error: anyhow::Error) -> Self {
         let code = if is_configuration_error(&error) {
             EXIT_CONFIG
@@ -310,11 +280,13 @@ impl BrokerExit {
     }
 }
 
-/// Whether a configuration error caused `error`, directly, through its
-/// context or sources, or inside a core error that wraps it transparently.
+/// Whether a configuration or composition error caused `error`, directly,
+/// through its context or sources, or inside a core error that wraps it
+/// transparently.
 fn is_configuration_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause.is::<ConfigError>()
+            || cause.is::<CompositionError>()
             || matches!(
                 cause.downcast_ref::<RuntimeError>(),
                 Some(RuntimeError::Config(_))
@@ -444,6 +416,7 @@ mod tests {
             BrokerComposition::from_registry(backend_registry()),
             IDENTITY,
         )
+        .unwrap()
     }
 
     fn run(args: &[&str]) -> u8 {
@@ -586,16 +559,40 @@ default_decision = "deny"
     }
 
     #[test]
-    fn the_build_status_follows_the_recorded_release_commit() {
-        const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-        let unavailable = IDENTITY.build_status();
-        assert_eq!(unavailable.broker_version, "1.2.3");
-        assert_eq!(unavailable.build_commit, None);
-        assert_eq!(unavailable.build_provenance, BuildProvenance::Unavailable);
-        assert_eq!(unavailable.catalog_version, API_CATALOG_VERSION);
-        assert_eq!(unavailable.send_schema_version, SEND_SCHEMA_VERSION);
-        let release = IDENTITY.with_release_commit(COMMIT).build_status();
-        assert_eq!(release.build_commit, Some(COMMIT));
-        assert_eq!(release.build_provenance, BuildProvenance::Release);
+    fn an_invalid_identity_is_rejected_at_construction_and_exits_three() {
+        static UNKNOWN: [crate::ModuleProvenance; 1] = [crate::ModuleProvenance::new(
+            "acme-provider",
+            "1.0.0",
+            crate::SourceRevision::declared("0123456789abcdef0123456789abcdef01234567"),
+        )];
+        let error = BrokerApplication::new(
+            BrokerComposition::from_registry(backend_registry()),
+            IDENTITY.with_module_provenance(&UNKNOWN),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "broker assembly identity is invalid");
+        assert_eq!(
+            error.problems(),
+            [
+                "module provenance names \"acme-provider\" \"1.0.0\", which is not a registered module package"
+            ]
+        );
+        assert_eq!(BrokerExit::from(error.clone()).code(), 3);
+        assert_eq!(BrokerExit::failed(error.into()).code(), 3);
+    }
+
+    #[test]
+    fn the_application_serves_the_identity_it_was_built_with() {
+        let status = serde_json::to_value(application().status()).unwrap();
+        assert_eq!(status["assembly"]["name"], "example-broker");
+        assert_eq!(status["assembly"]["version"], "1.2.3");
+        assert_eq!(
+            status["catalogVersion"],
+            agent_access_core::API_CATALOG_VERSION
+        );
+        assert_eq!(
+            status["sendSchemaVersion"],
+            agent_access_core::SEND_SCHEMA_VERSION
+        );
     }
 }

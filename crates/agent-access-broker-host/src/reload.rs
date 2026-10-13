@@ -68,7 +68,12 @@ pub async fn build_reloadable_state(
     validate_broker_config(&config)?;
     let node_id = resolve_node_id(&config.deployment)?;
     let hash = config_hash(&raw);
-    let state_locks = StateLockSet::acquire_for_config(&config, &config_path, &node_id, None)?;
+    let state_locks = StateLockSet::acquire_for_config(
+        &config,
+        &config_path,
+        &build_status.lock_holder(&node_id),
+        None,
+    )?;
     let audit_registry = Arc::new(AuditRuntimeRegistry::new());
     let runtime = BrokerRuntime::new_with_audit_registry(config, Arc::clone(&audit_registry))
         .map_err(|error| {
@@ -108,6 +113,7 @@ struct CandidateAdmission {
 fn admit_candidate_config(
     config_path: &FsPath,
     backends: &Arc<BackendRegistry>,
+    build_status: &BrokerBuildStatus,
     body_hard_cap: usize,
     live_locks: &[Arc<StateLockSet>],
     previous_runtime: &BrokerRuntime,
@@ -149,16 +155,20 @@ fn admit_candidate_config(
             Some(hash.clone()),
         )
     })?;
-    let state_locks =
-        StateLockSet::acquire_for_config_reusing(&config, config_path, &node_id, live_locks)
-            .map_err(|error| {
-                ReloadFailure::new(
-                    AdminDecision::Error,
-                    ReasonCode::ConfigAdmissionFailed,
-                    vec![error.operator_message()],
-                    Some(hash.clone()),
-                )
-            })?;
+    let state_locks = StateLockSet::acquire_for_config_reusing(
+        &config,
+        config_path,
+        &build_status.lock_holder(&node_id),
+        live_locks,
+    )
+    .map_err(|error| {
+        ReloadFailure::new(
+            AdminDecision::Error,
+            ReasonCode::ConfigAdmissionFailed,
+            vec![error.operator_message()],
+            Some(hash.clone()),
+        )
+    })?;
     Ok(CandidateAdmission {
         config,
         hash,
@@ -1226,10 +1236,12 @@ impl ReloadableState {
         let live_locks = self.live_state_lock_sets();
         let build_deadline = deadline.clone();
         let backends = Arc::clone(&self.backends);
+        let build_status = Arc::clone(&self.build_status);
         let mut build = tokio::task::spawn_blocking(move || {
             let admission = admit_candidate_config(
                 &config_path,
                 &backends,
+                &build_status,
                 body_hard_cap,
                 &live_locks,
                 &previous_runtime,

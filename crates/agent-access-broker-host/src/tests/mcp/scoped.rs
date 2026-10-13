@@ -24,10 +24,13 @@ pub(in crate::tests) async fn initialize(fixture: &Fixture, path: &str, token: &
         .unwrap()
         .to_owned();
     let body = rpc_body(response).await;
+    // The assembly, not the host package, names and versions the server.
+    let (assembly, version) = crate::test_composition::TEST_ASSEMBLY;
     assert_eq!(
         body["result"]["serverInfo"]["name"],
-        path.strip_prefix("/mcp/").unwrap_or("agent-access-broker")
+        path.strip_prefix("/mcp/").unwrap_or(assembly)
     );
+    assert_eq!(body["result"]["serverInfo"]["version"], version);
     assert_eq!(body["result"]["protocolVersion"], VERSION);
     assert_ne!(body["result"]["capabilities"]["tools"]["listChanged"], true);
     assert_eq!(

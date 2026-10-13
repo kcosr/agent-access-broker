@@ -1,5 +1,6 @@
 //! The modules an assembly links, validated once into an immutable
 //! composition that every command and runtime generation shares.
+use crate::build_status::{ModuleRole, ModuleRoleKind};
 use agent_access_core::imports::ImportedAdapterRegistration;
 use agent_access_core::{
     BackendRegistry, ConfigError, HttpRouteSpec, http_route_specs, parse_broker_config_raw,
@@ -7,6 +8,7 @@ use agent_access_core::{
 use agent_access_provider::{
     BackendRegistration, OAuthDialectRegistration, ResourceTypeRegistry, ServiceDescriptor,
 };
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -75,6 +77,45 @@ impl BrokerComposition {
         &self.registry
     }
 
+    /// Every registered module package, keyed by crate name and version,
+    /// with the roles it registers, in canonical order.
+    pub(crate) fn module_packages(
+        &self,
+    ) -> BTreeMap<(&'static str, &'static str), Vec<ModuleRole>> {
+        let natives = self.registry.registrations().map(|registration| {
+            (
+                registration.module(),
+                ModuleRole::new(ModuleRoleKind::Native, registration.kind()),
+            )
+        });
+        let dialects = self.registry.oauth_dialects().map(|dialect| {
+            (
+                dialect.module(),
+                ModuleRole::new(ModuleRoleKind::Oauth, dialect.id()),
+            )
+        });
+        let imports = self
+            .registry
+            .imported_adapter_registrations()
+            .map(|registration| {
+                (
+                    registration.module(),
+                    ModuleRole::new(ModuleRoleKind::Import, registration.kind()),
+                )
+            });
+        let mut packages = BTreeMap::<_, Vec<ModuleRole>>::new();
+        for (module, role) in natives.chain(dialects).chain(imports) {
+            packages
+                .entry((module.crate_name(), module.crate_version()))
+                .or_default()
+                .push(role);
+        }
+        for roles in packages.values_mut() {
+            roles.sort();
+        }
+        packages
+    }
+
     /// A composition over a registry that host tests already build.
     #[cfg(test)]
     pub(crate) fn from_registry(registry: BackendRegistry) -> Self {
@@ -135,29 +176,54 @@ impl BrokerCompositionBuilder {
         let registry = BackendRegistry::new(self.natives)
             .and_then(|registry| registry.with_oauth_dialects(self.oauth_dialects))
             .and_then(|registry| registry.with_imported_adapters(self.import_adapters))
-            .map_err(|problems| CompositionError { problems })?;
+            .map_err(CompositionError::composition)?;
         Ok(BrokerComposition {
             registry: Arc::new(registry),
         })
     }
 }
 
-/// Why a composition was rejected. Problems name only the conflicting module
-/// identities, in a deterministic order.
+/// Why a composition, or the assembly identity describing it, was rejected.
+/// Problems name only module and package identities, in a deterministic
+/// order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompositionError {
+    subject: Subject,
     problems: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Subject {
+    Composition,
+    AssemblyIdentity,
 }
 
 impl CompositionError {
     pub fn problems(&self) -> &[String] {
         &self.problems
     }
+
+    fn composition(problems: Vec<String>) -> Self {
+        Self {
+            subject: Subject::Composition,
+            problems,
+        }
+    }
+
+    pub(crate) fn assembly_identity(problems: Vec<String>) -> Self {
+        Self {
+            subject: Subject::AssemblyIdentity,
+            problems,
+        }
+    }
 }
 
 impl fmt::Display for CompositionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("broker composition is invalid")
+        formatter.write_str(match self.subject {
+            Subject::Composition => "broker composition is invalid",
+            Subject::AssemblyIdentity => "broker assembly identity is invalid",
+        })
     }
 }
 
