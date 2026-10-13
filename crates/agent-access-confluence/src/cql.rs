@@ -169,6 +169,8 @@ pub(crate) struct BuiltConfluenceSearchQuery {
     pub(crate) injected_space_predicate: &'static str,
     pub(crate) injected_type_predicate: &'static str,
     pub(crate) response_scope: EffectiveSearchScope,
+    /// The caller's query, canonically re-emitted; continuations bind it.
+    pub(crate) canonical_caller_cql: String,
     pub(crate) canonical_caller_cql_hash: String,
     pub(crate) query_shape: Value,
     pub(crate) text_operand_hashes: Vec<String>,
@@ -326,6 +328,7 @@ pub(crate) fn build_confluence_search_query_for_kind(
         injected_space_predicate,
         response_scope,
         canonical_caller_cql_hash: sha256_hex(caller_cql.as_bytes()),
+        canonical_caller_cql: caller_cql,
         query_shape,
         text_operand_hashes,
         sort_fields,

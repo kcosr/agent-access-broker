@@ -200,7 +200,11 @@ JQL/CQL; do not assume every upstream field or function works. Omitting Jira
 `projects` or Confluence `spaces` uses effective broker authorization. Empty or
 ordering-only queries can browse that boundary; Jira still requires finite
 project narrowing or a caller filter. Correct `input_invalid` using the returned
-message and action documentation rather than guessing query fields.
+message and action documentation rather than guessing query fields. Continue a
+search by passing the returned opaque `nextPageToken` unchanged with the same
+query, `projects` or `spaces`, and `maxResults`; when it is rejected (expired
+after 15 minutes, invalidated by a Broker reload, or after a grant change
+rescoped the search), repeat the search without it.
 
 ## Read outcomes and recover
 

@@ -377,12 +377,12 @@ on redirect targets.
 The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
 resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
-page tokens, and Gmail and Jira search page tokens use it; other native
-providers keep their own token handling, which is described in each provider's
-documentation. A provider that uses the envelope declares each token family
-once: its service and purpose, a version, an explicit payload cap (a family
-relaying an upstream token may instead derive it at construction from a
-configured limit), an optional expiry, and a signing lifetime:
+page tokens, Gmail and Jira search page tokens, and Confluence search cursors
+use it; Confluence keeps its own handling for its other tokens, which the
+Confluence documentation describes. A provider that uses the envelope declares
+each token family once: its service and purpose, a version, an explicit payload
+cap (a family relaying an upstream token may instead derive it at construction
+from a configured limit), an optional expiry, and a signing lifetime:
 
 - **generation**: a key generated with the provider instance, so a reload or
   restart invalidates the tokens even when a stable key is configured;
@@ -632,9 +632,10 @@ existence, ownership of a particular object, or an authorization outcome.
   support `before`, `after`, and `append` placement, and verify the parent and
   direct-child order by readback. Create actions resolve
   the target space directly from inputs. Update actions are optimistic-concurrency.
-  Attachment and comment list actions are cursor-paginated with broker-signed
-  HMAC continuation tokens. Twenty current page/blog, draft, and comment
-  mutations use canonical `content` plus explicit `contentFormat`. Markdown and
+  Search, blog search, attachment and comment list actions are cursor-paginated
+  with broker-signed continuation tokens that relay Confluence's cursor. Twenty
+  current page/blog, draft, and comment mutations use canonical `content` plus
+  explicit `contentFormat`. Markdown and
   plain text are converted to constrained storage HTML; native storage remains
   a string, and current page create/update also retain native
   `atlas_doc_format` JSON when enabled. Twenty-six Confluence actions whose

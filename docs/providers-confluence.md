@@ -354,7 +354,8 @@ prove attachment→page membership after authorization and before streaming byte
 ## `search` and CQL
 
 The `search` input mirrors Jira's: a `query` of `{ type: "cql" | "text", value }`,
-an optional `spaces` array (min 1), `maxResults`, and `nextPageToken`. Raw CQL is
+an optional `spaces` array (min 1), `maxResults`, and a `nextPageToken`
+continuation (see [Search pagination](#search-pagination)). Raw CQL is
 parsed into a broker-owned AST and re-emitted canonically. Omit `spaces` to search
 all effective broker-authorized spaces after grant, token, and execution-context
 restrictions; supply it only to narrow that boundary. Empty or whitespace-only
@@ -468,6 +469,41 @@ without explicit parentheses.
 Live upstream compatibility evidence for the broker-emitted Confluence CQL
 subset is collected by the read-only Confluence CQL conformance smoke described
 in `docs/testing.md`.
+
+### Search pagination
+
+A `search` or `blog.search` result's `nextPageToken` is an opaque broker-signed
+continuation, not Confluence's own cursor. To fetch the next page, pass it back
+unchanged as `nextPageToken` to the same action with the same search:
+
+- the same `query` type and canonical CQL (equivalent spellings are the same
+  query);
+- the same `spaces`, compared as a set;
+- the same effective `maxResults`; an omitted value equals the configured
+  default, and values above `providers.confluence.search.max_results` equal the
+  cap.
+
+The continuation is also bound to the execution context, the principal and
+whether it authenticated, the credential mode, the selected credential's type
+(which chooses the tenant or gateway route), and the Confluence configuration
+the cursor depends on: `tenant_host`, `cloud_id`, and whether
+`api.atlassian.com` is allowed. Any change rejects the token with
+`input_invalid`. Continuations expire 15 minutes after they are issued. They are
+signed with a key generated for each broker runtime generation, so a
+configuration reload or restart also invalidates them. Confluence may also
+expire its own cursor.
+
+A continuation carries no authority and does not bind the effective space
+boundary. Every page is authorized again under current policy, its CQL is
+composed under the current boundary, and returned content is checked against
+it, so a grant change applies from the next page. When that change alters the
+composed CQL, the continuation is rejected with `input_invalid` ("the effective
+Confluence space scope changed since nextPageToken was issued; repeat the search
+without nextPageToken") before Confluence is called; Confluence's cursor is
+never sent with a different query. The broker adds no cursor length limit of its
+own: Confluence's cursor arrives in a response bounded by
+`limits.max_upstream_response_bytes`, and a continuation that would not fit that
+bound fails with `upstream_protocol_failed`, never truncated.
 
 ## Normalized read content and whole-result Markdown
 
@@ -720,8 +756,8 @@ Blog native format support is controlled by
 `providers.confluence.content.blog_formats`. Storage is a non-empty UTF-8
 string; when enabled it also backs normalized Markdown and plain-text writes.
 
-`blog.search` has the same input shape and authorization planning as page
-search, but it composes `type = blogpost` and rejects page hierarchy predicates
+`blog.search` has the same input shape, authorization planning, and
+[pagination](#search-pagination) as page search, but it composes `type = blogpost` and rejects page hierarchy predicates
 (`id`, `content.id`, `ancestor`, and `parent`). It uses the v1
 `content/search` endpoint with `expand=space,version,history`, an optional
 cursor, and validates that every result is a current blog post in an authorized

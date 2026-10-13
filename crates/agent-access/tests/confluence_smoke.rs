@@ -205,7 +205,13 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         search_json["result"]["pages"][0]["spaceUrl"],
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
-    assert_eq!(search_json["result"]["nextPageToken"], "cursor-2");
+    // Confluence's cursor is sealed in a broker continuation, never relayed raw.
+    let continuation = search_json["result"]["nextPageToken"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(continuation, "cursor-2");
+    assert!(!continuation.contains("cursor-2"));
     let last_search = backend
         .last_search
         .lock()
@@ -219,6 +225,41 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     );
     assert_eq!(last_search.spaces, vec!["ENG"]);
     assert_eq!(last_search.max_results, 2);
+    assert_eq!(last_search.next_page_token, None);
+
+    // The same search continues with the continuation, and Confluence
+    // receives only its own cursor.
+    let next_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+        .args([
+            "--url",
+            &base_url,
+            "--no-token",
+            "confluence",
+            "page",
+            "search",
+            "--text",
+            "runbook",
+            "--max-results",
+            "100",
+            "--next-page-token",
+            &continuation,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        next_search.status.success(),
+        "continued search failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&next_search.stdout),
+        String::from_utf8_lossy(&next_search.stderr)
+    );
+    let last_search = backend
+        .last_search
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(last_search.next_page_token.as_deref(), Some("cursor-2"));
 
     let mismatch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -2723,7 +2764,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         *self.last_search.lock().unwrap() = Some(request);
         Ok(ConfluenceBackendResponse {
-            value: self.search_page.lock().unwrap().take().unwrap(),
+            value: self.search_page.lock().unwrap().clone().unwrap(),
             status: 200,
             duration_ms: 5,
         })

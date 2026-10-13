@@ -3,6 +3,7 @@
 //! `confluence_space` resources.
 mod backend;
 mod config;
+mod continuation;
 mod cql;
 mod present;
 #[cfg(test)]
@@ -11,6 +12,7 @@ mod validation;
 
 pub use backend::*;
 pub use config::*;
+use continuation::*;
 use cql::*;
 use validation::*;
 
@@ -77,6 +79,8 @@ pub struct ConfluenceProvider {
     limits: ProviderLimits,
     backend: Arc<dyn ConfluenceBackend>,
     pagination_signer: ConfluenceTokenSigner,
+    /// Seals search continuations.
+    continuations: ConfluenceContinuations,
     attribution: ProviderAttributionConfig,
 }
 
@@ -92,10 +96,15 @@ impl ConfluenceProvider {
             host.clients(),
         )?);
         Ok(Self {
+            pagination_signer: ConfluenceTokenSigner::new(host.stable_signing_key().cloned()),
+            continuations: ConfluenceContinuations::new(
+                &config,
+                &limits,
+                host.stable_signing_key().cloned(),
+            ),
             config,
             limits,
             backend,
-            pagination_signer: ConfluenceTokenSigner::new(host.stable_signing_key().cloned()),
             attribution: host.attribution().clone(),
         })
     }
@@ -106,10 +115,11 @@ impl ConfluenceProvider {
         backend: Arc<dyn ConfluenceBackend>,
     ) -> Self {
         Self {
+            pagination_signer: ConfluenceTokenSigner::new(None),
+            continuations: ConfluenceContinuations::new(&config, &limits, None),
             config,
             limits,
             backend,
-            pagination_signer: ConfluenceTokenSigner::new(None),
             attribution: ProviderAttributionConfig::default(),
         }
     }
@@ -129,10 +139,11 @@ impl ConfluenceProvider {
         stable_signing_key: Arc<dyn StableSigningKey>,
     ) -> Self {
         Self {
+            pagination_signer: ConfluenceTokenSigner::new(Some(stable_signing_key.clone())),
+            continuations: ConfluenceContinuations::new(&config, &limits, Some(stable_signing_key)),
             config,
             limits,
             backend,
-            pagination_signer: ConfluenceTokenSigner::new(Some(stable_signing_key)),
             attribution: ProviderAttributionConfig::default(),
         }
     }
@@ -3869,6 +3880,18 @@ impl ConfluenceProvider {
             build_confluence_search_query(&inputs.query, &effective_scope, &self.config.search)?;
         let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
+        let pages = SearchPageRequest {
+            context: request.context(),
+            credential,
+            query: &query,
+            requested_spaces: &requested,
+            max_results,
+        };
+        let upstream_page_token = inputs
+            .next_page_token
+            .as_deref()
+            .map(|token| self.continuations.open_search_page(&pages, token))
+            .transpose()?;
         let response = self
             .backend
             .search(
@@ -3876,7 +3899,7 @@ impl ConfluenceProvider {
                     cql: query.cql.clone(),
                     spaces: response_scope.values_for_backend(),
                     max_results,
-                    next_page_token: inputs.next_page_token.clone(),
+                    next_page_token: upstream_page_token,
                 },
                 credential,
             )
@@ -3908,7 +3931,13 @@ impl ConfluenceProvider {
             .map(|page| page.space.clone())
             .collect::<BTreeSet<_>>();
 
-        let result = search_result(&response.value, &self.config)?;
+        let next_page_token = response
+            .value
+            .next_page_token
+            .as_deref()
+            .map(|upstream| self.continuations.seal_search_page(&pages, upstream))
+            .transpose()?;
+        let result = search_result(&response.value, next_page_token.as_deref(), &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
             .with_audit(json!({
@@ -6389,6 +6418,18 @@ impl ConfluenceProvider {
         )?;
         let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
+        let pages = SearchPageRequest {
+            context: request.context(),
+            credential,
+            query: &query,
+            requested_spaces: &requested,
+            max_results,
+        };
+        let upstream_page_token = inputs
+            .next_page_token
+            .as_deref()
+            .map(|token| self.continuations.open_search_page(&pages, token))
+            .transpose()?;
         let response = self
             .backend
             .search_blogs(
@@ -6396,7 +6437,7 @@ impl ConfluenceProvider {
                     cql: query.cql.clone(),
                     spaces: response_scope.values_for_backend(),
                     max_results,
-                    next_page_token: inputs.next_page_token.clone(),
+                    next_page_token: upstream_page_token,
                 },
                 credential,
             )
@@ -6426,7 +6467,13 @@ impl ConfluenceProvider {
             .iter()
             .map(|blog| blog.space.clone())
             .collect::<BTreeSet<_>>();
-        let result = blog_search_result(&response.value, &self.config)?;
+        let next_page_token = response
+            .value
+            .next_page_token
+            .as_deref()
+            .map(|upstream| self.continuations.seal_search_page(&pages, upstream))
+            .transpose()?;
+        let result = blog_search_result(&response.value, next_page_token.as_deref(), &self.config)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result).with_audit(json!({
                 "provider": "confluence",
@@ -11878,8 +11925,11 @@ fn confluence_browser_url_protocol_error() -> ProviderError {
     )
 }
 
+/// A search page's result, carrying the sealed continuation for its
+/// upstream cursor.
 fn search_result(
     page: &ConfluenceSearchPage,
+    next_page_token: Option<&str>,
     config: &ConfluenceProviderConfig,
 ) -> Result<Value, ProviderError> {
     let pages = page
@@ -11904,12 +11954,13 @@ fn search_result(
     Ok(json!({
         "pages": pages,
         "maxResults": page.max_results,
-        "nextPageToken": page.next_page_token,
+        "nextPageToken": next_page_token,
     }))
 }
 
 fn blog_search_result(
     page: &ConfluenceSearchBlog,
+    next_page_token: Option<&str>,
     config: &ConfluenceProviderConfig,
 ) -> Result<Value, ProviderError> {
     let blogs = page
@@ -11937,7 +11988,7 @@ fn blog_search_result(
         "blogs": blogs,
         "count": page.blogs.len(),
         "maxResults": page.max_results,
-        "nextPageToken": page.next_page_token,
+        "nextPageToken": next_page_token,
     }))
 }
 

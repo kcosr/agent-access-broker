@@ -1060,6 +1060,11 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
         limits: ProviderLimits::default(),
         backend: backend.clone(),
         pagination_signer: ConfluenceTokenSigner::new(None),
+        continuations: ConfluenceContinuations::new(
+            &confluence_config(),
+            &ProviderLimits::default(),
+            None,
+        ),
         attribution: ProviderAttributionConfig::from_patterns(
             &confluence_descriptor(&confluence_config()),
             &[String::from("page.footer_comment.add")],
@@ -3189,6 +3194,7 @@ fn confluence_content_parsers_and_results_expose_metadata_without_search_bodies(
             max_results: 2,
             next_page_token: None,
         },
+        None,
         &config,
     )
     .unwrap();
@@ -3592,6 +3598,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
             max_results: 2,
             next_page_token: None,
         },
+        None,
         &config,
     )
     .unwrap();
@@ -3645,6 +3652,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
             max_results: 2,
             next_page_token: None,
         },
+        None,
         &config,
     )
     .unwrap();
@@ -3730,7 +3738,7 @@ fn confluence_result_urls_fail_closed_on_hostile_upstream_links() {
         max_results: 2,
         next_page_token: None,
     };
-    let error = search_result(&page, &config).unwrap_err();
+    let error = search_result(&page, None, &config).unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
@@ -7917,6 +7925,7 @@ fn confluence_attribution_provider(
     let attribution =
         ProviderAttributionConfig::from_patterns(&confluence_descriptor(&config), &patterns);
     ConfluenceProvider {
+        continuations: ConfluenceContinuations::new(&config, &ProviderLimits::default(), None),
         config,
         limits: ProviderLimits::default(),
         backend,

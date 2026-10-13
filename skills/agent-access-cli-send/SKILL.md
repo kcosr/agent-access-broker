@@ -145,7 +145,11 @@ Jira issue view/search include timestamps, small user summaries, priority, and
 labels; Confluence page/blog/draft results include created/updated actor and
 time fields; GitLab issue and merge-request results include timestamps, users,
 labels, milestone, and merge-request draft state. Jira and Confluence search
-results still omit large body fields.
+results still omit large body fields. Continue a Jira or Confluence search by
+passing the returned opaque `nextPageToken` unchanged as the `nextPageToken` input of the
+same action with the same query, projects or spaces, and `maxResults`. A
+rejected token (expired after 15 minutes, invalidated by a Broker reload, or
+after a grant change rescoped the search) means repeating the search without it.
 
 ## Invoke Envelope
 
