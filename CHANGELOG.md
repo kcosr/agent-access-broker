@@ -152,6 +152,10 @@ All notable changes to this project are documented in this file.
   failures.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
+- `scripts/verify-release-provenance.mjs` checks the release dependency graph
+  before building: `cargo tree --locked --target <host> -p agent-access-broker
+  -p agent-access -e normal,build,features` must enable no crate's
+  `test-support` feature and link no `reference` crate.
 
 ### Changed
 

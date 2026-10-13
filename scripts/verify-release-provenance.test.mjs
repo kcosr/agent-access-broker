@@ -8,13 +8,17 @@ import { fileURLToPath } from "node:url";
 
 import {
   StatusMetadataMismatch,
+  assertReleaseFeatureGraph,
   assertReleaseStatus,
   assertCleanAt,
   assertNoToolchainOverrides,
   cargoConfigInventory,
   inspectLocalToolchain,
+  parseCargoTree,
   parseProvenanceArguments,
   provenanceBuildPlan,
+  referenceCrates,
+  releaseFeatureTreeArgs,
   validateToolchainVersions,
 } from "./verify-release-provenance.mjs";
 
@@ -270,4 +274,66 @@ test("classifies every metadata mismatch as definitive", () => {
     );
   }
   assert.throws(() => assertReleaseStatus(null, expected), StatusMetadataMismatch);
+});
+
+const CLEAN_TREE = `agent-access-broker v0.1.0 (/checkout/crates/agent-access-broker)
+agent-access-broker-host feature "default"
+agent-access-broker-host v0.1.0 (/checkout/crates/agent-access-broker-host)
+agent-access-provider feature "default"
+agent-access-provider v0.1.0 (/checkout/crates/agent-access-provider)
+serde feature "derive"
+serde v1.0.228
+serde_derive v1.0.228 (proc-macro)
+[build-dependencies]
+cc feature "default"
+cc v1.2.0
+
+agent-access v0.1.0 (/checkout/crates/agent-access)
+agent-access-provider feature "default" (*)
+`;
+
+test("the release feature check covers both release packages without dev edges", () => {
+  assert.deepEqual(releaseFeatureTreeArgs(toolchain.host), ["tree", "--locked", "--target", toolchain.host,
+    "-p", "agent-access-broker", "-p", "agent-access", "-e", "normal,build,features", "--prefix", "none"]);
+  assert.ok(!releaseFeatureTreeArgs(toolchain.host).join(" ").includes("dev"));
+});
+
+test("parses package and feature nodes from cargo tree output", () => {
+  const parsed = parseCargoTree(CLEAN_TREE);
+  assert.deepEqual(parsed.features, [
+    "agent-access-broker-host/default", "agent-access-provider/default", "cc/default", "serde/derive",
+  ]);
+  assert.deepEqual(parsed.packages.map((pkg) => `${pkg.name}@${pkg.version}`), [
+    "agent-access-broker@0.1.0", "agent-access-broker-host@0.1.0", "agent-access-provider@0.1.0",
+    "serde@1.0.228", "serde_derive@1.0.228", "cc@1.2.0", "agent-access@0.1.0",
+  ]);
+});
+
+test("reference crates come from workspace role metadata", () => {
+  const metadata = {
+    workspace_members: ["conformance-id", "fake-id"],
+    packages: [
+      { id: "conformance-id", name: "agent-access-conformance", metadata: { "agent-access": { role: "reference" } } },
+      { id: "fake-id", name: "agent-access-fake", metadata: { "agent-access": { role: "native" } } },
+      { id: "registry-id", name: "outside-reference", metadata: { "agent-access": { role: "reference" } } },
+    ],
+  };
+  assert.deepEqual(referenceCrates(metadata), ["agent-access-conformance"]);
+  assert.deepEqual(referenceCrates({}), []);
+});
+
+test("rejects any test-support feature or reference crate in the release graph", () => {
+  const references = ["agent-access-conformance"];
+  assert.doesNotThrow(() => assertReleaseFeatureGraph(CLEAN_TREE, references));
+  assert.throws(
+    () => assertReleaseFeatureGraph(`${CLEAN_TREE}agent-access-provider feature "test-support"\nagent-access-core feature "test-support" (*)\n`, references),
+    /Release dependency graph enables test-only code: test feature agent-access-core\/test-support, test feature agent-access-provider\/test-support$/,
+  );
+  assert.throws(
+    () => assertReleaseFeatureGraph(`${CLEAN_TREE}agent-access-conformance v0.1.0 (/checkout/crates/agent-access-conformance)\n`, references),
+    /enables test-only code: reference crate agent-access-conformance$/,
+  );
+  // A feature that merely mentions the name is not the test-support feature.
+  assert.doesNotThrow(() => assertReleaseFeatureGraph(`${CLEAN_TREE}tokio feature "test-support-extra"\n`, references));
+  assert.throws(() => assertReleaseFeatureGraph("", references), /names neither release package/);
 });

@@ -173,6 +173,60 @@ export function assertReleaseStatus(status, expected) {
   }
 }
 
+const RELEASE_PACKAGES = ["agent-access-broker", "agent-access"];
+const FORBIDDEN_RELEASE_FEATURE = "test-support";
+
+export function releaseFeatureTreeArgs(host) {
+  return ["tree", "--locked", "--target", host,
+    ...RELEASE_PACKAGES.flatMap((name) => ["-p", name]),
+    "-e", "normal,build,features", "--prefix", "none"];
+}
+
+// Parses `cargo tree --prefix none -e features` output into package and
+// feature nodes; headings, blank lines and `(*)` repeat markers carry none.
+export function parseCargoTree(output) {
+  const packages = new Map();
+  const features = new Set();
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim();
+    const feature = /^(\S+) feature "([^"]+)"/.exec(line);
+    if (feature) {
+      features.add(`${feature[1]}/${feature[2]}`);
+      continue;
+    }
+    const pkg = /^(\S+) v(\S+)/.exec(line);
+    if (pkg) packages.set(`${pkg[1]} ${pkg[2]}`, { name: pkg[1], version: pkg[2] });
+  }
+  return { packages: [...packages.values()], features: [...features].sort() };
+}
+
+// Workspace members whose `[package.metadata.agent-access] role` is `reference`.
+export function referenceCrates(metadata) {
+  const members = new Set(metadata.workspace_members ?? []);
+  return (metadata.packages ?? [])
+    .filter((pkg) => members.has(pkg.id) && pkg.metadata?.["agent-access"]?.role === "reference")
+    .map((pkg) => pkg.name)
+    .sort();
+}
+
+// Release executables must not enable a test-support feature or link a
+// reference crate through normal or build edges.
+export function assertReleaseFeatureGraph(output, references) {
+  const { packages, features } = parseCargoTree(output);
+  if (!packages.some((pkg) => RELEASE_PACKAGES.includes(pkg.name))) {
+    throw new Error("cargo tree output names neither release package");
+  }
+  const testFeatures = features.filter((feature) => feature.endsWith(`/${FORBIDDEN_RELEASE_FEATURE}`));
+  const linkedReferences = [...new Set(packages.filter((pkg) => references.includes(pkg.name)).map((pkg) => pkg.name))].sort();
+  const problems = [
+    ...testFeatures.map((feature) => `test feature ${feature}`),
+    ...linkedReferences.map((name) => `reference crate ${name}`),
+  ];
+  if (problems.length) {
+    throw new Error(`Release dependency graph enables test-only code: ${problems.join(", ")}`);
+  }
+}
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -223,7 +277,7 @@ export function assertCleanAt(commit, stage, { root = ROOT, env = process.env } 
   }
 }
 
-function packageVersion(toolchain, env) {
+function workspaceMetadata(toolchain, env) {
   const metadata = JSON.parse(
     capture(toolchain.cargoPath, ["metadata", "--locked", "--no-deps", "--format-version", "1"], env),
   );
@@ -231,7 +285,13 @@ function packageVersion(toolchain, env) {
   if (!broker) {
     fail("agent-access-broker package was not found in cargo metadata");
   }
-  return broker.version;
+  return { version: broker.version, references: referenceCrates(metadata) };
+}
+
+function verifyReleaseFeatures(toolchain, env, references) {
+  const host = validateToolchainVersions(toolchain.pinned, toolchain.rustcVerbose, toolchain.cargoVersion);
+  const treeEnv = { ...env, CARGO: toolchain.cargoPath, RUSTC: toolchain.rustcPath, CARGO_BUILD_RUSTC: toolchain.rustcPath };
+  assertReleaseFeatureGraph(capture(toolchain.cargoPath, releaseFeatureTreeArgs(host), treeEnv), references);
 }
 
 function buildBinaries(plan) {
@@ -392,7 +452,9 @@ async function main() {
     assertCleanAt(commit, "before build");
     const toolchain = inspectLocalToolchain();
     const plan = provenanceBuildPlan(commit, { ...options, toolchain });
-    const version = packageVersion(toolchain, plan.env);
+    const { version, references } = workspaceMetadata(toolchain, plan.env);
+    verifyReleaseFeatures(toolchain, plan.env, references);
+    console.log(`Release feature check: no ${FORBIDDEN_RELEASE_FEATURE} feature or reference crate (${references.join(", ") || "none declared"}) in the normal/build graph of ${RELEASE_PACKAGES.join(" and ")}`);
     console.log(`Toolchain verification: ${JSON.stringify({
       ...toolchain,
       buildToolchain: options.buildService ? "Remote compiler and Cargo are unverified; local toolchain supplies metadata and native target only" : "Validated local compiler and Cargo; explicit compiler path, no wrappers or extra Rust flags",

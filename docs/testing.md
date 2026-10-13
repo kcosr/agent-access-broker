@@ -382,13 +382,16 @@ the expected immutable commit or exact tag:
 node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
-The verifier builds Broker and CLI release executables locally with locked
-dependencies and required provenance. It starts the Broker on loopback with a
-temporary minimal identity and asserts that `/v1/broker/status` names the
-`agent-access-broker` assembly at the expected package version, with the expected
-commit as evidence-backed provenance for the assembly, host, SDK and every module.
-It checks CLI startup with `--help` and fails if the checkout is dirty or `HEAD`
-changes. It does not publish artifacts or perform the source release.
+The verifier first rejects a release dependency graph (normal and build edges of
+`agent-access-broker` and `agent-access`) that enables a `test-support` feature or
+links a `reference` crate. It then builds Broker and CLI release executables
+locally with locked dependencies and required provenance. It starts the Broker on
+loopback with a temporary minimal identity and asserts that `/v1/broker/status`
+names the `agent-access-broker` assembly at the expected package version, with
+the expected commit as evidence-backed provenance for the assembly, host, SDK and
+every module. It checks CLI startup with `--help` and fails if the checkout is
+dirty or `HEAD` changes. It does not publish artifacts or perform the source
+release.
 
 To opt into a configured remote build service explicitly:
 
