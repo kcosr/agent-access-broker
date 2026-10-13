@@ -18712,11 +18712,44 @@ async fn gateway_request(spec: GatewayRequestSpec<'_>) -> axum::response::Respon
     app.oneshot(builder.body(body).unwrap()).await.unwrap()
 }
 
-fn temp_path(name: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("agent-access-broker-{}", uuid::Uuid::new_v4()));
-    create_private_dir(&dir);
-    dir.join(name)
+thread_local! {
+    /// The calling test's temporary root; see [`test_temp_dir`].
+    static TEST_TEMP_ROOT: std::cell::OnceCell<tempfile::TempDir> =
+        const { std::cell::OnceCell::new() };
+}
+
+/// A fresh private directory for the calling test.
+///
+/// A test's directories share one root that is removed when the test's
+/// thread exits: libtest runs each test on its own thread and joins it, so
+/// helpers that build configurations need not return a guard. Call it on
+/// the test's own thread; a spawned thread's exit would remove the
+/// directory early.
+pub(crate) fn test_temp_dir() -> PathBuf {
+    let thread = std::thread::current();
+    assert!(
+        thread
+            .name()
+            .is_some_and(|name| name != "main" && name != "tokio-runtime-worker"),
+        "test_temp_dir must run on the test's own thread, not {:?}",
+        thread.name()
+    );
+    TEST_TEMP_ROOT.with(|root| {
+        let root = root.get_or_init(|| {
+            tempfile::Builder::new()
+                .prefix("agent-access-host-test-")
+                .tempdir()
+                .unwrap()
+        });
+        let dir = root.path().join(uuid::Uuid::new_v4().to_string());
+        create_private_dir(&dir);
+        dir
+    })
+}
+
+/// `name` in a fresh [`test_temp_dir`].
+pub(crate) fn temp_path(name: &str) -> PathBuf {
+    test_temp_dir().join(name)
 }
 
 fn create_private_dir(dir: &Path) {

@@ -2853,6 +2853,7 @@ mod tests {
     use super::*;
     use crate::router::build_gateway_router;
     use crate::state::ReloadableState;
+    use crate::tests::test_temp_dir;
     use agent_access_core::{
         AuditConfig, BrokerConfig, CredentialConfig, CredentialsConfig, DEFAULT_EXECUTION_CONTEXT,
         DeploymentConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, NetworkConfig,
@@ -5915,19 +5916,5 @@ mod tests {
             agent_access_core::AuditStoreType::Jsonl,
             path,
         )
-    }
-
-    fn test_temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "agent-access-gateway-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        dir
     }
 }

@@ -1638,8 +1638,8 @@ path="{}"
     }
 
     async fn test_reloadable_state() -> Arc<ReloadableState> {
-        let config = temp_path("minimal-broker.toml");
-        let spool = temp_path("minimal-spool");
+        let config = crate::tests::temp_path("minimal-broker.toml");
+        let spool = crate::tests::temp_path("minimal-spool");
         std::fs::write(
             &config,
             format!(
@@ -1673,18 +1673,5 @@ upload_spool_dir = "{}"
         )
         .await
         .unwrap()
-    }
-
-    fn temp_path(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "agent-access-broker-lifecycle-test-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        path
     }
 }

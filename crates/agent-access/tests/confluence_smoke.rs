@@ -4575,17 +4575,9 @@ fn confluence_comment(
     }
 }
 
-fn temp_path(name: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("agent-access-confluence-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    dir.join(name)
-}
+#[path = "support/temp_dirs.rs"]
+mod temp_dirs;
+use temp_dirs::temp_path;
 
 #[path = "confluence_smoke/normalized_reads.rs"]
 mod confluence_normalized_reads;
