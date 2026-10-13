@@ -404,8 +404,10 @@ All notable changes to this project are documented in this file.
   upstream without a response (`mutationStatus: "unknown"`,
   `retrySafe: false`) and `applied_unverified(stage, safe_locators)`.
   `ProviderError::with_mutation_receipt` attaches one to a failure's result,
-  keeping its other fields, and `MutationReceipt::write_into` writes one into a
-  result value. `MutationStatus` names the non-exhaustive status vocabulary.
+  keeping its other fields, `ProviderError::or_mutation_receipt` attaches one
+  unless the error already reports a `mutationStatus`, and
+  `MutationReceipt::write_into` writes one into a result value.
+  `MutationStatus` names the non-exhaustive status vocabulary.
 
 ### Changed
 

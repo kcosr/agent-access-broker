@@ -6,8 +6,31 @@
 //! `retrySafe` and, for an applied but unverified write, the
 //! `verificationStage` that failed and the `safeLocators` of what changed.
 //! Build one with a [`MutationReceipt`] constructor and attach it with
-//! [`ProviderError::with_mutation_receipt`] or [`MutationReceipt::write_into`].
+//! [`ProviderError::with_mutation_receipt`],
+//! [`ProviderError::or_mutation_receipt`] or [`MutationReceipt::write_into`].
 //! Reads never carry a receipt.
+//!
+//! The receipt describes the whole operation, and never claims a retry is
+//! safe when anything may have applied:
+//!
+//! - the SDK proved the write's request was never sent
+//!   ([`UpstreamError::NotSent`](crate::UpstreamError::NotSent)):
+//!   [`MutationReceipt::not_applied`];
+//! - the request may have reached the upstream without a definitive answer: a
+//!   timeout or transport failure after sending, a stalled upload, an
+//!   upstream failure the provider does not recognize, or a 5xx response, which
+//!   a proxy can return after the upstream committed the write:
+//!   [`MutationReceipt::unknown`];
+//! - the upstream accepted the write with a success status, but its response
+//!   could not be read or validated, or a read-back after it failed:
+//!   [`MutationReceipt::applied_unverified`], whose safe locators come from the
+//!   validated request or earlier verified responses, never from the
+//!   unreadable one;
+//! - a batch in which an item may have applied before it failed:
+//!   [`MutationReceipt::unknown`], keeping the batch's partial result.
+//!
+//! A 4xx rejection, upstream throttling before the write applied, and a local
+//! failure before anything was sent carry no receipt.
 
 use crate::ProviderError;
 use serde_json::{Map, Value, json};
@@ -71,17 +94,20 @@ impl MutationReceipt {
     }
 
     /// The request may have reached the upstream, such as a timeout or
-    /// transport failure after it was sent, and no response said whether it
-    /// applied: `mutationStatus: "unknown"` and `retrySafe: false`. Report it
-    /// with the failure's own reason, such as `upstream_timeout`.
+    /// transport failure after it was sent or a 5xx response, and nothing
+    /// confirmed whether it applied: `mutationStatus: "unknown"` and
+    /// `retrySafe: false`. Report it with the failure's own reason, such as
+    /// `upstream_timeout`.
     pub const fn unknown() -> Self {
         Self::with_status(MutationStatus::Unknown)
     }
 
-    /// The upstream applied the write, but `verification_stage` could not
+    /// The upstream accepted the write, but `verification_stage` could not
     /// confirm it: `mutationStatus: "applied_unverified"`, `retrySafe: false`,
     /// `verificationStage` and the `safeLocators` identifying what was created
-    /// or changed. Report it as `mutation_verification_failed`.
+    /// or changed. Report it with `mutation_verification_failed` when the
+    /// verification itself failed, or with the failure's own reason when the
+    /// response or a read-back could not be read.
     pub fn applied_unverified(verification_stage: impl Into<String>, safe_locators: Value) -> Self {
         Self {
             status: MutationStatus::AppliedUnverified,
@@ -147,6 +173,21 @@ impl ProviderError {
         receipt.write_into(&mut result);
         self.result = Some(Box::new(result));
         self
+    }
+
+    /// [`Self::with_mutation_receipt`] unless this error's result already
+    /// reports a `mutationStatus`, which is more specific, such as the
+    /// `applied_unverified` receipt of a throttled read-back.
+    pub fn or_mutation_receipt(self, receipt: MutationReceipt) -> Self {
+        let reported = self
+            .result
+            .as_deref()
+            .is_some_and(|result| result.get("mutationStatus").is_some());
+        if reported {
+            self
+        } else {
+            self.with_mutation_receipt(receipt)
+        }
     }
 }
 
@@ -254,6 +295,21 @@ mod tests {
         assert_eq!(
             result,
             json!({"status": "partial", "mutationStatus": "not_applied", "retrySafe": true})
+        );
+
+        let throttled = ProviderError::error(ReasonCode::MutationVerificationFailed, "unverified")
+            .with_mutation_receipt(MutationReceipt::applied_unverified("readback", json!({})))
+            .or_mutation_receipt(MutationReceipt::unknown());
+        assert_eq!(
+            throttled.result.as_deref().unwrap()["mutationStatus"],
+            "applied_unverified"
+        );
+        let plain = ProviderError::error(ReasonCode::UpstreamTimeout, "timed out")
+            .with_result(json!({"status": "partial"}))
+            .or_mutation_receipt(MutationReceipt::unknown());
+        assert_eq!(
+            plain.result.as_deref(),
+            Some(&json!({"status": "partial", "mutationStatus": "unknown", "retrySafe": false}))
         );
 
         let mut scalar = json!("not an object");
