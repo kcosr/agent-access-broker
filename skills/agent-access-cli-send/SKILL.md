@@ -780,12 +780,17 @@ that verifies a create) is never a rate limit: it returns
 do not wait and repeat the write. On `concurrency_limited`, wait for your
 in-flight requests to finish.
 
-A failed write can carry a mutation receipt in `result`. `mutationStatus:
-"not_applied"` with `retrySafe: true` means the Broker proved the request never
-reached the upstream service: nothing changed, and the write may be repeated.
-`mutationStatus: "unknown"` with `retrySafe: false` means the write may have
-applied: inspect the target before repeating it. A failed write without a
-receipt makes no claim either way, so inspect before repeating it too.
+A failed write can carry a mutation receipt in `result`, beside its ordinary
+reason. `mutationStatus: "not_applied"` with `retrySafe: true` means the Broker
+proved the request never reached the upstream service: nothing changed, and
+the write may be repeated. `mutationStatus: "unknown"` with `retrySafe: false`
+(a timeout, a dropped connection, a 5xx, or a batch that failed after an item
+may have applied) means the write may have applied, and
+`mutationStatus: "applied_unverified"` means the service accepted it but the
+Broker could not read or verify the response; use its `safeLocators`. Inspect
+the target before repeating either. A 4xx rejection carries no receipt; any
+other failed write without one makes no claim either way, so inspect before
+repeating it too.
 
 Verified review success has `mutationStatus: "applied"`, `retrySafe: false`.
 If GitLab may have accepted

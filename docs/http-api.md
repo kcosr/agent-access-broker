@@ -2259,19 +2259,23 @@ or protocol contract.
 
 A write action's `result` can carry a mutation receipt: `mutationStatus` and
 `retrySafe`, which say whether the write took effect and whether repeating it
-is safe. Reads never carry one. A failure keeps its ordinary reason code and
-HTTP status; the receipt only adds what is known about the write:
+is safe. The receipt describes the whole operation and never claims a retry is
+safe when anything may have applied. Reads never carry one. A failure keeps its
+ordinary reason code, HTTP status and message; the receipt only adds what is
+known about the write:
 
 | `mutationStatus` | `retrySafe` | Meaning |
 | --- | --- | --- |
 | `not_applied` | `true` | The Broker proved the write's request never reached the upstream, for example because no connection was established. Nothing changed, and the request may be repeated. Native providers, Teams and imported MCP and OpenAPI writes report it with the failure's ordinary reason: usually `upstream_connection_failed` or `upstream_timeout`, but `upstream_failed` for a Jira or Confluence attachment batch whose first upload was never sent. |
-| `unknown` | `false` | The request may have reached the upstream, but no response said what happened. GitLab writes without a verification contract and dispatched imported MCP and OpenAPI writes report it. Inspect the target before repeating the write. |
-| `applied_unverified` | `false` | The upstream applied the write, or may have, but the Broker could not verify it; see `mutation_verification_failed` above. A success can also report it, such as an imported write or a CloudBees CI trigger without a queue location. |
+| `unknown` | `false` | The request may have reached the upstream, but nothing confirmed what happened: it timed out or failed after sending, its upload stalled, the client reported an unclassified failure, or the upstream answered 5xx, which a proxy can return after the upstream committed the write. Jira, Confluence, Gmail and Teams writes, GitLab writes without a verification contract, other CloudBees CI trigger failures and dispatched imported MCP and OpenAPI writes report it, and so does an attachment batch in which an upload may have applied, alongside its partial result. Inspect the target before repeating the write. |
+| `applied_unverified` | `false` | The upstream accepted the write, or may have, but the Broker could not verify it. `mutation_verification_failed` reports it (see above), and so does a failure that keeps its own reason after the upstream answered with a success status: an unreadable, oversized, unparseable or mismatched response, or a failed read-back. It then carries `verificationStage`, such as `mutation_response` or `post_update_readback`, and `safeLocators` from the request. A success can also report it, such as an imported write or a CloudBees CI trigger without a queue location. |
 | `applied` | `false` | The write succeeded; repeating it would apply it again. |
 
-A failed write without a receipt makes no claim either way: treat it as
-possibly applied, and inspect the target before repeating it. Imported writes
-also report `toolDispatched` (MCP) or `operationDispatched` (OpenAPI).
+A 4xx rejection, throttling of the write itself and a local failure before
+anything was sent carry no receipt. Any other failed write without a receipt
+makes no claim either way: treat it as possibly applied, and inspect the target
+before repeating it. Imported writes also report `toolDispatched` (MCP) or
+`operationDispatched` (OpenAPI).
 
 ## Reason-code table
 
