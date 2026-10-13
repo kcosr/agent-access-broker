@@ -147,6 +147,7 @@ cargo test --locked
 cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 node scripts/check-crate-boundaries.mjs
+node scripts/public-api.mjs check
 ```
 
 Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
@@ -155,6 +156,16 @@ Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
 undeclared role and dependency edges that cross the roles, such as any
 production path from core or the host to a backend or import adapter. See
 `docs/testing.md` for the rules.
+
+`api/` holds the checked-in supported public API inventory: the SDK and host
+with and without `test-support`, the assembly library, the reviewed selection
+entry points of linked native and adapter crates (`SELECTION_ENTRY_POINTS` in
+`scripts/public-api.mjs`), and the types their signatures expose. The public API
+check fails when the candidate's API differs. For an intended change, run
+`node scripts/public-api.mjs update`, review the diff against the rules in
+`api/README.md`, and commit it with the change. The check needs the
+`nightly-2026-07-13` toolchain and `cargo-public-api` 0.52.0; set
+`AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is in another rustup home.
 
 Use these for offline config validation:
 
@@ -307,6 +318,9 @@ and audit checks through the real `agent-access` binary.
 - `docs/`: implemented architecture, reference, security, operator, and user docs.
 - `schemas/`: published versioned JSON Schemas for runtime and contract
   surfaces.
+- `api/`: generated supported public API inventories, one file per surface,
+  maintained by `scripts/public-api.mjs`; `api/README.md` describes the surfaces,
+  prerequisites, and review rules.
 
 ## Documentation Map
 

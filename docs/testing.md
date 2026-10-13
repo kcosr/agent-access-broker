@@ -165,6 +165,7 @@ npm --prefix apps/portal run test:unit
 npm --prefix apps/portal run test:e2e
 node --test scripts/*.test.mjs
 node scripts/check-crate-boundaries.mjs
+node scripts/public-api.mjs check
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
@@ -199,6 +200,30 @@ these boundaries:
   adapter, or reference crate. Its core dependency is reported as allowed.
 
 Its unit tests use synthetic metadata and run with the other script tests.
+
+`node scripts/public-api.mjs check` regenerates the supported public API
+inventory and fails when it differs from the checked-in `api/` files. It covers
+the SDK and host with and without `test-support`, the assembly library, the
+reviewed selection entry points of the native and import adapter crates the
+assembly links, and the workspace and third-party types those signatures expose.
+After an intended and reviewed API change, run `node scripts/public-api.mjs
+update` and commit the `api/` diff. The check requires the `nightly-2026-07-13`
+Rust toolchain, installed with rustup, and `cargo-public-api` 0.52.0 on `PATH`.
+Set `AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is in a different
+rustup home from the active one:
+
+```bash
+rustup toolchain install nightly-2026-07-13 --profile minimal
+cargo install cargo-public-api --version 0.52.0 --locked
+AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME="$HOME/.rustup" node scripts/public-api.mjs check
+```
+
+It runs the nightly's rustdoc by absolute path, so `rust-toolchain.toml` does
+not select the toolchain, and builds only in `target/public-api`. A missing or
+mismatched tool fails with exit status 2; the check never skips. Its unit tests
+use synthetic rustdoc JSON and Cargo metadata, check the reviewed entry points
+against the repository's own metadata, and run with the other script tests. See the [inventory guide](../api/README.md) for the file format and review
+rules.
 
 On Unix, run the real-signal parent fixture separately:
 
