@@ -1,4 +1,6 @@
 //! Synthetic imported adapter: exercises the real DB loader without a network.
+//! Only test registries select it; the broker binary never links it.
+use agent_access_core::BackendRegistry;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -8,6 +10,14 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct ConformanceImportAdapter;
 pub static CONFORMANCE_IMPORT_ADAPTER: ConformanceImportAdapter = ConformanceImportAdapter;
+
+/// The broker's linked backends, dialects and adapters, plus the synthetic
+/// import adapter.
+pub fn registry() -> BackendRegistry {
+    crate::backend_registry()
+        .with_imported_adapters([&CONFORMANCE_IMPORT_ADAPTER as &dyn ImportedAdapter])
+        .expect("test import adapter registers consistently")
+}
 
 /// The fixture deliberately has a source identity unlike its grant action ID.
 pub fn conformance_import_action() -> ImportedActionDefinition {
@@ -162,5 +172,12 @@ mod scoped_name_tests {
         assert_ne!(action.action, "upstream_inspect");
         action.source = json!({});
         assert!(CONFORMANCE_IMPORT_ADAPTER.scoped_mcp_name(&action).is_err());
+    }
+
+    #[test]
+    fn only_test_registries_select_the_synthetic_adapter() {
+        let kind = CONFORMANCE_IMPORT_ADAPTER.kind();
+        assert!(crate::backend_registry().imported_adapter(kind).is_none());
+        assert!(registry().imported_adapter(kind).is_some());
     }
 }

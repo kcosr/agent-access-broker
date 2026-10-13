@@ -1,6 +1,6 @@
 //! Provider preparation precedes locked mutations and preserves unrelated dispatches.
+use super::conformance_import::conformance_import_action;
 use super::*;
-use agent_access_conformance::conformance_import_action;
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, ExecutionCredential,
     ImportedActionStatus, ImportedActionWrite, ImportedCredentialDelivery,

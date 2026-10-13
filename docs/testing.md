@@ -1597,7 +1597,9 @@ or production write target is required. `agent-access-provider` tests the bounde
 import contract, `agent-access-core` tests store/key lifecycle and stable naming,
 and broker `imports_foundation`, `imports_mcp`, and `imports_management` suites
 exercise restart, publication cancellation, normal authorization/limits/audit,
-credential isolation, and the administrator lifecycle. `agent-access-mcp-upstream`
+credential isolation, and the administrator lifecycle. The foundation suites load
+a development-only synthetic import adapter from the broker's test tree; only test
+registries select it, and the broker binary never links it. `agent-access-mcp-upstream`
 uses the pinned SDK's real HTTP server plus raw protocol fixtures. Two-version
 regression coverage must include:
 

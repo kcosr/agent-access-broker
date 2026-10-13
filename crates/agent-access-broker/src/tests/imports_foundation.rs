@@ -1,6 +1,6 @@
 //! Database-loaded imports use the broker's normal credentials, policy and publication.
+use super::conformance_import::conformance_import_action;
 use super::*;
-use agent_access_conformance::conformance_import_action;
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ImportedActionStatus,
@@ -86,7 +86,7 @@ pub(super) fn fixture() -> Fixture {
     let hash = directory.path().join("hash");
     std::fs::write(&hash, URL_SAFE_NO_PAD.encode([33u8; 32])).unwrap();
     let mut config = fake_config(directory.path().join("audit.jsonl").to_str().unwrap());
-    config.providers = ProvidersConfig::new(Arc::new(crate::backend_registry()));
+    config.providers = ProvidersConfig::new(Arc::new(super::conformance_import::registry()));
     config.credentials = CredentialsConfig::default();
     config.limits.upload_spool_dir = directory.path().join("spool").display().to_string();
     config.identity = IdentityConfig {
@@ -401,7 +401,7 @@ async fn imported_foundation_cancelled_waiter_does_not_abandon_commit_or_publica
     let runtime = fixture.runtime.clone();
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
-        Arc::new(crate::backend_registry()),
+        Arc::new(super::conformance_import::registry()),
         RuntimeSnapshot::new(
             1,
             "import-fixture".into(),
@@ -534,7 +534,7 @@ async fn ordinary_policy_edits_preserve_token_store_snapshot_identity() {
     let runtime = fixture.runtime.clone();
     let state = Arc::new(ReloadableState::from_snapshot(
         PathBuf::new(),
-        Arc::new(crate::backend_registry()),
+        Arc::new(super::conformance_import::registry()),
         RuntimeSnapshot::new(
             1,
             "policy-identity".into(),

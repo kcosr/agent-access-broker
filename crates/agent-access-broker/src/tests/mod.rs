@@ -58,6 +58,7 @@ mod audit_query;
 mod body_admission;
 mod confluence_read_presentation;
 mod conformance;
+pub(crate) mod conformance_import;
 mod discovery;
 mod gitlab_uploads;
 mod gitlab_webhooks;

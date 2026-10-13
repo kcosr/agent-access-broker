@@ -1217,7 +1217,7 @@ mod tests {
     #[test]
     fn scoped_preview_warnings_are_provisional_and_do_not_change_the_manifest() {
         let action = |id: &str, name: &str| {
-            let mut definition = agent_access_conformance::conformance_import_action();
+            let mut definition = crate::tests::conformance_import::conformance_import_action();
             definition.action = id.into();
             definition.source = json!({"name":name,"identity":id});
             definition
@@ -1308,7 +1308,7 @@ mod tests {
 
     #[test]
     fn title_changes_are_metadata_but_behavioral_hints_require_review() {
-        let mut old = agent_access_conformance::conformance_import_action();
+        let mut old = crate::tests::conformance_import::conformance_import_action();
         old.annotations = json!({"toolAnnotations":{},"execution":null});
         let mut new = old.clone();
         new.annotations["toolAnnotations"]["title"] = json!("New title");

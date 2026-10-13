@@ -7,11 +7,6 @@
 //! keep a private attribute that a single-attempt action consumes. Broker acceptance tests register it beside the linked
 //! backends; that it needs nothing outside this crate and the registration
 //! list is the point.
-mod imports;
-pub use imports::{
-    CONFORMANCE_IMPORT_ADAPTER, ConformanceImportAdapter, conformance_import_action,
-};
-
 use agent_access_provider::presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, ReadContentFormat,
     RenderBudget, RenderContext, RenderError, RenderedBody,

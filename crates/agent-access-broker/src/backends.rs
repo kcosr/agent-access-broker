@@ -11,7 +11,7 @@ use agent_access_teams::TEAMS_BACKEND;
 /// Every backend the broker can configure through `[providers.<kind>]`,
 /// in resource-type listing order.
 pub fn backend_registry() -> BackendRegistry {
-    let registry = BackendRegistry::new([
+    BackendRegistry::new([
         &JIRA_BACKEND,
         &CONFLUENCE_BACKEND,
         &GITLAB_BACKEND,
@@ -30,13 +30,7 @@ pub fn backend_registry() -> BackendRegistry {
         &agent_access_mcp_upstream::McpAdapter as &dyn agent_access_core::ImportedAdapter,
         &agent_access_openapi_upstream::OpenApiAdapter as &dyn agent_access_core::ImportedAdapter,
     ])
-    .expect("linked imported adapters register consistently");
-    #[cfg(test)]
-    let registry = registry
-        .with_imported_adapters([&agent_access_conformance::CONFORMANCE_IMPORT_ADAPTER
-            as &dyn agent_access_core::ImportedAdapter])
-        .expect("test import adapter registers consistently");
-    registry
+    .expect("linked imported adapters register consistently")
 }
 
 #[cfg(test)]
