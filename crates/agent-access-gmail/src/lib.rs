@@ -18,6 +18,25 @@ use url::Url;
 const API: &str = "https://gmail.googleapis.com/gmail/v1/users/me/";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(30);
+/// `message.search` continuations: Gmail's `nextPageToken`, sealed for the
+/// admitted context and caller, the connection's delegated binding, target
+/// and audience, and the normalized query, page size and spam/trash
+/// selection. Keys live for one provider instance, so a reload or restart
+/// invalidates every token.
+const SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
+    "gmail",
+    "message-search-page",
+    1,
+    ContinuationLifetime::Generation,
+    MAX_UPSTREAM_PAGE_TOKEN_BYTES,
+)
+.expires_after(Duration::from_secs(SEARCH_PAGE_TOKEN_TTL_MINUTES * 60));
+/// Gmail's own page token, the sealed payload. Never truncated.
+const MAX_UPSTREAM_PAGE_TOKEN_BYTES: usize = 2048;
+const SEARCH_PAGE_TOKEN_TTL_MINUTES: u64 = 15;
+/// The `pageToken` input bound: the exact size of the largest envelope.
+const MAX_PAGE_TOKEN_BYTES: usize = SEARCH_PAGES.max_token_bytes();
+const DEFAULT_MAX_RESULTS: u64 = 20;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,8 +95,9 @@ pub fn descriptor() -> ServiceDescriptor {
             object(
                 json!({
                     "query":{"type":"string","maxLength":2048},
-                    "maxResults":{"type":"integer","minimum":1,"maximum":50,"default":20},
-                    "pageToken":{"type":"string","minLength":1,"maxLength":2048},
+                    "maxResults":{"type":"integer","minimum":1,"maximum":50,"default":DEFAULT_MAX_RESULTS},
+                    "pageToken":{"type":"string","minLength":1,"maxLength":MAX_PAGE_TOKEN_BYTES,
+                        "description":"Previous page's nextPageToken; repeat the same query, maxResults and includeSpamTrash."},
                     "includeSpamTrash":{"type":"boolean","default":false}
                 }),
                 json!([]),
@@ -121,10 +141,27 @@ pub fn descriptor() -> ServiceDescriptor {
 struct GmailProvider {
     client: UpstreamClient,
     max_bytes: u64,
+    search_pages: ContinuationSigner,
 }
 struct RequestBudget {
     remaining: u64,
     last_status: Option<u16>,
+}
+/// `message.search` settings after defaults, as sent upstream and bound into
+/// continuations. An absent query differs from an empty one.
+struct SearchSettings<'a> {
+    query: Option<&'a str>,
+    max_results: u64,
+    include_spam_trash: bool,
+}
+impl<'a> SearchSettings<'a> {
+    fn from_inputs(inputs: &'a Value) -> Self {
+        Self {
+            query: inputs["query"].as_str(),
+            max_results: inputs["maxResults"].as_u64().unwrap_or(DEFAULT_MAX_RESULTS),
+            include_spam_trash: inputs["includeSpamTrash"].as_bool().unwrap_or(false),
+        }
+    }
 }
 impl GmailProvider {
     fn new(
@@ -145,6 +182,8 @@ impl GmailProvider {
                 clients,
             )?,
             max_bytes: limits.max_upstream_response_bytes.min(MAX_BYTES),
+            // Generation-lifetime tokens never use the host's stable key.
+            search_pages: ContinuationSigner::new(None),
         })
     }
     async fn request(
@@ -159,13 +198,7 @@ impl GmailProvider {
         for attempt in 1..=2 {
             // Every page/detail call rechecks the original account and consent.
             credential.revalidate().await?;
-            let access = credential.access();
-            if access.target() != GMAIL_TARGET || access.audience() != GMAIL_AUDIENCE {
-                return Err(ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "Gmail needs an account-bound Gmail OAuth connection",
-                ));
-            }
+            let access = account_bound(credential)?;
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
@@ -240,6 +273,49 @@ impl GmailProvider {
             .join(path)
             .expect("validated Gmail route")
     }
+    /// Binds a search continuation to the admitted service, action, execution
+    /// context, credential mode and caller, the Gmail API endpoint, the
+    /// lease's delegated binding, target and audience, and the normalized
+    /// search settings. Never to the effective grants: each page is
+    /// authorized again.
+    fn search_binding(
+        &self,
+        context: &AdmittedContext,
+        credential: &DelegatedCredential,
+        search: &SearchSettings<'_>,
+    ) -> ContinuationBinding {
+        SEARCH_PAGES
+            .bind(context, self.client.base().as_str())
+            .delegated(credential)
+            .optional_text("query", search.query)
+            .number("maxResults", search.max_results)
+            .flag("includeSpamTrash", search.include_spam_trash)
+    }
+    fn open_page_token(
+        &self,
+        binding: &ContinuationBinding,
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        let payload = self
+            .search_pages
+            .open(binding, token)
+            .map_err(page_token_failure)?;
+        String::from_utf8(payload).map_err(|_| page_token_error())
+    }
+    /// Seals Gmail's page token whole. One over the upstream cap is an
+    /// upstream protocol failure, never truncated.
+    fn seal_page_token(
+        &self,
+        binding: &ContinuationBinding,
+        upstream: &str,
+    ) -> Result<String, ProviderError> {
+        if upstream.len() > MAX_UPSTREAM_PAGE_TOKEN_BYTES {
+            return Err(oversized_page_token());
+        }
+        self.search_pages
+            .seal(binding, upstream.as_bytes())
+            .map_err(page_token_failure)
+    }
     async fn execute(
         &self,
         invocation: &ProviderInvocation,
@@ -292,22 +368,33 @@ impl GmailProvider {
             }
             "message.search" => {
                 let inputs = invocation.inputs();
-                let limit = inputs["maxResults"].as_u64().unwrap_or(20);
+                let search = SearchSettings::from_inputs(inputs);
+                // A continuation opens only under the lease selected for this
+                // invocation, before its upstream token is used: reconnecting,
+                // replacing the account or new consent changes the binding
+                // identity, while routine access refresh keeps it.
+                account_bound(credential)?;
+                let binding = self.search_binding(invocation.context(), credential, &search);
+                let upstream_page_token = inputs["pageToken"]
+                    .as_str()
+                    .map(|token| self.open_page_token(&binding, token))
+                    .transpose()?;
                 let mut url = self.url("messages");
                 url.query_pairs_mut()
-                    .append_pair("maxResults", &limit.to_string())
+                    .append_pair("maxResults", &search.max_results.to_string())
                     .append_pair(
                         "includeSpamTrash",
-                        if inputs["includeSpamTrash"].as_bool().unwrap_or(false) {
+                        if search.include_spam_trash {
                             "true"
                         } else {
                             "false"
                         },
                     );
-                for (input, parameter) in [("query", "q"), ("pageToken", "pageToken")] {
-                    if let Some(s) = inputs[input].as_str() {
-                        url.query_pairs_mut().append_pair(parameter, s);
-                    }
+                if let Some(query) = search.query {
+                    url.query_pairs_mut().append_pair("q", query);
+                }
+                if let Some(token) = &upstream_page_token {
+                    url.query_pairs_mut().append_pair("pageToken", token);
                 }
                 let v = self
                     .request(credential, Method::GET, url, None, action, budget)
@@ -317,9 +404,16 @@ impl GmailProvider {
                     Some(Value::Array(a)) => a.as_slice(),
                     _ => return Err(protocol()),
                 };
-                if entries.len() as u64 > limit {
+                if entries.len() as u64 > search.max_results {
                     return Err(protocol());
                 }
+                let next_page_token = match v.get("nextPageToken") {
+                    None => None,
+                    Some(Value::String(token)) if !token.is_empty() => {
+                        Some(self.seal_page_token(&binding, token)?)
+                    }
+                    Some(_) => return Err(protocol()),
+                };
                 let mut messages = Vec::new();
                 for entry in entries {
                     let id = entry["id"]
@@ -336,13 +430,8 @@ impl GmailProvider {
                         .await?;
                     messages.push(mail::message(&detail, false)?);
                 }
-                if v.get("nextPageToken")
-                    .is_some_and(|t| t.as_str().is_none_or(|s| s.len() > 2048 || s.is_empty()))
-                {
-                    return Err(protocol());
-                }
                 Ok(
-                    json!({"messages":messages,"nextPageToken":v["nextPageToken"],"resultSizeEstimate":v["resultSizeEstimate"]}),
+                    json!({"messages":messages,"nextPageToken":next_page_token,"resultSizeEstimate":v["resultSizeEstimate"]}),
                 )
             }
             _ => {
@@ -452,7 +541,9 @@ fn validate_inputs(action: &str, inputs: &Value) -> Result<(), ProviderError> {
                         .as_str()
                         .is_some_and(|s| s.len() <= 2048 && !s.contains('\0')),
                     "pageToken" => v.as_str().is_some_and(|s| {
-                        !s.is_empty() && s.len() <= 2048 && !s.chars().any(char::is_control)
+                        !s.is_empty()
+                            && s.len() <= MAX_PAGE_TOKEN_BYTES
+                            && !s.chars().any(char::is_control)
                     }),
                     "maxResults" => v.as_u64().is_some_and(|n| (1..=50).contains(&n)),
                     "includeSpamTrash" => v.is_boolean(),
@@ -477,6 +568,42 @@ fn validate_inputs(action: &str, inputs: &Value) -> Result<(), ProviderError> {
 }
 fn invalid() -> ProviderError {
     ProviderError::deny(ReasonCode::InputInvalid, "Invalid Gmail action inputs")
+}
+/// The lease's current access, provided it is for the connected Gmail
+/// mailbox: the exact target and audience.
+fn account_bound(credential: &DelegatedCredential) -> Result<DelegatedAccess, ProviderError> {
+    let access = credential.access();
+    if access.target() != GMAIL_TARGET || access.audience() != GMAIL_AUDIENCE {
+        return Err(ProviderError::deny(
+            ReasonCode::CredentialInvalid,
+            "Gmail needs an account-bound Gmail OAuth connection",
+        ));
+    }
+    Ok(access)
+}
+fn page_token_error() -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::InputInvalid,
+        "Gmail pageToken is invalid or expired, or the search settings, connected account or context changed; restart the search without pageToken",
+    )
+}
+fn oversized_page_token() -> ProviderError {
+    ProviderError::error(
+        ReasonCode::UpstreamProtocolFailed,
+        format!(
+            "Gmail returned a nextPageToken over {MAX_UPSTREAM_PAGE_TOKEN_BYTES} bytes; it is not truncated"
+        ),
+    )
+}
+fn page_token_failure(error: ContinuationError) -> ProviderError {
+    match error {
+        _ if error.is_token_rejection() => page_token_error(),
+        ContinuationError::PayloadTooLarge { .. } => oversized_page_token(),
+        _ => ProviderError::error(
+            ReasonCode::CursorSigningUnavailable,
+            "Broker could not sign the Gmail search continuation",
+        ),
+    }
 }
 fn protocol() -> ProviderError {
     ProviderError::error(

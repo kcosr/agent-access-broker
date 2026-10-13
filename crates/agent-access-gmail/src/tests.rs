@@ -1,31 +1,54 @@
 use super::*;
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, delegated_binding_id};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, header, method, path, query_param},
 };
 
-struct Lease;
+const BINDING: &str = "gmail-test-binding";
+
+/// A delegated lease for one connection binding. Recovery after a 401, when
+/// enabled, renews the access once within the same binding, as the host does.
+struct Lease {
+    binding: DelegatedBindingId,
+    token: Mutex<String>,
+    target: &'static str,
+    audience: &'static str,
+    recovers_to: Option<&'static str>,
+    recovered: AtomicBool,
+}
 #[async_trait]
 impl DelegatedLease for Lease {
     fn binding_identity(&self) -> DelegatedBindingId {
-        agent_access_provider::test_support::delegated_binding_id("gmail-test-binding")
+        self.binding
     }
     fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
         Ok(())
     }
     fn access(&self) -> DelegatedAccess {
-        DelegatedAccess::new("secret", GMAIL_TARGET, GMAIL_AUDIENCE, "v1", i64::MAX)
+        let token = self.token.lock().unwrap().clone();
+        let version = format!("version-{token}");
+        DelegatedAccess::new(token, self.target, self.audience, version, i64::MAX)
     }
     async fn revalidate(&self) -> Result<(), ProviderError> {
         Ok(())
     }
     async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
-        Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "test refused refresh",
-        ))
+        match self.recovers_to {
+            Some(token) if !self.recovered.swap(true, Ordering::SeqCst) => {
+                *self.token.lock().unwrap() = token.into();
+                Ok(self.access())
+            }
+            _ => Err(ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "test refused refresh",
+            )),
+        }
     }
 }
 /// A lease whose refresh is already in progress for the same connection.
@@ -33,13 +56,13 @@ struct BusyLease;
 #[async_trait]
 impl DelegatedLease for BusyLease {
     fn binding_identity(&self) -> DelegatedBindingId {
-        Lease.binding_identity()
+        lease(BINDING, "secret").binding_identity()
     }
     fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
         Ok(())
     }
     fn access(&self) -> DelegatedAccess {
-        Lease.access()
+        lease(BINDING, "secret").access()
     }
     async fn revalidate(&self) -> Result<(), ProviderError> {
         Ok(())
@@ -83,7 +106,20 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
     assert_eq!(hook.check_failure(&error), Ok(()));
 }
 
-fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
+fn lease(binding: &str, token: &str) -> Lease {
+    Lease {
+        binding: delegated_binding_id(binding),
+        token: Mutex::new(token.into()),
+        target: GMAIL_TARGET,
+        audience: GMAIL_AUDIENCE,
+        recovers_to: None,
+        recovered: AtomicBool::new(false),
+    }
+}
+fn delegated(lease: Lease) -> DelegatedCredential {
+    agent_access_provider::host::delegated_credential(Arc::new(lease))
+}
+fn request(action: &str, inputs: Value) -> InvocationBuilder {
     InvocationBuilder::new("gmail", action)
         .inputs(inputs)
         .correlation(CorrelationContext::new(
@@ -91,10 +127,12 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
             "gmail-broker-test".into(),
         ))
         .credential_mode(CredentialMode::PerUser)
-        .delegated(agent_access_provider::host::delegated_credential(Arc::new(
-            Lease,
-        )))
-        .build()
+        .identity(InvocationIdentity::new("alice", true))
+        .execution_context("default")
+        .delegated(delegated(lease(BINDING, "secret")))
+}
+fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
+    request(action, inputs).build()
 }
 fn provider(server: &MockServer) -> GmailProvider {
     let host = agent_access_provider::test_support::TestHost::default();
@@ -142,9 +180,18 @@ fn action_inputs_are_bounded_and_never_accept_mailboxes_urls_or_unsupported_effe
         json!({"maxResults":0}),
         json!({"includeSpamTrash":"true"}),
         json!({"query":"a".repeat(2049)}),
+        json!({"pageToken":""}),
+        json!({"pageToken":"A".repeat(MAX_PAGE_TOKEN_BYTES + 1)}),
     ] {
         assert!(validate_inputs("message.search", &inputs).is_err());
     }
+    assert!(
+        validate_inputs(
+            "message.search",
+            &json!({"pageToken":"A".repeat(MAX_PAGE_TOKEN_BYTES)})
+        )
+        .is_ok()
+    );
     let d = descriptor();
     assert_eq!(d.actions.len(), 11);
     for a in d.actions {
@@ -260,7 +307,10 @@ async fn search_is_one_page_with_explicit_trash_and_metadata_only_details() {
         ))
         .await
         .unwrap();
-    assert_eq!(r.result["nextPageToken"], "next");
+    // Gmail's token is returned only inside a Broker envelope.
+    let token = r.result["nextPageToken"].as_str().unwrap();
+    assert_ne!(token, "next");
+    assert!(token.len() <= MAX_PAGE_TOKEN_BYTES);
     assert_eq!(r.result["messages"][0]["textParts"], json!([]));
     assert!(!r.audit.unwrap().to_string().contains("trash"));
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
@@ -477,4 +527,289 @@ fn oversized_part_metadata_preserves_every_message_in_a_thread() {
     );
     assert_eq!(messages[1]["bodyOmissions"], json!(["part_metadata_limit"]));
     assert_eq!(messages[2]["textParts"][0]["text"], "private body");
+}
+
+/// Mounts one search page with no messages: the first page when `page_token`
+/// is `None`, otherwise the page Gmail's `page_token` continues, answering
+/// `next` as Gmail's continuation.
+async fn mount_page(server: &MockServer, page_token: Option<&str>, next: Option<&str>) {
+    let mut page = json!({"resultSizeEstimate":0});
+    if let Some(next) = next {
+        page["nextPageToken"] = json!(next);
+    }
+    let mock = Mock::given(method("GET")).and(path("/gmail/v1/users/me/messages"));
+    match page_token {
+        Some(token) => mock.and(query_param("pageToken", token)),
+        None => mock.and(wiremock::matchers::query_param_is_missing("pageToken")),
+    }
+    .respond_with(ResponseTemplate::new(200).set_body_json(page))
+    .expect(1)
+    .mount(server)
+    .await;
+}
+async fn first_page_token(p: &GmailProvider, first: InvocationBuilder) -> String {
+    let page = p.invoke(first.build()).await.unwrap();
+    page.result["nextPageToken"].as_str().unwrap().to_owned()
+}
+async fn list_requests(server: &MockServer, page_token: &str) -> Vec<wiremock::Request> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| {
+            r.url.path() == "/gmail/v1/users/me/messages"
+                && r.url
+                    .query_pairs()
+                    .any(|(k, v)| k == "pageToken" && v == page_token)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn search_continuations_round_trip_with_normalized_defaults() {
+    let server = MockServer::start().await;
+    mount_page(&server, None, Some("upstream-page-2")).await;
+    mount_page(&server, Some("upstream-page-2"), None).await;
+    let p = provider(&server);
+    // Omitted defaults bind as their values, so a page requested with them
+    // explicitly (as the typed CLI does) continues the same search.
+    let token = first_page_token(&p, request("message.search", json!({"query":"in:inbox"}))).await;
+    assert_ne!(token, "upstream-page-2");
+    let raw = URL_SAFE_NO_PAD.decode(&token).unwrap();
+    assert_eq!(raw[0], SEARCH_PAGES.version());
+    assert!(token.len() <= MAX_PAGE_TOKEN_BYTES);
+    let next = p
+        .invoke(invocation(
+            "message.search",
+            json!({"query":"in:inbox","maxResults":20,"includeSpamTrash":false,"pageToken":token}),
+        ))
+        .await
+        .unwrap();
+    assert!(next.result["nextPageToken"].is_null());
+    let continued = list_requests(&server, "upstream-page-2").await;
+    assert_eq!(continued.len(), 1);
+    let pairs: BTreeMap<_, _> = continued[0].url.query_pairs().into_owned().collect();
+    assert_eq!(pairs["q"], "in:inbox");
+    assert_eq!(pairs["maxResults"], "20");
+    assert_eq!(pairs["includeSpamTrash"], "false");
+}
+
+#[tokio::test]
+async fn search_continuations_reject_changed_settings_caller_context_and_connection() {
+    let server = MockServer::start().await;
+    mount_page(&server, None, Some("upstream-page-2")).await;
+    let p = provider(&server);
+    let first = json!({"query":"label:work","maxResults":5});
+    let token = first_page_token(&p, request("message.search", first.clone())).await;
+    let continued = |inputs: Value| {
+        let mut inputs = inputs;
+        inputs["pageToken"] = json!(token);
+        request("message.search", inputs)
+    };
+    let same = || continued(first.clone());
+    let cases = vec![
+        // Normalized query settings, including absence and defaults.
+        (
+            "query",
+            continued(json!({"query":"label:home","maxResults":5})),
+        ),
+        ("absent query", continued(json!({"maxResults":5}))),
+        ("empty query", continued(json!({"query":"","maxResults":5}))),
+        (
+            "maxResults",
+            continued(json!({"query":"label:work","maxResults":6})),
+        ),
+        (
+            "default maxResults",
+            continued(json!({"query":"label:work"})),
+        ),
+        (
+            "includeSpamTrash",
+            continued(json!({"query":"label:work","maxResults":5,"includeSpamTrash":true})),
+        ),
+        // The admitted execution context, caller and credential mode.
+        ("context", same().execution_context("external")),
+        ("principal", same().principal("mallory")),
+        (
+            "authentication",
+            same().identity(InvocationIdentity::new("alice", false)),
+        ),
+        ("mode", same().credential_mode(CredentialMode::Service)),
+        // Reconnecting or replacing the account changes the binding identity.
+        (
+            "connection",
+            same().delegated(delegated(lease("gmail-reconnected-binding", "secret"))),
+        ),
+    ];
+    // Another provider instance, as after a reload, has its own key.
+    let reloaded = provider(&server);
+    for (change, builder) in cases {
+        let error = p.invoke(builder.build()).await.unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{change}");
+        assert_eq!(error.decision(), Decision::Deny, "{change}");
+        assert!(error.message.contains("restart the search"), "{change}");
+    }
+    let error = reloaded.invoke(same().build()).await.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    // A lease for another target or audience is refused as a credential
+    // before its continuation is considered.
+    for (target, audience) in [
+        ("other", GMAIL_AUDIENCE),
+        (GMAIL_TARGET, "https://other.test/"),
+    ] {
+        let mut other = lease(BINDING, "secret");
+        other.target = target;
+        other.audience = audience;
+        let error = p
+            .invoke(same().delegated(delegated(other)).build())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
+    }
+    // Only the first page reached Gmail, and the unchanged request continues.
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    mount_page(&server, Some("upstream-page-2"), None).await;
+    p.invoke(same().build()).await.unwrap();
+}
+
+#[tokio::test]
+async fn search_continuations_are_purpose_separated_expiring_and_tamper_evident() {
+    const OTHER_PURPOSE: ContinuationFamily = ContinuationFamily::new(
+        "gmail",
+        "thread-search-page",
+        1,
+        ContinuationLifetime::Generation,
+        MAX_UPSTREAM_PAGE_TOKEN_BYTES,
+    )
+    .expires_after(Duration::from_secs(SEARCH_PAGE_TOKEN_TTL_MINUTES * 60));
+    let server = MockServer::start().await;
+    let p = provider(&server);
+    let builder = request("message.search", json!({}));
+    let template = builder.clone().build();
+    let credential = template.execution().delegated().unwrap();
+    let settings = SearchSettings::from_inputs(template.inputs());
+    let binding = p.search_binding(template.context(), credential, &settings);
+    let page = b"upstream-page-2";
+    let foreign = p
+        .search_pages
+        .seal(
+            &OTHER_PURPOSE
+                .bind(template.context(), p.client.base().as_str())
+                .delegated(credential)
+                .optional_text("query", None)
+                .number("maxResults", DEFAULT_MAX_RESULTS)
+                .flag("includeSpamTrash", false),
+            page,
+        )
+        .unwrap();
+    let expired = p
+        .search_pages
+        .seal_at(
+            &binding,
+            page,
+            SystemTime::now() - Duration::from_secs(SEARCH_PAGE_TOKEN_TTL_MINUTES * 60 + 1),
+        )
+        .unwrap();
+    let valid = p.search_pages.seal(&binding, page).unwrap();
+    let mut tampered = valid.clone().into_bytes();
+    let middle = tampered.len() / 2;
+    tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
+    let tampered = String::from_utf8(tampered).unwrap();
+    // Raw upstream tokens are no longer accepted.
+    for token in [foreign, expired, tampered, "upstream-page-2".to_owned()] {
+        let error = p
+            .invoke(builder.clone().input("pageToken", json!(token)).build())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+    // The same binding's current token does reach Gmail.
+    mount_page(&server, Some("upstream-page-2"), None).await;
+    p.invoke(builder.input("pageToken", json!(valid)).build())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn search_continuations_survive_access_refresh_and_recover_only_one_401() {
+    let server = MockServer::start().await;
+    mount_page(&server, None, Some("upstream-page-2")).await;
+    let p = provider(&server);
+    let token = first_page_token(&p, request("message.search", json!({}))).await;
+    let continuation = |lease: Lease| {
+        request("message.search", json!({"pageToken":token}))
+            .delegated(delegated(lease))
+            .build()
+    };
+    let refreshing = || {
+        let mut refreshed = lease(BINDING, "refreshed");
+        refreshed.recovers_to = Some("recovered");
+        refreshed
+    };
+    // Routine refresh renews the access under the same binding: the
+    // continuation opens, and the one explicit 401 recovery repeats that page.
+    let page = |authorization: &'static str, status: u16| {
+        Mock::given(method("GET"))
+            .and(path("/gmail/v1/users/me/messages"))
+            .and(query_param("pageToken", "upstream-page-2"))
+            .and(header("authorization", authorization))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({})))
+    };
+    page("Bearer refreshed", 401).expect(1).mount(&server).await;
+    page("Bearer recovered", 200).expect(1).mount(&server).await;
+    let next = p.invoke(continuation(refreshing())).await.unwrap();
+    assert!(next.result["nextPageToken"].is_null());
+    assert_eq!(list_requests(&server, "upstream-page-2").await.len(), 2);
+    // A second 401 never causes a third dispatch.
+    server.reset().await;
+    page("Bearer refreshed", 401).expect(1).mount(&server).await;
+    page("Bearer recovered", 401).expect(1).mount(&server).await;
+    let error = p.invoke(continuation(refreshing())).await.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
+    assert_eq!(error.upstream_status, Some(401));
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn upstream_page_tokens_keep_their_cap_and_are_never_truncated() {
+    let largest = "7".repeat(MAX_UPSTREAM_PAGE_TOKEN_BYTES);
+    let server = MockServer::start().await;
+    mount_page(&server, None, Some(&largest)).await;
+    mount_page(&server, Some(&largest), None).await;
+    let p = provider(&server);
+    let token = first_page_token(&p, request("message.search", json!({}))).await;
+    // The input bound is exactly the largest envelope's size.
+    assert_eq!(MAX_PAGE_TOKEN_BYTES, 2786);
+    assert_eq!(token.len(), MAX_PAGE_TOKEN_BYTES);
+    let search = descriptor()
+        .actions
+        .into_iter()
+        .find(|a| a.action == "message.search")
+        .unwrap();
+    assert_eq!(
+        search.input_schema["properties"]["pageToken"]["maxLength"],
+        MAX_PAGE_TOKEN_BYTES
+    );
+    p.invoke(invocation("message.search", json!({"pageToken":token})))
+        .await
+        .unwrap();
+    assert_eq!(list_requests(&server, &largest).await.len(), 1);
+    // One byte more is an upstream protocol failure.
+    let server = MockServer::start().await;
+    mount_page(
+        &server,
+        None,
+        Some(&"7".repeat(MAX_UPSTREAM_PAGE_TOKEN_BYTES + 1)),
+    )
+    .await;
+    let error = provider(&server)
+        .invoke(invocation("message.search", json!({})))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.decision(), Decision::Error);
+    assert!(error.message.contains("not truncated"), "{}", error.message);
+    assert!(error.result.is_none());
 }

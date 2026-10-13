@@ -123,8 +123,21 @@ Search supports Gmail query syntax, `maxResults` (default 20, maximum 50),
 `pageToken` (CLI `--page-token`) and `includeSpamTrash` (CLI `--include-spam-trash`).
 Use `--query 'in:trash' --include-spam-trash` to find mail to restore. Each invocation
 fetches exactly one page and bounded metadata for that page; callers request each
-continuation. A page token or message ID applies to the current connection, so
-restart searches and discard saved IDs when deliberately changing accounts.
+continuation by passing the response's `nextPageToken` as `pageToken` with the
+same query, `maxResults` and `includeSpamTrash`. Omitted values count as their
+defaults, so a continuation may state them explicitly or omit them.
+
+`nextPageToken` is a Broker-signed envelope of at most 2,786 characters around
+Gmail's own page token, which the Broker accepts up to 2,048 bytes and never
+truncates; a longer Gmail token fails the search with `upstream_protocol_failed`.
+The envelope is bound to the action, execution context, caller and credential
+mode, the Broker's connection to the mailbox, and the query settings above. It
+is not bound to grants: every page is authorized again. Routine access-token
+refresh keeps it valid. Reconnecting or replacing the account, a Broker reload
+or restart, 15 minutes after issue, or any changed setting makes it fail with
+`input_invalid` before Gmail is contacted; restart the search without
+`pageToken`. Message IDs apply to the current mailbox, so discard saved IDs when
+deliberately changing accounts.
 
 Reads project useful headers, label IDs, snippets, decoded text parts and attachment
 metadata. Content is marked `contentTrust: "untrusted"`; mail may contain malicious
