@@ -1876,25 +1876,57 @@ async fn audit_sink_revalidates_parent_before_retention_prune() {
     let temp = TempDir::new().unwrap();
     let audit_dir = temp.path().join("audit");
     let audit_path = audit_dir.join("audit.jsonl");
+    // The first append makes a prune due, which the writer runs after the
+    // acknowledgement and only while no command is queued. Hold that prune at
+    // its start, before it validates the parent, so it runs exactly after the
+    // parent becomes unsafe.
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let hook_path = audit_path.display().to_string();
+    let hook_gate = Arc::clone(&gate);
+    let _hook = install_audit_writer_hook(move |event| {
+        if event.path == hook_path && event.kind == AuditWriterTestEventKind::Prune {
+            if let Some(sender) = started_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            let (lock, condition) = &*hook_gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = condition.wait(released).unwrap();
+            }
+        }
+    });
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 0,
         ..jsonl_audit_config(audit_path.display().to_string())
     });
     sink.append_required(test_audit_record()).await.unwrap();
-    // Append acknowledges before pruning; a queued probe waits for that first prune
-    // to finish before this test creates a retained file and changes permissions.
-    sink.check_writable().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), started_rx)
+        .await
+        .expect("the first append starts a retention prune")
+        .unwrap();
     let old_rotated = audit_dir.join(format!("audit.jsonl.20000101T000000Z.{}", Uuid::new_v4()));
     fs::write(&old_rotated, b"old").unwrap();
     let old_mtime =
         filetime::FileTime::from_unix_time(Utc::now().timestamp().saturating_sub(86_400), 0);
     filetime::set_file_mtime(&old_rotated, old_mtime).unwrap();
     fs::set_permissions(&audit_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    release_gate(&gate);
 
+    // The writer answers this append only after the held prune has finished.
     let error = sink.append_required(test_audit_record()).await.unwrap_err();
 
     assert!(matches!(error, RuntimeError::Audit { .. }));
     assert!(old_rotated.exists());
+    assert!(
+        sink.writer
+            .as_ref()
+            .unwrap()
+            .health
+            .recorded()
+            .contains(AuditFailureClass::Prune)
+    );
 }
 
 #[cfg(unix)]
