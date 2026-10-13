@@ -136,13 +136,13 @@ also includes a same-origin browser portal frontend:
   host changes. See [Adding a backend](#adding-a-backend).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules and request authorization.
-- **`agent-access-broker-host`** — the broker host library: HTTP routers,
-  request decoding, host-matched gateway dispatch, source/proxy-chain
+- **`agent-access-broker-host`** — the broker host library: module
+  composition (`BrokerComposition`), HTTP routers, request decoding, host-matched gateway dispatch, source/proxy-chain
   derivation, dynamic config reload, management routing, and HTTP MCP serving.
   It depends on core and never on a backend or import adapter.
 - **`agent-access-broker`** — the service binary: process lifecycle, listeners,
-  command dispatch, build stamping, and the backends it links (`main.rs`,
-  `backends.rs`, and `build_info.rs`).
+  command dispatch, build stamping, and the modules it links (`main.rs`,
+  `composition()` in `backends.rs`, and `build_info.rs`).
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static
@@ -211,8 +211,12 @@ policy, then asks the provider to execute.
 
 ### Backend registration
 
-The broker binary lists the backends it links (`backend_registry()` in the
-broker crate). Each `BackendRegistration` names a kind, the resource types the
+The broker binary selects the modules it links through `composition()` in the
+broker crate: native backends, OAuth dialects, and import adapters, validated
+once into an immutable `BrokerComposition` that every command and runtime
+generation shares. Building it rejects invalid identifiers and duplicate
+backend kinds, resource types, dialects, and adapters. Each
+`BackendRegistration` names a kind, the resource types the
 backend defines, a strict parser for its `[providers.<kind>]` table, and whether
 it is a development fixture. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
@@ -259,7 +263,7 @@ on redirect targets.
 ### Adding a backend
 
 A backend is a crate that depends only on `agent-access-provider` and exports
-one `BackendRegistration`; adding it to the broker's `backend_registry()` is the
+one `BackendRegistration`; selecting it in the broker's `composition()` is the
 only host change. The crate supplies:
 
 - **Resource types**: `ResourceTypeDescriptor` statics with a canonical target

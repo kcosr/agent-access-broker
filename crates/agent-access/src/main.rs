@@ -18465,12 +18465,13 @@ mod tests {
         service: &str,
         action: &str,
     ) -> agent_access_provider::ResponseCapabilities {
-        static CONFIG: std::sync::OnceLock<agent_access_core::BrokerConfig> =
+        static DESCRIPTORS: std::sync::OnceLock<Vec<agent_access_provider::ServiceDescriptor>> =
             std::sync::OnceLock::new();
-        let config = CONFIG.get_or_init(|| {
-            agent_access_core::parse_broker_config_raw(
-                "capabilities.toml",
-                r#"
+        let descriptors = DESCRIPTORS.get_or_init(|| {
+            agent_access_broker::composition()
+                .unwrap()
+                .configured_service_descriptors(
+                    r#"
 [identity]
 mode = "anonymous"
 authority = "toml"
@@ -18494,15 +18495,13 @@ api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"
 allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 "#,
-                &std::sync::Arc::new(agent_access_broker::backend_registry()),
-            )
-            .unwrap()
+                )
+                .unwrap()
         });
-        let descriptor = config
-            .providers
-            .get_kind(service)
-            .expect("backend is configured")
-            .descriptor();
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| descriptor.service == service)
+            .expect("backend is configured");
         agent_access_provider::presentation::response_capabilities(
             descriptor
                 .action(action)
@@ -21819,14 +21818,12 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn send_route_resolution_encodes_path_and_declared_query_values() {
-        let service_route = agent_access_core::http_route_specs(
-            &agent_access_broker::backend_registry()
-                .resource_types()
-                .clone(),
-        )
-        .into_iter()
-        .find(|route| route.method == "GET" && route.route == "/v1/services/{service}")
-        .unwrap();
+        let service_route = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs()
+            .into_iter()
+            .find(|route| route.method == "GET" && route.route == "/v1/services/{service}")
+            .unwrap();
         let service_path = resolve_route_path(
             &service_route,
             BTreeMap::from([("service".to_string(), "jira/cloud project #1".to_string())]),
@@ -21835,14 +21832,12 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
         .unwrap();
         assert_eq!(service_path, "/v1/services/jira%2Fcloud%20project%20%231");
 
-        let grants_route = agent_access_core::http_route_specs(
-            &agent_access_broker::backend_registry()
-                .resource_types()
-                .clone(),
-        )
-        .into_iter()
-        .find(|route| route.method == "GET" && route.route == "/v1/admin/policy/grants")
-        .unwrap();
+        let grants_route = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs()
+            .into_iter()
+            .find(|route| route.method == "GET" && route.route == "/v1/admin/policy/grants")
+            .unwrap();
         let grants_path = resolve_route_path(
             &grants_route,
             BTreeMap::new(),
@@ -21864,14 +21859,12 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn send_route_resolution_rejects_unknown_params_and_structured_query_objects() {
-        let route = agent_access_core::http_route_specs(
-            &agent_access_broker::backend_registry()
-                .resource_types()
-                .clone(),
-        )
-        .into_iter()
-        .find(|route| route.method == "GET" && route.route == "/v1/admin/policy/grants")
-        .unwrap();
+        let route = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs()
+            .into_iter()
+            .find(|route| route.method == "GET" && route.route == "/v1/admin/policy/grants")
+            .unwrap();
 
         let unknown = resolve_route_path(
             &route,
@@ -22289,11 +22282,9 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
             output: None,
         };
         let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
-        catalog.routes = agent_access_core::http_route_specs(
-            &agent_access_broker::backend_registry()
-                .resource_types()
-                .clone(),
-        );
+        catalog.routes = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs();
         let request = serde_json::json!({
             "version": "agent-access.send.v1",
             "kind": "http",
@@ -22316,11 +22307,9 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
     #[test]
     fn send_http_response_shape_follows_route_catalog() {
-        let routes = agent_access_core::http_route_specs(
-            &agent_access_broker::backend_registry()
-                .resource_types()
-                .clone(),
-        );
+        let routes = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs();
         let management = routes
             .iter()
             .find(|route| route.method == "GET" && route.route == "/v1/admin/policy/grants")
