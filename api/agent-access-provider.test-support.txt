@@ -4,6 +4,7 @@
 pub mod agent_access_provider
 pub mod agent_access_provider::host
 #[non_exhaustive] pub enum agent_access_provider::host::HostPort
+pub agent_access_provider::host::HostPort::AdmittedOperation
 pub agent_access_provider::host::HostPort::DelegatedLease
 impl agent_access_provider::host::HostPort
 pub fn agent_access_provider::host::HostPort::permits(self, &agent_access_provider::Decision, agent_access_provider::ReasonCode) -> bool
@@ -126,9 +127,11 @@ pub fn agent_access_provider::host::bearer_credential(alloc::string::String) -> 
 pub fn agent_access_provider::host::build_context<'a>(&'a agent_access_provider::ProviderLimits, &'a dyn agent_access_provider::host::UpstreamClientFactory, agent_access_provider::ProviderAttributionConfig, core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> agent_access_provider::BuildContext<'a>
 pub fn agent_access_provider::host::configure_client_profile(reqwest::async_impl::client::ClientBuilder, agent_access_provider::ClientProfile, &agent_access_provider::ProviderLimits) -> reqwest::async_impl::client::ClientBuilder
 pub fn agent_access_provider::host::delegated_binding_id([u8; 32]) -> agent_access_provider::DelegatedBindingId
+pub fn agent_access_provider::host::hook_context(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::HookPhase, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> agent_access_provider::HookContext
 pub fn agent_access_provider::host::invocation(agent_access_provider::AdmittedRequest, alloc::vec::Vec<agent_access_provider::BrokerBodyPart>, agent_access_provider::ResourceAttributes, core::option::Option<agent_access_provider::ProviderState>) -> agent_access_provider::ProviderInvocation
 pub fn agent_access_provider::host::port_failure(agent_access_provider::host::HostPort, agent_access_provider::ProviderError) -> agent_access_provider::ProviderError
 pub fn agent_access_provider::host::scope_request(agent_access_provider::host::ScopeRequestParts<'_>) -> agent_access_provider::ScopeRequest<'_>
+pub async fn agent_access_provider::host::with_hook_context<F: core::future::future::Future>(agent_access_provider::HookContext, F) -> <F as core::future::future::Future>::Output
 pub mod agent_access_provider::presentation
 pub enum agent_access_provider::presentation::BodyPathSegment
 pub agent_access_provider::presentation::BodyPathSegment::Each
@@ -584,6 +587,7 @@ pub fn agent_access_provider::test_support::bearer_credential(&str) -> agent_acc
 pub fn agent_access_provider::test_support::credential_token(&agent_access_provider::ExecutionCredential) -> &str
 pub fn agent_access_provider::test_support::credential_username(&agent_access_provider::ExecutionCredential) -> core::option::Option<&str>
 pub fn agent_access_provider::test_support::delegated_binding_id(&str) -> agent_access_provider::DelegatedBindingId
+pub async fn agent_access_provider::test_support::in_invocation_hook<F: core::future::future::Future>(&str, &str, F) -> <F as core::future::future::Future>::Output
 pub fn agent_access_provider::test_support::install_trace_capture() -> &'static agent_access_provider::test_support::TraceCaptureDispatcher
 pub fn agent_access_provider::test_support::test_signing_key(u8) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
 pub macro agent_access_provider::module_metadata!
@@ -798,6 +802,36 @@ impl core::marker::Unpin for agent_access_provider::ContinuationOwner
 impl core::marker::UnsafeUnpin for agent_access_provider::ContinuationOwner
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationOwner
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationOwner
+#[non_exhaustive] pub enum agent_access_provider::ContractViolation
+pub agent_access_provider::ContractViolation::AllowNotPermitted
+pub agent_access_provider::ContractViolation::HostOnlyReason
+pub agent_access_provider::ContractViolation::HostPortNotPermitted
+pub agent_access_provider::ContractViolation::InconsistentHookContext
+pub agent_access_provider::ContractViolation::MissingHookContext
+pub agent_access_provider::ContractViolation::RateLimitResultInvalid
+pub agent_access_provider::ContractViolation::ReasonNotPermitted
+pub agent_access_provider::ContractViolation::StreamReasonNotPermitted
+pub agent_access_provider::ContractViolation::UnregisteredDomainReason
+impl agent_access_provider::ContractViolation
+pub fn agent_access_provider::ContractViolation::diagnostic_code(self) -> &'static str
+impl core::clone::Clone for agent_access_provider::ContractViolation
+pub fn agent_access_provider::ContractViolation::clone(&self) -> agent_access_provider::ContractViolation
+impl core::cmp::Eq for agent_access_provider::ContractViolation
+impl core::cmp::PartialEq for agent_access_provider::ContractViolation
+pub fn agent_access_provider::ContractViolation::eq(&self, &agent_access_provider::ContractViolation) -> bool
+impl core::fmt::Debug for agent_access_provider::ContractViolation
+pub fn agent_access_provider::ContractViolation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::ContractViolation
+pub fn agent_access_provider::ContractViolation::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for agent_access_provider::ContractViolation
+impl core::marker::StructuralPartialEq for agent_access_provider::ContractViolation
+impl core::marker::Freeze for agent_access_provider::ContractViolation
+impl core::marker::Send for agent_access_provider::ContractViolation
+impl core::marker::Sync for agent_access_provider::ContractViolation
+impl core::marker::Unpin for agent_access_provider::ContractViolation
+impl core::marker::UnsafeUnpin for agent_access_provider::ContractViolation
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContractViolation
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContractViolation
 pub enum agent_access_provider::CredentialMode
 pub agent_access_provider::CredentialMode::PerUser
 pub agent_access_provider::CredentialMode::Service
@@ -958,6 +992,8 @@ pub agent_access_provider::HookPhase::BodyAdmission
 pub agent_access_provider::HookPhase::CredentialVerification
 pub agent_access_provider::HookPhase::Invocation
 pub agent_access_provider::HookPhase::ScopeResolution
+impl agent_access_provider::HookPhase
+pub fn agent_access_provider::HookPhase::as_str(self) -> &'static str
 impl core::clone::Clone for agent_access_provider::HookPhase
 pub fn agent_access_provider::HookPhase::clone(&self) -> agent_access_provider::HookPhase
 impl core::cmp::Eq for agent_access_provider::HookPhase
@@ -1416,6 +1452,7 @@ pub fn agent_access_provider::ReasonCode::is_provider_emittable(self) -> bool
 pub fn agent_access_provider::ReasonCode::permits_late_stream(self) -> bool
 pub fn agent_access_provider::ReasonCode::permits_provider_allow(self, agent_access_provider::HookPhase, bool) -> bool
 pub fn agent_access_provider::ReasonCode::permits_provider_failure(self, &agent_access_provider::Decision, agent_access_provider::HookPhase) -> bool
+pub fn agent_access_provider::ReasonCode::permits_provider_trace(self, agent_access_provider::HookPhase) -> bool
 impl core::clone::Clone for agent_access_provider::ReasonCode
 pub fn agent_access_provider::ReasonCode::clone(&self) -> agent_access_provider::ReasonCode
 impl core::cmp::Eq for agent_access_provider::ReasonCode
@@ -2389,6 +2426,27 @@ impl core::marker::Unpin for agent_access_provider::ExecutionCredential
 impl core::marker::UnsafeUnpin for agent_access_provider::ExecutionCredential
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ExecutionCredential
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ExecutionCredential
+pub struct agent_access_provider::HookContext
+impl agent_access_provider::HookContext
+pub fn agent_access_provider::HookContext::action(&self) -> &str
+pub fn agent_access_provider::HookContext::check_failure(&self, &agent_access_provider::ProviderError) -> core::result::Result<(), agent_access_provider::ContractViolation>
+pub fn agent_access_provider::HookContext::check_late_stream(&self, agent_access_provider::ProviderReason) -> core::result::Result<(), agent_access_provider::ContractViolation>
+pub fn agent_access_provider::HookContext::check_trace(&self, agent_access_provider::ProviderReason) -> core::result::Result<(), agent_access_provider::ContractViolation>
+pub fn agent_access_provider::HookContext::declares(&self, &agent_access_provider::ProviderReasonDefinition) -> bool
+pub fn agent_access_provider::HookContext::domain_reasons(&self) -> &'static [&'static agent_access_provider::ProviderReasonDefinition]
+pub fn agent_access_provider::HookContext::phase(&self) -> agent_access_provider::HookPhase
+pub fn agent_access_provider::HookContext::service(&self) -> &str
+impl core::clone::Clone for agent_access_provider::HookContext
+pub fn agent_access_provider::HookContext::clone(&self) -> agent_access_provider::HookContext
+impl core::fmt::Debug for agent_access_provider::HookContext
+pub fn agent_access_provider::HookContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::HookContext
+impl core::marker::Send for agent_access_provider::HookContext
+impl core::marker::Sync for agent_access_provider::HookContext
+impl core::marker::Unpin for agent_access_provider::HookContext
+impl core::marker::UnsafeUnpin for agent_access_provider::HookContext
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::HookContext
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::HookContext
 pub struct agent_access_provider::InvalidReasonCodeId
 impl core::clone::Clone for agent_access_provider::InvalidReasonCodeId
 pub fn agent_access_provider::InvalidReasonCodeId::clone(&self) -> agent_access_provider::InvalidReasonCodeId
@@ -3851,6 +3909,7 @@ pub fn agent_access_provider::attribution_audit_applied(core::option::Option<&se
 pub fn agent_access_provider::attribution_skip_target_absent_audit() -> serde_json::value::Value
 pub fn agent_access_provider::complete_upstream_trace(&mut reqwest::async_impl::response::Response, core::option::Option<agent_access_provider::ProviderReason>)
 pub fn agent_access_provider::current_correlation_context() -> core::option::Option<agent_access_provider::CorrelationContext>
+pub fn agent_access_provider::current_hook_context() -> core::option::Option<agent_access_provider::HookContext>
 pub fn agent_access_provider::current_provider_action() -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn agent_access_provider::current_provider_finalization() -> core::option::Option<agent_access_provider::ProviderFinalizationContext>
 pub fn agent_access_provider::default_attachment_max_bytes() -> u64
@@ -3923,6 +3982,7 @@ enum agent_access_provider::ClientProfile: exhaustive
 enum agent_access_provider::ContinuationError: non-exhaustive
 enum agent_access_provider::ContinuationLifetime: non-exhaustive
 enum agent_access_provider::ContinuationOwner: non-exhaustive
+enum agent_access_provider::ContractViolation: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
 enum agent_access_provider::CredentialView: exhaustive
 enum agent_access_provider::Decision: exhaustive
@@ -3992,6 +4052,7 @@ struct agent_access_provider::EgressProxyConfig: named fields
 struct agent_access_provider::EgressRoute: named fields, private fields
 struct agent_access_provider::EmbeddedBody: named fields
 struct agent_access_provider::ExecutionCredential: named fields, private fields
+struct agent_access_provider::HookContext: named fields, private fields
 struct agent_access_provider::InvalidReasonCodeId: unit
 struct agent_access_provider::InvocationIdentity: named fields
 struct agent_access_provider::InvocationScope: named fields, private fields

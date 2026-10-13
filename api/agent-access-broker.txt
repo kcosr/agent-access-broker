@@ -40,6 +40,26 @@ impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_core::backends::B
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::backends::BackendRegistry
 pub mod agent_access_core::imports
 pub mod agent_access_core::imports::adapter
+pub enum agent_access_core::imports::adapter::AdapterDiscoveryError
+pub agent_access_core::imports::adapter::AdapterDiscoveryError::Configuration(alloc::string::String)
+pub agent_access_core::imports::adapter::AdapterDiscoveryError::Failed(agent_access_provider::result::ProviderError)
+impl core::clone::Clone for agent_access_core::imports::adapter::AdapterDiscoveryError
+pub fn agent_access_core::imports::adapter::AdapterDiscoveryError::clone(&self) -> agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::cmp::Eq for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::cmp::PartialEq for agent_access_core::imports::adapter::AdapterDiscoveryError
+pub fn agent_access_core::imports::adapter::AdapterDiscoveryError::eq(&self, &agent_access_core::imports::adapter::AdapterDiscoveryError) -> bool
+impl core::convert::From<agent_access_provider::result::ProviderError> for agent_access_core::imports::adapter::AdapterDiscoveryError
+pub fn agent_access_core::imports::adapter::AdapterDiscoveryError::from(agent_access_provider::result::ProviderError) -> Self
+impl core::fmt::Debug for agent_access_core::imports::adapter::AdapterDiscoveryError
+pub fn agent_access_core::imports::adapter::AdapterDiscoveryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::marker::Freeze for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::marker::Send for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::marker::Sync for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::marker::Unpin for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::marker::UnsafeUnpin for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::adapter::AdapterDiscoveryError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::adapter::AdapterDiscoveryError
 pub enum agent_access_core::imports::adapter::ImportedDiscoveryAuthentication
 pub agent_access_core::imports::adapter::ImportedDiscoveryAuthentication::Anonymous
 pub agent_access_core::imports::adapter::ImportedDiscoveryAuthentication::Delegated(agent_access_provider::delegated::DelegatedCredential)
@@ -99,7 +119,7 @@ pub trait agent_access_core::imports::adapter::ImportedAdapter: core::marker::Se
 pub fn agent_access_core::imports::adapter::ImportedAdapter::additional_destinations(&self, &agent_access_core::imports::definition::ImportedServiceDefinition) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
 pub fn agent_access_core::imports::adapter::ImportedAdapter::build(&self, &agent_access_core::imports::definition::ImportedServiceDefinition, &[agent_access_core::imports::definition::ImportedActionDefinition], core::option::Option<agent_access_provider::credential::ExecutionCredential>, &agent_access_provider::backend::BuildContext<'_>) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::provider::Provider>, agent_access_provider::error::ProviderBuildError>
 pub fn agent_access_core::imports::adapter::ImportedAdapter::development_only(&self) -> bool
-pub fn agent_access_core::imports::adapter::ImportedAdapter::discover<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 agent_access_core::imports::definition::ImportedServiceDefinition, &'life2 agent_access_core::imports::adapter::ImportedDiscoveryAuthentication, core::option::Option<agent_access_provider::credential::ExecutionCredential>, &'life3 agent_access_provider::backend::BuildContext<'life4>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_core::imports::adapter::ImportedDiscovery, agent_access_provider::result::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
+pub fn agent_access_core::imports::adapter::ImportedAdapter::discover<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 agent_access_core::imports::definition::ImportedServiceDefinition, &'life2 agent_access_core::imports::adapter::ImportedDiscoveryAuthentication, core::option::Option<agent_access_provider::credential::ExecutionCredential>, &'life3 agent_access_provider::backend::BuildContext<'life4>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_core::imports::adapter::ImportedDiscovery, agent_access_core::imports::adapter::AdapterDiscoveryError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
 pub fn agent_access_core::imports::adapter::ImportedAdapter::kind(&self) -> &'static str
 pub fn agent_access_core::imports::adapter::ImportedAdapter::scoped_mcp_name(&self, &agent_access_core::imports::definition::ImportedActionDefinition) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn agent_access_core::imports::adapter::ImportedAdapter::sensitive_output_pointers(&self) -> &'static [&'static str]
@@ -380,6 +400,7 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::regis
 
 // Implementation and construction contracts of the items above
 
+enum agent_access_core::imports::adapter::AdapterDiscoveryError: exhaustive
 enum agent_access_core::imports::adapter::ImportedDiscoveryAuthentication: exhaustive
 enum agent_access_core::imports::definition::ImportedAuthMechanism: exhaustive
 enum agent_access_core::imports::definition::ImportedBindingStatus: exhaustive
