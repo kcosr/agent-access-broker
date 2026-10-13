@@ -493,8 +493,10 @@ All notable changes to this project are documented in this file.
   `mutationStatus: "unknown"`, `retrySafe: false` to their unchanged
   `upstream_timeout` or `upstream_connection_failed` error, which previously
   carried no result. The same writes now also report `mutationStatus:
-  "unknown"`, `retrySafe: false` for a 5xx response (`upstream_failed`) and for
-  an upstream failure GitLab does not classify, and `mutationStatus:
+  "unknown"`, `retrySafe: false` for a redirect or 5xx response
+  (`upstream_failed`), since the Broker never follows a redirect and a proxy can
+  answer 5xx after a committed write, and for an upstream failure GitLab does
+  not classify, and `mutationStatus:
   "applied_unverified"`, `retrySafe: false`, `verificationStage:
   "mutation_response"` with request-derived `safeLocators` when GitLab answered
   with a success status whose response then failed, stalled, exceeded the byte
@@ -516,9 +518,10 @@ All notable changes to this project are documented in this file.
   the trigger's job read, carry no receipt.
 - A Teams notification that may have reached the Workflow without a confirmed
   outcome (a timeout, a transport failure or another unclassified failure
-  after sending, or a 5xx response) and a CloudBees CI trigger POST that fails
-  without a response in a way other than a timeout, transport failure or
-  proven-unsent request now add `mutationStatus: "unknown"`,
+  after sending, a redirect or a 5xx response) and a CloudBees CI trigger POST
+  answered with a redirect, or failing without a response in a way other than
+  a timeout, transport failure or proven-unsent request, now add
+  `mutationStatus: "unknown"`,
   `retrySafe: false` to their unchanged error. CloudBees CI's existing
   `applied_unverified` outcomes are unchanged.
 - A Gmail archive, trash or restore whose request the Broker proves was never
@@ -530,7 +533,8 @@ All notable changes to this project are documented in this file.
 - Gmail archive, trash and restore failures that may have applied now carry a
   receipt with their unchanged reason and message: `mutationStatus:
   "unknown"`, `retrySafe: false` after a timeout or transport failure once
-  sent, a 5xx response or the operation deadline, and `mutationStatus:
+  sent, a redirect or 5xx response or the operation deadline, and
+  `mutationStatus:
   "applied_unverified"`, `verificationStage: "mutation_response"` with the
   requested `message` or `thread` ID as `safeLocators` when Gmail answered
   with a success status whose body could not be read or parsed.
@@ -546,7 +550,8 @@ All notable changes to this project are documented in this file.
 - Jira write failures that may have applied now carry a receipt with their
   unchanged reason and message: `mutationStatus: "unknown"`,
   `retrySafe: false` when the mutation request got no response (or an
-  unclassified failure) or a 5xx; `mutationStatus: "applied_unverified"` at
+  unclassified failure), a redirect or a 5xx; `mutationStatus:
+  "applied_unverified"` at
   `mutation_response` when Jira answered with a success status whose response
   then failed, did not parse or did not match the request; and
   `applied_unverified` at the read-back stage when the read-back after an
@@ -567,7 +572,8 @@ All notable changes to this project are documented in this file.
 - Confluence write failures that may have applied now carry a receipt with
   their unchanged reason and message: `mutationStatus: "unknown"`,
   `retrySafe: false` when the mutation request got no response (or an
-  unclassified failure) or a 5xx; `mutationStatus: "applied_unverified"` at
+  unclassified failure), a redirect or a 5xx; `mutationStatus:
+  "applied_unverified"` at
   `mutation_response` when Confluence answered with a success status whose
   response then failed, did not parse or did not match the request, or when
   anything after the accepted write failed; and `applied_unverified` at the

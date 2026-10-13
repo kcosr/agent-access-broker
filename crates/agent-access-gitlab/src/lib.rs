@@ -14224,15 +14224,16 @@ impl PlainWrite {
     /// The failure of the write request itself:
     ///
     /// - proven unsent: `not_applied`;
-    /// - no response, or a 5xx a proxy may return after GitLab committed the
-    ///   write: `unknown`;
+    /// - no response, a 5xx a proxy may return after GitLab committed the
+    ///   write, or a redirect the Broker never follows: `unknown`;
     /// - a success status whose response then stalled, failed, exceeded the
     ///   byte cap or did not parse: `applied_unverified`;
     /// - a rejection, or a failure before anything was sent: no receipt.
     pub(crate) fn failed(&self, error: GitlabBackendError) -> ProviderError {
         match error {
             GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
-            GitlabBackendError::NoResponse { .. } | GitlabBackendError::HttpStatus(500..=599) => {
+            GitlabBackendError::NoResponse { .. }
+            | GitlabBackendError::HttpStatus(300..=399 | 500..=599) => {
                 gitlab_backend_error(error).with_mutation_receipt(MutationReceipt::unknown())
             }
             GitlabBackendError::Timeout

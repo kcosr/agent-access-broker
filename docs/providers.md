@@ -102,7 +102,8 @@ use the narrowest upstream role that supports the approved workflow.
   what the upstream may have done: `mutationStatus: "not_applied"`,
   `retrySafe: true` when the Broker proves the request was never sent;
   `mutationStatus: "unknown"`, `retrySafe: false` when it may have been sent
-  without a definitive answer, including a 5xx, or when a batch failed after an
+  without a definitive answer, including a redirect or a 5xx, or when a batch
+  failed after an
   item may have applied; and `mutationStatus: "applied_unverified"`,
   `retrySafe: false` when the upstream answered with a success status but the
   response or a read-back could not be read or validated. Writes with their own

@@ -5859,8 +5859,8 @@ impl JiraWrite {
     /// The failure of the mutation request itself:
     ///
     /// - proven unsent: `not_applied`;
-    /// - no response, or a 5xx a proxy may return after Jira committed the
-    ///   write: `unknown`;
+    /// - no response, a 5xx a proxy may return after Jira committed the
+    ///   write, or a redirect the Broker never follows: `unknown`;
     /// - a success status whose response then failed: `applied_unverified`;
     /// - a rejection, or a failure before anything was sent: no receipt.
     fn failed(&self, error: JiraBackendError) -> ProviderError {
@@ -5868,7 +5868,9 @@ impl JiraWrite {
             JiraBackendError::NotSent { .. } => {
                 jira_backend_error(error).with_mutation_receipt(MutationReceipt::not_applied())
             }
-            JiraBackendError::NoResponse { .. } | JiraBackendError::HttpStatus(500..=599) => {
+            JiraBackendError::NoResponse { .. }
+            | JiraBackendError::Redirected
+            | JiraBackendError::HttpStatus(500..=599) => {
                 jira_backend_error(error).with_mutation_receipt(MutationReceipt::unknown())
             }
             JiraBackendError::AcceptedUnreadable(_)
@@ -5894,6 +5896,7 @@ fn upload_may_have_applied(error: &JiraBackendError) -> bool {
     matches!(
         error,
         JiraBackendError::NoResponse { .. }
+            | JiraBackendError::Redirected
             | JiraBackendError::HttpStatus(500..=599)
             | JiraBackendError::AcceptedUnreadable(_)
     )
@@ -5934,6 +5937,7 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
         | JiraBackendError::Timeout => "upstream_timeout",
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
+        | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",
     }
 }

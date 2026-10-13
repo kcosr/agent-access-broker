@@ -784,7 +784,7 @@ A failed write can carry a mutation receipt in `result`, beside its ordinary
 reason. `mutationStatus: "not_applied"` with `retrySafe: true` means the Broker
 proved the request never reached the upstream service: nothing changed, and
 the write may be repeated. `mutationStatus: "unknown"` with `retrySafe: false`
-(a timeout, a dropped connection, a 5xx, or a batch that failed after an item
+(a timeout, a dropped connection, a redirect, a 5xx, or a batch that failed after an item
 may have applied) means the write may have applied, and
 `mutationStatus: "applied_unverified"` means the service accepted it but the
 Broker could not read or verify the response; use its `safeLocators`. Inspect

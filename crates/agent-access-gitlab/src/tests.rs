@@ -6390,6 +6390,12 @@ fn plain_write_receipts_follow_what_gitlab_may_have_applied() {
         assert_eq!(read.reason_code(), reason);
         assert!(read.result.is_none());
     }
+    // The Broker never follows a redirect: a plain write answered with one
+    // may have committed. Writes with a verification contract keep their
+    // own mapping.
+    let redirected = write.failed(GitlabBackendError::HttpStatus(303));
+    assert_eq!(redirected.reason_code(), ReasonCode::UpstreamFailed);
+    assert_eq!(redirected.result.as_deref(), Some(&unknown));
     // Only redirect-following reads report a redirect failure.
     assert_eq!(
         gitlab_upstream_error(UpstreamError::Redirect),
@@ -6493,6 +6499,8 @@ enum WriteFate {
     /// The write is read in full and answered with a success whose issue is
     /// in another project.
     ForeignSuccess,
+    /// The write is read in full and answered with a redirect.
+    Redirect,
 }
 
 /// A raw GitLab stand-in that answers `reads` in order, one connection each,
@@ -6567,6 +6575,13 @@ fn scripted_gitlab(
                     socket,
                     "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
+                );
+                let _ = socket.flush();
+            }
+            WriteFate::Redirect => {
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 302 Found\r\nlocation: /elsewhere\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                 );
                 let _ = socket.flush();
             }
@@ -6677,6 +6692,11 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
         ),
         (
             WriteFate::BadGateway,
+            ReasonCode::UpstreamFailed,
+            Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
+        ),
+        (
+            WriteFate::Redirect,
             ReasonCode::UpstreamFailed,
             Some(json!({ "mutationStatus": "unknown", "retrySafe": false })),
         ),

@@ -879,6 +879,10 @@ pub enum ConfluenceBackendError {
     /// like the wrapped failure.
     #[error("write accepted but its response failed: {0}")]
     AcceptedUnreadable(Box<ConfluenceBackendError>),
+    /// Confluence answered with a redirect, which the Broker never follows. It
+    /// reports the same reason as `Protocol`.
+    #[error("Confluence redirect responses are rejected")]
+    Redirected,
     /// Reading a response failed, or an upload file could not be opened.
     #[error("transport: {0}")]
     Transport(String),
@@ -952,10 +956,12 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
             ReasonCode::UpstreamProtocolFailed,
             "Confluence response exceeded the configured byte cap",
         ),
-        ConfluenceBackendError::Protocol(_message) => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence response protocol error",
-        ),
+        ConfluenceBackendError::Redirected | ConfluenceBackendError::Protocol(_) => {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                "Confluence response protocol error",
+            )
+        }
     }
 }
 
@@ -985,9 +991,9 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
         ConfluenceBackendError::NotSent { timed_out: true }
         | ConfluenceBackendError::NoResponse { timed_out: true }
         | ConfluenceBackendError::Timeout => ReasonCode::UpstreamTimeout,
-        ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
-            ReasonCode::UpstreamProtocolFailed
-        }
+        ConfluenceBackendError::ResponseTooLarge
+        | ConfluenceBackendError::Redirected
+        | ConfluenceBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
     }
 }
 
@@ -3727,9 +3733,7 @@ pub(crate) fn validate_confluence_body_response(
 ) -> Result<(), ConfluenceBackendError> {
     let status = response.status().as_u16();
     if response.status().is_redirection() {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence redirect responses are rejected".to_string(),
-        ));
+        return Err(ConfluenceBackendError::Redirected);
     }
     if status == 401 {
         return Err(ConfluenceBackendError::Unauthorized);

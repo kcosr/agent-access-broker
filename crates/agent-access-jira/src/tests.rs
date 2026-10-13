@@ -6469,6 +6469,15 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
     let server_error = write.failed(JiraBackendError::HttpStatus(502));
     assert_eq!(server_error.reason_code(), ReasonCode::UpstreamFailed);
     assert_eq!(server_error.result.as_deref(), Some(&unknown));
+    // The Broker never follows a redirect: the write may have committed.
+    let redirected = write.failed(JiraBackendError::Redirected);
+    assert_eq!(redirected.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(redirected.message, "Jira response protocol error");
+    assert_eq!(redirected.result.as_deref(), Some(&unknown));
+    assert_eq!(
+        sanitized_backend_reason(&JiraBackendError::Redirected),
+        "upstream_protocol_failed"
+    );
     for (error, reason) in [
         (JiraBackendError::Timeout, ReasonCode::UpstreamTimeout),
         (
@@ -6618,6 +6627,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
             Some(&unknown),
         ),
         (0, JiraBackendError::HttpStatus(500), Some(&unknown)),
+        (0, JiraBackendError::Redirected, Some(&unknown)),
         (
             0,
             accepted_if_success(200)(JiraBackendError::Timeout),

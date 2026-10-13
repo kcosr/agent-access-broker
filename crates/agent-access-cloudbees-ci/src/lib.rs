@@ -288,7 +288,12 @@ impl CloudbeesCiProvider {
             ));
         }
         if status.is_redirection() {
-            return Err(protocol_error());
+            // The Broker never follows a redirect, so a trigger answered with
+            // one may already be queued.
+            return Err(match mutation {
+                Some(_) => protocol_error().with_mutation_receipt(MutationReceipt::unknown()),
+                None => protocol_error(),
+            });
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
             return Err(rate_limited(response.headers()));
@@ -2803,6 +2808,41 @@ mod tests {
             assert_trigger_unverified(&error);
             assert_eq!(error.upstream_status, Some(status));
         }
+    }
+
+    #[tokio::test]
+    async fn trigger_post_redirect_is_an_unknown_outcome() {
+        let server = MockServer::start().await;
+        mount_buildable_job(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/team-ci/job/payments/job/build-api/build"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/team-ci/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, protocol_error().message);
+        assert_eq!(
+            error.result.as_deref(),
+            Some(&json!({"mutationStatus":"unknown","retrySafe":false}))
+        );
+        // A read answered with a redirect carries no receipt.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(JOB_API))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/team-ci/"))
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert!(error.result.is_none());
     }
 
     #[tokio::test]

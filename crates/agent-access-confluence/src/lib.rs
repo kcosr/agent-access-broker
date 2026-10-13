@@ -12146,8 +12146,8 @@ impl ConfluenceWrite {
     /// The failure of the mutation request itself, mapped by `map`:
     ///
     /// - proven unsent: `not_applied`;
-    /// - no response, or a 5xx a proxy may return after Confluence committed
-    ///   the write: `unknown`;
+    /// - no response, a 5xx a proxy may return after Confluence committed the
+    ///   write, or a redirect the Broker never follows: `unknown`;
     /// - a success status whose response then failed: `applied_unverified`;
     /// - a rejection, or a failure before anything was sent: no receipt.
     fn failed_with(
@@ -12158,6 +12158,7 @@ impl ConfluenceWrite {
         let receipt = match &error {
             ConfluenceBackendError::NotSent { .. } => Some(MutationReceipt::not_applied()),
             ConfluenceBackendError::NoResponse { .. }
+            | ConfluenceBackendError::Redirected
             | ConfluenceBackendError::HttpStatus(500..=599) => Some(MutationReceipt::unknown()),
             ConfluenceBackendError::AcceptedUnreadable(_) => Some(
                 MutationReceipt::applied_unverified("mutation_response", self.locators()),
@@ -12199,6 +12200,7 @@ fn upload_may_have_applied(error: &ConfluenceBackendError) -> bool {
     matches!(
         error,
         ConfluenceBackendError::NoResponse { .. }
+            | ConfluenceBackendError::Redirected
             | ConfluenceBackendError::HttpStatus(500..=599)
             | ConfluenceBackendError::AcceptedUnreadable(_)
     )
@@ -12221,9 +12223,9 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
         ConfluenceBackendError::NotSent { timed_out: true }
         | ConfluenceBackendError::NoResponse { timed_out: true }
         | ConfluenceBackendError::Timeout => "upstream_timeout",
-        ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
-            "upstream_protocol_failed"
-        }
+        ConfluenceBackendError::ResponseTooLarge
+        | ConfluenceBackendError::Redirected
+        | ConfluenceBackendError::Protocol(_) => "upstream_protocol_failed",
     }
 }
 

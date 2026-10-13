@@ -289,7 +289,9 @@ was never sent, because no connection was established, keeps its ordinary
 reports `mutationStatus:"not_applied"`, `retrySafe:true`: nothing was queued,
 and the trigger can be repeated. Any other failure of the POST without a
 response keeps its ordinary error and reports `mutationStatus:"unknown"`,
-`retrySafe:false`. A 401/403/404/409/429 response or a redirect keeps its
+`retrySafe:false`, and so does a redirect answering the POST
+(`upstream_protocol_failed`): older trigger paths redirect after queueing, and
+the Broker never follows a redirect. A 401/403/404/409/429 response keeps its
 ordinary error without a receipt. Even a valid queue ID may identify an already queued item: it
 does not prove a new build was created. Check `job.view` (`inQueue`,
 `lastBuild`), `build.list`, or `queue.view` before considering another trigger.

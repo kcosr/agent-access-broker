@@ -8478,6 +8478,11 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
             .as_deref(),
         Some(&unknown)
     );
+    // The Broker never follows a redirect: the write may have committed.
+    let redirected = write.failed(ConfluenceBackendError::Redirected);
+    assert_eq!(redirected.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(redirected.message, "Confluence response protocol error");
+    assert_eq!(redirected.result.as_deref(), Some(&unknown));
     for (error, reason) in [
         (ConfluenceBackendError::Timeout, ReasonCode::UpstreamTimeout),
         (
@@ -8656,6 +8661,14 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
         (
             false,
             500,
+            "Confluence attachment upload failed",
+            Some(&unknown),
+        ),
+        // The first upload was answered with a redirect, which the Broker
+        // never follows.
+        (
+            false,
+            302,
             "Confluence attachment upload failed",
             Some(&unknown),
         ),

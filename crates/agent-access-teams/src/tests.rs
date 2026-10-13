@@ -111,7 +111,7 @@ impl NotificationTransport for StatusTransport {
 }
 
 #[tokio::test]
-async fn only_server_errors_leave_an_unknown_notification_outcome() {
+async fn redirects_and_server_errors_leave_an_unknown_notification_outcome() {
     for (status, reason, receipt) in [
         (
             502,
@@ -123,9 +123,15 @@ async fn only_server_errors_leave_an_unknown_notification_outcome() {
             ReasonCode::UpstreamFailed,
             Some(json!({"mutationStatus": "unknown", "retrySafe": false})),
         ),
+        // The Broker never follows a redirect: the Workflow may have
+        // accepted the request.
+        (
+            302,
+            ReasonCode::UpstreamProtocolFailed,
+            Some(json!({"mutationStatus": "unknown", "retrySafe": false})),
+        ),
         (400, ReasonCode::UpstreamFailed, None),
         (403, ReasonCode::UpstreamForbidden, None),
-        (302, ReasonCode::UpstreamProtocolFailed, None),
     ] {
         let provider = TeamsProvider {
             transport: Arc::new(StatusTransport(status)),

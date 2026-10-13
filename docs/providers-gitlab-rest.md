@@ -1273,7 +1273,7 @@ reason, and add a receipt for what GitLab may have done:
 | What happened | Receipt |
 | --- | --- |
 | The request may have been sent, but no response arrived: a timeout (including a stalled upload) or a connection failure after sending (`upstream_timeout`, HTTP 504, or `upstream_connection_failed`, HTTP 502) | `{ "mutationStatus": "unknown", "retrySafe": false }` |
-| GitLab, or a proxy in front of it, answered with a 5xx (`upstream_failed`); the write may have committed first | `{ "mutationStatus": "unknown", "retrySafe": false }` |
+| GitLab, or a proxy in front of it, answered with a redirect, which the Broker never follows on a write, or a 5xx (`upstream_failed`); the write may have committed first | `{ "mutationStatus": "unknown", "retrySafe": false }` |
 | GitLab answered with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse, carried a body on a no-content response, or did not match the request, such as an issue in another project | `mutationStatus = "applied_unverified"`, `retrySafe = false`, `verificationStage = "mutation_response"` and `safeLocators` |
 
 The `safeLocators` name the target from the validated request, never from the
@@ -1281,7 +1281,7 @@ response: always `project`, and `issueIid`, `mergeRequestIid`, `noteId`,
 `discussionId`, `branch`, `path`, `ref`, `pipelineId`, `jobId`, or
 `sourceBranch` and `targetBranch`, as the action has them. Inspect the target
 before repeating a write with either receipt. A rejection with another HTTP
-status, such as 400, 403, 404, 409, 422 or 429, a redirect, and a failure before
+status, such as 400, 403, 404, 409, 422 or 429, and a failure before
 the request is sent, such as an upload file the Broker cannot open, carry no
 receipt.
 

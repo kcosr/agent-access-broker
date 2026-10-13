@@ -629,6 +629,30 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
             "safeLocators": {"thread": "a123"},
         }))
     );
+    // A mutation answered with a redirect, which the Broker never follows,
+    // may have applied; a read answered with one carries no receipt.
+    for (action, route, receipt) in [
+        (
+            "message.restore",
+            "/gmail/v1/users/me/messages/a123/untrash",
+            Some(json!({"mutationStatus":"unknown","retrySafe":false})),
+        ),
+        ("message.view", "/gmail/v1/users/me/messages/a123", None),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/elsewhere"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation(action, json!({"id":"a123"})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(error.message, "Gmail request failed");
+        assert_eq!(error.result.as_deref(), receipt.as_ref(), "{action}");
+    }
     // A read with an unreadable body carries no receipt.
     let server = MockServer::start().await;
     Mock::given(path("/gmail/v1/users/me/threads/a123"))

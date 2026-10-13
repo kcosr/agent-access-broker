@@ -18,7 +18,9 @@
 //!   [`MutationReceipt::not_applied`];
 //! - the request may have reached the upstream without a definitive answer: a
 //!   timeout or transport failure after sending, a stalled upload, an
-//!   upstream failure the provider does not recognize, or a 5xx response, which
+//!   upstream failure the provider does not recognize, a redirect, which a
+//!   write never follows and which can answer a committed write, or a 5xx
+//!   response, which
 //!   a proxy can return after the upstream committed the write:
 //!   [`MutationReceipt::unknown`];
 //! - the upstream accepted the write with a success status, but its response
@@ -95,7 +97,7 @@ impl MutationReceipt {
     }
 
     /// The request may have reached the upstream, such as a timeout or
-    /// transport failure after it was sent or a 5xx response, and nothing
+    /// transport failure after it was sent, a redirect or a 5xx response, and nothing
     /// confirmed whether it applied: `mutationStatus: "unknown"` and
     /// `retrySafe: false`. Report it with the failure's own reason, such as
     /// `upstream_timeout`.

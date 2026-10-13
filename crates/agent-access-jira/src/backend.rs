@@ -614,6 +614,10 @@ pub enum JiraBackendError {
     /// the wrapped failure.
     #[error("Jira accepted the write but its response failed: {0}")]
     AcceptedUnreadable(Box<JiraBackendError>),
+    /// Jira answered with a redirect, which the Broker never follows. It
+    /// reports the same reason as `Protocol`.
+    #[error("Jira redirect responses are rejected")]
+    Redirected,
     /// Reading a response failed, or an upload file could not be opened.
     #[error("Jira transport failed: {0}")]
     Transport(String),
@@ -693,12 +697,12 @@ pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
             ReasonCode::UpstreamProtocolFailed,
             "Jira response exceeded the configured byte cap",
         ),
-        JiraBackendError::IssueCreateResponseInvalid { .. } | JiraBackendError::Protocol(_) => {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira response protocol error",
-            )
-        }
+        JiraBackendError::IssueCreateResponseInvalid { .. }
+        | JiraBackendError::Redirected
+        | JiraBackendError::Protocol(_) => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "Jira response protocol error",
+        ),
     }
 }
 
@@ -725,6 +729,7 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
         | JiraBackendError::Timeout => ReasonCode::UpstreamTimeout,
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
+        | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
     }
 }
@@ -2085,9 +2090,7 @@ pub(crate) fn validate_jira_body_response(
 ) -> Result<(), JiraBackendError> {
     let status = response.status().as_u16();
     if response.status().is_redirection() {
-        return Err(JiraBackendError::Protocol(
-            "Jira redirect responses are rejected".to_string(),
-        ));
+        return Err(JiraBackendError::Redirected);
     }
     if status == 401 {
         return Err(JiraBackendError::Unauthorized);

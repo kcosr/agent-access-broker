@@ -372,8 +372,9 @@ impl Provider for TeamsProvider {
                     "Teams Workflow rejected the notification; request was not retried",
                 )
             };
-            // A proxy can answer 5xx after the Workflow accepted the request.
-            if (500..=599).contains(&status) {
+            // The Broker never follows a redirect, and a proxy can answer 5xx
+            // after the Workflow accepted the request.
+            if (300..=399).contains(&status) || (500..=599).contains(&status) {
                 error = error.with_mutation_receipt(MutationReceipt::unknown());
             }
             return Err(error

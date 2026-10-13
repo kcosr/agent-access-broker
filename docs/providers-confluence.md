@@ -226,9 +226,9 @@ done:
 
 | What happened | Receipt |
 | --- | --- |
-| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Confluence or a proxy answered 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
+| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Confluence or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
 | Confluence answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request; or anything after the accepted write failed, such as a read-back, a draft handle or the result size | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"`, or the read-back stage (such as `post_create_readback`) when a read-back request failed |
-| A page, blog or draft attachment batch failed after an upload may have created its attachment: an earlier upload succeeded, or the failing upload got no response, a 5xx or an unreadable success response | `mutationStatus: "unknown"`, `retrySafe: false`, alongside the batch's result |
+| A page, blog or draft attachment batch failed after an upload may have created its attachment: an earlier upload succeeded, or the failing upload got no response, a redirect, a 5xx or an unreadable success response | `mutationStatus: "unknown"`, `retrySafe: false`, alongside the batch's result |
 
 `safeLocators` name the target from the validated request and the reads before
 the write, such as the `pageId`, `blogId`, `commentId`, `parentCommentId`,

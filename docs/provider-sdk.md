@@ -1078,7 +1078,8 @@ Errors can carry a bounded `result` with `with_result`, and upstream facts with
 - **Proven unsent**: `UpstreamError::NotSent`, so nothing reached the upstream.
 - **Unknown**: a write's request may have reached the upstream, but nothing
   confirmed whether it applied: it timed out or its connection failed after
-  sending, its upload stalled, the upstream answered 5xx, or the client
+  sending, its upload stalled, the upstream answered with a redirect, which a
+  write never follows, or a 5xx, or the client
   reported a failure the provider does not recognize.
 - **Applied**: success, with safe locators of what changed.
 - **Partial**: a batch in which some writes applied. Keep the batch's `status`,
@@ -1097,7 +1098,7 @@ value with `write_into`:
 | Constructor | `mutationStatus` | `retrySafe` | Use for |
 | --- | --- | --- | --- |
 | `MutationReceipt::not_applied()` | `not_applied` | `true` | A proven-unsent write (`UpstreamError::NotSent`), with its ordinary reason, such as `upstream_connection_failed`; or a batch whose first item was proven unsent. |
-| `MutationReceipt::unknown()` | `unknown` | `false` | A write that may have reached the upstream without a definitive answer: a timeout, transport failure, stalled upload, unrecognized `UpstreamError` or 5xx response, with its ordinary reason. Also a batch that failed after any item may have applied, alongside its partial result. |
+| `MutationReceipt::unknown()` | `unknown` | `false` | A write that may have reached the upstream without a definitive answer: a timeout, transport failure, stalled upload, unrecognized `UpstreamError`, redirect (3xx) or 5xx response, with its ordinary reason. Also a batch that failed after any item may have applied, alongside its partial result. |
 | `MutationReceipt::applied_unverified(stage, safe_locators)` | `applied_unverified` | `false` | A write the upstream accepted (2xx) whose response then stalled, failed, exceeded a cap or failed validation, or whose read-back failed, with the failure's own reason; or `mutation_verification_failed` when the verification itself failed. Use a stage such as `mutation_response`, and safe locators from the validated request or an earlier verified response, never from the unreadable one. |
 
 Report a failed read-back after an applied write with

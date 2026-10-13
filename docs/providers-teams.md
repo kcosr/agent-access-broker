@@ -151,9 +151,10 @@ metadata. This confirms endpoint acceptance, not successful Workflow completion
 or a visible Teams message. Inspect Workflow run history when delivery is unclear.
 After a timeout or connection interruption the outcome may be unknown; check before
 retrying to avoid duplicate notifications. Such a failure, any other failure
-after the request may have been sent, and a 5xx response (`upstream_failed`),
-which a proxy can return after the Workflow accepted the request, keep their
-error and report `mutationStatus: "unknown"`, `retrySafe: false`. A request the Broker proves was never
+after the request may have been sent, a redirect (`upstream_protocol_failed`),
+which the Broker never follows, and a 5xx response (`upstream_failed`), which a
+proxy can return after the Workflow accepted the request, keep their error and
+report `mutationStatus: "unknown"`, `retrySafe: false`. A request the Broker proves was never
 sent, because no connection was established or the endpoint URL was refused,
 fails with its ordinary reason and the message `Teams notification request was
 not sent`, and reports `mutationStatus: "not_applied"`, `retrySafe: true`:

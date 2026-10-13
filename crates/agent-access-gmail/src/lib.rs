@@ -273,8 +273,9 @@ impl GmailProvider {
                         .message
                         .push_str("; mutation outcome may be unknown, inspect before retrying");
                 }
-                // A proxy can answer 5xx after Gmail applied the change.
-                if mutation.is_some() && status >= 500 {
+                // The Broker never follows a redirect, and a proxy can answer
+                // 5xx after Gmail applied the change.
+                if mutation.is_some() && ((300..400).contains(&status) || status >= 500) {
                     error = error.with_mutation_receipt(MutationReceipt::unknown());
                 }
                 Err(error)

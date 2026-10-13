@@ -266,7 +266,7 @@ ordinary reason and message and reports what Jira may have done:
 
 | What happened | Receipt |
 | --- | --- |
-| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
+| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
 | Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, such as a created issue in another project | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
 | The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
 
@@ -1058,7 +1058,7 @@ When the first upload was proven never sent, nothing was created: the
 `upstream_failed` error carries `mutationStatus: "not_applied"` and
 `retrySafe: true`, and the whole batch can be repeated. When an upload may have
 created its attachment before the batch failed (an earlier upload succeeded, or
-the failed upload got no response, a 5xx, or a success status with an
+the failed upload got no response, a redirect, a 5xx, or a success status with an
 unreadable response), the error keeps its result and adds
 `mutationStatus: "unknown"`, `retrySafe: false`, unless throttling already
 reported it as `applied_unverified`; repeating the whole batch could upload
