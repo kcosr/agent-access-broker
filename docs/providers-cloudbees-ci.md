@@ -287,8 +287,10 @@ receipt fields instead of a retryable upstream error. A POST the Broker proves
 was never sent, because no connection was established, keeps its ordinary
 `upstream_connection_failed` (HTTP 502) or `upstream_timeout` (HTTP 504) and
 reports `mutationStatus:"not_applied"`, `retrySafe:true`: nothing was queued,
-and the trigger can be repeated. A 401/403/404/409/429 response or a redirect
-keeps its ordinary error without a receipt. Even a valid queue ID may identify an already queued item: it
+and the trigger can be repeated. Any other failure of the POST without a
+response keeps its ordinary error and reports `mutationStatus:"unknown"`,
+`retrySafe:false`. A 401/403/404/409/429 response or a redirect keeps its
+ordinary error without a receipt. Even a valid queue ID may identify an already queued item: it
 does not prove a new build was created. Check `job.view` (`inQueue`,
 `lastBuild`), `build.list`, or `queue.view` before considering another trigger.
 

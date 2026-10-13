@@ -511,6 +511,13 @@ All notable changes to this project are documented in this file.
   failed`; Teams: `Teams notification request was not sent`, which also covers
   a refused endpoint URL). Both previously carried no result. Reads, including
   the trigger's job read, carry no receipt.
+- A Teams notification that may have reached the Workflow without a confirmed
+  outcome (a timeout, a transport failure or another unclassified failure
+  after sending, or a 5xx response) and a CloudBees CI trigger POST that fails
+  without a response in a way other than a timeout, transport failure or
+  proven-unsent request now add `mutationStatus: "unknown"`,
+  `retrySafe: false` to their unchanged error. CloudBees CI's existing
+  `applied_unverified` outcomes are unchanged.
 - A Gmail archive, trash or restore whose request the Broker proves was never
   sent now reports `mutationStatus: "not_applied"`, `retrySafe: true` with its
   unchanged `upstream_connection_failed` or `upstream_timeout`, and its message

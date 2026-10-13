@@ -251,10 +251,13 @@ impl NotificationTransport for HttpTransport {
                     ProviderError::error(error.reason_code(), "Teams notification request was not sent")
                         .with_mutation_receipt(MutationReceipt::not_applied())
                 }
+                // A timeout, a transport failure and any failure the provider
+                // does not classify may have reached the Workflow.
                 _ => ProviderError::error(
                     error.reason_code(),
                     "Teams notification request failed; outcome may be unknown, inspect the workflow before retrying",
-                ),
+                )
+                .with_mutation_receipt(MutationReceipt::unknown()),
             }
         })?;
         let status = response.status().as_u16();
@@ -361,7 +364,7 @@ impl Provider for TeamsProvider {
         let status = receipt.status;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(reason) = status_reason(status) {
-            let error = if reason == ReasonCode::UpstreamRateLimited {
+            let mut error = if reason == ReasonCode::UpstreamRateLimited {
                 upstream_rate_limited(SERVICE, receipt.retry_after)
             } else {
                 ProviderError::error(
@@ -369,6 +372,10 @@ impl Provider for TeamsProvider {
                     "Teams Workflow rejected the notification; request was not retried",
                 )
             };
+            // A proxy can answer 5xx after the Workflow accepted the request.
+            if (500..=599).contains(&status) {
+                error = error.with_mutation_receipt(MutationReceipt::unknown());
+            }
             return Err(error
                 .with_upstream(Some(status), Some(elapsed))
                 .with_audit(audit));

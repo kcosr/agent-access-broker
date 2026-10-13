@@ -805,7 +805,7 @@ pub(crate) fn documentation(action: &str) -> Value {
         }
         "build.trigger" => {
             documentation["receipt"] = json!(
-                "A queue receipt reports mutationStatus applied. Without a usable queue location, or when the request may have reached the controller but no response confirmed it (timeout, connection failure, or 5xx), the result reports mutationStatus applied_unverified and retrySafe false; the uncertain case is the error mutation_verification_failed. safeLocators holds controller and job. Check job.view (inQueue, lastBuild) or build.list before triggering again. A POST proven never sent (no connection was established) fails with its ordinary error and reports mutationStatus not_applied and retrySafe true: nothing was queued."
+                "A queue receipt reports mutationStatus applied. Without a usable queue location, or when the request may have reached the controller but no response confirmed it (timeout, connection failure, or 5xx), the result reports mutationStatus applied_unverified and retrySafe false; the uncertain case is the error mutation_verification_failed. safeLocators holds controller and job. Check job.view (inQueue, lastBuild) or build.list before triggering again. A POST proven never sent (no connection was established) fails with its ordinary error and reports mutationStatus not_applied and retrySafe true: nothing was queued. Any other POST failure without a response reports mutationStatus unknown and retrySafe false."
             );
         }
         _ => {}
