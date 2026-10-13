@@ -4690,7 +4690,13 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let upstream_addr = listener.local_addr().unwrap();
+        // The accept deadline starts with the first Broker request, not
+        // during the store and runtime setup before it.
+        let (request_started, request_start) = std::sync::mpsc::channel::<()>();
         let upstream = std::thread::spawn(move || {
+            if request_start.recv().is_err() {
+                return;
+            }
             let deadline = Instant::now() + Duration::from_secs(10);
             let (stream, _) = loop {
                 match listener.accept() {
@@ -4819,6 +4825,9 @@ mod tests {
                 cached.clone()
             } else {
                 broker_calls += 1;
+                if index == 0 {
+                    request_started.send(()).unwrap();
+                }
                 let response = router
                     .clone()
                     .oneshot(
