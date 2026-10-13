@@ -399,19 +399,18 @@ impl GmailProvider {
 }
 #[async_trait]
 impl Provider for GmailProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        validate_inputs(action, inputs)?;
-        Ok(BTreeMap::new())
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        validate_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
     async fn invoke(
         &self,
         invocation: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&invocation.action, &invocation.inputs)?;
+        validate_inputs(&invocation.action, &invocation.inputs)?;
         let started = Instant::now();
         let mut budget = RequestBudget {
             remaining: self.max_bytes,

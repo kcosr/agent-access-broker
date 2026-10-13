@@ -97,11 +97,21 @@ impl BackendConfig for FixtureConfig {
         Ok(Arc::new(self.clone()))
     }
 }
-#[async_trait]
-impl Provider for FixtureConfig {
-    fn resolve_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+impl FixtureConfig {
+    fn local_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let job = format!("{}/{}", inputs["controller"], inputs["job"]);
         Ok(BTreeMap::from([("job".into(), vec![job])]))
+    }
+}
+
+#[async_trait]
+impl Provider for FixtureConfig {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
         if resource_type == &JOB.id {

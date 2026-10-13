@@ -5,6 +5,7 @@ use agent_access_core::{
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, ManagedStore, ManagedStoreConfig,
     PrincipalRole, TrustedCallerConfig, TrustedCallerContextMode, TrustedCallerCredentialTransport,
 };
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::{HeaderMap, HeaderValue};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use http_body_util::BodyExt;
@@ -287,12 +288,13 @@ impl agent_access_provider::test_support::DescribedProvider for ContextProvider 
 
 #[async_trait::async_trait]
 impl Provider for ContextProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

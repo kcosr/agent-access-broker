@@ -506,12 +506,13 @@ mod tests {
 
     #[async_trait]
     impl Provider for TwoTypeProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
 
         async fn invoke(

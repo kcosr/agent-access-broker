@@ -38,7 +38,7 @@ async fn issue_type_list_is_read_only_project_scoped_and_needs_no_lookup() {
     assert_eq!(action.input_schema["additionalProperties"], false);
     assert!(action.documentation.is_some());
     let scopes = provider
-        .resolve_scopes_with_lookup("issue_type.list", &json!({"project":"PROJ"}), None)
+        .lookup_scopes("issue_type.list", &json!({"project":"PROJ"}), None)
         .await
         .unwrap();
     assert_eq!(
@@ -71,7 +71,7 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
         json!({"project":"PROJ","maxResults":null}),
     ] {
         assert!(
-            provider.resolve_scopes("issue_type.list", &inputs).is_err(),
+            provider.local_scopes("issue_type.list", &inputs).is_err(),
             "{inputs}"
         );
         assert!(provider.invoke(invocation(inputs)).await.is_err());

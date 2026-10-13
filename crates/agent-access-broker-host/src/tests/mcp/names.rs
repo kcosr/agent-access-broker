@@ -1,7 +1,8 @@
 //! Naming omissions leave the real HTTP MCP session and unaffected tools usable.
 use super::*;
 use agent_access_provider::{
-    BackendConfig, BuildContext, EgressProxyConfig, ProviderBuildError, ValidationContext,
+    BackendConfig, BuildContext, EgressProxyConfig, ProviderBuildError, ScopeRequest,
+    ScopeResolution, ValidationContext,
 };
 
 #[derive(Clone, Debug)]
@@ -51,12 +52,13 @@ impl BackendConfig for NamingBackend {
 
 #[async_trait::async_trait]
 impl Provider for NamingBackend {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

@@ -12,16 +12,16 @@ use agent_access_provider::presentation::{
     RenderBudget, RenderContext, RenderError, RenderedBody,
 };
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BrokerBodyPart, BrokerBodyPartSpec,
-    BuildContext, ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig,
-    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
-    ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
+    ActionDescriptor, BackendConfig, BackendRegistration, BodyAdmission, BrokerBodyPart,
+    BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor, EgressDeclaration,
+    EgressProxyConfig, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
+    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
     ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
-    attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
-    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, ServiceSurface, StateDisposition, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
+    complete_upstream_trace, file_upload_body, parse_backend_config, take_upstream_trace,
+    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -871,13 +871,8 @@ fn check_part(part: &BrokerBodyPart, attachment: &AttachmentInput) -> Result<(),
     Ok(())
 }
 
-#[async_trait]
-impl Provider for ConformanceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl ConformanceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action == "endpoint.ping" && self.endpoints {
             let endpoint = ping_inputs(inputs)?.endpoint;
             return Ok(BTreeMap::from([("endpoint".into(), vec![endpoint])]));
@@ -903,6 +898,17 @@ impl Provider for ConformanceProvider {
         }
         Ok(BTreeMap::from([("item".into(), vec![item])]))
     }
+}
+
+#[async_trait]
+impl Provider for ConformanceProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
         if resource_type == &CONFORMANCE_ITEM_RESOURCE.id {
@@ -914,8 +920,8 @@ impl Provider for ConformanceProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         if request.action != "item.upload" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
@@ -923,7 +929,7 @@ impl Provider for ConformanceProvider {
             ));
         }
         let inputs = upload_inputs(&request.inputs, self.max_upload_bytes)?;
-        Ok(inputs
+        let part_specs = inputs
             .attachments
             .into_iter()
             .map(|attachment| BrokerBodyPartSpec {
@@ -933,7 +939,8 @@ impl Provider for ConformanceProvider {
                 size: attachment.size,
                 sha256: attachment.sha256,
             })
-            .collect())
+            .collect();
+        Ok(BodyAdmission::new(part_specs, StateDisposition::Keep))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -962,10 +969,9 @@ impl Provider for ConformanceProvider {
 mod tests {
     use super::*;
     use agent_access_provider::presentation::response_capabilities;
-    use agent_access_provider::test_support::{TestHost, install_trace_capture};
+    use agent_access_provider::test_support::{InvocationBuilder, TestHost, install_trace_capture};
     use agent_access_provider::{
-        ActionIo, CorrelationContext, ExecutionCredential, InvocationIdentity, ProviderLimits,
-        with_provider_context,
+        ActionIo, CorrelationContext, ExecutionCredential, ProviderLimits, with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
@@ -1028,27 +1034,16 @@ mod tests {
             .as_str()
             .map(|item| BTreeMap::from([("item".into(), vec![item.to_owned()])]))
             .unwrap_or_default();
-        ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: InvocationIdentity::anonymous(),
-            service: SERVICE.into(),
-            action: action.into(),
-            correlation: CorrelationContext::for_tests(),
-            inputs,
-            body_parts,
-            resource_scopes,
-            credential_mode: "service".into(),
-            credential: Some(ExecutionCredential {
+        InvocationBuilder::new(SERVICE, action)
+            .inputs(inputs)
+            .resources(resource_scopes)
+            .credential(ExecutionCredential {
                 kind: "bearer_token".into(),
                 username: None,
                 token: Some("token".into()),
-            }),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        }
+            })
+            .body_parts(body_parts)
+            .build()
     }
 
     const KEY: &str = "endpoint-key-sentinel-0123456789";
@@ -1153,11 +1148,11 @@ mod tests {
         );
         assert!(
             provider
-                .resolve_scopes("item.view", &json!({"item": "shelf-two/item"}))
+                .local_scopes("item.view", &json!({"item": "shelf-two/item"}))
                 .is_ok()
         );
         let outside = provider
-            .resolve_scopes("item.view", &json!({"item": "shelf-three/item"}))
+            .local_scopes("item.view", &json!({"item": "shelf-three/item"}))
             .unwrap_err();
         assert_eq!(outside.reason_code, ReasonCode::InputInvalid);
         let mut config = config("https://conformance.example.test");

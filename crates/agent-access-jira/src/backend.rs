@@ -247,8 +247,8 @@ pub struct JiraIssueMetadata {
     pub project: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+/// Admission's issue metadata, handed to the same operation's upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct JiraIssuePreflight {
     pub(crate) metadata: JiraIssueMetadata,
     pub(crate) upstream_status: u16,

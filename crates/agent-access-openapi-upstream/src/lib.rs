@@ -257,18 +257,25 @@ struct OpenApiProvider {
     max_bytes: usize,
     timeout: Duration,
 }
-#[async_trait]
-impl Provider for OpenApiProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl OpenApiProvider {
+    /// Imported actions are action-only; their inputs must still plan a request.
+    fn validate_action_inputs(&self, action: &str, inputs: &Value) -> Result<(), ProviderError> {
         self.actions
             .get(action)
             .ok_or_else(input_error)?
             .request(&self.endpoint, inputs)?;
-        Ok(BTreeMap::new())
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for OpenApiProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         if request.service != self.definition.service

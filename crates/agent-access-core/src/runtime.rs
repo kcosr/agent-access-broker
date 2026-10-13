@@ -15,6 +15,8 @@ mod imports;
 mod mcp_views;
 mod owned;
 #[cfg(test)]
+mod provider_state_tests;
+#[cfg(test)]
 mod resource_attribute_tests;
 #[cfg(test)]
 mod resource_coverage_tests;
@@ -4405,7 +4407,7 @@ impl BrokerRuntime {
         };
 
         let mut audit_search_authorization = None;
-        let (scopes, policy, provider_preflight, search_authorization) =
+        let (scopes, policy, provider_state, search_authorization) =
             if action_descriptor.search_contained {
                 let mut search_authorization = match self.plan_search_authorization(
                     &policy_snapshot,
@@ -4481,15 +4483,25 @@ impl BrokerRuntime {
                 audit_search_authorization = Some(search_authorization);
                 (scopes, policy, None, Some(provider_search_authorization))
             } else {
+                let scope_identity = InvocationIdentity {
+                    principal: identity.principal.clone(),
+                    authenticated: identity.authenticated,
+                };
                 let scope_resolution = match with_provider_context(
                     correlation.clone(),
                     service.clone(),
                     action.clone(),
-                    provider.resolve_scopes_with_lookup_context(
-                        &action,
-                        &request.inputs,
-                        pre_scope_lookup.as_ref(),
-                    ),
+                    provider.resolve_scopes(agent_access_provider::host::scope_request(
+                        agent_access_provider::host::ScopeRequestParts {
+                            service: &service,
+                            action: &action,
+                            inputs: &request.inputs,
+                            execution_context: execution_context.as_str(),
+                            identity: &scope_identity,
+                            correlation: &correlation,
+                            lookup_credential: pre_scope_lookup.as_ref(),
+                        },
+                    )),
                 )
                 .await
                 {
@@ -4521,8 +4533,7 @@ impl BrokerRuntime {
                         )));
                     }
                 };
-                let scopes = scope_resolution.resource_scopes;
-                let provider_preflight = scope_resolution.provider_preflight;
+                let (scopes, provider_state) = scope_resolution.into_parts();
 
                 if let Err(error) = self.enforce_agent_invoke_token_resource_caveats_with(
                     &policy_snapshot,
@@ -4597,7 +4608,7 @@ impl BrokerRuntime {
                         )));
                     }
                 };
-                (scopes, policy, provider_preflight, None)
+                (scopes, policy, provider_state, None)
             };
 
         let credentials = match self
@@ -4715,7 +4726,7 @@ impl BrokerRuntime {
             credential_mode: policy.credential_mode.clone(),
             credential: credentials.execution,
             lookup_credential,
-            provider_preflight,
+            state: provider_state,
             search_authorization,
             delegated_credential: credentials.delegated,
         };
@@ -4756,13 +4767,13 @@ impl BrokerRuntime {
             correlation,
             service,
             action,
-            prepared
-                .provider
-                .authorize_body_parts(&mut prepared.invocation),
+            prepared.provider.authorize_body_parts(&prepared.invocation),
         )
         .await;
         match result {
-            Ok(body_part_specs) => {
+            Ok(admission) => {
+                let (body_part_specs, disposition) = admission.into_parts();
+                prepared.invocation.state = disposition.apply(prepared.invocation.state.take());
                 prepared.body_part_specs = body_part_specs;
                 Ok(prepared)
             }

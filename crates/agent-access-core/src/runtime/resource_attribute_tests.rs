@@ -66,9 +66,8 @@ impl BackendConfig for FixtureConfig {
         Ok(Arc::new(self.clone()))
     }
 }
-#[async_trait]
-impl Provider for FixtureConfig {
-    fn resolve_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+impl FixtureConfig {
+    fn local_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let target = inputs["destination"]
             .as_str()
             .filter(|target| TYPE.is_canonical_target(target))
@@ -77,6 +76,17 @@ impl Provider for FixtureConfig {
             "destination".into(),
             vec![target.into()],
         )]))
+    }
+}
+
+#[async_trait]
+impl Provider for FixtureConfig {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert!(request.credential.is_none());

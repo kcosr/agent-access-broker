@@ -311,22 +311,15 @@ mod tests {
 
     #[async_trait]
     impl Provider for ControlledProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
-        }
-        async fn resolve_scopes_with_lookup(
-            &self,
-            action: &str,
-            inputs: &Value,
-            _: Option<&ExecutionCredential>,
-        ) -> Result<ResourceScopes, ProviderError> {
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
             self.lookup_started.add_permits(1);
             self.lookup_continue.acquire().await.unwrap().forget();
-            self.resolve_scopes(action, inputs)
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
         async fn invoke(
             &self,

@@ -774,13 +774,8 @@ fn jira_action(action: &str, description: &str, input_schema: Value) -> ActionDe
         .credential_modes(["service", "per_user"])
 }
 
-#[async_trait]
-impl Provider for JiraProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl JiraProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
             "issue_type.list" => {
                 let inputs = parse_issue_type_list_inputs(inputs)?;
@@ -846,8 +841,10 @@ impl Provider for JiraProvider {
             )),
         }
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+impl JiraProvider {
+    async fn lookup_scopes(
         &self,
         action: &str,
         inputs: &Value,
@@ -910,18 +907,34 @@ impl Provider for JiraProvider {
                     issue_scopes_from_metadata(&response.value)
                 }
             }
-            "issue_type.list" | "issue.create" | "search" => self.resolve_scopes(action, inputs),
+            "issue_type.list" | "issue.create" | "search" => self.local_scopes(action, inputs),
             _ => Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
                 "Jira action is not supported",
             )),
         }
     }
+}
+
+#[async_trait]
+impl Provider for JiraProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.lookup_scopes(
+            request.action(),
+            request.inputs(),
+            request.lookup_credential(),
+        )
+        .await
+        .map(ScopeResolution::resources)
+    }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         if request.action != "attachment.add" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
@@ -935,12 +948,14 @@ impl Provider for JiraProvider {
         let response = self
             .confirm_issue_project(&inputs.issue, credential)
             .await?;
-        request.provider_preflight = Some(json!(JiraIssuePreflight {
-            metadata: response.value,
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-        }));
-        Ok(body_part_specs)
+        Ok(BodyAdmission::new(
+            body_part_specs,
+            StateDisposition::Replace(ProviderState::new(JiraIssuePreflight {
+                metadata: response.value,
+                upstream_status: response.status,
+                upstream_duration_ms: response.duration_ms,
+            })),
+        ))
     }
 
     async fn verify_execution_credential(
@@ -2810,17 +2825,18 @@ impl JiraProvider {
         let credential = invocation_credential(&request)?;
         let lookup_credential = lookup_credential(&request)?;
         let inputs = parse_attachment_add_inputs(&request.inputs)?;
-        let metadata_response = match jira_issue_preflight(&request)? {
-            Some(preflight) => JiraBackendResponse {
-                value: preflight.metadata,
-                status: preflight.upstream_status,
-                duration_ms: preflight.upstream_duration_ms,
-            },
-            None => {
-                self.confirm_issue_project(&inputs.issue, lookup_credential)
-                    .await?
-            }
-        };
+        let metadata_response =
+            match ProviderState::optional::<JiraIssuePreflight>(request.state.as_ref())? {
+                Some(preflight) => JiraBackendResponse {
+                    value: preflight.metadata.clone(),
+                    status: preflight.upstream_status,
+                    duration_ms: preflight.upstream_duration_ms,
+                },
+                None => {
+                    self.confirm_issue_project(&inputs.issue, lookup_credential)
+                        .await?
+                }
+            };
         let metadata = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
@@ -5000,23 +5016,6 @@ fn lookup_credential(request: &ProviderInvocation) -> Result<&ExecutionCredentia
             "lookup credential material is unavailable",
         )
     })
-}
-
-fn jira_issue_preflight(
-    request: &ProviderInvocation,
-) -> Result<Option<JiraIssuePreflight>, ProviderError> {
-    request
-        .provider_preflight
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value(value.clone()).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "provider preflight metadata is invalid",
-                )
-            })
-        })
-        .transpose()
 }
 
 fn serialized_body_size(value: &Value) -> Result<u64, ProviderError> {

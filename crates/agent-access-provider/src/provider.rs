@@ -1,10 +1,9 @@
 use crate::{
-    BrokerBodyPartSpec, CorrelationContext, ExecutionCredential, ProviderCredentialVerification,
-    ProviderError, ProviderInvocation, ProviderResult, ProviderScopeResolution, ReasonCode,
-    ResourceScopes, ResourceType, ServiceDescriptor,
+    BodyAdmission, CorrelationContext, ExecutionCredential, ProviderCredentialVerification,
+    ProviderError, ProviderInvocation, ProviderResult, ReasonCode, ResourceType, ScopeRequest,
+    ScopeResolution, ServiceDescriptor,
 };
 use async_trait::async_trait;
-use serde_json::Value;
 use std::sync::Arc;
 
 /// A provider paired with the descriptor of the service it serves. The
@@ -37,8 +36,14 @@ impl std::fmt::Debug for ServiceProvider {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    fn resolve_scopes(&self, action: &str, inputs: &Value)
-    -> Result<ResourceScopes, ProviderError>;
+    /// Names the canonical resources an action operates on. A local
+    /// resolver returns immediately; an action-only provider explicitly
+    /// returns [`ScopeResolution::no_resources`]. Lookup uses only the
+    /// host-selected credential in the request.
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError>;
 
     /// Configured top-level namespace values of a resource type, such as
     /// CloudBees CI controller aliases. Discovery reports only the roots a
@@ -48,39 +53,22 @@ pub trait Provider: Send + Sync {
         Vec::new()
     }
 
-    async fn resolve_scopes_with_lookup(
-        &self,
-        action: &str,
-        inputs: &Value,
-        _lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.resolve_scopes(action, inputs)
-    }
-
-    async fn resolve_scopes_with_lookup_context(
-        &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ProviderScopeResolution, ProviderError> {
-        Ok(ProviderScopeResolution {
-            resource_scopes: self
-                .resolve_scopes_with_lookup(action, inputs, lookup_credential)
-                .await?,
-            provider_preflight: None,
-        })
-    }
-
+    /// Admits multipart body-part metadata before the host consumes the
+    /// body, and states what happens to the operation's provider state.
+    /// Admission cannot change the service, identity, scopes, credential
+    /// selection or policy.
     async fn authorize_body_parts(
         &self,
-        _request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        _request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         Err(ProviderError::deny(
             ReasonCode::BodyMalformed,
             "action does not accept multipart body parts",
         ))
     }
 
+    /// Verifies selected credential material upstream. `None` means
+    /// verification is unsupported, never that it succeeded.
     async fn verify_execution_credential(
         &self,
         _credential: &ExecutionCredential,

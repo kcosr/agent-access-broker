@@ -6,9 +6,9 @@ use agent_access_provider::{
     CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig, Provider,
     ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits, ProviderResult,
     ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType, ResourceTypeDescriptor,
-    ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    ValidationContext, complete_upstream_trace, is_literal_loopback, parse_backend_config,
-    take_upstream_trace,
+    ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, ValidationContext, complete_upstream_trace, is_literal_loopback,
+    parse_backend_config, take_upstream_trace,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -289,15 +289,8 @@ impl OAuthRecordsProvider {
     }
 }
 
-#[async_trait]
-impl Provider for OAuthRecordsProvider {
-    // The runtime performs all action, resource and credential-mode admission
-    // and lends the invocation its delegated credential only after policy.
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl OAuthRecordsProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let invalid = || {
             ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -347,9 +340,22 @@ impl Provider for OAuthRecordsProvider {
             vec![collection.into()],
         )]))
     }
+}
+
+#[async_trait]
+impl Provider for OAuthRecordsProvider {
+    // The runtime performs all action, resource and credential-mode admission
+    // and lends the invocation its delegated credential only after policy.
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
+        self.local_scopes(&request.action, &request.inputs)?;
         let delegated = request.delegated_credential.as_ref().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,

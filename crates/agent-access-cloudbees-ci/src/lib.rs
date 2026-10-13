@@ -6,11 +6,12 @@ use agent_access_provider::{
     CredentialDescriptor, EgressDeclaration, EgressProxyConfig, EgressRoute, ExecutionCredential,
     Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
     ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
-    ResourceScopeCapabilities, ResourceScopes, ResourceType, ServiceDescriptor, ServiceSurface,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamRetryAfter,
-    ValidationContext, complete_upstream_trace, current_provider_action, is_service_name,
-    parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
+    current_provider_action, is_service_name, parse_backend_config, upstream_rate_limited,
+    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -669,18 +670,24 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
     }
 }
 
-#[async_trait]
-impl Provider for CloudbeesCiProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl CloudbeesCiProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let input = self.parse(action, inputs)?;
         Ok(BTreeMap::from([(
             "job".into(),
             vec![format!("{}/{}", input.controller, input.job)],
         )]))
+    }
+}
+
+#[async_trait]
+impl Provider for CloudbeesCiProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
@@ -1458,6 +1465,7 @@ pub fn is_cloudbees_ci_resource_path(value: &str, allow_controller_only: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::test_support::InvocationBuilder;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1534,30 +1542,18 @@ mod tests {
     }
 
     pub(super) fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
-        ProviderInvocation {
-            resource_attributes: Default::default(),
-            identity: agent_access_provider::InvocationIdentity::anonymous(),
-            execution_context: "internal".into(),
-            service: "cloudbees_ci".into(),
-            action: action.into(),
-            correlation: agent_access_provider::CorrelationContext::for_tests(),
-            inputs,
-            body_parts: Vec::new(),
-            resource_scopes: BTreeMap::from([(
+        InvocationBuilder::new("cloudbees_ci", action)
+            .inputs(inputs)
+            .resources(BTreeMap::from([(
                 "job".into(),
                 vec!["team-ci/payments/build-api".into()],
-            )]),
-            credential_mode: "service".into(),
-            credential: Some(ExecutionCredential {
+            )]))
+            .credential(ExecutionCredential {
                 kind: "basic_api_token".into(),
                 username: Some("automation".into()),
                 token: Some("secret".into()),
-            }),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        }
+            })
+            .build()
     }
 
     #[test]
@@ -2154,7 +2150,7 @@ mod tests {
             "reports\\out.txt",
         ] {
             let error = provider(&server)
-                .resolve_scopes(
+                .local_scopes(
                     "build.artifact.download",
                     &json!({
                         "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2677,7 +2673,7 @@ mod tests {
             "url":"https://public.example/controller/job/payments/job/feature%252Ffoo/42/console?x=1"
         });
         assert_eq!(
-            ci.resolve_scopes("build.view", &inputs).unwrap()["job"],
+            ci.local_scopes("build.view", &inputs).unwrap()["job"],
             vec!["team-ci/payments/feature%2Ffoo"]
         );
         let result = ci.invoke(invocation("build.view", inputs)).await.unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::extract::State;
 use axum::response::IntoResponse;
 use std::sync::atomic::AtomicBool;
@@ -248,13 +249,8 @@ impl agent_access_provider::test_support::DescribedProvider for BrokerWebhookCon
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for BrokerWebhookContractProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl BrokerWebhookContractProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if !matches!(action, "webhook.create" | "webhook.update") {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -268,6 +264,17 @@ impl Provider for BrokerWebhookContractProvider {
             "repository".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for BrokerWebhookContractProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

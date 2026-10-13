@@ -1,5 +1,6 @@
 //! Service connection boundaries through the real HTTP router and SDK sessions.
 use super::*;
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 
 const SCOPED: &str = "/mcp/fake";
 
@@ -440,12 +441,13 @@ impl agent_access_provider::test_support::DescribedProvider for ScopedCatalogPro
 }
 #[async_trait::async_trait]
 impl Provider for ScopedCatalogProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         panic!("catalog fixture must not execute")

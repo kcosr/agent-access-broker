@@ -19,8 +19,8 @@ use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, CredentialDescriptor,
     EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
     ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
-    ResourceTypeDescriptor, ServiceDescriptor, ServiceProvider, ServiceSurface, ValidationContext,
-    parse_backend_config,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceProvider,
+    ServiceSurface, ValidationContext, parse_backend_config,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -37,9 +37,10 @@ impl Default for FakeProvider {
     }
 }
 
-#[async_trait]
-impl Provider for FakeProvider {
-    fn resolve_scopes(
+impl FakeProvider {
+    /// The `echo` action's `fake_project` scope, resolved locally. Test
+    /// providers reuse it for their own echo-shaped actions.
+    pub fn echo_scopes(
         &self,
         action: &str,
         inputs: &Value,
@@ -85,6 +86,17 @@ impl Provider for FakeProvider {
         let mut scopes = ResourceScopes::new();
         scopes.insert("project".to_string(), vec![project.to_string()]);
         Ok(scopes)
+    }
+}
+
+#[async_trait]
+impl Provider for FakeProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

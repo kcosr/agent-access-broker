@@ -1,19 +1,24 @@
 //! Helpers for backend and host tests. Fixtures are embedded from
 //! `test_support/fixtures/`; nothing is read from the filesystem.
 use crate::host::{
-    ClientTransportSpec, TransportClient, UpstreamClientFactory, UpstreamClientFactoryError,
+    ClientTransportSpec, ScopeRequestParts, TransportClient, UpstreamClientFactory,
+    UpstreamClientFactoryError, scope_request,
 };
 use crate::{
-    BuildContext, ClientProfile, EgressDeclaration, EgressProxySource, EgressRoute,
-    OpaqueTokenSigner, Provider, ProviderAttributionConfig, ProviderLimits, ServiceDescriptor,
-    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
+    BuildContext, ClientProfile, CorrelationContext, EgressDeclaration, EgressProxySource,
+    EgressRoute, ExecutionCredential, InvocationIdentity, OpaqueTokenSigner, Provider,
+    ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor, ServiceProvider,
+    SigningError, StableSigningKey, is_literal_loopback,
 };
 use rustls::pki_types::{CertificateDer, pem::PemObject};
+use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use url::Url;
 
+mod invocation;
 mod trace_capture;
 
+pub use invocation::InvocationBuilder;
 pub use trace_capture::{TraceCapture, TraceCaptureDispatcher, install_trace_capture};
 
 /// A test provider that states its own descriptor, so tests can inject it
@@ -211,4 +216,64 @@ pub fn test_signing_key(byte: u8) -> Arc<dyn StableSigningKey> {
     }
 
     Arc::new(FixedKey([byte; 32]))
+}
+
+/// Owned inputs for a [`ScopeRequest`] in provider tests: an anonymous
+/// caller in the `internal` execution context, with no lookup credential
+/// unless one is supplied.
+#[derive(Debug, Clone)]
+pub struct ScopeRequestFixture {
+    service: String,
+    action: String,
+    inputs: Value,
+    execution_context: String,
+    identity: InvocationIdentity,
+    correlation: CorrelationContext,
+    lookup_credential: Option<ExecutionCredential>,
+}
+
+impl ScopeRequestFixture {
+    pub fn new(service: &str, action: &str, inputs: Value) -> Self {
+        Self {
+            service: service.to_owned(),
+            action: action.to_owned(),
+            inputs,
+            execution_context: "internal".to_owned(),
+            identity: InvocationIdentity::anonymous(),
+            correlation: CorrelationContext::for_tests(),
+            lookup_credential: None,
+        }
+    }
+
+    pub fn lookup_credential(mut self, credential: ExecutionCredential) -> Self {
+        self.lookup_credential = Some(credential);
+        self
+    }
+
+    pub fn maybe_lookup_credential(mut self, credential: Option<ExecutionCredential>) -> Self {
+        self.lookup_credential = credential;
+        self
+    }
+
+    pub fn execution_context(mut self, execution_context: &str) -> Self {
+        self.execution_context = execution_context.to_owned();
+        self
+    }
+
+    pub fn identity(mut self, identity: InvocationIdentity) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    pub fn request(&self) -> ScopeRequest<'_> {
+        scope_request(ScopeRequestParts {
+            service: &self.service,
+            action: &self.action,
+            inputs: &self.inputs,
+            execution_context: &self.execution_context,
+            identity: &self.identity,
+            correlation: &self.correlation,
+            lookup_credential: self.lookup_credential.as_ref(),
+        })
+    }
 }

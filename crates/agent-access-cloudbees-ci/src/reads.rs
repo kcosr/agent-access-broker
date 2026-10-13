@@ -812,10 +812,7 @@ mod tests {
         for id in ["../secret", "%2f", "0", "123456789012345678901", ""] {
             let mut input = node_inputs();
             input["nodeId"] = json!(id);
-            assert!(
-                ci.resolve_scopes("build.pipeline.node.view", &input)
-                    .is_err()
-            );
+            assert!(ci.local_scopes("build.pipeline.node.view", &input).is_err());
         }
         for (action, _) in ACTIONS {
             let input = if action.starts_with("build.pipeline.node.") {
@@ -824,7 +821,7 @@ mod tests {
                 inputs()
             };
             assert_eq!(
-                ci.resolve_scopes(action, &input).unwrap()["job"],
+                ci.local_scopes(action, &input).unwrap()["job"],
                 vec!["team-ci/payments/build-api"]
             );
         }

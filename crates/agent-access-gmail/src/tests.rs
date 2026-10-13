@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -31,23 +32,15 @@ impl DelegatedLease for Lease {
     }
 }
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: InvocationIdentity::anonymous(),
-        service: "gmail".into(),
-        action: action.into(),
-        correlation: CorrelationContext::new("gmail-test".into(), "gmail-broker-test".into()),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: BTreeMap::new(),
-        credential_mode: "per_user".into(),
-        credential: None,
-        lookup_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: Some(DelegatedCredential::new(Arc::new(Lease))),
-    }
+    InvocationBuilder::new("gmail", action)
+        .inputs(inputs)
+        .correlation(CorrelationContext::new(
+            "gmail-test".into(),
+            "gmail-broker-test".into(),
+        ))
+        .credential_mode("per_user")
+        .delegated(DelegatedCredential::new(Arc::new(Lease)))
+        .build()
 }
 fn provider(server: &MockServer) -> GmailProvider {
     let host = agent_access_provider::test_support::TestHost::default();

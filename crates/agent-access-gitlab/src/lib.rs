@@ -464,35 +464,13 @@ fn gitlab_page_token_error() -> ProviderError {
 
 #[async_trait]
 impl Provider for GitlabProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        let (action, inputs) = (request.action(), request.inputs());
         let locator = project_locator_for_action(action, inputs, &self.config)?;
-        Ok(repository_scopes_from_path(&locator.project))
-    }
-
-    async fn resolve_scopes_with_lookup(
-        &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        Ok(self
-            .resolve_scopes_with_lookup_context(action, inputs, lookup_credential)
-            .await?
-            .resource_scopes)
-    }
-
-    async fn resolve_scopes_with_lookup_context(
-        &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ProviderScopeResolution, ProviderError> {
-        let locator = project_locator_for_action(action, inputs, &self.config)?;
-        let credential = lookup_credential.ok_or_else(|| {
+        let credential = request.lookup_credential().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "lookup credential is not provisioned",
@@ -508,10 +486,9 @@ impl Provider for GitlabProvider {
             action,
             "merge_request.suggestion.apply" | "merge_request.suggestion.batch_apply"
         ) {
-            return Ok(ProviderScopeResolution {
-                resource_scopes: repository_scopes_from_project(&project),
-                provider_preflight: None,
-            });
+            return Ok(ScopeResolution::resources(repository_scopes_from_project(
+                &project,
+            )));
         }
         let iid = parse_suggestion_apply_inputs(
             inputs,
@@ -534,15 +511,14 @@ impl Provider for GitlabProvider {
             )
         })?;
         if source_project_id == project.id {
-            return Ok(ProviderScopeResolution {
-                resource_scopes: repository_scopes_from_project(&project),
-                provider_preflight: Some(json!({
-                    "gitlabSuggestionScope": {
-                        "targetProjectId": project.id,
-                        "sourceProjectId": source_project_id
-                    }
-                })),
-            });
+            return Ok(
+                ScopeResolution::resources(repository_scopes_from_project(&project)).with_state(
+                    ProviderState::new(GitlabSuggestionScopePreflight {
+                        target_project_id: project.id,
+                        source_project_id,
+                    }),
+                ),
+            );
         }
         let source_project = self
             .backend
@@ -557,21 +533,22 @@ impl Provider for GitlabProvider {
             ));
         }
         ensure_distinct_project_paths(&project, &source_project)?;
-        Ok(ProviderScopeResolution {
-            resource_scopes: repository_scopes_from_projects([&project, &source_project]),
-            provider_preflight: Some(json!({
-                "gitlabSuggestionScope": {
-                    "targetProjectId": project.id,
-                    "sourceProjectId": source_project_id
-                }
+        Ok(
+            ScopeResolution::resources(repository_scopes_from_projects([
+                &project,
+                &source_project,
+            ]))
+            .with_state(ProviderState::new(GitlabSuggestionScopePreflight {
+                target_project_id: project.id,
+                source_project_id,
             })),
-        })
+        )
     }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         if request.action != "project.upload" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
@@ -587,7 +564,7 @@ impl Provider for GitlabProvider {
             )
             .await?;
         ensure_upload_project_scope(&project, &request.resource_scopes)?;
-        Ok(vec![metadata])
+        Ok(BodyAdmission::new(vec![metadata], StateDisposition::Keep))
     }
 
     async fn verify_execution_credential(
@@ -3719,7 +3696,8 @@ impl GitlabProvider {
             batch,
             self.config.content.max_body_bytes,
         )?;
-        let scope_preflight = suggestion_scope_preflight(request.provider_preflight.as_ref())?;
+        let scope_preflight =
+            ProviderState::require::<GitlabSuggestionScopePreflight>(request.state.as_ref())?;
         let lookup_project = self
             .lookup_project_for_invoke(
                 &request.action,
@@ -3738,7 +3716,7 @@ impl GitlabProvider {
         let (project, merge_request, source_project) = self
             .revalidate_suggestion_scopes(
                 &lookup_project,
-                &scope_preflight,
+                scope_preflight,
                 inputs.iid,
                 &inputs.expected_head_sha,
                 &request.resource_scopes,
@@ -9460,19 +9438,6 @@ fn parse_suggestion_apply_inputs(
             false,
         )?,
     })
-}
-
-fn suggestion_scope_preflight(
-    value: Option<&Value>,
-) -> Result<GitlabSuggestionScopePreflight, ProviderError> {
-    value
-        .cloned()
-        .ok_or_else(suggestion_scope_changed_error)
-        .and_then(|value| {
-            serde_json::from_value::<GitlabSuggestionProviderPreflight>(value)
-                .map(|preflight| preflight.gitlab_suggestion_scope)
-                .map_err(|_| suggestion_scope_changed_error())
-        })
 }
 
 fn parse_issue_search_inputs(inputs: &Value) -> Result<SearchInputs, ProviderError> {

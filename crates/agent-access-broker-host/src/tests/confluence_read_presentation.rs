@@ -1,5 +1,6 @@
 use super::*;
 use agent_access_confluence::ConfluenceProviderConfig;
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 
 const EMBEDDED_ACTIONS: &[&str] = &[
     "blog.draft.view",
@@ -505,19 +506,25 @@ impl agent_access_provider::test_support::DescribedProvider
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestConfluenceReadPresentationProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestConfluenceReadPresentationProvider {
+    fn local_scopes(&self, action: &str, _inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         assert!(matches!(action, "page.view" | "search" | "verify"));
         self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
         Ok(ResourceScopes::from([(
             "space".to_string(),
             vec!["ENG".to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestConfluenceReadPresentationProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

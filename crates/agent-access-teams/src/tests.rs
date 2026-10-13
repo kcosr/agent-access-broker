@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -46,29 +47,22 @@ impl NotificationTransport for ThrottledTransport {
 }
 
 fn admitted_invocation() -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        identity: InvocationIdentity {
+    InvocationBuilder::new("teams", ACTION)
+        .inputs(simple())
+        .identity(InvocationIdentity {
             principal: "alice".into(),
             authenticated: true,
-        },
-        service: "teams".into(),
-        action: ACTION.into(),
-        correlation: Default::default(),
-        inputs: simple(),
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("destination".into(), vec!["release-alerts".into()])]),
-        resource_attributes: ResourceAttributes::from(BTreeMap::from([(
+        })
+        .correlation(Default::default())
+        .resources(BTreeMap::from([(
+            "destination".into(),
+            vec!["release-alerts".into()],
+        )]))
+        .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
             "webhookUrl".into(),
             ENDPOINT.into(),
-        )])),
-        credential_mode: "service".into(),
-        credential: None,
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+        )])))
+        .build()
 }
 
 #[tokio::test]
@@ -115,26 +109,18 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
         allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
         max_bytes: MAX_BODY_BYTES,
     };
-    let mut invocation = ProviderInvocation {
-        execution_context: "internal".to_string(),
-        identity: InvocationIdentity {
+    let mut invocation = InvocationBuilder::new("teams", ACTION)
+        .inputs(simple())
+        .identity(InvocationIdentity {
             principal: "alice".into(),
             authenticated: true,
-        },
-        service: "teams".into(),
-        action: ACTION.into(),
-        correlation: Default::default(),
-        inputs: simple(),
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("destination".into(), vec!["release-alerts".into()])]),
-        resource_attributes: ResourceAttributes::default(),
-        credential_mode: "service".into(),
-        credential: None,
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    };
+        })
+        .correlation(Default::default())
+        .resources(BTreeMap::from([(
+            "destination".into(),
+            vec!["release-alerts".into()],
+        )]))
+        .build();
     assert!(provider.invoke(invocation.clone()).await.is_err());
     invocation.resource_attributes =
         ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())]));

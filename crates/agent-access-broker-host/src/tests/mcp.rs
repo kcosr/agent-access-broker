@@ -1,5 +1,6 @@
 //! Real router + SDK wire tests. No external services or caller configuration.
 use super::*;
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
 mod names;
@@ -807,23 +808,16 @@ impl agent_access_provider::test_support::DescribedProvider for ControlledProvid
 
 #[async_trait::async_trait]
 impl Provider for ControlledProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
-    }
-    async fn resolve_scopes_with_lookup(
-        &self,
-        action: &str,
-        inputs: &Value,
-        _credential: Option<&agent_access_provider::ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
         if self.pause_before_dispatch {
             self.pause().await;
         }
-        self.resolve_scopes(action, inputs)
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.executions.fetch_add(1, Ordering::SeqCst);
@@ -978,12 +972,13 @@ impl agent_access_provider::test_support::DescribedProvider for CatalogProvider 
 
 #[async_trait::async_trait]
 impl Provider for CatalogProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         panic!("catalog-only provider must not be invoked")
@@ -1149,12 +1144,13 @@ impl agent_access_provider::test_support::DescribedProvider for FileCatalogProvi
 
 #[async_trait::async_trait]
 impl Provider for FileCatalogProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         panic!("file actions must never reach this HTTP MCP provider")
@@ -1710,12 +1706,13 @@ impl agent_access_provider::test_support::DescribedProvider for PostDispatchReas
 
 #[async_trait::async_trait]
 impl Provider for PostDispatchReasonProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

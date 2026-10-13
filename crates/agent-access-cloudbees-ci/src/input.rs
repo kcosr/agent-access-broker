@@ -1065,8 +1065,7 @@ mod tests {
         let ci = provider();
         let url = "https://ci.example.com/team-ci/job/payments/job/build-api/42/console";
         assert_eq!(
-            ci.resolve_scopes("build.view", &json!({"url": url}))
-                .unwrap()["job"],
+            ci.local_scopes("build.view", &json!({"url": url})).unwrap()["job"],
             vec!["team-ci/payments/build-api"]
         );
         let input_value = json!({"url": url});
@@ -1389,7 +1388,7 @@ mod tests {
                 "tail",
             ),
         ] {
-            let error = ci.resolve_scopes(action, &inputs).unwrap_err();
+            let error = ci.local_scopes(action, &inputs).unwrap_err();
             assert_eq!(category(&error), expected, "{action} {inputs}");
             assert!(
                 error.message.contains(mention),

@@ -1618,17 +1618,12 @@ pub(crate) struct GitlabSuggestionApplyInputs {
     pub(crate) commit_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The repositories scope resolution confirmed for a suggestion apply,
+/// handed to the same operation's invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitlabSuggestionScopePreflight {
     pub(crate) target_project_id: u64,
     pub(crate) source_project_id: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct GitlabSuggestionProviderPreflight {
-    pub(crate) gitlab_suggestion_scope: GitlabSuggestionScopePreflight,
 }
 
 #[derive(Debug, Clone, PartialEq)]

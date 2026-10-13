@@ -1,5 +1,6 @@
 use super::*;
 use crate::{ActionIo, Decision, raw_download_io};
+use agent_access_provider::test_support::InvocationBuilder;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -265,7 +266,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let create_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.create",
             &json!({
                 "space": "ENG", "title": "Child", "parentPageId": "200",
@@ -279,7 +280,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert!(!create_scopes.contains_key("page"));
 
     let append_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
@@ -289,7 +290,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert_eq!(append_scopes["space"], vec!["ENG"]);
     assert!(!append_scopes.contains_key("page"));
     let before_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&credential()),
@@ -311,7 +312,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         Arc::new(target_under_folder),
     );
     let append_scopes = target_under_folder_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
@@ -320,7 +321,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .unwrap();
     assert!(!append_scopes.contains_key("page"));
     let error = target_under_folder_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&credential()),
@@ -337,7 +338,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         Arc::new(cross_space),
     );
     let error = cross_space_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
@@ -780,7 +781,7 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.view",
             &json!({
                 "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
@@ -819,7 +820,7 @@ async fn page_view_rejects_legacy_space_input() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.view",
             &json!({ "pageId": "123456", "space": "OPS" }),
             Some(&credential()),
@@ -856,7 +857,7 @@ async fn verify_scope_resolution_uses_lookup_for_existing_pages_in_requested_spa
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -896,7 +897,7 @@ async fn verify_scope_resolution_uses_authoritative_space_from_lookup() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -967,7 +968,7 @@ async fn comment_scope_resolution_walks_nested_parent_chain_with_lookup() {
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.inline_comment.reply.add",
             &json!({
                 "commentId": "6003",
@@ -1597,7 +1598,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -1624,7 +1625,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -3719,7 +3720,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
             backend,
         );
         let scopes = provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
                 Some(&credential()),
@@ -3739,7 +3740,7 @@ async fn attachment_download_scope_lookup_defers_membership_checks() {
         backend.clone(),
     );
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "attachment.download",
             &json!({
                 "pageId": "123456",
@@ -3786,7 +3787,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "blog.attachment.download",
             &json!({
                 "blogId": "123456",
@@ -7584,24 +7585,17 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     if matches!(action, "page.view" | "blog.view") {
         resource_scopes.insert("space".to_string(), vec!["ENG".to_string()]);
     }
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity::anonymous(),
-        service: "confluence".to_string(),
-        action: action.to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes,
-        credential_mode: "service".to_string(),
-        credential: Some(credential()),
-        lookup_credential: Some(credential()),
-        provider_preflight: None,
-        search_authorization: (action == "search")
-            .then(|| confluence_search_preflight(["ENG"], "service")),
-        delegated_credential: None,
+    let builder = InvocationBuilder::new("confluence", action)
+        .inputs(inputs)
+        .resources(resource_scopes)
+        .credential(credential())
+        .lookup_credential(credential());
+    if action == "search" {
+        builder.search(confluence_search_preflight(["ENG"], "service"))
+    } else {
+        builder
     }
+    .build()
 }
 
 fn confluence_search_preflight<const N: usize>(
@@ -8172,46 +8166,44 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         bodies: BTreeMap::new(),
     };
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "confluence".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "pageId": "123456",
-                "attachments": names.iter().enumerate().map(|(index, name)| json!({
-                    "field": format!("file{index}"),
-                    "filename": format!("{name}.txt"),
-                    "contentType": "text/plain",
-                    "size": name.len(),
-                    "sha256": sha256_hex(name.as_bytes()),
-                })).collect::<Vec<_>>(),
-            }),
-            body_parts: names
-                .iter()
-                .enumerate()
-                .map(|(index, name)| BrokerBodyPart {
-                    name: format!("file{index}"),
-                    file_name: Some(format!("{name}.txt")),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: name.as_bytes().to_vec(),
-                    temp_file: None,
-                })
-                .collect(),
-            resource_scopes: BTreeMap::from([("space".to_string(), vec!["ENG".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(credential()),
-            lookup_credential: Some(credential()),
-            provider_preflight: Some(json!(ConfluencePagePreflight {
-                page,
-                upstream_status: 200,
-                upstream_duration_ms: 1,
-            })),
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("confluence", "attachment.add")
+                .inputs(json!({
+                    "pageId": "123456",
+                    "attachments": names.iter().enumerate().map(|(index, name)| json!({
+                        "field": format!("file{index}"),
+                        "filename": format!("{name}.txt"),
+                        "contentType": "text/plain",
+                        "size": name.len(),
+                        "sha256": sha256_hex(name.as_bytes()),
+                    })).collect::<Vec<_>>(),
+                }))
+                .resources(BTreeMap::from([(
+                    "space".to_string(),
+                    vec!["ENG".to_string()],
+                )]))
+                .credential(credential())
+                .lookup_credential(credential())
+                .body_parts(
+                    names
+                        .iter()
+                        .enumerate()
+                        .map(|(index, name)| BrokerBodyPart {
+                            name: format!("file{index}"),
+                            file_name: Some(format!("{name}.txt")),
+                            content_type: Some("text/plain".to_string()),
+                            bytes: name.as_bytes().to_vec(),
+                            temp_file: None,
+                        })
+                        .collect(),
+                )
+                .state(ProviderState::new(ConfluencePagePreflight {
+                    page,
+                    upstream_status: 200,
+                    upstream_duration_ms: 1,
+                }))
+                .build(),
+        )
         .await
         .unwrap_err();
     // att1 applied before the second upload was throttled: repeating the

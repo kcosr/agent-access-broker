@@ -119,13 +119,8 @@ struct ImportedConformanceProvider {
     actions: Vec<ImportedActionDefinition>,
     transport_authority: Option<&'static str>,
 }
-#[async_trait]
-impl Provider for ImportedConformanceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl ImportedConformanceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if !self.actions.iter().any(|item| item.action == action) {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -140,8 +135,19 @@ impl Provider for ImportedConformanceProvider {
         }
         Ok(BTreeMap::new())
     }
+}
+
+#[async_trait]
+impl Provider for ImportedConformanceProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
+        self.local_scopes(&request.action, &request.inputs)?;
         let token = request.credential.as_ref().and_then(|c| c.token.as_deref());
         // Tokens are synthetic test sentinels; responses never expose material.
         let authority = match token {

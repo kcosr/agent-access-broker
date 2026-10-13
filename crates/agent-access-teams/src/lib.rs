@@ -294,13 +294,8 @@ struct TeamsProvider {
     max_bytes: u64,
 }
 
-#[async_trait]
-impl Provider for TeamsProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TeamsProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != ACTION {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -310,8 +305,19 @@ impl Provider for TeamsProvider {
         let (destination, _) = payload::prepare(inputs, self.max_bytes)?;
         Ok(BTreeMap::from([("destination".into(), vec![destination])]))
     }
+}
+
+#[async_trait]
+impl Provider for TeamsProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
+        self.local_scopes(&request.action, &request.inputs)?;
         let (destination, body) = payload::prepare(&request.inputs, self.max_bytes)?;
         if request.service != "teams"
             || request.credential_mode != "service"

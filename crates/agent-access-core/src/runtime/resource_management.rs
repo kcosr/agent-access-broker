@@ -242,27 +242,17 @@ mod tests {
 
     #[async_trait]
     impl Provider for HoldingProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
-        }
-        async fn resolve_scopes_with_lookup_context(
-            &self,
-            action: &str,
-            inputs: &Value,
-            _credential: Option<&ExecutionCredential>,
-        ) -> Result<ProviderScopeResolution, ProviderError> {
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
             if self.hold_once.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
-            Ok(ProviderScopeResolution {
-                resource_scopes: self.resolve_scopes(action, inputs)?,
-                provider_preflight: None,
-            })
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
         async fn invoke(
             &self,

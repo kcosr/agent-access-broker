@@ -1060,7 +1060,7 @@ mod tests {
         let mut value = inputs("head");
         value["offset"] = json!(0);
         assert_eq!(
-            ci.resolve_scopes("build.log.read", &value)
+            ci.local_scopes("build.log.read", &value)
                 .unwrap_err()
                 .reason_code,
             ReasonCode::InputInvalid

@@ -122,7 +122,7 @@ impl InvocationIdentity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInvocation {
     /// Execution context selected and authorized by the host, never a tool input.
@@ -149,18 +149,12 @@ pub struct ProviderInvocation {
     #[serde(skip)]
     pub delegated_credential: Option<DelegatedCredential>,
     /// Provider-owned state carried from scope resolution or body-part
-    /// admission to dispatch. Core never writes it.
+    /// admission to dispatch. The host never inspects or changes it.
     #[serde(skip)]
-    pub provider_preflight: Option<Value>,
+    pub state: Option<crate::ProviderState>,
     /// Broker-admitted search boundary for search-contained actions.
     #[serde(skip)]
     pub search_authorization: Option<SearchAuthorization>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderScopeResolution {
-    pub resource_scopes: ResourceScopes,
-    pub provider_preflight: Option<Value>,
 }
 
 #[derive(Clone, PartialEq, Eq)]

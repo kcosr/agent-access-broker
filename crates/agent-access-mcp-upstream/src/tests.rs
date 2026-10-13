@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use axum::{
     Json, Router,
     extract::State,
@@ -64,26 +65,14 @@ fn action() -> ImportedActionDefinition {
     }
 }
 fn invocation(inputs: Value, token: &str) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".into(),
-        identity: InvocationIdentity {
+    InvocationBuilder::new("example", "item.update")
+        .inputs(inputs)
+        .identity(InvocationIdentity {
             principal: "alice".into(),
             authenticated: true,
-        },
-        service: "example".into(),
-        action: "item.update".into(),
-        correlation: CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: Default::default(),
-        resource_attributes: Default::default(),
-        credential_mode: "service".into(),
-        credential: Some(credential(token)),
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+        })
+        .credential(credential(token))
+        .build()
 }
 fn tool() -> Value {
     let action = action();

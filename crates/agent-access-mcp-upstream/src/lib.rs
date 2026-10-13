@@ -225,19 +225,26 @@ struct McpProvider {
     timeout: Duration,
 }
 
-#[async_trait]
-impl Provider for McpProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl McpProvider {
+    /// Imported actions are action-only; their inputs must match the tool schema.
+    fn validate_action_inputs(&self, action: &str, inputs: &Value) -> Result<(), ProviderError> {
         let action = self.actions.get(action).ok_or_else(input_error)?;
         if !action.input.valid(inputs) {
             return Err(input_error());
         }
         action.input.headers(inputs).map_err(|_| input_error())?;
-        Ok(BTreeMap::new())
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for McpProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
 
     async fn verify_execution_credential(
@@ -270,7 +277,7 @@ impl Provider for McpProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
+        self.validate_action_inputs(&request.action, &request.inputs)?;
         if request.service != self.definition.service
             || !request.resource_scopes.is_empty()
             || !request.body_parts.is_empty()

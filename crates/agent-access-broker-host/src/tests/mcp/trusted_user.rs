@@ -4,6 +4,7 @@ use agent_access_core::{
     BrokerTokensConfig, CredentialKeyRing, ManagedStore, ManagedStoreConfig, PrincipalRole,
     TrustedCallerConfig, TrustedCallerContextMode, TrustedCallerCredentialTransport,
 };
+use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderMap;
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
@@ -51,24 +52,17 @@ impl agent_access_provider::test_support::DescribedProvider for UserProvider {
 }
 #[async_trait::async_trait]
 impl Provider for UserProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes("echo", inputs)
-    }
-    async fn resolve_scopes_with_lookup(
-        &self,
-        action: &str,
-        inputs: &Value,
-        _credential: Option<&agent_access_provider::ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
         if self.pause_before_dispatch.load(Ordering::SeqCst) {
             self.entered.add_permits(1);
             self.release.acquire().await.unwrap().forget();
         }
-        self.resolve_scopes(action, inputs)
+        agent_access_fake::FakeProvider
+            .echo_scopes("echo", request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.executions.fetch_add(1, Ordering::SeqCst);

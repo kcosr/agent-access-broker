@@ -2044,13 +2044,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
     actions
 }
 
-#[async_trait]
-impl Provider for ConfluenceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl ConfluenceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
             "page.view" => {
                 let locator = page_locator_from_inputs(inputs, &self.config)?;
@@ -2280,8 +2275,10 @@ impl Provider for ConfluenceProvider {
             )),
         }
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+impl ConfluenceProvider {
+    async fn lookup_scopes(
         &self,
         action: &str,
         inputs: &Value,
@@ -2600,14 +2597,30 @@ impl Provider for ConfluenceProvider {
                 self.resolve_comment_scopes_with_lookup(comment_action, inputs, credential)
                     .await
             }
-            _ => self.resolve_scopes(action, inputs),
+            _ => self.local_scopes(action, inputs),
         }
+    }
+}
+
+#[async_trait]
+impl Provider for ConfluenceProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.lookup_scopes(
+            request.action(),
+            request.inputs(),
+            request.lookup_credential(),
+        )
+        .await
+        .map(ScopeResolution::resources)
     }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         if request.action != "attachment.add"
             && request.action != "blog.attachment.add"
             && request.action != "page.draft.attachment.add"
@@ -2619,30 +2632,34 @@ impl Provider for ConfluenceProvider {
             ));
         }
         let credential = lookup_credential(request)?;
-        let body_part_specs = if request.action == "attachment.add" {
+        let (body_part_specs, state) = if request.action == "attachment.add" {
             let inputs = parse_attachment_add_inputs(&request.inputs)?;
             validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
             let response = self
                 .confirmed_page_response(&inputs.page_id, None, credential)
                 .await?;
-            request.provider_preflight = Some(json!(ConfluencePagePreflight {
-                page: response.value,
-                upstream_status: response.status,
-                upstream_duration_ms: response.duration_ms,
-            }));
-            attachment_body_part_specs(&inputs.attachments)
+            (
+                attachment_body_part_specs(&inputs.attachments),
+                ProviderState::new(ConfluencePagePreflight {
+                    page: response.value,
+                    upstream_status: response.status,
+                    upstream_duration_ms: response.duration_ms,
+                }),
+            )
         } else if request.action == "blog.attachment.add" {
             let inputs = parse_blog_attachment_add_inputs(&request.inputs)?;
             validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
             let response = self
                 .confirmed_blog_response(&inputs.blog_id, credential)
                 .await?;
-            request.provider_preflight = Some(json!(ConfluenceBlogPreflight {
-                blog: response.value,
-                upstream_status: response.status,
-                upstream_duration_ms: response.duration_ms,
-            }));
-            attachment_body_part_specs(&inputs.attachments)
+            (
+                attachment_body_part_specs(&inputs.attachments),
+                ProviderState::new(ConfluenceBlogPreflight {
+                    blog: response.value,
+                    upstream_status: response.status,
+                    upstream_duration_ms: response.duration_ms,
+                }),
+            )
         } else if request.action == "page.draft.attachment.add" {
             let inputs = parse_page_draft_attachment_add_inputs(&request.inputs)?;
             validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
@@ -2657,12 +2674,14 @@ impl Provider for ConfluenceProvider {
                 .draft_page_response_with_space(&inputs.page_id, Some("storage"), credential)
                 .await?;
             ensure_draft_content_matches_handle(&response.value, &handle)?;
-            request.provider_preflight = Some(json!(ConfluenceDraftContentPreflight {
-                content: response.value,
-                upstream_status: response.status,
-                upstream_duration_ms: response.duration_ms,
-            }));
-            attachment_body_part_specs(&inputs.attachments)
+            (
+                attachment_body_part_specs(&inputs.attachments),
+                ProviderState::new(ConfluenceDraftContentPreflight {
+                    content: response.value,
+                    upstream_status: response.status,
+                    upstream_duration_ms: response.duration_ms,
+                }),
+            )
         } else {
             let inputs = parse_blog_draft_attachment_add_inputs(&request.inputs)?;
             validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
@@ -2677,14 +2696,19 @@ impl Provider for ConfluenceProvider {
                 .draft_blog_response_with_space(&inputs.blog_id, Some("storage"), credential)
                 .await?;
             ensure_draft_content_matches_handle(&response.value, &handle)?;
-            request.provider_preflight = Some(json!(ConfluenceDraftContentPreflight {
-                content: response.value,
-                upstream_status: response.status,
-                upstream_duration_ms: response.duration_ms,
-            }));
-            attachment_body_part_specs(&inputs.attachments)
+            (
+                attachment_body_part_specs(&inputs.attachments),
+                ProviderState::new(ConfluenceDraftContentPreflight {
+                    content: response.value,
+                    upstream_status: response.status,
+                    upstream_duration_ms: response.duration_ms,
+                }),
+            )
         };
-        Ok(body_part_specs)
+        Ok(BodyAdmission::new(
+            body_part_specs,
+            StateDisposition::Replace(state),
+        ))
     }
 
     async fn verify_execution_credential(
@@ -5487,9 +5511,11 @@ impl ConfluenceProvider {
             &request,
         )?;
         reject_staged_draft_attachment_add(&handle)?;
-        let metadata_response = match confluence_draft_preflight(&request)? {
+        let metadata_response = match ProviderState::optional::<ConfluenceDraftContentPreflight>(
+            request.state.as_ref(),
+        )? {
             Some(preflight) => ConfluenceBackendResponse {
-                value: preflight.content,
+                value: preflight.content.clone(),
                 status: preflight.upstream_status,
                 duration_ms: preflight.upstream_duration_ms,
             },
@@ -5888,17 +5914,18 @@ impl ConfluenceProvider {
         let credential = invocation_credential(&request)?;
         let lookup_credential = lookup_credential(&request)?;
         let inputs = parse_attachment_add_inputs(&request.inputs)?;
-        let metadata_response = match confluence_page_preflight(&request)? {
-            Some(preflight) => ConfluenceBackendResponse {
-                value: preflight.page,
-                status: preflight.upstream_status,
-                duration_ms: preflight.upstream_duration_ms,
-            },
-            None => {
-                self.confirmed_page_response(&inputs.page_id, None, lookup_credential)
-                    .await?
-            }
-        };
+        let metadata_response =
+            match ProviderState::optional::<ConfluencePagePreflight>(request.state.as_ref())? {
+                Some(preflight) => ConfluenceBackendResponse {
+                    value: preflight.page.clone(),
+                    status: preflight.upstream_status,
+                    duration_ms: preflight.upstream_duration_ms,
+                },
+                None => {
+                    self.confirmed_page_response(&inputs.page_id, None, lookup_credential)
+                        .await?
+                }
+            };
         let page = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
@@ -7385,9 +7412,11 @@ impl ConfluenceProvider {
             &request,
         )?;
         reject_staged_draft_attachment_add(&handle)?;
-        let metadata_response = match confluence_draft_preflight(&request)? {
+        let metadata_response = match ProviderState::optional::<ConfluenceDraftContentPreflight>(
+            request.state.as_ref(),
+        )? {
             Some(preflight) => ConfluenceBackendResponse {
-                value: preflight.content,
+                value: preflight.content.clone(),
                 status: preflight.upstream_status,
                 duration_ms: preflight.upstream_duration_ms,
             },
@@ -7786,17 +7815,18 @@ impl ConfluenceProvider {
         let credential = invocation_credential(&request)?;
         let lookup_credential = lookup_credential(&request)?;
         let inputs = parse_blog_attachment_add_inputs(&request.inputs)?;
-        let metadata_response = match confluence_blog_preflight(&request)? {
-            Some(preflight) => ConfluenceBackendResponse {
-                value: preflight.blog,
-                status: preflight.upstream_status,
-                duration_ms: preflight.upstream_duration_ms,
-            },
-            None => {
-                self.confirmed_blog_response(&inputs.blog_id, lookup_credential)
-                    .await?
-            }
-        };
+        let metadata_response =
+            match ProviderState::optional::<ConfluenceBlogPreflight>(request.state.as_ref())? {
+                Some(preflight) => ConfluenceBackendResponse {
+                    value: preflight.blog.clone(),
+                    status: preflight.upstream_status,
+                    duration_ms: preflight.upstream_duration_ms,
+                },
+                None => {
+                    self.confirmed_blog_response(&inputs.blog_id, lookup_credential)
+                        .await?
+                }
+            };
         let blog = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
@@ -10989,57 +11019,6 @@ fn validate_download_content(
         ));
     }
     Ok(())
-}
-
-fn confluence_page_preflight(
-    request: &ProviderInvocation,
-) -> Result<Option<ConfluencePagePreflight>, ProviderError> {
-    request
-        .provider_preflight
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value(value.clone()).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "provider preflight metadata is invalid",
-                )
-            })
-        })
-        .transpose()
-}
-
-fn confluence_blog_preflight(
-    request: &ProviderInvocation,
-) -> Result<Option<ConfluenceBlogPreflight>, ProviderError> {
-    request
-        .provider_preflight
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value(value.clone()).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "provider preflight metadata is invalid",
-                )
-            })
-        })
-        .transpose()
-}
-
-fn confluence_draft_preflight(
-    request: &ProviderInvocation,
-) -> Result<Option<ConfluenceDraftContentPreflight>, ProviderError> {
-    request
-        .provider_preflight
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value(value.clone()).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "provider preflight metadata is invalid",
-                )
-            })
-        })
-        .transpose()
 }
 
 fn ensure_authorized_space(scopes: &ResourceScopes, space: &str) -> Result<(), ProviderError> {

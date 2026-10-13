@@ -684,24 +684,21 @@ pub struct ConfluencePageUpdateRequest {
     pub body: ConfluencePageBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluencePagePreflight {
     pub(crate) page: ConfluencePage,
     pub(crate) upstream_status: u16,
     pub(crate) upstream_duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluenceBlogPreflight {
     pub(crate) blog: ConfluenceBlog,
     pub(crate) upstream_status: u16,
     pub(crate) upstream_duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluenceDraftContentPreflight {
     pub(crate) content: ConfluenceDraftContent,
     pub(crate) upstream_status: u16,

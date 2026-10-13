@@ -676,9 +676,16 @@ sequenceDiagram
    `ProviderInvocation.search_authorization` field (scope type, finite or
    all-except scope, and credential mode). The matched grants stay with the
    broker and appear only in the audit record's `searchAuthorization`. For
-   other actions, the provider resolves scopes using the lookup credential;
-   `provider_preflight` carries only provider-owned state from scope
-   resolution or body-part admission to dispatch.
+   other actions, the provider's single `resolve_scopes` hook receives the
+   action, validated inputs, host-selected execution context, minimal caller
+   identity, correlation, and only the lookup credential the runtime selected;
+   it never receives execution authority or an execution credential. It
+   returns canonical scopes and optional in-process `ProviderState`. That state
+   stays with the prepared operation, which pins the provider instance, so it
+   never reaches another generation's provider. Body-part admission explicitly
+   keeps, replaces, or clears it; the runtime never inspects, serializes, or
+   merges it. A provider whose own required state is missing or of another type
+   fails closed with an `operation_failed` contract error.
 9. **Deny-by-default policy selection.** The resolved scope set is authorized;
    the credential mode is selected from the surviving grant.
 10. **Execution-credential resolution.** The credential for the selected mode is

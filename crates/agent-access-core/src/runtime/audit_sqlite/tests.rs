@@ -1232,12 +1232,12 @@ impl agent_access_provider::test_support::DescribedProvider for CountingProvider
 
 #[async_trait::async_trait]
 impl agent_access_provider::Provider for CountingProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<agent_access_provider::ResourceScopes, agent_access_provider::ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: agent_access_provider::ScopeRequest<'_>,
+    ) -> Result<agent_access_provider::ScopeResolution, agent_access_provider::ProviderError> {
+        agent_access_provider::Provider::resolve_scopes(&agent_access_fake::FakeProvider, request)
+            .await
     }
 
     async fn invoke(

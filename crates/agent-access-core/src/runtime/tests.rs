@@ -2035,13 +2035,8 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for LookupTraceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl LookupTraceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != self.action.as_str() {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -2059,15 +2054,17 @@ impl Provider for LookupTraceProvider {
             vec![scope_value.to_string()],
         )]))
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+#[async_trait::async_trait]
+impl Provider for LookupTraceProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.record("pre_scope", lookup_credential);
-        self.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.record("pre_scope", request.lookup_credential());
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -2131,18 +2128,17 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
 
 #[async_trait::async_trait]
 impl Provider for SearchPreflightTraceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+        _request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
         panic!("search authorization must replace ordinary scope resolution")
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert!(
-            request.provider_preflight.is_none(),
-            "core never writes provider-owned preflight state"
+            request.state.is_none(),
+            "core never writes provider-owned state"
         );
         self.preflights.lock().unwrap().push(
             serde_json::to_value(
@@ -2256,13 +2252,8 @@ impl agent_access_provider::test_support::DescribedProvider for DependencyPolicy
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for DependencyPolicyTraceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl DependencyPolicyTraceProvider {
+    fn local_scopes(&self, action: &str, _inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != self.action {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -2280,15 +2271,17 @@ impl Provider for DependencyPolicyTraceProvider {
             ),
         ]))
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+#[async_trait::async_trait]
+impl Provider for DependencyPolicyTraceProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.record("pre_scope", lookup_credential);
-        self.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.record("pre_scope", request.lookup_credential());
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3609,12 +3602,13 @@ impl agent_access_provider::test_support::DescribedProvider for MissingStreamHan
 
 #[async_trait::async_trait]
 impl Provider for MissingStreamHandleProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3643,12 +3637,13 @@ impl agent_access_provider::test_support::DescribedProvider for FailingStreamPro
 
 #[async_trait::async_trait]
 impl Provider for FailingStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3684,12 +3679,13 @@ impl agent_access_provider::test_support::DescribedProvider for CompletedStreamP
 
 #[async_trait::async_trait]
 impl Provider for CompletedStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3722,12 +3718,13 @@ impl agent_access_provider::test_support::DescribedProvider for PendingStreamPro
 
 #[async_trait::async_trait]
 impl Provider for PendingStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7680,12 +7677,13 @@ impl agent_access_provider::test_support::DescribedProvider for NamedServiceProv
 
 #[async_trait]
 impl Provider for NamedServiceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7781,15 +7779,21 @@ impl agent_access_provider::test_support::DescribedProvider for ResponseResoluti
     }
 }
 
+impl ResponseResolutionTraceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+        self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
+        agent_access_fake::FakeProvider.echo_scopes(action, inputs)
+    }
+}
+
 #[async_trait]
 impl Provider for ResponseResolutionTraceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7830,13 +7834,8 @@ impl agent_access_provider::test_support::DescribedProvider for CorrelationCaptu
     }
 }
 
-#[async_trait]
-impl Provider for CorrelationCaptureProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl CorrelationCaptureProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "echo" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -7851,6 +7850,17 @@ impl Provider for CorrelationCaptureProvider {
             "project".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait]
+impl Provider for CorrelationCaptureProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7877,18 +7887,19 @@ impl agent_access_provider::test_support::DescribedProvider for BodyPartCorrelat
 
 #[async_trait]
 impl Provider for BodyPartCorrelationCaptureProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         *self.captured_correlation.lock().unwrap() = current_correlation_context();
         *self.captured_action.lock().unwrap() = current_provider_action();
         assert_eq!(
@@ -7898,13 +7909,16 @@ impl Provider for BodyPartCorrelationCaptureProvider {
                 "broker-body-preflight-id".to_string()
             )
         );
-        Ok(vec![BrokerBodyPartSpec {
-            name: "attachment".to_string(),
-            file_name: "upload.bin".to_string(),
-            content_type: "application/octet-stream".to_string(),
-            size: 7,
-            sha256: "sha256".to_string(),
-        }])
+        Ok(BodyAdmission::new(
+            vec![BrokerBodyPartSpec {
+                name: "attachment".to_string(),
+                file_name: "upload.bin".to_string(),
+                content_type: "application/octet-stream".to_string(),
+                size: 7,
+                sha256: "sha256".to_string(),
+            }],
+            StateDisposition::Keep,
+        ))
     }
 
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

@@ -6,10 +6,15 @@
 //! may implement these ports with deterministic doubles; `test_support::TestHost`
 //! is one. Nothing here resolves secret references, loads TLS files, reads the
 //! process environment or touches a store: those stay inside the host.
+//!
+//! It also holds the host's construction port for the values the host hands
+//! providers per request, such as [`ScopeRequest`]s.
 use crate::{
-    BuildContext, ClientProfile, EgressDeclaration, EgressRoute, ProviderAttributionConfig,
-    ProviderLimits, StableSigningKey,
+    BuildContext, ClientProfile, CorrelationContext, EgressDeclaration, EgressRoute,
+    ExecutionCredential, InvocationIdentity, ProviderAttributionConfig, ProviderLimits,
+    ScopeRequest, StableSigningKey,
 };
+use serde_json::Value;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -174,5 +179,38 @@ pub fn configure_client_profile(
             .timeout(total)
             .connect_timeout(connect)
             .retry(reqwest::retry::never()),
+    }
+}
+
+/// The host's inputs for one scope-resolution request.
+#[derive(Debug, Clone, Copy)]
+pub struct ScopeRequestParts<'a> {
+    pub service: &'a str,
+    pub action: &'a str,
+    pub inputs: &'a Value,
+    pub execution_context: &'a str,
+    pub identity: &'a InvocationIdentity,
+    pub correlation: &'a CorrelationContext,
+    pub lookup_credential: Option<&'a ExecutionCredential>,
+}
+
+pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
+    let ScopeRequestParts {
+        service,
+        action,
+        inputs,
+        execution_context,
+        identity,
+        correlation,
+        lookup_credential,
+    } = parts;
+    ScopeRequest {
+        service,
+        action,
+        inputs,
+        execution_context,
+        identity,
+        correlation,
+        lookup_credential,
     }
 }

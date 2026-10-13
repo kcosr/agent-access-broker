@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use axum::{
     Router,
     body::Bytes,
@@ -137,26 +138,14 @@ fn credential(token: &str) -> ExecutionCredential {
     }
 }
 fn invocation(inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".into(),
-        identity: InvocationIdentity {
+    InvocationBuilder::new("example", "item.update")
+        .inputs(inputs)
+        .identity(InvocationIdentity {
             principal: "alice".into(),
             authenticated: true,
-        },
-        service: "example".into(),
-        action: "item.update".into(),
-        correlation: CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: Default::default(),
-        resource_attributes: Default::default(),
-        credential_mode: "service".into(),
-        credential: Some(credential("api-secret")),
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+        })
+        .credential(credential("api-secret"))
+        .build()
 }
 fn document() -> Value {
     json!({"openapi":"3.1.1","info":{"title":"Inventory","version":"1"},"components":{"securitySchemes":{"access":{"type":"http","scheme":"bearer"},"Key":{"type":"apiKey","in":"header","name":"X-Api-Key"}},"schemas":{"Item":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}},"security":[{"access":[]},{"Key":[]}],"paths":{"/items/{id}":{"post":{"operationId":"update_item","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"name":"q","in":"query","schema":{"type":"string"}},{"name":"tags","in":"query","explode":false,"schema":{"type":"array","items":{"type":"string"}}},{"name":"Count","in":"header","schema":{"type":"integer"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}},"responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}},"default":{"description":"Error","content":{"application/json":{"schema":true}}}}}}}})

@@ -26,10 +26,11 @@ use agent_access_gitlab::PositionInputCategory;
 use agent_access_jira::JIRA_PROJECT_RESOURCE;
 use agent_access_provider::test_support::install_trace_capture;
 use agent_access_provider::{
-    ActionDescriptor, BROKER_REQUEST_ID_HEADER, BrokerBodyPartSpec, CredentialDescriptor,
-    GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError, ProviderInvocation,
-    ProviderResult, ProviderResultStream, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ReasonCode,
-    ResourceScopes, ResourceSelector, ResourceType, ServiceDescriptor, ServiceSurface,
+    ActionDescriptor, BROKER_REQUEST_ID_HEADER, BodyAdmission, BrokerBodyPartSpec,
+    CredentialDescriptor, GIT_REPOSITORY_RESOURCE, LookupRequirement, Provider, ProviderError,
+    ProviderInvocation, ProviderResult, ProviderResultStream, REQUEST_ID_HEADER,
+    RESULT_METADATA_HEADER, ReasonCode, ResourceScopes, ResourceSelector, ResourceType,
+    ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceSurface, StateDisposition,
     attachment_upload_plan,
 };
 use axum::Router;
@@ -14749,14 +14750,24 @@ impl agent_access_provider::test_support::DescribedProvider
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestManagedGitlabCredentialProvider {
-    fn resolve_scopes(
+impl TestManagedGitlabCredentialProvider {
+    fn local_scopes(
         &self,
         _action: &str,
         _inputs: &Value,
     ) -> Result<ResourceScopes, ProviderError> {
         panic!("management credential fixture must not invoke GitLab actions")
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestManagedGitlabCredentialProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         panic!("management credential fixture must not invoke GitLab actions")
@@ -14961,13 +14972,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraParentIn
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestJiraParentInvokeProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestJiraParentInvokeProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if !matches!(action, "issue.parent.set" | "issue.child.create") {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -14993,18 +14999,22 @@ impl Provider for TestJiraParentInvokeProvider {
             ("issue".to_string(), issues),
         ]))
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+#[async_trait::async_trait]
+impl Provider for TestJiraParentInvokeProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&agent_access_provider::ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
         assert_eq!(
-            lookup_credential.and_then(|credential| credential.token.as_deref()),
+            request
+                .lookup_credential()
+                .and_then(|credential| credential.token.as_deref()),
             Some("lookup-token")
         );
-        self.resolve_scopes(action, inputs)
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15137,19 +15147,25 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraReadPres
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestJiraReadPresentationProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestJiraReadPresentationProvider {
+    fn local_scopes(&self, action: &str, _inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         assert!(matches!(action, "issue.view" | "issue.update" | "verify"));
         self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
         Ok(ResourceScopes::from([(
             "project".to_string(),
             vec!["PROJ".to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestJiraReadPresentationProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15238,13 +15254,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraNormaliz
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestJiraNormalizedWriteProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestJiraNormalizedWriteProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "issue.create" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15259,6 +15270,17 @@ impl Provider for TestJiraNormalizedWriteProvider {
             "project".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestJiraNormalizedWriteProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15356,13 +15378,8 @@ impl agent_access_provider::test_support::DescribedProvider
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestConfluenceNormalizedWriteProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestConfluenceNormalizedWriteProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "page.create" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15377,6 +15394,17 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
             "space".to_string(),
             vec![space.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestConfluenceNormalizedWriteProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15466,13 +15494,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabNormal
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestGitlabNormalizedWriteProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestGitlabNormalizedWriteProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "issue.create" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15487,6 +15510,17 @@ impl Provider for TestGitlabNormalizedWriteProvider {
             "repository".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestGitlabNormalizedWriteProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15591,13 +15625,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabReview
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestGitlabReviewFailureProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestGitlabReviewFailureProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "merge_request.discussion.inline.add" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15612,6 +15641,17 @@ impl Provider for TestGitlabReviewFailureProvider {
             "repository".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestGitlabReviewFailureProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15686,13 +15726,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabSugges
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestGitlabSuggestionApplyProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestGitlabSuggestionApplyProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "merge_request.suggestion.apply" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15707,6 +15742,17 @@ impl Provider for TestGitlabSuggestionApplyProvider {
             "repository".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestGitlabSuggestionApplyProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -15774,9 +15820,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestCredentialVe
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestCredentialVerificationProvider {
-    fn resolve_scopes(
+impl TestCredentialVerificationProvider {
+    fn local_scopes(
         &self,
         _action: &str,
         _inputs: &Value,
@@ -15785,6 +15830,17 @@ impl Provider for TestCredentialVerificationProvider {
             ReasonCode::ServiceActionDenied,
             "test provider does not invoke actions",
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestCredentialVerificationProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn verify_execution_credential(
@@ -15829,9 +15885,8 @@ impl agent_access_provider::test_support::DescribedProvider
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestFailingCredentialVerificationProvider {
-    fn resolve_scopes(
+impl TestFailingCredentialVerificationProvider {
+    fn local_scopes(
         &self,
         _action: &str,
         _inputs: &Value,
@@ -15840,6 +15895,17 @@ impl Provider for TestFailingCredentialVerificationProvider {
             ReasonCode::ServiceActionDenied,
             "test provider does not invoke actions",
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestFailingCredentialVerificationProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn verify_execution_credential(
@@ -15878,9 +15944,8 @@ impl agent_access_provider::test_support::DescribedProvider
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestLocalCredentialVerificationFailureProvider {
-    fn resolve_scopes(
+impl TestLocalCredentialVerificationFailureProvider {
+    fn local_scopes(
         &self,
         _action: &str,
         _inputs: &Value,
@@ -15889,6 +15954,17 @@ impl Provider for TestLocalCredentialVerificationFailureProvider {
             ReasonCode::ServiceActionDenied,
             "test provider does not invoke actions",
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestLocalCredentialVerificationFailureProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn verify_execution_credential(
@@ -15955,13 +16031,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestMultipartPro
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestMultipartProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestMultipartProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "attachment.add" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -15977,11 +16048,22 @@ impl Provider for TestMultipartProvider {
             vec![project.to_string()],
         )]))
     }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestMultipartProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<BodyAdmission, ProviderError> {
         if request.action == "attachment.add" {
             let attachments = request
                 .inputs
@@ -16049,7 +16131,7 @@ impl Provider for TestMultipartProvider {
                     })
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?;
-            Ok(specs)
+            Ok(BodyAdmission::new(specs, StateDisposition::Keep))
         } else {
             Err(ProviderError::deny(
                 ReasonCode::BodyFormatUnsupported,
@@ -16141,13 +16223,8 @@ impl agent_access_provider::test_support::DescribedProvider for TestDownloadProv
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for TestDownloadProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TestDownloadProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "attachment.download" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -16162,6 +16239,17 @@ impl Provider for TestDownloadProvider {
             "project".to_string(),
             vec![project.to_string()],
         )]))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for TestDownloadProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

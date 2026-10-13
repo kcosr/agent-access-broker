@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     ActionIo, GitlabContentConfig, GitlabWebhooksConfig, SearchLimitsConfig, raw_download_io,
 };
+use agent_access_provider::test_support::InvocationBuilder;
 use wiremock::matchers::{
     body_json, body_string, method, path, query_param, query_param_is_missing,
 };
@@ -380,7 +381,12 @@ async fn project_upload_streams_html_with_selected_credential_and_sanitizes_audi
     std::fs::write(&temp_path, &part.bytes).unwrap();
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
-        provider.authorize_body_parts(&mut request).await.unwrap()[0].name,
+        provider
+            .authorize_body_parts(&request)
+            .await
+            .unwrap()
+            .part_specs()[0]
+            .name,
         "session"
     );
     request.body_parts.push(BrokerBodyPart::from_temp_file(
@@ -440,7 +446,7 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
         provider
-            .authorize_body_parts(&mut request)
+            .authorize_body_parts(&request)
             .await
             .unwrap_err()
             .reason_code,
@@ -692,26 +698,16 @@ fn test_credential() -> ExecutionCredential {
 }
 
 fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity {
+    InvocationBuilder::new("gitlab", action)
+        .inputs(inputs)
+        .identity(crate::InvocationIdentity {
             principal: "agent-1".to_string(),
             authenticated: true,
-        },
-        service: "gitlab".to_string(),
-        action: action.to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: Vec::new(),
-        resource_scopes: repository_scopes_from_path("sip/service"),
-        credential_mode: "service".to_string(),
-        credential: Some(test_credential()),
-        lookup_credential: Some(test_credential()),
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: None,
-    }
+        })
+        .resources(repository_scopes_from_path("sip/service"))
+        .credential(test_credential())
+        .lookup_credential(test_credential())
+        .build()
 }
 
 fn test_project() -> GitlabProject {
@@ -2791,31 +2787,23 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.note.add".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                broker_request_id.to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "contentFormat": "markdown",
-                "content": "note before attribution"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.note.add")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "contentFormat": "markdown",
+                    "content": "note before attribution"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    broker_request_id.to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2875,31 +2863,23 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                broker_request_id.to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "title": "New issue",
-                "contentFormat": "markdown",
-                "content": "description before attribution"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.create")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "title": "New issue",
+                    "contentFormat": "markdown",
+                    "content": "description before attribution"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    broker_request_id.to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2964,30 +2944,22 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.update".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "title": "New title"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.update")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "title": "New title"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -3016,31 +2988,23 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
     let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.note.add".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "contentFormat": "markdown",
-                "content": "short"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.note.add")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "contentFormat": "markdown",
+                    "content": "short"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
