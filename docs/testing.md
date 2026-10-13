@@ -268,6 +268,13 @@ admin-only reveal, CSRF, no-store, and audit failure before decryption. These te
 make no live Workflow calls; rendering and final delivery need a separately
 authorized dedicated Workflow test.
 
+Core stored-format golden tests use rows written by an earlier release. Per-user
+credential rows and imported execution slots must still resolve to the same
+material with fixed AAD bytes. Imported service definitions, including credential
+bindings, accepted action definitions and hashes, and discovery previews keep their
+exact JSON. A failure means stored credentials or imports would need reentry or
+change identity; fix the change rather than regenerating the vectors.
+
 The backend-contract acceptance suite (`cargo test -p agent-access-broker
 conformance`) registers the test-only `agent-access-conformance` backend beside
 the linked backends and exercises it through TOML configuration and

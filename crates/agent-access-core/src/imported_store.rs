@@ -1149,6 +1149,7 @@ mod tests {
         ImportedDiscoveryCredential,
     };
     use serde_json::json;
+    include!("managed_store/imported_store_golden_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,

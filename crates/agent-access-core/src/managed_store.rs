@@ -8831,6 +8831,7 @@ mod tests {
     use super::*;
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
+    include!("managed_store/stored_credential_golden_tests.rs");
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
     use std::sync::{Arc, Barrier};

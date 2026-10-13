@@ -37,6 +37,10 @@ actions and exposes typed wrappers for supported services.
   `docs/system-overview.html` presentation is the one tracked exception: keep it
   consistent with the Markdown docs when the behavior it describes changes.
 - Keep sample configs in sync with the config schema and tests.
+- Stored credential rows, their AAD inputs, the `basic_api_token`/`bearer_token`
+  and profile spellings, and persisted import JSON are durable data contracts.
+  Core golden tests freeze rows written by an earlier release; never regenerate
+  them to make a refactor pass.
 - Update `README.md` for user-facing behavior, config, or workflow changes.
 - Service policy grants use the canonical plural `subjects` field everywhere;
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
