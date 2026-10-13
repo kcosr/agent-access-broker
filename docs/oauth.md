@@ -489,9 +489,10 @@ The harness starts isolated processes on free loopback ports, initializes an
 encrypted managed store, connects an account through browser HTTP requests,
 and invokes the actual CLI. It exercises readiness, configuration reload,
 denial, replay, refresh, concurrent requests, restart, transient and uncertain
-token responses, recovery after cancelled consent, revocation and disconnect. It
-cleans up processes and temporary state. Add `--demo --state-dir /new/private/path`
-to keep an interactive instance running until interrupted. Read its private
+token responses, recovery after cancelled consent, revocation, setup-grant
+withdrawal and disconnect. It cleans up processes and temporary state. Add
+`--demo --state-dir /new/private/path` to keep an interactive instance running
+until interrupted. Read its private
 `connection-info.json` for the local URL, test login and CLI configuration;
 do not publish that file or commit generated state. The stub's README documents
 its independent protocol tests, fault controls and optional TLS listener.
