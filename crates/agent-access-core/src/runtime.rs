@@ -9084,6 +9084,13 @@ impl AuditWriterHandle {
     }
 
     async fn check_writable(&self) -> Result<(), RuntimeError> {
+        self.probe_storage().await?;
+        self.health.check()
+    }
+
+    /// Queues a storage probe and returns the writer's result for it alone.
+    /// Health checked afterwards can also reflect commands handled since.
+    async fn probe_storage(&self) -> Result<(), RuntimeError> {
         let permit = self.reserve_normal_capacity().await?;
         let (ack, done) = oneshot::channel();
         {
@@ -9110,8 +9117,7 @@ impl AuditWriterHandle {
             .map_err(|source| RuntimeError::Audit {
                 path: self.path_label(),
                 source,
-            })?;
-        self.health.check()
+            })
     }
 
     fn command_send_error(&self, error: mpsc::error::TrySendError<AuditCommand>) -> RuntimeError {

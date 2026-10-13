@@ -373,7 +373,10 @@ fn hold_writer_lock(sink: &AuditSink) -> std::sync::mpsc::Sender<()> {
 }
 
 /// Queues a probe that parks the writer on the held lock, so appends queued
-/// after it are drained together once the lock is released.
+/// after it are drained together once the lock is released. The handle
+/// yields the writer's result for the probe itself: `check_writable` also
+/// checks health after the writer answers, which can already include the
+/// failures of a batch released behind the probe.
 fn park_writer(
     sink: &AuditSink,
 ) -> (
@@ -382,8 +385,8 @@ fn park_writer(
 ) {
     let release = hold_writer_lock(sink);
     let probe = {
-        let sink = sink.clone();
-        start_now(async move { sink.check_writable().await })
+        let writer = Arc::clone(sink.writer.as_ref().unwrap());
+        start_now(async move { writer.probe_storage().await })
     };
     (release, probe)
 }
