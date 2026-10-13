@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   CARGO_PUBLIC_API_VERSION, PUBLIC_API_TOOLCHAIN, PublicApiPrerequisiteError, RUSTUP_HOME_VARIABLE,
-  SELECTION_ENTRY_POINTS, compareInventories, compatibleLine, dependencyLines, exposureClosure,
+  SELECTION_ENTRY_POINTS, compareInventories, compatibleLine, contractLines, dependencyLines, exposureClosure,
   formatComparison, inspectPublicApiToolchain, inventorySurfaces, parsePublicApiArguments,
-  parseResolvedPackages, pruneToEntryPoints, publicApiEnvironment, reachableIds, referencedIds,
+  parseResolvedPackages, pruneToEntryPoints, publicApiEnvironment, publicPaths, reachableIds, referencedIds,
   renderInventory, resolvedSurfaceFeatures, rustdocArguments, surfaceCoverage, synthesizeExposure, treeArguments,
   visibleNames,
 } from "./public-api.mjs";
@@ -280,6 +280,78 @@ test("exposed items render beneath synthetic modules at their defining paths", (
   assert.throws(() => synthesizeExposure(json, new Set([200])), /no local defining path/);
 });
 
+// `kappa` exports a trait with required and provided items, and through a
+// glob and a renaming re-export, structs and an enum of each construction kind.
+const method = (id, name, hasBody) => item(id, name, { function: { sig: { inputs: [], output: null, is_c_variadic: false },
+  generics: { params: [], where_predicates: [] }, header: { is_const: false, is_unsafe: false, is_async: false, abi: "Rust" },
+  has_body: hasBody } });
+const kappa = () => crate([
+  module(0, "kappa", [1, 3, 7]),
+  item(1, "Contract", { trait: { is_auto: false, is_unsafe: false, is_dyn_compatible: true, items: [2, 4, 5, 6],
+    generics: { params: [], where_predicates: [] }, bounds: [], implementations: [] } }),
+  method(2, "build", false),
+  method(4, "validate", true),
+  item(5, "Output", { assoc_type: { generics: { params: [], where_predicates: [] }, bounds: [], type: null } }),
+  item(6, "CONST", { assoc_const: { type: { primitive: "usize" }, value: "1" } }),
+  use(3, "inner", 10, true),
+  use(7, "Renamed", 16),
+  module(10, "inner", [11, 12, 13]),
+  item(11, "Unit", { struct: { kind: "unit", generics: { params: [], where_predicates: [] }, impls: [] } }),
+  { ...item(12, "Named", { struct: { kind: { plain: { fields: [], has_stripped_fields: true } }, generics: { params: [], where_predicates: [] }, impls: [] } }),
+    attrs: [] },
+  { ...item(13, "E", { enum: { generics: { params: [], where_predicates: [] }, has_stripped_variants: false, variants: [14, 15], impls: [] } }),
+    attrs: ["non_exhaustive"] },
+  { ...item(14, "Open", { variant: { kind: "plain", discriminant: null } }), attrs: ["non_exhaustive"] },
+  item(15, "Hidden", { variant: { kind: { tuple: [null] }, discriminant: null } }),
+  item(16, "Tuple", { struct: { kind: { tuple: [17] }, generics: { params: [], where_predicates: [] }, impls: [] } }),
+  item(17, "0", { struct_field: { primitive: "u8" } }),
+], {});
+
+test("public paths follow modules, renaming re-exports and glob re-exports", () => {
+  const paths = publicPaths(kappa());
+  assert.deepEqual(Object.fromEntries([...paths].map(([id, names]) => [id, names])), {
+    0: ["kappa"], 1: ["kappa::Contract"], 11: ["kappa::Unit"], 12: ["kappa::Named"], 13: ["kappa::E"], 16: ["kappa::Renamed"],
+  });
+});
+
+test("contracts record required and provided trait items and how types are constructed", () => {
+  assert.deepEqual(contractLines(kappa()), [
+    "enum kappa::E: non-exhaustive",
+    "struct kappa::Named: named fields, private fields",
+    "struct kappa::Renamed: tuple fields",
+    "struct kappa::Unit: unit",
+    "trait kappa::Contract: dyn-compatible",
+    "trait kappa::Contract::CONST: provided const",
+    "trait kappa::Contract::Output: required type",
+    "trait kappa::Contract::build: required fn",
+    "trait kappa::Contract::validate: provided fn",
+    "variant kappa::E::Hidden: tuple fields, private fields",
+    "variant kappa::E::Open: unit, non-exhaustive",
+  ]);
+  const sealed = kappa();
+  Object.assign(sealed.index["1"].inner.trait, { is_dyn_compatible: false, is_unsafe: true });
+  sealed.index["13"].attrs = [];
+  sealed.index["12"].inner.struct.kind.plain.has_stripped_fields = false;
+  const lines = contractLines(sealed);
+  assert.ok(lines.includes("trait kappa::Contract: not dyn-compatible, unsafe to implement"));
+  assert.ok(lines.includes("enum kappa::E: exhaustive"));
+  assert.ok(lines.includes("struct kappa::Named: named fields"));
+  assert.deepEqual(contractLines(pruneToEntryPoints(kappa(), ["Unit"])), ["struct kappa::Unit: unit"]);
+});
+
+test("removing a trait method's default changes the inventory although its signature does not", () => {
+  const surface = { package: "kappa", features: [], entryPoints: null };
+  const own = "pub mod kappa\npub trait kappa::Contract\npub fn kappa::Contract::validate(&self)\n";
+  const before = kappa();
+  const after = kappa();
+  after.index["4"].inner.function.has_body = false;
+  const checked = new Map([["kappa.txt", renderInventory(surface, { own, contracts: contractLines(before) })]]);
+  const generated = new Map([["kappa.txt", renderInventory(surface, { own, contracts: contractLines(after) })]]);
+  assert.deepEqual(compareInventories(checked, generated).changed, [{ file: "kappa.txt", removed: 1, added: 1 }]);
+  assert.ok(generated.get("kappa.txt").includes("trait kappa::Contract::validate: required fn\n"));
+  assert.ok(checked.get("kappa.txt").includes("trait kappa::Contract::validate: provided fn\n"));
+});
+
 test("cargo tree output resolves packages, versions and features by library name", () => {
   const resolved = parseResolvedPackages([
     "agent-access-provider v0.1.0 (/checkout/crates/agent-access-provider)\tagent_access_provider\ttest-support",
@@ -315,6 +387,7 @@ test("inventory text separates the surface, exposed types and public dependencie
   assert.equal(renderInventory(surface, {
     own: "pub mod agent_access_jira\npub static agent_access_jira::JIRA_BACKEND: T\n",
     exposed: [{ package: "agent-access-core", features: ["test-support"], text: "pub mod agent_access_core\n" }],
+    contracts: ["struct agent_access_core::Registration: named fields, private fields"],
     dependencies: ["dependency http 1"],
   }), [
     "// agent-access-jira selection entry points (features: none)",
@@ -326,6 +399,10 @@ test("inventory text separates the surface, exposed types and public dependencie
     "// Exposed through supported signatures: agent-access-core (features: test-support)",
     "",
     "pub mod agent_access_core",
+    "",
+    "// Implementation and construction contracts of the items above",
+    "",
+    "struct agent_access_core::Registration: named fields, private fields",
     "",
     "// Public dependency packages (semver-compatible lines)",
     "",

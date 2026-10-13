@@ -180,7 +180,9 @@ differs from the checked-in `api/` files. The inventory covers the provider SDK
 and the Broker host with and without `test-support`, the assembly's
 `composition()` and other exports, the selection entry points of the shipped
 natives, OAuth dialects and import adapters, and the workspace and third-party
-types their signatures expose. A failure prints the differing lines; regenerate
+types their signatures expose. It also records whether trait items are required
+or provided and how types are constructed, which signatures alone omit. A
+failure prints the differing lines; regenerate
 with `node scripts/public-api.mjs update` only for a reviewed, intended change.
 
 No released inventory precedes `0.2.0`, the first baseline, so the gate compares

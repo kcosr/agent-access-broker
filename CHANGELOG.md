@@ -169,8 +169,10 @@ All notable changes to this project are documented in this file.
   JSON and `cargo-public-api` 0.52.0. It covers the SDK and host with and
   without `test-support`, the assembly library, the reviewed selection entry
   points of the linked natives, OAuth dialects and import adapters, and the
-  workspace and third-party types their signatures expose.
-  `node scripts/public-api.mjs check` fails when the candidate's API differs
+  workspace and third-party types their signatures expose. It also records the
+  contracts the signatures omit: required or provided trait items, trait dyn
+  compatibility, and how structs, variants and enums can be constructed or
+  matched. `node scripts/public-api.mjs check` fails when the candidate's API differs
   from the inventory. `0.2.0` is the first released baseline.
 - Release qualification runs a required `public-api` gate
   (`node scripts/public-api.mjs check`). Preflight requires the pinned nightly

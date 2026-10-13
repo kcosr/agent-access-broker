@@ -7075,6 +7075,314 @@ impl core::marker::UnsafeUnpin for agent_access_core::TrustedCallerConfig
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::TrustedCallerConfig
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::TrustedCallerConfig
 
+// Implementation and construction contracts of the items above
+
+enum agent_access_core::AgentInvokeTokenCaveatError: exhaustive
+enum agent_access_core::AuditDurability: exhaustive
+enum agent_access_core::AuditStoreType: exhaustive
+enum agent_access_core::BrokerTokenTtlOption: exhaustive
+enum agent_access_core::TrustedCallerContextMode: exhaustive
+enum agent_access_core::TrustedCallerCredentialTransport: exhaustive
+enum agent_access_core::api::ExitPolicy: exhaustive
+enum agent_access_core::api::ResponseKind: exhaustive
+enum agent_access_core::api::RouteAccess: exhaustive
+enum agent_access_core::api::RouteFeature: exhaustive
+enum agent_access_core::audit_query::AuditActionFilter: exhaustive
+enum agent_access_core::audit_query::AuditListRoute: exhaustive
+enum agent_access_core::audit_query::AuditQueryError: exhaustive
+enum agent_access_core::audit_query::AuditSearchTerm: exhaustive
+enum agent_access_core::audit_query::AuditVisibility: exhaustive
+enum agent_access_core::config_error::ConfigError: exhaustive
+enum agent_access_core::config_error::HostConfigError: exhaustive
+enum agent_access_core::imports::adapter::ImportedDiscoveryAuthentication: exhaustive
+enum agent_access_core::imports::definition::ImportedAuthMechanism: exhaustive
+enum agent_access_core::imports::definition::ImportedBindingStatus: exhaustive
+enum agent_access_core::imports::definition::ImportedCredentialDelivery: exhaustive
+enum agent_access_core::imports::definition::ImportedCredentialMode: exhaustive
+enum agent_access_core::imports::definition::ImportedCredentialPurpose: exhaustive
+enum agent_access_core::imports::definition::ImportedDiscoveryCredential: exhaustive
+enum agent_access_core::invocation_limits::InvocationLimitError: exhaustive
+enum agent_access_core::managed_store::BrokerTokenClass: exhaustive
+enum agent_access_core::managed_store::ManagedStoreError: exhaustive
+enum agent_access_core::managed_store::ManagedStoreOpenMode: exhaustive
+enum agent_access_core::managed_store::OidcCompletionOutcome: exhaustive
+enum agent_access_core::managed_store::SignInMethodStatus: exhaustive
+enum agent_access_core::managed_store::imported_store::ImportedActionStatus: exhaustive
+enum agent_access_core::managed_store::imported_store::ImportedServiceStatus: exhaustive
+enum agent_access_core::managed_store::principal_access::AgentTokenManagementPurpose: exhaustive
+enum agent_access_core::managed_store::principal_access::CredentialManagementPurpose: exhaustive
+enum agent_access_core::managed_store::principal_access::PolicyReadScope: exhaustive
+enum agent_access_core::managed_store::principal_access::PolicyWriteScope: exhaustive
+enum agent_access_core::managed_store::principal_access::PrincipalRole: exhaustive
+enum agent_access_core::managed_store::resources::audit::CatalogAuditEntityKind: exhaustive
+enum agent_access_core::mcp::registry::McpView: exhaustive
+enum agent_access_core::mcp::registry::ScopedMcpIssueCode: exhaustive
+enum agent_access_core::microsoft_oidc::MicrosoftOidcRuntimeConfigError: exhaustive
+enum agent_access_core::microsoft_oidc::MicrosoftOidcSecretError: exhaustive
+enum agent_access_core::microsoft_oidc::MicrosoftOidcValidationError: exhaustive
+enum agent_access_core::network::outbound_tls::OutboundTlsTrustMode: exhaustive
+enum agent_access_core::oauth::OAuthConnectIntent: exhaustive
+enum agent_access_core::oauth::OAuthConnectionStatus: exhaustive
+enum agent_access_core::oauth::OAuthError: exhaustive
+enum agent_access_core::oauth::OAuthReturnPath: exhaustive
+enum agent_access_core::runtime::ExecutionContextFailure: exhaustive
+enum agent_access_core::runtime::IdentityFailure: exhaustive
+enum agent_access_core::runtime::RuntimeError: exhaustive
+enum agent_access_core::runtime::availability::AvailabilityState: exhaustive
+enum agent_access_core::runtime::import_control::ImportDiscoveryError: exhaustive
+struct agent_access_broker_host::AssemblyIdentity: named fields, private fields
+struct agent_access_broker_host::BrokerApplication: named fields, private fields
+struct agent_access_broker_host::BrokerBuildStatus: named fields, private fields
+struct agent_access_broker_host::BrokerComposition: named fields, private fields
+struct agent_access_broker_host::BrokerCompositionBuilder: named fields, private fields
+struct agent_access_broker_host::BrokerExit: named fields, private fields
+struct agent_access_broker_host::CompositionError: named fields, private fields
+struct agent_access_broker_host::ModuleProvenance: named fields, private fields
+struct agent_access_broker_host::ReloadableState: named fields, private fields
+struct agent_access_broker_host::SourceRevision: named fields, private fields
+struct agent_access_core::AgentInvokeTokenCaveats: named fields
+struct agent_access_core::AgentTokenServiceRestriction: named fields
+struct agent_access_core::AuditConfig: named fields
+struct agent_access_core::BrokerConfig: named fields
+struct agent_access_core::BrokerTokensConfig: named fields
+struct agent_access_core::BrowserAuthConfig: named fields
+struct agent_access_core::CredentialConfig: named fields
+struct agent_access_core::CredentialEncryptionConfig: named fields
+struct agent_access_core::CredentialEncryptionKeyConfig: named fields
+struct agent_access_core::CredentialInputField: named fields
+struct agent_access_core::CredentialInputSchema: named fields
+struct agent_access_core::CredentialsConfig: named fields
+struct agent_access_core::DeploymentConfig: named fields
+struct agent_access_core::ErrorBody: named fields
+struct agent_access_core::ExecutionContext: tuple fields, private fields
+struct agent_access_core::ExecutionContextConfig: named fields
+struct agent_access_core::GatewayConfig: named fields
+struct agent_access_core::GatewayGitConfig: named fields
+struct agent_access_core::IdentityConfig: named fields
+struct agent_access_core::IdentityGroupConfig: named fields
+struct agent_access_core::IdentitySourceConfig: named fields
+struct agent_access_core::InitialAdminConfig: named fields
+struct agent_access_core::InvalidExecutionContext: unit
+struct agent_access_core::LimitsConfig: named fields
+struct agent_access_core::LocalPasswordConfig: named fields
+struct agent_access_core::ManagedStoreConfig: named fields
+struct agent_access_core::ManagementConfig: named fields
+struct agent_access_core::MicrosoftOidcConfig: named fields
+struct agent_access_core::NetworkConfig: named fields
+struct agent_access_core::OidcConfig: named fields
+struct agent_access_core::PolicyConfig: named fields
+struct agent_access_core::PolicyGrantConfig: named fields
+struct agent_access_core::PortalConfig: named fields
+struct agent_access_core::ResponseEnvelope: named fields
+struct agent_access_core::StaticPrincipalConfig: named fields
+struct agent_access_core::TrustedCallerConfig: named fields
+struct agent_access_core::api::ApiActionSpec: named fields
+struct agent_access_core::api::ApiResourceScopeSpec: named fields
+struct agent_access_core::api::ApiServiceSpec: named fields
+struct agent_access_core::api::HttpRouteSpec: named fields
+struct agent_access_core::api::RouteParamSpec: named fields
+struct agent_access_core::attribution::AttributionConfig: named fields
+struct agent_access_core::audit_query::AuditEventFilters: named fields, private fields
+struct agent_access_core::audit_query::AuditEventsPage: named fields
+struct agent_access_core::audit_query::AuditEventsQuery: named fields
+struct agent_access_core::audit_query::AuditFilterParams: named fields
+struct agent_access_core::audit_query::AuditPosition: named fields
+struct agent_access_core::audit_query::AuditSearch: named fields
+struct agent_access_core::backends::BackendRegistry: named fields, private fields
+struct agent_access_core::backends::ProvidersConfig: named fields, private fields
+struct agent_access_core::imports::adapter::ImportedDiscoveredTool: named fields
+struct agent_access_core::imports::adapter::ImportedDiscovery: named fields
+struct agent_access_core::imports::definition::ImportedActionDefinition: named fields
+struct agent_access_core::imports::definition::ImportedCredentialBinding: named fields
+struct agent_access_core::imports::definition::ImportedInvocationLimit: named fields
+struct agent_access_core::imports::definition::ImportedServiceDefinition: named fields
+struct agent_access_core::imports::registration::ImportOAuthCompanion: named fields
+struct agent_access_core::imports::registration::ImportedAdapterRegistration: named fields, private fields
+struct agent_access_core::imports_config::ImportsConfig: named fields
+struct agent_access_core::invocation_limits::ConfiguredInvocationLimits: named fields, private fields
+struct agent_access_core::invocation_limits::EffectiveInvocationLimit: named fields
+struct agent_access_core::invocation_limits::InvocationLimit: named fields, private fields
+struct agent_access_core::invocation_limits::InvocationLimitConfig: named fields
+struct agent_access_core::invocation_limits::InvocationLimitsConfig: named fields
+struct agent_access_core::invocation_limits::PrincipalInvocationLimitConfig: named fields
+struct agent_access_core::managed_store::AuthenticatedLocalPassword: named fields
+struct agent_access_core::managed_store::BrokerTokenHasher: named fields, private fields
+struct agent_access_core::managed_store::BrokerTokenIdentity: named fields
+struct agent_access_core::managed_store::BrokerTokenIssueRequest: named fields
+struct agent_access_core::managed_store::BrokerTokenRecord: named fields
+struct agent_access_core::managed_store::BrowserCsrfKey: named fields, private fields
+struct agent_access_core::managed_store::BrowserSessionIdentity: named fields
+struct agent_access_core::managed_store::BrowserSessionIssueRequest: named fields
+struct agent_access_core::managed_store::BrowserSessionRecord: named fields
+struct agent_access_core::managed_store::ChangedLocalPassword: named fields
+struct agent_access_core::managed_store::CredentialKeyRing: named fields, private fields
+struct agent_access_core::managed_store::CredentialMetadata: named fields
+struct agent_access_core::managed_store::CredentialVerificationCandidate: named fields
+struct agent_access_core::managed_store::CredentialVerificationTarget: named fields
+struct agent_access_core::managed_store::CredentialWriteRequest: named fields
+struct agent_access_core::managed_store::EffectiveGroupMembershipRecord: named fields
+struct agent_access_core::managed_store::EffectiveMembershipRecord: named fields
+struct agent_access_core::managed_store::EnabledLocalPassword: named fields
+struct agent_access_core::managed_store::ExternalGroupBindingCreateRequest: named fields
+struct agent_access_core::managed_store::ExternalGroupBindingRecord: named fields
+struct agent_access_core::managed_store::GroupMemberRecord: named fields
+struct agent_access_core::managed_store::GroupPatchRequest: named fields
+struct agent_access_core::managed_store::GroupRecord: named fields
+struct agent_access_core::managed_store::GroupWriteRequest: named fields
+struct agent_access_core::managed_store::InitialAdminBootstrapRequest: named fields
+struct agent_access_core::managed_store::IssuedBrokerToken: named fields
+struct agent_access_core::managed_store::IssuedBrowserSession: named fields
+struct agent_access_core::managed_store::LocalGroupRemovalResult: named fields
+struct agent_access_core::managed_store::LocalMembershipContributionRecord: named fields
+struct agent_access_core::managed_store::LocalPasswordChangeRequest: named fields
+struct agent_access_core::managed_store::LocalPasswordHasher: named fields, private fields
+struct agent_access_core::managed_store::LocalPasswordVerifyRequest: named fields
+struct agent_access_core::managed_store::LocalPasswordWriteRequest: named fields
+struct agent_access_core::managed_store::LoginMethodRecord: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantCreateRequest: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantPatchRequest: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantRecord: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantStatusRequest: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantSubjectAddRequest: named fields
+struct agent_access_core::managed_store::ManagedPolicyGrantSubjectRemoveRequest: named fields
+struct agent_access_core::managed_store::ManagedPolicyMutationResult: named fields
+struct agent_access_core::managed_store::ManagedPolicyRevision: named fields
+struct agent_access_core::managed_store::ManagedPolicySubjectCatalog: named fields
+struct agent_access_core::managed_store::ManagedStore: named fields, private fields
+struct agent_access_core::managed_store::ManagedStoreStatus: named fields
+struct agent_access_core::managed_store::MicrosoftMembershipContributionRecord: named fields
+struct agent_access_core::managed_store::OidcCompleteLoginRequest: named fields
+struct agent_access_core::managed_store::OidcCompleteLoginResult: named fields
+struct agent_access_core::managed_store::OidcFlowClaimRequest: named fields
+struct agent_access_core::managed_store::OidcFlowCreateRequest: named fields
+struct agent_access_core::managed_store::OidcFlowRecord: named fields
+struct agent_access_core::managed_store::OidcLoginMethodLinkRequest: named fields
+struct agent_access_core::managed_store::OidcProviderStateReconcileRequest: named fields
+struct agent_access_core::managed_store::OidcProviderStateRecord: named fields
+struct agent_access_core::managed_store::PolicyValidationIssue: named fields
+struct agent_access_core::managed_store::PrincipalPatchRequest: named fields
+struct agent_access_core::managed_store::PrincipalRecord: named fields
+struct agent_access_core::managed_store::PrincipalWriteRequest: named fields
+struct agent_access_core::managed_store::RewrapSummary: named fields
+struct agent_access_core::managed_store::RightGrantRequest: named fields
+struct agent_access_core::managed_store::RightRecord: named fields
+struct agent_access_core::managed_store::SelfAgentTokenIssueRequest: named fields
+struct agent_access_core::managed_store::SignInMethods: named fields
+struct agent_access_core::managed_store::VerifiedLocalPassword: named fields
+struct agent_access_core::managed_store::identity_access::AttestedIdentityProof: named fields, private fields
+struct agent_access_core::managed_store::identity_access::IdentityAccessRecord: named fields
+struct agent_access_core::managed_store::identity_access::ResolvedAttestedIdentity: named fields
+struct agent_access_core::managed_store::identity_access::UsernameBindingRecord: named fields
+struct agent_access_core::managed_store::identity_tokens::IdentityTokenMetadata: named fields
+struct agent_access_core::managed_store::imported_store::ImportedActionRecord: named fields
+struct agent_access_core::managed_store::imported_store::ImportedActionWrite: named fields
+struct agent_access_core::managed_store::imported_store::ImportedCatalog: named fields
+struct agent_access_core::managed_store::imported_store::ImportedMutationResult: named fields
+struct agent_access_core::managed_store::imported_store::ImportedPreview: named fields
+struct agent_access_core::managed_store::imported_store::ImportedPreviewAcceptance: named fields
+struct agent_access_core::managed_store::imported_store::ImportedPreviewWriteRequest: named fields
+struct agent_access_core::managed_store::imported_store::ImportedSecretDeleteRequest: named fields
+struct agent_access_core::managed_store::imported_store::ImportedSecretWriteProof: named fields, private fields
+struct agent_access_core::managed_store::imported_store::ImportedSecretWriteRequest: named fields
+struct agent_access_core::managed_store::imported_store::ImportedServiceRecord: named fields
+struct agent_access_core::managed_store::imported_store::ImportedServiceUpdateRequest: named fields
+struct agent_access_core::managed_store::principal_access::EffectiveServicePolicyManagementAuthority: named fields
+struct agent_access_core::managed_store::principal_access::ManagedManagementAuthority: named fields
+struct agent_access_core::managed_store::principal_access::PrincipalAccessChange: named fields
+struct agent_access_core::managed_store::principal_access::PrincipalAccessPatchRequest: named fields
+struct agent_access_core::managed_store::principal_access::ServicePolicyManagementAssignmentPutRequest: named fields
+struct agent_access_core::managed_store::principal_access::ServicePolicyManagementAssignmentRecord: named fields
+struct agent_access_core::managed_store::principal_service_limits::PrincipalServiceLimitRecord: named fields
+struct agent_access_core::managed_store::principal_service_limits::PrincipalServiceLimitWriteRequest: named fields
+struct agent_access_core::managed_store::resources::CreateResourceGroupRequest: named fields
+struct agent_access_core::managed_store::resources::CreateResourceRequest: named fields
+struct agent_access_core::managed_store::resources::DeleteResourceRequest: named fields
+struct agent_access_core::managed_store::resources::ManagedCatalogMutationResult: named fields
+struct agent_access_core::managed_store::resources::ManagedPolicyExport: named fields
+struct agent_access_core::managed_store::resources::ManagedPolicyState: named fields
+struct agent_access_core::managed_store::resources::ManagedResourceCatalog: named fields
+struct agent_access_core::managed_store::resources::ManagedResourceGroupRecord: named fields
+struct agent_access_core::managed_store::resources::ManagedResourceRecord: named fields
+struct agent_access_core::managed_store::resources::PatchResourceGroupRequest: named fields
+struct agent_access_core::managed_store::resources::PatchResourceRequest: named fields
+struct agent_access_core::managed_store::resources::ResourceAttributeBinding: named fields
+struct agent_access_core::managed_store::resources::ResourceReference: named fields
+struct agent_access_core::managed_store::resources::audit::CatalogAuditEntity: named fields
+struct agent_access_core::managed_store::resources::audit::CatalogAuditMemberList: named fields
+struct agent_access_core::managed_store::resources::audit::CatalogAuditMembership: named fields
+struct agent_access_core::managed_store::resources::audit::CatalogAuditSnapshot: named fields
+struct agent_access_core::managed_store::resources::audit::ManagedCatalogAuditChange: named fields
+struct agent_access_core::mcp::registry::ScopedMcpIssue: named fields
+struct agent_access_core::mcp::registry::ScopedMcpReadiness: named fields
+struct agent_access_core::mcp_config::McpConfig: named fields
+struct agent_access_core::microsoft_oidc::MicrosoftOidcRuntimeConfig: named fields, private fields
+struct agent_access_core::microsoft_oidc::ResolvedMicrosoftOidcSecrets: named fields, private fields
+struct agent_access_core::network::outbound_tls::OutboundTlsConfig: named fields
+struct agent_access_core::network::outbound_tls::PreparedOutboundTls: named fields, private fields
+struct agent_access_core::oauth::OAuthBinding: named fields
+struct agent_access_core::oauth::OAuthConfig: named fields
+struct agent_access_core::oauth::OAuthConnectStart: named fields
+struct agent_access_core::oauth::OAuthConnection: named fields
+struct agent_access_core::oauth::OAuthLease: named fields, private fields
+struct agent_access_core::oauth::OAuthManagementAdmission: named fields
+struct agent_access_core::oauth::OAuthManager: named fields, private fields
+struct agent_access_core::resource_policy::ResourceBoundary: named fields
+struct agent_access_core::resource_policy::ResourceDefinition: named fields
+struct agent_access_core::resource_policy::ResourceGroupDefinition: named fields
+struct agent_access_core::resource_policy::ResourceSelection: named fields
+struct agent_access_core::runtime::AgentTokenActionOption: named fields
+struct agent_access_core::runtime::AgentTokenOptions: named fields
+struct agent_access_core::runtime::AgentTokenServiceOption: named fields
+struct agent_access_core::runtime::AuditMaintenanceFailure: named fields
+struct agent_access_core::runtime::AuditRecord: named fields
+struct agent_access_core::runtime::AuditRuntimeRegistry: named fields, private fields
+struct agent_access_core::runtime::AuditStoreInfo: named fields, private fields
+struct agent_access_core::runtime::BrokerResponse: named fields
+struct agent_access_core::runtime::BrokerRuntime: named fields, private fields
+struct agent_access_core::runtime::CapabilityBundle: named fields
+struct agent_access_core::runtime::CredentialVerificationInput: named fields
+struct agent_access_core::runtime::GovernedIdentityFailureContext: named fields
+struct agent_access_core::runtime::GovernedOperationContext: named fields
+struct agent_access_core::runtime::IdentityContext: named fields
+struct agent_access_core::runtime::IdentitySourceAudit: named fields
+struct agent_access_core::runtime::IdentitySummary: named fields
+struct agent_access_core::runtime::InvokeRequest: named fields
+struct agent_access_core::runtime::MatchedGrantAudit: named fields
+struct agent_access_core::runtime::OperationContext: named fields
+struct agent_access_core::runtime::PreparedGatewayOperation: named fields, private fields
+struct agent_access_core::runtime::PreparedInvocation: named fields, private fields
+struct agent_access_core::runtime::SearchAuthorizationPlan: named fields
+struct agent_access_core::runtime::SourceContext: named fields
+struct agent_access_core::runtime::availability::CredentialRequirement: named fields
+struct agent_access_core::runtime::availability::DiscoveredService: named fields
+struct agent_access_core::runtime::availability::ServiceAvailability: named fields
+struct agent_access_core::runtime::discovery::ActionList: named fields
+struct agent_access_core::runtime::discovery::DiscoveredResource: named fields
+struct agent_access_core::runtime::discovery::ResourceCoverage: named fields
+struct agent_access_core::runtime::discovery::ResourceList: named fields
+struct agent_access_core::runtime::discovery::ResourceListQuery: named fields
+struct agent_access_core::runtime::discovery::ServiceDiscovery: named fields, private fields
+struct agent_access_core::runtime::import_control::ImportPreparationError: named fields, private fields
+struct agent_access_core::runtime::imports::PreparedImportedProviders: named fields, private fields
+struct agent_access_core::runtime::owned::InvocationControl: named fields, private fields
+struct agent_access_core::runtime::resource_access::EffectiveAccessClause: named fields
+struct agent_access_core::runtime::resource_access::EffectiveAccessEntry: named fields
+struct agent_access_core::runtime::resource_access::EffectiveAccessPreview: named fields
+struct agent_access_core::runtime::resource_access::ResourceGroupOption: named fields
+struct agent_access_core::runtime::trusted_callers::AdmittedIdentity: named fields
+struct agent_access_core::runtime::trusted_callers::CallerSecurityBinding: tuple fields, private fields
+struct agent_access_core::runtime::trusted_callers::IngressAdmission: named fields, private fields
+trait agent_access_core::imports::adapter::ImportedAdapter: dyn-compatible
+trait agent_access_core::imports::adapter::ImportedAdapter::additional_destinations: provided fn
+trait agent_access_core::imports::adapter::ImportedAdapter::build: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::development_only: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::discover: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::kind: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::scoped_mcp_name: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::sensitive_output_pointers: provided fn
+trait agent_access_core::imports::adapter::ImportedAdapter::validate_action: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::validate_definition: provided fn
+
 // Public dependency packages (semver-compatible lines)
 
 dependency anyhow 1

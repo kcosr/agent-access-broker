@@ -378,6 +378,34 @@ impl core::marker::UnsafeUnpin for agent_access_core::imports::registration::Imp
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 
+// Implementation and construction contracts of the items above
+
+enum agent_access_core::imports::adapter::ImportedDiscoveryAuthentication: exhaustive
+enum agent_access_core::imports::definition::ImportedAuthMechanism: exhaustive
+enum agent_access_core::imports::definition::ImportedBindingStatus: exhaustive
+enum agent_access_core::imports::definition::ImportedCredentialDelivery: exhaustive
+enum agent_access_core::imports::definition::ImportedCredentialMode: exhaustive
+enum agent_access_core::imports::definition::ImportedDiscoveryCredential: exhaustive
+struct agent_access_core::backends::BackendRegistry: named fields, private fields
+struct agent_access_core::imports::adapter::ImportedDiscoveredTool: named fields
+struct agent_access_core::imports::adapter::ImportedDiscovery: named fields
+struct agent_access_core::imports::definition::ImportedActionDefinition: named fields
+struct agent_access_core::imports::definition::ImportedCredentialBinding: named fields
+struct agent_access_core::imports::definition::ImportedInvocationLimit: named fields
+struct agent_access_core::imports::definition::ImportedServiceDefinition: named fields
+struct agent_access_core::imports::registration::ImportOAuthCompanion: named fields
+struct agent_access_core::imports::registration::ImportedAdapterRegistration: named fields, private fields
+trait agent_access_core::imports::adapter::ImportedAdapter: dyn-compatible
+trait agent_access_core::imports::adapter::ImportedAdapter::additional_destinations: provided fn
+trait agent_access_core::imports::adapter::ImportedAdapter::build: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::development_only: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::discover: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::kind: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::scoped_mcp_name: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::sensitive_output_pointers: provided fn
+trait agent_access_core::imports::adapter::ImportedAdapter::validate_action: required fn
+trait agent_access_core::imports::adapter::ImportedAdapter::validate_definition: provided fn
+
 // Public dependency packages (semver-compatible lines)
 
 dependency serde_core 1

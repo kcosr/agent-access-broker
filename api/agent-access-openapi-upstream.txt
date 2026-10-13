@@ -25,3 +25,7 @@ impl core::marker::Unpin for agent_access_core::imports::registration::ImportedA
 impl core::marker::UnsafeUnpin for agent_access_core::imports::registration::ImportedAdapterRegistration
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
+
+// Implementation and construction contracts of the items above
+
+struct agent_access_core::imports::registration::ImportedAdapterRegistration: named fields, private fields

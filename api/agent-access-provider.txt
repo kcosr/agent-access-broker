@@ -3767,6 +3767,212 @@ pub type agent_access_provider::ResourceActionInputs = fn(&agent_access_provider
 pub type agent_access_provider::ResourceScopes = alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
 pub type agent_access_provider::UploadProgress = tokio::sync::watch::Receiver<tokio::time::instant::Instant>
 
+// Implementation and construction contracts of the items above
+
+enum agent_access_provider::ActionIo: exhaustive
+enum agent_access_provider::AttributionRepresentation: exhaustive
+enum agent_access_provider::AttributionVerb: exhaustive
+enum agent_access_provider::AuthorityMismatch: exhaustive
+enum agent_access_provider::BodyPathSegment: exhaustive
+enum agent_access_provider::ClientProfile: exhaustive
+enum agent_access_provider::ContinuationError: non-exhaustive
+enum agent_access_provider::ContinuationLifetime: non-exhaustive
+enum agent_access_provider::ContinuationOwner: non-exhaustive
+enum agent_access_provider::CredentialMode: exhaustive
+enum agent_access_provider::CredentialView: exhaustive
+enum agent_access_provider::Decision: exhaustive
+enum agent_access_provider::EgressDeclaration: exhaustive
+enum agent_access_provider::EgressProxySource: exhaustive
+enum agent_access_provider::ExecutionAccess: exhaustive
+enum agent_access_provider::HeaderEncoding: exhaustive
+enum agent_access_provider::HookPhase: non-exhaustive
+enum agent_access_provider::InvocationAuthority: exhaustive
+enum agent_access_provider::IssuedRefreshToken: exhaustive
+enum agent_access_provider::LookupRequirement: exhaustive
+enum agent_access_provider::OAuthClientAuth: exhaustive
+enum agent_access_provider::OAuthDialectError: exhaustive
+enum agent_access_provider::OAuthRotation: exhaustive
+enum agent_access_provider::OAuthScopeMode: exhaustive
+enum agent_access_provider::OAuthTokenEncoding: exhaustive
+enum agent_access_provider::OpaqueTokenSigner: exhaustive
+enum agent_access_provider::ProviderFailureStatus: non-exhaustive
+enum agent_access_provider::ProviderResultStreamSource: exhaustive
+enum agent_access_provider::ProviderStateError: exhaustive
+enum agent_access_provider::ReadContentFormat: exhaustive
+enum agent_access_provider::ReasonCode: exhaustive
+enum agent_access_provider::RefreshReplay: exhaustive
+enum agent_access_provider::RenderBudgetExhausted: exhaustive
+enum agent_access_provider::ResourceSelector: exhaustive
+enum agent_access_provider::ResponseFormat: exhaustive
+enum agent_access_provider::ScopedMcpNameSource: exhaustive
+enum agent_access_provider::SearchAuthorizationScope: exhaustive
+enum agent_access_provider::ServiceSurface: exhaustive
+enum agent_access_provider::StateDisposition: exhaustive
+enum agent_access_provider::StaticCredentialKind: exhaustive
+enum agent_access_provider::UpstreamError: exhaustive
+enum agent_access_provider::UpstreamResourceOwnership: exhaustive
+enum agent_access_provider::host::HostPort: non-exhaustive
+enum agent_access_provider::presentation::BodyPathSegment: exhaustive
+enum agent_access_provider::presentation::ReadContentFormat: exhaustive
+enum agent_access_provider::presentation::RenderBudgetExhausted: exhaustive
+enum agent_access_provider::presentation::ResponseFormat: exhaustive
+struct agent_access_provider::ActionCapabilities: named fields
+struct agent_access_provider::ActionDescriptor: named fields
+struct agent_access_provider::ActionPresentation: named fields
+struct agent_access_provider::AdmittedContext: tuple fields, private fields
+struct agent_access_provider::AdmittedRequest: named fields, private fields
+struct agent_access_provider::AttachmentLimitsConfig: named fields
+struct agent_access_provider::AttributionCapability: named fields
+struct agent_access_provider::AttributionMutation: named fields
+struct agent_access_provider::AuthorizationRequest: named fields
+struct agent_access_provider::BackendRegistration: named fields, private fields, non-exhaustive
+struct agent_access_provider::BodyAdmission: named fields, private fields
+struct agent_access_provider::BrokerBodyPart: named fields
+struct agent_access_provider::BrokerBodyPartFile: named fields, private fields
+struct agent_access_provider::BrokerBodyPartSpec: named fields
+struct agent_access_provider::BuildContext: named fields, private fields
+struct agent_access_provider::CodeExchange: named fields
+struct agent_access_provider::ConnectedIdentity: named fields
+struct agent_access_provider::ContinuationBinding: named fields, private fields
+struct agent_access_provider::ContinuationFamily: named fields, private fields
+struct agent_access_provider::ContinuationSigner: named fields, private fields
+struct agent_access_provider::CorrelationContext: named fields
+struct agent_access_provider::CredentialDescriptor: named fields
+struct agent_access_provider::CredentialProfile: named fields
+struct agent_access_provider::DelegatedAccess: named fields
+struct agent_access_provider::DelegatedBindingId: tuple fields, private fields
+struct agent_access_provider::DelegatedConnection: named fields
+struct agent_access_provider::DelegatedCredential: tuple fields, private fields
+struct agent_access_provider::EgressProxyConfig: named fields
+struct agent_access_provider::EgressRoute: named fields, private fields
+struct agent_access_provider::EmbeddedBody: named fields
+struct agent_access_provider::ExecutionCredential: named fields, private fields
+struct agent_access_provider::InvalidReasonCodeId: unit
+struct agent_access_provider::InvocationIdentity: named fields
+struct agent_access_provider::InvocationScope: named fields, private fields
+struct agent_access_provider::ModuleMetadata: named fields, private fields, non-exhaustive
+struct agent_access_provider::MultipartUploadSpec: named fields
+struct agent_access_provider::NamespaceSelectorDescriptor: named fields
+struct agent_access_provider::NamespaceSelectorMetadata: named fields
+struct agent_access_provider::OAuthAdapter: tuple fields, private fields
+struct agent_access_provider::OAuthCallbackIssuer: named fields
+struct agent_access_provider::OAuthClient: named fields
+struct agent_access_provider::OAuthDialectRegistration: named fields, private fields, non-exhaustive
+struct agent_access_provider::OAuthHttp: named fields, private fields
+struct agent_access_provider::OAuthPermissionProfile: named fields
+struct agent_access_provider::OAuthRegistrationConfig: named fields
+struct agent_access_provider::OAuthResponse: named fields, private fields
+struct agent_access_provider::OAuthTarget: named fields
+struct agent_access_provider::PendingUpstreamTrace: tuple fields, private fields
+struct agent_access_provider::PreparedAuthorization: named fields
+struct agent_access_provider::PresentationBudget: named fields, private fields
+struct agent_access_provider::ProviderAttributionConfig: named fields, private fields
+struct agent_access_provider::ProviderBuildError: named fields, private fields
+struct agent_access_provider::ProviderCredentialVerification: named fields
+struct agent_access_provider::ProviderError: named fields, private fields
+struct agent_access_provider::ProviderFinalizationContext: named fields, private fields
+struct agent_access_provider::ProviderFinalizationGuard: named fields, private fields
+struct agent_access_provider::ProviderInvocation: named fields, private fields
+struct agent_access_provider::ProviderLimits: named fields
+struct agent_access_provider::ProviderReason: tuple fields, private fields
+struct agent_access_provider::ProviderReasonDefinition: named fields, private fields, non-exhaustive
+struct agent_access_provider::ProviderResult: named fields
+struct agent_access_provider::ProviderResultStream: named fields
+struct agent_access_provider::ProviderState: tuple fields, private fields
+struct agent_access_provider::ProviderStreamError: named fields
+struct agent_access_provider::ReasonCodeId: tuple fields, private fields
+struct agent_access_provider::RedirectRules: named fields
+struct agent_access_provider::RenderBudget: named fields, private fields
+struct agent_access_provider::RenderContext: named fields
+struct agent_access_provider::RenderError: unit
+struct agent_access_provider::RenderedBody: named fields
+struct agent_access_provider::ResourceAttributeDescriptor: named fields
+struct agent_access_provider::ResourceAttributeMetadata: named fields
+struct agent_access_provider::ResourceAttributes: tuple fields, private fields
+struct agent_access_provider::ResourceScopeCapabilities: named fields
+struct agent_access_provider::ResourceType: tuple fields, private fields
+struct agent_access_provider::ResourceTypeDescriptor: named fields
+struct agent_access_provider::ResourceTypeMetadata: named fields
+struct agent_access_provider::ResourceTypeRegistry: named fields, private fields
+struct agent_access_provider::ResponseCapabilities: named fields
+struct agent_access_provider::ResponseOptions: named fields
+struct agent_access_provider::ScopeRequest: named fields, private fields
+struct agent_access_provider::ScopeResolution: named fields, private fields
+struct agent_access_provider::SearchAuthorization: named fields
+struct agent_access_provider::SearchLimitsConfig: named fields
+struct agent_access_provider::ServiceCapabilities: named fields
+struct agent_access_provider::ServiceCredentialKinds: named fields
+struct agent_access_provider::ServiceDescriptor: named fields
+struct agent_access_provider::ServiceProvider: named fields
+struct agent_access_provider::SigningError: unit
+struct agent_access_provider::TokenGrant: named fields
+struct agent_access_provider::UnsupportedCredentialMode: unit
+struct agent_access_provider::UpstreamCall: named fields
+struct agent_access_provider::UpstreamClient: named fields, private fields
+struct agent_access_provider::UpstreamClientSpec: named fields
+struct agent_access_provider::UpstreamRetryAfter: named fields, private fields
+struct agent_access_provider::UpstreamTrace: named fields
+struct agent_access_provider::ValidationContext: named fields
+struct agent_access_provider::host::AdmittedRequestParts: named fields
+struct agent_access_provider::host::ClientTransportSpec: named fields, private fields
+struct agent_access_provider::host::ScopeRequestParts: named fields
+struct agent_access_provider::host::TransportClient: named fields, private fields
+struct agent_access_provider::host::UpstreamClientFactoryError: tuple fields, private fields
+struct agent_access_provider::presentation::ActionPresentation: named fields
+struct agent_access_provider::presentation::EmbeddedBody: named fields
+struct agent_access_provider::presentation::MarkdownWriter: named fields, private fields
+struct agent_access_provider::presentation::PresentationBudget: named fields, private fields
+struct agent_access_provider::presentation::RenderBudget: named fields, private fields
+struct agent_access_provider::presentation::RenderContext: named fields
+struct agent_access_provider::presentation::RenderError: unit
+struct agent_access_provider::presentation::RenderedBody: named fields
+struct agent_access_provider::presentation::ResponseCapabilities: named fields
+struct agent_access_provider::presentation::ResponseOptions: named fields
+trait agent_access_provider::BackendConfig: dyn-compatible
+trait agent_access_provider::BackendConfig::build: required fn
+trait agent_access_provider::BackendConfig::descriptor: required fn
+trait agent_access_provider::BackendConfig::egress_proxies: required fn
+trait agent_access_provider::BackendConfig::kind: required fn
+trait agent_access_provider::BackendConfig::validate: required fn
+trait agent_access_provider::BackendConfig::validate_resource_attributes: provided fn
+trait agent_access_provider::DelegatedLease: dyn-compatible
+trait agent_access_provider::DelegatedLease::access: required fn
+trait agent_access_provider::DelegatedLease::binding_identity: required fn
+trait agent_access_provider::DelegatedLease::mark_rejected: required fn
+trait agent_access_provider::DelegatedLease::recover_after_unauthorized: required fn
+trait agent_access_provider::DelegatedLease::revalidate: required fn
+trait agent_access_provider::EmbeddedBodyCodec: dyn-compatible
+trait agent_access_provider::EmbeddedBodyCodec::render: required fn
+trait agent_access_provider::OAuthDialect: dyn-compatible
+trait agent_access_provider::OAuthDialect::allows_access_without_refresh: provided fn
+trait agent_access_provider::OAuthDialect::authorization_url: required fn
+trait agent_access_provider::OAuthDialect::callback_issuer: required fn
+trait agent_access_provider::OAuthDialect::discover_targets: required fn
+trait agent_access_provider::OAuthDialect::exchange_code: required fn
+trait agent_access_provider::OAuthDialect::identity: required fn
+trait agent_access_provider::OAuthDialect::prepare_authorization: provided fn
+trait agent_access_provider::OAuthDialect::refresh: required fn
+trait agent_access_provider::OAuthDialect::refresh_replay: required fn
+trait agent_access_provider::OAuthDialect::supports_server_default_scopes: provided fn
+trait agent_access_provider::OAuthDialect::upstream_allowlist: required fn
+trait agent_access_provider::OAuthDialect::validate_registration: required fn
+trait agent_access_provider::Provider: dyn-compatible
+trait agent_access_provider::Provider::authorize_body_parts: provided fn
+trait agent_access_provider::Provider::invoke: required fn
+trait agent_access_provider::Provider::resolve_scopes: required fn
+trait agent_access_provider::Provider::resource_roots: provided fn
+trait agent_access_provider::Provider::verify_execution_credential: provided fn
+trait agent_access_provider::StableSigningKey: dyn-compatible
+trait agent_access_provider::StableSigningKey::hmac_base64url: required fn
+trait agent_access_provider::WholeResultRenderer: dyn-compatible
+trait agent_access_provider::WholeResultRenderer::render: required fn
+trait agent_access_provider::host::UpstreamClientFactory: dyn-compatible
+trait agent_access_provider::host::UpstreamClientFactory::build_client: required fn
+trait agent_access_provider::presentation::EmbeddedBodyCodec: dyn-compatible
+trait agent_access_provider::presentation::EmbeddedBodyCodec::render: required fn
+trait agent_access_provider::presentation::WholeResultRenderer: dyn-compatible
+trait agent_access_provider::presentation::WholeResultRenderer::render: required fn
+
 // Public dependency packages (semver-compatible lines)
 
 dependency bytes 1

@@ -23,7 +23,7 @@ their backend, OAuth dialect and import adapter registrations. The check fails
 until every such crate has reviewed entry points, and rejects entry points for any
 other crate. Core, helper, reference and CLI crates have no surface of their own.
 
-Each file has up to three parts:
+Each file has up to four parts:
 
 - The surface's items as `cargo-public-api` lists them: one line per item,
   including inherent, trait, derived and auto-trait implementations. Blanket
@@ -34,6 +34,15 @@ Each file has up to three parts:
   surface already covers. Core and helper crates are supported only to this
   extent. Exposed items appear under their defining module path, which may not
   be nameable from outside the crate.
+- `Implementation and construction contracts`: source-breaking facts that the
+  rendered signatures omit, read from the same rustdoc JSON:
+  - whether each trait method, associated type and associated constant is
+    `required` or `provided` (has a default);
+  - whether each trait is dyn-compatible, and whether it is unsafe to implement;
+  - whether each struct and enum variant is a unit, tuple or named-field shape,
+    whether it has private fields, and whether it is non-exhaustive;
+  - whether each enum is exhaustive or non-exhaustive, and whether it hides
+    variants.
 - `Public dependency packages`: third-party packages whose items appear in the
   file, with their semver-compatible lines, such as `http 1` or `reqwest 0.12`.
 
@@ -41,6 +50,21 @@ Signatures name other crates' items by their defining module path, as rustdoc
 records them, for example `agent_access_provider::backend::BackendRegistration`.
 Moving an item between private modules therefore changes these lines without
 changing the API; review such a change as a move.
+
+The inventory deliberately does not record:
+
+- A sealed or implementable classification for traits. Sealing a trait with a
+  private supertrait or a private type in a method signature changes its
+  rendered bound or signature line, so review it there.
+- Auto traits that leak through `impl Trait` return types and `async fn`
+  futures. A body change can make a returned future stop being `Send`.
+- The `macro_rules!` grammar of exported macros; only their names are listed.
+- `#[doc(hidden)]` items, which rustdoc omits; they are not supported API.
+- Constant and static values, function bodies and other behavior.
+- Function parameter names, `#[must_use]` and `#[deprecated]`, which do not
+  break downstream source.
+- Items that exist only for other targets: the inventory covers the native host
+  target's configuration.
 
 ## Commands
 
@@ -120,7 +144,9 @@ release's inventory, for example `git diff v0.2.0 -- api/`:
   as `Provider`, `BackendConfig` or `OAuthDialect`, is breaking. A new default
   method is compatible only if it preserves the documented semantics. A new
   variant of an exhaustive enum or a new public field of an exhaustive struct is
-  breaking.
+  breaking. In the contracts section, a `provided` item becoming `required`, a
+  trait losing dyn compatibility, or a type gaining private fields or becoming
+  non-exhaustive is a changed line and therefore breaking.
 - An incompatible change advances the minor version on the 0.x line and
   documents the required source and behavior changes in the changelog.
 
