@@ -1169,6 +1169,7 @@ impl JiraProvider {
             )?;
         }
 
+        let write = JiraWrite::new(json!({ "project": inputs.project }));
         let create_response = match self
             .backend
             .create_issue(
@@ -1208,9 +1209,10 @@ impl JiraProvider {
                 .with_object_ids(issue_create_object_ids_partial(
                     partial.id.as_deref(),
                     partial.key.as_deref(),
-                )));
+                ))
+                .with_mutation_receipt(write.receipt()));
             }
-            Err(error) => return Err(jira_write_error(error)),
+            Err(error) => return Err(write.failed(error)),
         };
         let created = create_response.value;
         let mut upstream_duration_ms = create_response.duration_ms;
@@ -1230,123 +1232,133 @@ impl JiraProvider {
             )
             .with_audit(audit)
             .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_create_object_ids(Some(&created))));
+            .with_object_ids(issue_create_object_ids(Some(&created)))
+            .with_mutation_receipt(write.receipt()));
         }
 
-        let readback_started = Instant::now();
-        let readback_response = match self.backend.issue(&created.key, credential).await {
-            Ok(response) => response,
-            Err(error) => {
-                upstream_duration_ms += elapsed_ms(readback_started);
-                let mut audit = issue_create_failure_audit(
-                    &request,
-                    &audit_context,
-                    "post_create_readback",
-                    Some(&created),
-                    &self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                merge_attribution_audit(&mut audit, attribution);
-                // The issue exists: throttling here must not invite a second create.
-                return Err(jira_backend_error(error)
-                    .unverified_if_throttled(
+        after_accepted_write(
+            "post_create_readback",
+            issue_create_object_ids(Some(&created)),
+            async {
+                let readback_started = Instant::now();
+                let readback_response = match self.backend.issue(&created.key, credential).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        upstream_duration_ms += elapsed_ms(readback_started);
+                        let mut audit = issue_create_failure_audit(
+                            &request,
+                            &audit_context,
+                            "post_create_readback",
+                            Some(&created),
+                            &self.backend.egress_proxy_audit(credential),
+                        );
+                        audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                        merge_attribution_audit(&mut audit, attribution);
+                        // The issue exists: throttling here must not invite a second create.
+                        return Err(jira_backend_error(error)
+                            .unverified_after_mutation(
+                                "post_create_readback",
+                                issue_create_object_ids(Some(&created)),
+                            )
+                            .with_audit(audit)
+                            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                            .with_object_ids(issue_create_object_ids(Some(&created))));
+                    }
+                };
+                upstream_duration_ms += readback_response.duration_ms;
+                let issue = readback_response.value;
+                if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
+                    let mut audit = issue_create_failure_audit(
+                        &request,
+                        &audit_context,
                         "post_create_readback",
-                        issue_create_object_ids(Some(&created)),
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira issue response did not include a valid current key and project",
                     )
                     .with_audit(audit)
                     .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
                     .with_object_ids(issue_create_object_ids(Some(&created))));
-            }
-        };
-        upstream_duration_ms += readback_response.duration_ms;
-        let issue = readback_response.value;
-        if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
-            let mut audit = issue_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira issue response did not include a valid current key and project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_create_object_ids(Some(&created))));
-        }
-        if issue.project != inputs.project
-            || issue_key_project(&issue.key) != inputs.project
-            || issue.id != created.id
-            || issue.key != created.key
-        {
-            let mut audit = issue_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira created issue readback did not match the authorized project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_create_object_ids(Some(&created))));
-        }
-        if let Err(error) = validate_returned_issue_description(&issue, &self.config) {
-            let mut audit = issue_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(error
-                .with_audit(audit)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_object_ids(issue_create_object_ids(Some(&created))));
-        }
-        let result = json!({
-            "operation": "issue.create",
-            "issue": issue_view_result(&issue, &self.config),
-        });
-        if let Err(error) = enforce_result_size(&result, self.limits.max_upstream_response_bytes) {
-            let mut audit = issue_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(error
-                .with_audit(audit)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_object_ids(issue_create_object_ids(Some(&created))));
-        }
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "issue.create",
-            "issueId": issue.id,
-            "issueKey": issue.key,
-            "project": issue.project,
-            "issueTypeId": inputs.issue_type_id,
-            "descriptionProvided": description_provided,
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_create_object_ids(Some(&created))))
+                }
+                if issue.project != inputs.project
+                    || issue_key_project(&issue.key) != inputs.project
+                    || issue.id != created.id
+                    || issue.key != created.key
+                {
+                    let mut audit = issue_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_create_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira created issue readback did not match the authorized project",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_create_object_ids(Some(&created))));
+                }
+                if let Err(error) = validate_returned_issue_description(&issue, &self.config) {
+                    let mut audit = issue_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_create_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(error
+                        .with_audit(audit)
+                        .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                        .with_object_ids(issue_create_object_ids(Some(&created))));
+                }
+                let result = json!({
+                    "operation": "issue.create",
+                    "issue": issue_view_result(&issue, &self.config),
+                });
+                if let Err(error) =
+                    enforce_result_size(&result, self.limits.max_upstream_response_bytes)
+                {
+                    let mut audit = issue_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_create_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(error
+                        .with_audit(audit)
+                        .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                        .with_object_ids(issue_create_object_ids(Some(&created))));
+                }
+                let mut audit = json!({
+                    "provider": "jira",
+                    "operation": "issue.create",
+                    "issueId": issue.id,
+                    "issueKey": issue.key,
+                    "project": issue.project,
+                    "issueTypeId": inputs.issue_type_id,
+                    "descriptionProvided": description_provided,
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                });
+                merge_attribution_audit(&mut audit, attribution);
+                merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_create_object_ids(Some(&created))))
+            },
+        )
+        .await
     }
 
     async fn invoke_issue_child_create(
@@ -1392,6 +1404,9 @@ impl JiraProvider {
             )?;
         }
 
+        let write = JiraWrite::new(
+            json!({ "project": inputs.project, "parentIssueId": parent.id, "parentIssueKey": parent.key }),
+        );
         let create_response = match self
             .backend
             .create_issue(
@@ -1432,9 +1447,10 @@ impl JiraProvider {
                     partial.id.as_deref(),
                     partial.key.as_deref(),
                     &parent,
-                )));
+                ))
+                .with_mutation_receipt(write.receipt()));
             }
-            Err(error) => return Err(jira_write_error(error)),
+            Err(error) => return Err(write.failed(error)),
         };
         let created = create_response.value;
         upstream_duration_ms += create_response.duration_ms;
@@ -1454,218 +1470,235 @@ impl JiraProvider {
             )
             .with_audit(audit)
             .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent))
+            .with_mutation_receipt(write.receipt()));
         }
 
-        let readback_started = Instant::now();
-        let readback_response = match self.backend.issue(&created.key, credential).await {
-            Ok(response) => response,
-            Err(error) => {
-                upstream_duration_ms += elapsed_ms(readback_started);
-                let mut audit = issue_child_create_failure_audit(
-                    &request,
-                    &audit_context,
-                    "post_create_readback",
-                    Some(&created),
-                    &self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                merge_attribution_audit(&mut audit, attribution);
-                return Err(jira_backend_error(error)
-                    .unverified_if_throttled(
+        after_accepted_write(
+            "post_create_readback",
+            issue_child_create_object_ids(Some(&created), &parent),
+            async {
+                let readback_started = Instant::now();
+                let readback_response = match self.backend.issue(&created.key, credential).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        upstream_duration_ms += elapsed_ms(readback_started);
+                        let mut audit = issue_child_create_failure_audit(
+                            &request,
+                            &audit_context,
+                            "post_create_readback",
+                            Some(&created),
+                            &self.backend.egress_proxy_audit(credential),
+                        );
+                        audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                        merge_attribution_audit(&mut audit, attribution);
+                        return Err(jira_backend_error(error)
+                            .unverified_after_mutation(
+                                "post_create_readback",
+                                issue_child_create_object_ids(Some(&created), &parent),
+                            )
+                            .with_audit(audit)
+                            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                            .with_object_ids(issue_child_create_object_ids(
+                                Some(&created),
+                                &parent,
+                            )));
+                    }
+                };
+                upstream_duration_ms += readback_response.duration_ms;
+                let issue = readback_response.value;
+                if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
                         "post_create_readback",
-                        issue_child_create_object_ids(Some(&created), &parent),
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira child issue response did not include a valid current key and project",
                     )
                     .with_audit(audit)
                     .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
                     .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-            }
-        };
-        upstream_duration_ms += readback_response.duration_ms;
-        let issue = readback_response.value;
-        if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira child issue response did not include a valid current key and project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
-        if issue.project != inputs.project
-            || issue_key_project(&issue.key) != inputs.project
-            || issue.id != created.id
-            || issue.key != created.key
-        {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira child issue readback did not match the authorized project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
-        if let Err(error) = validate_returned_issue_description(&issue, &self.config) {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_create_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(error
-                .with_audit(audit)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
+                }
+                if issue.project != inputs.project
+                    || issue_key_project(&issue.key) != inputs.project
+                    || issue.id != created.id
+                    || issue.key != created.key
+                {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_create_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira child issue readback did not match the authorized project",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+                }
+                if let Err(error) = validate_returned_issue_description(&issue, &self.config) {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_create_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(error
+                        .with_audit(audit)
+                        .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                        .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+                }
 
-        let parent_readback_started = Instant::now();
-        let parent_readback_response = match self.backend.issue_parent(&issue.key, credential).await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                upstream_duration_ms += elapsed_ms(parent_readback_started);
-                let mut audit = issue_child_create_failure_audit(
-                    &request,
-                    &audit_context,
-                    "post_parent_readback",
-                    Some(&created),
-                    &self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                merge_attribution_audit(&mut audit, attribution);
-                return Err(jira_backend_error(error)
-                    .unverified_if_throttled(
+                let parent_readback_started = Instant::now();
+                let parent_readback_response =
+                    match self.backend.issue_parent(&issue.key, credential).await {
+                        Ok(response) => response,
+                        Err(error) => {
+                            upstream_duration_ms += elapsed_ms(parent_readback_started);
+                            let mut audit = issue_child_create_failure_audit(
+                                &request,
+                                &audit_context,
+                                "post_parent_readback",
+                                Some(&created),
+                                &self.backend.egress_proxy_audit(credential),
+                            );
+                            audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                            merge_attribution_audit(&mut audit, attribution);
+                            return Err(jira_backend_error(error)
+                                .unverified_after_mutation(
+                                    "post_parent_readback",
+                                    issue_child_create_object_ids(Some(&created), &parent),
+                                )
+                                .with_audit(audit)
+                                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                                .with_object_ids(issue_child_create_object_ids(
+                                    Some(&created),
+                                    &parent,
+                                )));
+                        }
+                    };
+                upstream_duration_ms += parent_readback_response.duration_ms;
+                let parent_readback = parent_readback_response.value;
+                if !is_issue_key(&parent_readback.issue.key)
+                    || issue_key_project(&parent_readback.issue.key)
+                        != parent_readback.issue.project
+                {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
                         "post_parent_readback",
-                        issue_child_create_object_ids(Some(&created), &parent),
-                    )
-                    .with_audit(audit)
-                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                    .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-            }
-        };
-        upstream_duration_ms += parent_readback_response.duration_ms;
-        let parent_readback = parent_readback_response.value;
-        if !is_issue_key(&parent_readback.issue.key)
-            || issue_key_project(&parent_readback.issue.key) != parent_readback.issue.project
-        {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_parent_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::error(
                 ReasonCode::UpstreamProtocolFailed,
                 "Jira child issue parent readback did not include a valid current key and project",
             )
             .with_audit(audit)
             .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
             .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
-        if parent_readback.issue.id != issue.id
-            || parent_readback.issue.key != issue.key
-            || parent_readback.issue.project != issue.project
-        {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_parent_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira child issue parent readback did not match created issue metadata",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
-        if !issue_parent_readback_matches(&parent_readback, &parent) {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_parent_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira child issue readback did not confirm the requested parent issue",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
+                }
+                if parent_readback.issue.id != issue.id
+                    || parent_readback.issue.key != issue.key
+                    || parent_readback.issue.project != issue.project
+                {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_parent_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira child issue parent readback did not match created issue metadata",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+                }
+                if !issue_parent_readback_matches(&parent_readback, &parent) {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_parent_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira child issue readback did not confirm the requested parent issue",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+                }
 
-        let issue_metadata = JiraIssueMetadata {
-            id: issue.id,
-            key: issue.key,
-            project: issue.project,
-        };
-        let result = json!({
-            "operation": "issue.child.create",
-            "issue": issue_metadata_result(&issue_metadata, &self.config),
-            "parentIssue": issue_metadata_result(&parent, &self.config),
-            "verification": { "status": "matched" },
-        });
-        if let Err(error) = enforce_result_size(&result, self.limits.max_upstream_response_bytes) {
-            let mut audit = issue_child_create_failure_audit(
-                &request,
-                &audit_context,
-                "post_parent_readback",
-                Some(&created),
-                &self.backend.egress_proxy_audit(credential),
-            );
-            merge_attribution_audit(&mut audit, attribution);
-            return Err(error
-                .with_audit(audit)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
-        }
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "issue.child.create",
-            "issueId": issue_metadata.id.as_str(),
-            "issueKey": issue_metadata.key.as_str(),
-            "project": issue_metadata.project.as_str(),
-            "issueTypeId": inputs.issue_type_id,
-            "parentIssueId": parent.id.as_str(),
-            "parentIssueKey": parent.key.as_str(),
-            "parentProject": parent.project.as_str(),
-            "descriptionProvided": description_provided,
-            "verificationStatus": "matched",
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)))
+                let issue_metadata = JiraIssueMetadata {
+                    id: issue.id,
+                    key: issue.key,
+                    project: issue.project,
+                };
+                let result = json!({
+                    "operation": "issue.child.create",
+                    "issue": issue_metadata_result(&issue_metadata, &self.config),
+                    "parentIssue": issue_metadata_result(&parent, &self.config),
+                    "verification": { "status": "matched" },
+                });
+                if let Err(error) =
+                    enforce_result_size(&result, self.limits.max_upstream_response_bytes)
+                {
+                    let mut audit = issue_child_create_failure_audit(
+                        &request,
+                        &audit_context,
+                        "post_parent_readback",
+                        Some(&created),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    merge_attribution_audit(&mut audit, attribution);
+                    return Err(error
+                        .with_audit(audit)
+                        .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                        .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)));
+                }
+                let mut audit = json!({
+                    "provider": "jira",
+                    "operation": "issue.child.create",
+                    "issueId": issue_metadata.id.as_str(),
+                    "issueKey": issue_metadata.key.as_str(),
+                    "project": issue_metadata.project.as_str(),
+                    "issueTypeId": inputs.issue_type_id,
+                    "parentIssueId": parent.id.as_str(),
+                    "parentIssueKey": parent.key.as_str(),
+                    "parentProject": parent.project.as_str(),
+                    "descriptionProvided": description_provided,
+                    "verificationStatus": "matched",
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                });
+                merge_attribution_audit(&mut audit, attribution);
+                merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)))
+            },
+        )
+        .await
     }
 
     async fn invoke_issue_update(
@@ -1700,6 +1733,10 @@ impl JiraProvider {
             .await?;
         let metadata = metadata_response.value;
         ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
+        let write = JiraWrite::new(issue_create_object_ids_partial(
+            Some(&metadata.id),
+            Some(&metadata.key),
+        ));
         let update_response = self
             .backend
             .update_issue(
@@ -1712,67 +1749,79 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        let readback_response = self
-            .backend
-            .issue(&metadata.key, credential)
-            .await
-            .map_err(|error| {
-                jira_backend_error(error).unverified_if_throttled(
-                    "post_update_readback",
-                    issue_create_object_ids_partial(Some(&metadata.id), Some(&metadata.key)),
-                )
-            })?;
-        let issue = readback_response.value;
-        if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira issue response did not include a valid current key and project",
-            ));
-        }
-        if issue.id != metadata.id || issue.key != metadata.key || issue.project != metadata.project
-        {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira issue response did not match confirmed metadata",
-            ));
-        }
-        validate_returned_issue_description(&issue, &self.config)?;
-        let result = json!({
-            "operation": "issue.update",
-            "issue": issue_view_result(&issue, &self.config),
-            "changedFields": changed_fields.clone(),
-            "notifyUsers": inputs.notify_users,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "issue.update",
-            "issueKey": issue.key,
-            "project": issue.project,
-            "changedFields": changed_fields,
-            "summaryChanged": summary_changed,
-            "descriptionChanged": description_changed,
-            "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(update_response.status),
-                Some(
-                    metadata_response.duration_ms
-                        + update_response.duration_ms
-                        + readback_response.duration_ms,
-                ),
-            )
-            .with_object_ids(json!({
-                "issueId": issue.id,
-                "issueKey": issue.key,
-            })))
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write(
+            "post_update_readback",
+            issue_create_object_ids_partial(Some(&metadata.id), Some(&metadata.key)),
+            async {
+                let readback_response = self
+                    .backend
+                    .issue(&metadata.key, credential)
+                    .await
+                    .map_err(|error| {
+                        jira_backend_error(error).unverified_after_mutation(
+                            "post_update_readback",
+                            issue_create_object_ids_partial(
+                                Some(&metadata.id),
+                                Some(&metadata.key),
+                            ),
+                        )
+                    })?;
+                let issue = readback_response.value;
+                if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira issue response did not include a valid current key and project",
+                    ));
+                }
+                if issue.id != metadata.id
+                    || issue.key != metadata.key
+                    || issue.project != metadata.project
+                {
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira issue response did not match confirmed metadata",
+                    ));
+                }
+                validate_returned_issue_description(&issue, &self.config)?;
+                let result = json!({
+                    "operation": "issue.update",
+                    "issue": issue_view_result(&issue, &self.config),
+                    "changedFields": changed_fields.clone(),
+                    "notifyUsers": inputs.notify_users,
+                });
+                enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+                let mut audit = json!({
+                    "provider": "jira",
+                    "operation": "issue.update",
+                    "issueKey": issue.key,
+                    "project": issue.project,
+                    "changedFields": changed_fields,
+                    "summaryChanged": summary_changed,
+                    "descriptionChanged": description_changed,
+                    "notifyUsers": inputs.notify_users,
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                });
+                merge_attribution_audit(&mut audit, attribution);
+                merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(
+                        Some(update_response.status),
+                        Some(
+                            metadata_response.duration_ms
+                                + update_response.duration_ms
+                                + readback_response.duration_ms,
+                        ),
+                    )
+                    .with_object_ids(json!({
+                        "issueId": issue.id,
+                        "issueKey": issue.key,
+                    })))
+            },
+        )
+        .await
     }
 
     async fn invoke_issue_parent_set(
@@ -1788,6 +1837,7 @@ impl JiraProvider {
         ensure_authorized_issue_metadata(&issue, request.resource_scopes()?)?;
         ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
 
+        let write = JiraWrite::new(issue_parent_set_object_ids(&issue, &parent));
         let update_response = self
             .backend
             .set_issue_parent(
@@ -1798,107 +1848,118 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        upstream_duration_ms += update_response.duration_ms;
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write(
+            "post_parent_readback",
+            issue_parent_set_object_ids(&issue, &parent),
+            async {
+                upstream_duration_ms += update_response.duration_ms;
 
-        let readback_response = match self.backend.issue_parent(&issue.key, credential).await {
-            Ok(response) => response,
-            Err(error) => {
-                let mut audit = issue_parent_set_failure_audit(
-                    &request,
-                    &issue,
-                    &parent,
-                    "post_parent_readback",
-                    &self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(jira_backend_error(error)
-                    .unverified_if_throttled(
+                let readback_response = match self
+                    .backend
+                    .issue_parent(&issue.key, credential)
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let mut audit = issue_parent_set_failure_audit(
+                            &request,
+                            &issue,
+                            &parent,
+                            "post_parent_readback",
+                            &self.backend.egress_proxy_audit(credential),
+                        );
+                        audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                        return Err(jira_backend_error(error)
+                            .unverified_after_mutation(
+                                "post_parent_readback",
+                                issue_parent_set_object_ids(&issue, &parent),
+                            )
+                            .with_audit(audit)
+                            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+                            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
+                    }
+                };
+                upstream_duration_ms += readback_response.duration_ms;
+                let readback = readback_response.value;
+                if !is_issue_key(&readback.issue.key)
+                    || issue_key_project(&readback.issue.key) != readback.issue.project
+                {
+                    let audit = issue_parent_set_failure_audit(
+                        &request,
+                        &issue,
+                        &parent,
                         "post_parent_readback",
-                        issue_parent_set_object_ids(&issue, &parent),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira parent readback did not include a valid current key and project",
                     )
                     .with_audit(audit)
                     .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
                     .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
-            }
-        };
-        upstream_duration_ms += readback_response.duration_ms;
-        let readback = readback_response.value;
-        if !is_issue_key(&readback.issue.key)
-            || issue_key_project(&readback.issue.key) != readback.issue.project
-        {
-            let audit = issue_parent_set_failure_audit(
-                &request,
-                &issue,
-                &parent,
-                "post_parent_readback",
-                &self.backend.egress_proxy_audit(credential),
-            );
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira parent readback did not include a valid current key and project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
-        }
-        if readback.issue.id != issue.id
-            || readback.issue.key != issue.key
-            || readback.issue.project != issue.project
-        {
-            let audit = issue_parent_set_failure_audit(
-                &request,
-                &issue,
-                &parent,
-                "post_parent_readback",
-                &self.backend.egress_proxy_audit(credential),
-            );
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira parent readback did not match confirmed child issue metadata",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
-        }
-        if !issue_parent_readback_matches(&readback, &parent) {
-            let audit = issue_parent_set_failure_audit(
-                &request,
-                &issue,
-                &parent,
-                "post_parent_readback",
-                &self.backend.egress_proxy_audit(credential),
-            );
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira parent readback did not confirm the requested parent issue",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
-        }
+                }
+                if readback.issue.id != issue.id
+                    || readback.issue.key != issue.key
+                    || readback.issue.project != issue.project
+                {
+                    let audit = issue_parent_set_failure_audit(
+                        &request,
+                        &issue,
+                        &parent,
+                        "post_parent_readback",
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira parent readback did not match confirmed child issue metadata",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
+                }
+                if !issue_parent_readback_matches(&readback, &parent) {
+                    let audit = issue_parent_set_failure_audit(
+                        &request,
+                        &issue,
+                        &parent,
+                        "post_parent_readback",
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira parent readback did not confirm the requested parent issue",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_parent_set_object_ids(&issue, &parent)));
+                }
 
-        let result = json!({
-            "operation": "issue.parent.set",
-            "issue": issue_metadata_result(&issue, &self.config),
-            "parentIssue": issue_metadata_result(&parent, &self.config),
-            "verification": { "status": "matched" },
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
-                "operation": "issue.parent.set",
-                "issueKey": issue.key.as_str(),
-                "project": issue.project.as_str(),
-                "parentIssueKey": parent.key.as_str(),
-                "parentProject": parent.project.as_str(),
-                "verificationStatus": "matched",
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
-            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)))
+                let result = json!({
+                    "operation": "issue.parent.set",
+                    "issue": issue_metadata_result(&issue, &self.config),
+                    "parentIssue": issue_metadata_result(&parent, &self.config),
+                    "verification": { "status": "matched" },
+                });
+                enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+                Ok(ProviderResult::new(result)
+                    .with_audit(json!({
+                        "provider": "jira",
+                        "operation": "issue.parent.set",
+                        "issueKey": issue.key.as_str(),
+                        "project": issue.project.as_str(),
+                        "parentIssueKey": parent.key.as_str(),
+                        "parentProject": parent.project.as_str(),
+                        "verificationStatus": "matched",
+                        "credentialMode": request.credential_mode(),
+                        "egressProxy": self.backend.egress_proxy_audit(credential),
+                    }))
+                    .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_parent_set_object_ids(&issue, &parent)))
+            },
+        )
+        .await
     }
 
     async fn invoke_issue_dependency_add(
@@ -1923,6 +1984,7 @@ impl JiraProvider {
         let link_type =
             configured_dependency_link_type(&link_types_response.value, &self.config.issue_links)?;
 
+        let write = JiraWrite::new(issue_dependency_object_ids(&blocking, &blocked));
         let create_response = self
             .backend
             .create_issue_link(
@@ -1934,96 +1996,107 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        upstream_duration_ms += create_response.duration_ms;
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write(
+            "post_dependency_readback",
+            issue_dependency_object_ids(&blocking, &blocked),
+            async {
+                upstream_duration_ms += create_response.duration_ms;
 
-        let readback_response = match self.backend.issue_links(&blocking.key, credential).await {
-            Ok(response) => response,
-            Err(error) => {
-                let mut audit = issue_dependency_failure_audit(
-                    &request,
-                    &blocking,
-                    &blocked,
-                    &link_type,
-                    "post_dependency_readback",
-                    &self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(jira_backend_error(error)
-                    .unverified_if_throttled(
+                let readback_response = match self
+                    .backend
+                    .issue_links(&blocking.key, credential)
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let mut audit = issue_dependency_failure_audit(
+                            &request,
+                            &blocking,
+                            &blocked,
+                            &link_type,
+                            "post_dependency_readback",
+                            &self.backend.egress_proxy_audit(credential),
+                        );
+                        audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                        return Err(jira_backend_error(error)
+                            .unverified_after_mutation(
+                                "post_dependency_readback",
+                                issue_dependency_object_ids(&blocking, &blocked),
+                            )
+                            .with_audit(audit)
+                            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
+                            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)));
+                    }
+                };
+                upstream_duration_ms += readback_response.duration_ms;
+                let readback = readback_response.value;
+                if readback.issue.id != blocking.id
+                    || readback.issue.key != blocking.key
+                    || readback.issue.project != blocking.project
+                {
+                    let audit = issue_dependency_failure_audit(
+                        &request,
+                        &blocking,
+                        &blocked,
+                        &link_type,
                         "post_dependency_readback",
-                        issue_dependency_object_ids(&blocking, &blocked),
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    return Err(ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "Jira dependency link readback did not match the blocking issue",
                     )
                     .with_audit(audit)
                     .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
                     .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)));
-            }
-        };
-        upstream_duration_ms += readback_response.duration_ms;
-        let readback = readback_response.value;
-        if readback.issue.id != blocking.id
-            || readback.issue.key != blocking.key
-            || readback.issue.project != blocking.project
-        {
-            let audit = issue_dependency_failure_audit(
-                &request,
-                &blocking,
-                &blocked,
-                &link_type,
-                "post_dependency_readback",
-                &self.backend.egress_proxy_audit(credential),
-            );
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Jira dependency link readback did not match the blocking issue",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)));
-        }
-        if !dependency_link_readback_matches(&readback, &link_type.name, &blocked.key) {
-            let audit = issue_dependency_failure_audit(
-                &request,
-                &blocking,
-                &blocked,
-                &link_type,
-                "post_dependency_readback",
-                &self.backend.egress_proxy_audit(credential),
-            );
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira dependency link readback did not confirm the requested relationship",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)));
-        }
+                }
+                if !dependency_link_readback_matches(&readback, &link_type.name, &blocked.key) {
+                    let audit = issue_dependency_failure_audit(
+                        &request,
+                        &blocking,
+                        &blocked,
+                        &link_type,
+                        "post_dependency_readback",
+                        &self.backend.egress_proxy_audit(credential),
+                    );
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Jira dependency link readback did not confirm the requested relationship",
+                    )
+                    .with_audit(audit)
+                    .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)));
+                }
 
-        let result = json!({
-            "operation": "issue.dependency.add",
-            "status": "present",
-            "linkType": link_type.name.as_str(),
-            "blockingIssue": issue_metadata_result(&blocking, &self.config),
-            "blockedIssue": issue_metadata_result(&blocked, &self.config),
-            "verification": { "status": "matched" },
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
-                "operation": "issue.dependency.add",
-                "status": "present",
-                "linkType": link_type.name.as_str(),
-                "blockingIssueKey": blocking.key.as_str(),
-                "blockingProject": blocking.project.as_str(),
-                "blockedIssueKey": blocked.key.as_str(),
-                "blockedProject": blocked.project.as_str(),
-                "verificationStatus": "matched",
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
-            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
-            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)))
+                let result = json!({
+                    "operation": "issue.dependency.add",
+                    "status": "present",
+                    "linkType": link_type.name.as_str(),
+                    "blockingIssue": issue_metadata_result(&blocking, &self.config),
+                    "blockedIssue": issue_metadata_result(&blocked, &self.config),
+                    "verification": { "status": "matched" },
+                });
+                enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+                Ok(ProviderResult::new(result)
+                    .with_audit(json!({
+                        "provider": "jira",
+                        "operation": "issue.dependency.add",
+                        "status": "present",
+                        "linkType": link_type.name.as_str(),
+                        "blockingIssueKey": blocking.key.as_str(),
+                        "blockingProject": blocking.project.as_str(),
+                        "blockedIssueKey": blocked.key.as_str(),
+                        "blockedProject": blocked.project.as_str(),
+                        "verificationStatus": "matched",
+                        "credentialMode": request.credential_mode(),
+                        "egressProxy": self.backend.egress_proxy_audit(credential),
+                    }))
+                    .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
+                    .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)))
+            },
+        )
+        .await
     }
 
     async fn invoke_search(
@@ -2292,6 +2365,7 @@ impl JiraProvider {
             .await?;
         let metadata = metadata_response.value;
         let visibility_restricted = inputs.visibility.is_some();
+        let write = JiraWrite::new(json!({ "issueId": metadata.id, "issueKey": metadata.key }));
         let response = self
             .backend
             .add_comment(
@@ -2304,39 +2378,42 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        validate_returned_comment_id(&response.value.id, None)?;
-        validate_returned_comment_parent_id(&response.value, None)?;
-        validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
-        let result = json!({
-            "operation": "comment.add",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "comment": comment_result(&response.value),
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "comment.add",
-            "issueKey": metadata.key,
-            "project": metadata.project,
-            "commentId": response.value.id,
-            "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "issueId": metadata.id,
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            validate_returned_comment_id(&response.value.id, None)?;
+            validate_returned_comment_parent_id(&response.value, None)?;
+            validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
+            let result = json!({
+                "operation": "comment.add",
+                "issue": issue_metadata_result(&metadata, &self.config),
+                "comment": comment_result(&response.value),
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "jira",
+                "operation": "comment.add",
                 "issueKey": metadata.key,
+                "project": metadata.project,
                 "commentId": response.value.id,
-            })))
+                "visibilityRestricted": visibility_restricted,
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_attribution_audit(&mut audit, attribution);
+            merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": response.value.id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_comment_reply(
@@ -2385,6 +2462,9 @@ impl JiraProvider {
                 parent_response.value.id
             };
         let visibility_restricted = inputs.visibility.is_some();
+        let write = JiraWrite::new(
+            json!({ "issueId": metadata.id, "issueKey": metadata.key, "parentCommentId": effective_parent_comment_id }),
+        );
         let response = self
             .backend
             .add_comment(
@@ -2397,42 +2477,48 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        upstream_duration_ms += response.duration_ms;
-        validate_returned_comment_id(&response.value.id, None)?;
-        validate_returned_comment_parent_id(&response.value, Some(&effective_parent_comment_id))?;
-        validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
-        let result = json!({
-            "operation": "comment.reply",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "requestedParentCommentId": requested_parent_comment_id,
-            "parentCommentId": effective_parent_comment_id,
-            "comment": comment_result(&response.value),
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "comment.reply",
-            "issueKey": metadata.key,
-            "project": metadata.project,
-            "commentId": response.value.id,
-            "requestedParentCommentId": requested_parent_comment_id,
-            "parentCommentId": effective_parent_comment_id,
-            "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(response.status), Some(upstream_duration_ms))
-            .with_object_ids(json!({
-                "issueId": metadata.id,
-                "issueKey": metadata.key,
-                "commentId": response.value.id,
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            upstream_duration_ms += response.duration_ms;
+            validate_returned_comment_id(&response.value.id, None)?;
+            validate_returned_comment_parent_id(
+                &response.value,
+                Some(&effective_parent_comment_id),
+            )?;
+            validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
+            let result = json!({
+                "operation": "comment.reply",
+                "issue": issue_metadata_result(&metadata, &self.config),
+                "requestedParentCommentId": requested_parent_comment_id,
                 "parentCommentId": effective_parent_comment_id,
-            })))
+                "comment": comment_result(&response.value),
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "jira",
+                "operation": "comment.reply",
+                "issueKey": metadata.key,
+                "project": metadata.project,
+                "commentId": response.value.id,
+                "requestedParentCommentId": requested_parent_comment_id,
+                "parentCommentId": effective_parent_comment_id,
+                "visibilityRestricted": visibility_restricted,
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_attribution_audit(&mut audit, attribution);
+            merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(Some(response.status), Some(upstream_duration_ms))
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": response.value.id,
+                    "parentCommentId": effective_parent_comment_id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_comment_update(
@@ -2470,6 +2556,9 @@ impl JiraProvider {
             }
         };
         let visibility_restricted = outbound_visibility.is_some();
+        let write = JiraWrite::new(
+            json!({ "issueId": metadata.id, "issueKey": metadata.key, "commentId": inputs.comment_id }),
+        );
         let response = self
             .backend
             .update_comment(
@@ -2483,38 +2572,41 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_write_error)?;
-        upstream_duration_ms += response.duration_ms;
-        validate_returned_comment_id(&response.value.id, Some(&inputs.comment_id))?;
-        validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
-        let result = json!({
-            "operation": "comment.update",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "comment": comment_result(&response.value),
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "jira",
-            "operation": "comment.update",
-            "issueKey": metadata.key,
-            "project": metadata.project,
-            "commentId": response.value.id,
-            "visibilityMode": inputs.visibility_mode.audit_value(),
-            "visibilityRestricted": visibility_restricted,
-            "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_attribution_audit(&mut audit, attribution);
-        merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(response.status), Some(upstream_duration_ms))
-            .with_object_ids(json!({
-                "issueId": metadata.id,
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            upstream_duration_ms += response.duration_ms;
+            validate_returned_comment_id(&response.value.id, Some(&inputs.comment_id))?;
+            validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
+            let result = json!({
+                "operation": "comment.update",
+                "issue": issue_metadata_result(&metadata, &self.config),
+                "comment": comment_result(&response.value),
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "jira",
+                "operation": "comment.update",
                 "issueKey": metadata.key,
+                "project": metadata.project,
                 "commentId": response.value.id,
-            })))
+                "visibilityMode": inputs.visibility_mode.audit_value(),
+                "visibilityRestricted": visibility_restricted,
+                "notifyUsers": inputs.notify_users,
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_attribution_audit(&mut audit, attribution);
+            merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(Some(response.status), Some(upstream_duration_ms))
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": response.value.id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_comment_delete(
@@ -2528,37 +2620,43 @@ impl JiraProvider {
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
         let metadata = metadata_response.value;
+        let write = JiraWrite::new(
+            json!({ "issueId": metadata.id, "issueKey": metadata.key, "commentId": inputs.comment_id }),
+        );
         let response = self
             .backend
             .delete_comment(&metadata.key, &inputs.comment_id, credential)
             .await
-            .map_err(jira_write_error)?;
-        let result = json!({
-            "operation": "comment.delete",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "commentId": inputs.comment_id,
-            "status": "deleted",
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let result = json!({
                 "operation": "comment.delete",
-                "issueKey": metadata.key,
-                "project": metadata.project,
+                "issue": issue_metadata_result(&metadata, &self.config),
                 "commentId": inputs.comment_id,
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "issueId": metadata.id,
-                "issueKey": metadata.key,
-                "commentId": inputs.comment_id,
-            })))
+                "status": "deleted",
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(json!({
+                    "provider": "jira",
+                    "operation": "comment.delete",
+                    "issueKey": metadata.key,
+                    "project": metadata.project,
+                    "commentId": inputs.comment_id,
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                }))
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": inputs.comment_id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_comment_property_list(
@@ -2698,40 +2796,46 @@ impl JiraProvider {
                 credential,
             )
             .await?;
+        let write = JiraWrite::new(
+            json!({ "issueId": metadata.id, "issueKey": metadata.key, "commentId": inputs.comment_id }),
+        );
         let response = self
             .backend
             .set_comment_property(&inputs.comment_id, property_key, value, credential)
             .await
-            .map_err(jira_write_error)?;
-        let result = json!({
-            "operation": "comment.property.set",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "commentId": inputs.comment_id,
-            "propertyKey": property_key,
-            "status": "set",
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let result = json!({
                 "operation": "comment.property.set",
-                "issueKey": metadata.key,
-                "project": metadata.project,
+                "issue": issue_metadata_result(&metadata, &self.config),
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "issueId": metadata.id,
-                "issueKey": metadata.key,
-                "commentId": inputs.comment_id,
-                "propertyKey": property_key,
-            })))
+                "status": "set",
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(json!({
+                    "provider": "jira",
+                    "operation": "comment.property.set",
+                    "issueKey": metadata.key,
+                    "project": metadata.project,
+                    "commentId": inputs.comment_id,
+                    "propertyKey": property_key,
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                }))
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": inputs.comment_id,
+                    "propertyKey": property_key,
+                })))
+        })
+        .await
     }
 
     async fn invoke_comment_property_delete(
@@ -2756,40 +2860,46 @@ impl JiraProvider {
                 credential,
             )
             .await?;
+        let write = JiraWrite::new(
+            json!({ "issueId": metadata.id, "issueKey": metadata.key, "commentId": inputs.comment_id }),
+        );
         let response = self
             .backend
             .delete_comment_property(&inputs.comment_id, property_key, credential)
             .await
-            .map_err(jira_write_error)?;
-        let result = json!({
-            "operation": "comment.property.delete",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "commentId": inputs.comment_id,
-            "propertyKey": property_key,
-            "status": "deleted",
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let result = json!({
                 "operation": "comment.property.delete",
-                "issueKey": metadata.key,
-                "project": metadata.project,
+                "issue": issue_metadata_result(&metadata, &self.config),
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "issueId": metadata.id,
-                "issueKey": metadata.key,
-                "commentId": inputs.comment_id,
-                "propertyKey": property_key,
-            })))
+                "status": "deleted",
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(json!({
+                    "provider": "jira",
+                    "operation": "comment.property.delete",
+                    "issueKey": metadata.key,
+                    "project": metadata.project,
+                    "commentId": inputs.comment_id,
+                    "propertyKey": property_key,
+                    "credentialMode": request.credential_mode(),
+                    "egressProxy": self.backend.egress_proxy_audit(credential),
+                }))
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "issueId": metadata.id,
+                    "issueKey": metadata.key,
+                    "commentId": inputs.comment_id,
+                    "propertyKey": property_key,
+                })))
+        })
+        .await
     }
 
     async fn invoke_attachment_add(
@@ -2826,6 +2936,8 @@ impl JiraProvider {
         let mut rate_limited = None;
         // Set when the SDK proved the upload that stopped the batch unsent.
         let mut stopped_unsent = false;
+        // Set when the upload that stopped the batch may have applied.
+        let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -2853,6 +2965,7 @@ impl JiraProvider {
                         rate_limited = Some(*retry_after);
                     }
                     stopped_unsent = matches!(error, JiraBackendError::NotSent { .. });
+                    stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -2890,6 +3003,8 @@ impl JiraProvider {
                 // The first upload never reached Jira and the rest were
                 // skipped, so nothing was applied.
                 error = error.with_mutation_receipt(MutationReceipt::not_applied());
+            } else if stopped_uncertain {
+                error = error.with_mutation_receipt(MutationReceipt::unknown());
             }
             return Err(error.with_audit(json!({
                 "provider": "jira",
@@ -2916,7 +3031,9 @@ impl JiraProvider {
             "attachments": successes,
             "failures": failures,
         });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        // Uploads were applied: repeating the batch would upload them again.
+        enforce_result_size(&result, self.limits.max_upstream_response_bytes)
+            .map_err(|error| error.or_mutation_receipt(MutationReceipt::unknown()))?;
         let audit = json!({
             "provider": "jira",
             "operation": "attachment.add",
@@ -2952,6 +3069,9 @@ impl JiraProvider {
                     object_ids.clone(),
                 );
             }
+            // Earlier uploads applied: repeating the batch would upload them
+            // again.
+            error = error.or_mutation_receipt(MutationReceipt::unknown());
             return Err(error
                 .with_audit(audit)
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
@@ -5713,21 +5833,87 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The failure of an action's own write. A request the SDK proved never
-/// reached Jira also reports `not_applied`; call it only for the action's
-/// first write, never after another write applied.
-fn jira_write_error(error: JiraBackendError) -> ProviderError {
-    let not_sent = matches!(error, JiraBackendError::NotSent { .. });
-    let failure = jira_backend_error(error);
-    if not_sent {
-        failure.with_mutation_receipt(MutationReceipt::not_applied())
-    } else {
-        failure
+/// The receipts of a Jira write action's mutation request. Its failures keep
+/// their ordinary reason and message.
+struct JiraWrite {
+    /// What the write targets, from the validated request and the reads
+    /// before it; never from the write's own response.
+    locators: Value,
+}
+
+impl JiraWrite {
+    fn new(locators: Value) -> Self {
+        Self { locators }
     }
+
+    fn locators(&self) -> Value {
+        self.locators.clone()
+    }
+
+    /// The receipt of a write Jira accepted but whose response could not be
+    /// read or did not match the request.
+    fn receipt(&self) -> MutationReceipt {
+        MutationReceipt::applied_unverified("mutation_response", self.locators())
+    }
+
+    /// The failure of the mutation request itself:
+    ///
+    /// - proven unsent: `not_applied`;
+    /// - no response, or a 5xx a proxy may return after Jira committed the
+    ///   write: `unknown`;
+    /// - a success status whose response then failed: `applied_unverified`;
+    /// - a rejection, or a failure before anything was sent: no receipt.
+    fn failed(&self, error: JiraBackendError) -> ProviderError {
+        match error {
+            JiraBackendError::NotSent { .. } => {
+                jira_backend_error(error).with_mutation_receipt(MutationReceipt::not_applied())
+            }
+            JiraBackendError::NoResponse { .. } | JiraBackendError::HttpStatus(500..=599) => {
+                jira_backend_error(error).with_mutation_receipt(MutationReceipt::unknown())
+            }
+            JiraBackendError::AcceptedUnreadable(_)
+            | JiraBackendError::IssueCreateResponseInvalid { .. } => {
+                jira_backend_error(error).with_mutation_receipt(self.receipt())
+            }
+            JiraBackendError::Unauthorized
+            | JiraBackendError::Forbidden
+            | JiraBackendError::NotFound
+            | JiraBackendError::HttpStatus(_)
+            | JiraBackendError::RateLimited(_)
+            | JiraBackendError::Validation { .. }
+            | JiraBackendError::Transport(_)
+            | JiraBackendError::Timeout
+            | JiraBackendError::ResponseTooLarge
+            | JiraBackendError::Protocol(_) => jira_backend_error(error),
+        }
+    }
+}
+
+/// Whether an upload that failed may still have created its attachment.
+fn upload_may_have_applied(error: &JiraBackendError) -> bool {
+    matches!(
+        error,
+        JiraBackendError::NoResponse { .. }
+            | JiraBackendError::HttpStatus(500..=599)
+            | JiraBackendError::AcceptedUnreadable(_)
+    )
+}
+
+/// Runs what follows a write Jira accepted: a failure that reports no
+/// receipt keeps its reason and gains `applied_unverified` at `stage`.
+async fn after_accepted_write(
+    stage: &str,
+    locators: Value,
+    tail: impl Future<Output = Result<ProviderResult, ProviderError>>,
+) -> Result<ProviderResult, ProviderError> {
+    tail.await.map_err(|error| {
+        error.or_mutation_receipt(MutationReceipt::applied_unverified(stage, locators))
+    })
 }
 
 fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
     match error {
+        JiraBackendError::AcceptedUnreadable(error) => sanitized_backend_reason(error),
         JiraBackendError::Unauthorized => "unauthorized",
         JiraBackendError::Forbidden => "forbidden",
         JiraBackendError::NotFound => "not_found",
@@ -5740,12 +5926,12 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
                 "input_invalid"
             }
         }
-        JiraBackendError::NotSent { timed_out: false } | JiraBackendError::Transport(_) => {
-            "upstream_connection_failed"
-        }
-        JiraBackendError::NotSent { timed_out: true } | JiraBackendError::Timeout => {
-            "upstream_timeout"
-        }
+        JiraBackendError::NotSent { timed_out: false }
+        | JiraBackendError::NoResponse { timed_out: false }
+        | JiraBackendError::Transport(_) => "upstream_connection_failed",
+        JiraBackendError::NotSent { timed_out: true }
+        | JiraBackendError::NoResponse { timed_out: true }
+        | JiraBackendError::Timeout => "upstream_timeout",
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",

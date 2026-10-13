@@ -543,6 +543,18 @@ All notable changes to this project are documented in this file.
   which previously carried no result: `upstream_connection_failed` or
   `upstream_timeout` for single writes, and `upstream_failed` with
   `Jira attachment upload failed` for the attachment batch.
+- Jira write failures that may have applied now carry a receipt with their
+  unchanged reason and message: `mutationStatus: "unknown"`,
+  `retrySafe: false` when the mutation request got no response (or an
+  unclassified failure) or a 5xx; `mutationStatus: "applied_unverified"` at
+  `mutation_response` when Jira answered with a success status whose response
+  then failed, did not parse or did not match the request; and
+  `applied_unverified` at the read-back stage when the read-back after an
+  applied create, child create, update, parent set or dependency add failed or
+  did not match, or the result exceeded the response limit (throttled
+  read-backs keep their `mutation_verification_failed`). An `attachment.add`
+  batch in which an upload may have applied reports `unknown` alongside its
+  result, unless throttling already reported it as `applied_unverified`.
 - Confluence write actions (page create, update and move; blog create and
   update; page and blog draft create, stage, update, publish and discard;
   footer comment add; comment update, delete and reply; and page, blog and draft
