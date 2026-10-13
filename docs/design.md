@@ -397,6 +397,17 @@ only host change. The crate supplies:
   [provider-reported subset](http-api.md#provider-reported-standard-reasons).
   The registry rejects duplicate, standard, and reserved codes before serving.
 
+A backend builds SDK values through constructors and builders, not struct
+literals: registrations, resource types, reason definitions and presentations
+are `const` statics, and results, descriptors and OAuth values use `new` with
+`with_*` builders. Only the shared configuration tables, such as
+`AttachmentLimitsConfig`, are deserialized or built from `Default` with struct
+update syntax. Extendable SDK enums are non-exhaustive, so
+a backend's matches end with a fallback arm that rejects what it does not
+support, such as an unknown credential view. The policy and the intentionally
+exhaustive items are listed in the
+[inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
+
 The runtime runs each provider hook (scope resolution including lookup, body
 admission, invocation, credential verification) under a host-supplied
 `HookContext`: service, action, phase, and the domain reasons pinned with the

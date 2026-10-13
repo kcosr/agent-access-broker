@@ -67,6 +67,56 @@ The inventory deliberately does not record:
 - Items that exist only for other targets: the inventory covers the native host
   target's configuration.
 
+## Construction and exhaustiveness policy
+
+Supported SDK types follow one construction policy, so a compatible release
+can add a field, variant or option without breaking downstream source. The
+contracts section of each inventory shows the result per type.
+
+- Static registrations and definitions (`BackendRegistration`,
+  `OAuthDialectRegistration`, `ProviderReasonDefinition`, `ModuleMetadata`,
+  `ContinuationFamily`, `ResourceTypeDescriptor` with its
+  `NamespaceSelectorDescriptor` and `ResourceAttributeDescriptor` entries, and
+  the presentation's `ActionPresentation` and `EmbeddedBody`) have private
+  fields, are non-exhaustive and are declared with `const` constructors and
+  builders; their data is read through `const` accessors.
+- Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`) and
+  lent credential material (`DelegatedAccess`, like `ExecutionCredential`)
+  have private fields and constructors.
+- Other data types keep public fields where those fields are the data the
+  other side reads (`ProviderResult`, `ProviderLimits`, `ServiceDescriptor`,
+  `TokenGrant`, `ConnectedIdentity`, `OAuthTarget` and the rest). They are
+  non-exhaustive and are built with constructors and `with_*` builders, so a
+  downstream crate never writes a struct literal or an exhaustive
+  destructuring pattern for them.
+- Extendable enums are non-exhaustive. A consumer matches them with a
+  fallback arm that rejects what it does not support, failing closed: an
+  unsupported credential view, authority, egress route, I/O kind or OAuth
+  option is an error, never treated as success or as another variant.
+- Data access is through public fields or inherent methods; the SDK defines
+  no public trait for data access. The implementable traits are the ones the
+  crate documentation lists.
+
+These shapes are intentionally exhaustive, each an explicit API decision:
+
+| Item | Why |
+| --- | --- |
+| `Decision` | `allow`, `deny` and `error` are the complete decision vocabulary of responses, audit records and reason contracts. |
+| `CredentialMode` | `service` and `per_user` are the closed, stored and configured grant modes. |
+| `ProviderFailureStatus` | The closed set of domain statuses; a new status also decides its CLI exit mapping. |
+| `SearchAuthorizationScope` | A finite set and the complement of one describe every search boundary. |
+| `StateDisposition` | Keep, replace and clear are every outcome for an operation's provider state. |
+| `IssuedRefreshToken` | Issued, retained and absent are every refresh token outcome the OAuth manager's fences handle. |
+| `RefreshReplay` | A refresh exchange either consumes its input or may reuse it. |
+| `ProviderResultStreamSource` | A body is in memory or streamed, and the host must deliver every source. |
+| `presentation::ReadContentFormat` | Every embedded-body codec receives the format and must render each one. |
+| `AttachmentLimitsConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
+| `host::ScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. |
+| `InvalidReasonCodeId`, `SigningError`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
+
+Changing any of these, or making a non-exhaustive item exhaustive, is an
+incompatible change reviewed under the rules below.
+
 ## Commands
 
 ```bash

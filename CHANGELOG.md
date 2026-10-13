@@ -140,6 +140,53 @@ All notable changes to this project are documented in this file.
   `apply_current_correlation_headers`, `is_reason_code_id`,
   `is_resource_type_id`, `is_repository_selector_segment` and
   `url_matches_allowed_pattern` are no longer public.
+- Supported SDK types are built through constructors and builders, never
+  struct literals, and extendable enums are non-exhaustive (see
+  `api/README.md` for the policy and the intentionally exhaustive items).
+  - Static definitions have private fields and `const` builders:
+    `ResourceTypeDescriptor::new(id, label, plural_label, example, canonical)`
+    with `.with_namespace(NamespaceSelectorDescriptor::new(..))`,
+    `.with_attributes(&[ResourceAttributeDescriptor::required(..)])` and
+    `.with_action_inputs(..)`, read through `id()`, `label()`, `namespace()`,
+    `attributes()`, `action_inputs(selector)` and `is_valid`;
+    `presentation::ActionPresentation::new(bodies, whole)` and
+    `EmbeddedBody::new(owner_path, codec)`.
+  - `UpstreamClientSpec::new(label, provider, base, egress, allowed_hosts,
+    profile)` with `.with_status_reasons(..)`, and `RedirectRules::new(max,
+    deadline, authorize)` with `.correlating_other_origins()`, `.with_vet(..)`
+    and `.with_decorate(..)`, have private fields. `DelegatedAccess::new(token,
+    target, audience, version, expires_at)` has private fields read through
+    `token()`, `target()`, `audience()`, `version()` and `expires_at()`.
+  - `ProviderResult::new(result)` with `.with_stream(..)`, `.with_audit(..)`,
+    `.with_upstream(status, duration_ms)` and `.with_object_ids(..)`;
+    `ProviderLimits::default()` with `.with_max_http_body_bytes(..)` and the
+    other limit builders; `ServiceDescriptor::new(service, display_name)` with
+    `.with_surface(..)`, `.with_resource_scopes(..)`, `.with_actions(..)`,
+    `.with_credentials(..)` and `.with_presentation_body_limit(..)`;
+    `TokenGrant::new(access_token, token_type, expires_in, refresh_token)` with
+    `.with_scopes(..)` and `.with_supersedes_other_access(..)`;
+    `ConnectedIdentity::new(display_name)` with `.with_subject(..)`;
+    `OAuthTarget::new(id, audience, scopes)` with `.with_name(..)`. These and
+    the other data types (`ActionDescriptor`, `CredentialDescriptor`,
+    `MultipartUploadSpec`, `ResourceScopeCapabilities`, `AttributionCapability`,
+    `ProviderCredentialVerification`, `ProviderStreamError`,
+    `ProviderResultStream`, `UpstreamCall`, `UpstreamTrace`,
+    `InvocationIdentity`, `SearchAuthorization`, `BrokerBodyPartSpec`,
+    `BrokerBodyPart`, `CorrelationContext`, `ValidationContext`,
+    `ServiceCredentialKinds`, `OAuthClient`, `AuthorizationRequest`,
+    `CodeExchange`, `OAuthCallbackIssuer`, `PreparedAuthorization`,
+    `RenderedBody`, `ResponseOptions`, `ResponseCapabilities`, `RenderContext`,
+    the discovery projections and `test_support::BuiltClient`) keep their
+    public fields but are non-exhaustive; each has a `new` constructor where
+    downstream code builds it. Provider tests build in-memory body parts with
+    `BrokerBodyPart::in_memory` under the `test-support` feature.
+  - Non-exhaustive enums now include `ReasonCode`, `ResourceSelector`,
+    `ActionIo`, `ServiceSurface`, `CredentialView`, `StaticCredentialKind`,
+    `ExecutionAccess`, `InvocationAuthority`, `EgressDeclaration`,
+    `ClientProfile`, `UpstreamError`, the OAuth option enums and
+    `OAuthDialectError`; matches need a fallback arm that rejects the
+    unsupported variant. `ProviderFailureStatus` is now exhaustive.
+  Serialized and stored shapes are unchanged.
 
 ### Added
 

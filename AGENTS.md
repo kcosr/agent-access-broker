@@ -167,6 +167,13 @@ check fails when the candidate's API differs. For an intended change, run
 `nightly-2026-07-13` toolchain and `cargo-public-api` 0.52.0; set
 `AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is in another rustup home.
 
+Supported SDK types follow the construction policy in `api/README.md`: build
+them through constructors and builders (`const` ones for statics), keep new
+data types non-exhaustive or private-field, and make extendable enums
+non-exhaustive. Matches on them end with a fallback arm that fails closed,
+never treating an unsupported variant as success or as another variant. Record
+any intentionally exhaustive shape in its rustdoc and in that list.
+
 Use these for offline config validation:
 
 ```bash

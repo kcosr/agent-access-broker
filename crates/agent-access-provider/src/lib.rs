@@ -107,6 +107,27 @@
 //! a module update means rebuilding the distribution. The tested toolchain is
 //! the repository's pinned one; no wider minimum Rust version is implied.
 //!
+//! Supported types are built through constructors and builders rather than
+//! struct literals, so a compatible release can add fields:
+//!
+//! - static registrations and definitions, such as [`BackendRegistration`],
+//!   [`ResourceTypeDescriptor`] and
+//!   [`ActionPresentation`](presentation::ActionPresentation), have private
+//!   fields, `const` builders and accessors;
+//! - other data types are non-exhaustive and keep public fields only where
+//!   they are the data the other side reads, such as [`ProviderResult`] and
+//!   [`ServiceDescriptor`];
+//! - extendable enums are non-exhaustive, and a match on one ends with an arm
+//!   that rejects what the module does not support, such as an unknown
+//!   [`CredentialView`], instead of treating it as success or as another
+//!   variant.
+//!
+//! Data is read through those fields or inherent methods; no public trait
+//! exists only for data access. Intentionally exhaustive items, such as
+//! [`Decision`], [`CredentialMode`], [`ProviderFailureStatus`] and the shared
+//! configuration tables (built from [`Default`] or deserialized), say so in
+//! their documentation.
+//!
 //! # Third-party dependencies
 //!
 //! Supported signatures name types from these packages. An incompatible
