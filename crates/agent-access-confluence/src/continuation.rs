@@ -616,42 +616,50 @@ pub(crate) fn invalid_draft_handle_error() -> ProviderError {
 }
 
 fn draft_handle_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        ContinuationError::DurableKeyUnavailable => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence draft actions require broker_tokens.hash_key_ref",
-        ),
-        ContinuationError::SigningUnavailable => ProviderError::error(
+    ContinuationFailures::new(
+        invalid_draft_handle_error(),
+        |_| {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                "failed to encode Confluence draft handle",
+            )
+        },
+        ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Confluence draft signing key is unavailable",
         ),
-        error if error.is_token_rejection() => invalid_draft_handle_error(),
-        _ => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "failed to encode Confluence draft handle",
-        ),
-    }
+    )
+    .durable_key_unavailable(ProviderError::error(
+        ReasonCode::UpstreamProtocolFailed,
+        "Confluence draft actions require broker_tokens.hash_key_ref",
+    ))
+    .report(error)
 }
 
 fn list_token_failure(pages: ListPages, error: ContinuationError) -> ProviderError {
     let label = pages.label();
-    match error {
-        ContinuationError::Expired => ProviderError::deny(
-            ReasonCode::InputInvalid,
-            format!("Confluence {label} pagination token is expired"),
-        ),
-        error if error.is_token_rejection() => ProviderError::deny(
+    ContinuationFailures::new(
+        ProviderError::deny(
             ReasonCode::InputInvalid,
             format!(
                 "Confluence {label} pagination token is invalid or does not match this request"
             ),
         ),
-        ContinuationError::PayloadTooLarge { .. } => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            format!("Confluence {label} pagination position exceeds the provider response limit"),
-        ),
-        _ => pagination_signing_unavailable(),
-    }
+        |_| {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                format!(
+                    "Confluence {label} pagination position exceeds the provider response limit"
+                ),
+            )
+        },
+        pagination_signing_unavailable(),
+    )
+    .expired(ProviderError::deny(
+        ReasonCode::InputInvalid,
+        format!("Confluence {label} pagination token is expired"),
+    ))
+    .report(error)
 }
 
 /// An attachment position from a token still names exactly one supported
@@ -683,26 +691,29 @@ fn checked_cursor(pages: ListPages, cursor: String) -> Result<String, ProviderEr
 }
 
 fn search_token_failure(action: &str, error: ContinuationError) -> ProviderError {
-    match error {
-        ContinuationError::UpstreamQueryChanged => ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "the effective Confluence space scope changed since nextPageToken was issued; repeat the search without nextPageToken",
-        ),
-        error if error.is_token_rejection() => ProviderError::deny(
+    ContinuationFailures::new(
+        ProviderError::deny(
             ReasonCode::InputInvalid,
             format!(
                 "confluence.{action} nextPageToken is invalid or expired; reuse it only with the same query, spaces, and maxResults"
             ),
         ),
-        ContinuationError::PayloadTooLarge { .. } => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence search cursor exceeds the provider response limit",
-        ),
-        _ => ProviderError::error(
+        |_| {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                "Confluence search cursor exceeds the provider response limit",
+            )
+        },
+        ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Confluence search continuation signing is unavailable",
         ),
-    }
+    )
+    .upstream_query_changed(ProviderError::deny(
+        ReasonCode::InputInvalid,
+        "the effective Confluence space scope changed since nextPageToken was issued; repeat the search without nextPageToken",
+    ))
+    .report(error)
 }
 
 fn pagination_signing_unavailable() -> ProviderError {

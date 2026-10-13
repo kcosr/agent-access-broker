@@ -403,19 +403,20 @@ fn decode_gitlab_page_token(
 }
 
 fn gitlab_page_token_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        _ if error.is_token_rejection() => gitlab_page_token_error(),
-        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
+    ContinuationFailures::new(
+        gitlab_page_token_error(),
+        |_| {
             ProviderError::error(
                 ReasonCode::UpstreamProtocolFailed,
-                "GitLab pagination signing key is unavailable",
+                "GitLab pagination token exceeded its size bound",
             )
-        }
-        _ => ProviderError::error(
+        },
+        ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
-            "GitLab pagination token exceeded its size bound",
+            "GitLab pagination signing key is unavailable",
         ),
-    }
+    )
+    .report(error)
 }
 
 fn gitlab_page_token_error() -> ProviderError {

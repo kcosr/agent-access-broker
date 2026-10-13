@@ -2,8 +2,8 @@
 //! never UTF-8 replacement bytes or Jenkins' annotated progressive-log offsets.
 use super::*;
 use agent_access_provider::{
-    ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
-    ContinuationSigner,
+    ContinuationBinding, ContinuationError, ContinuationFailures, ContinuationFamily,
+    ContinuationLifetime, ContinuationSigner,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -172,16 +172,17 @@ fn signing_error() -> ProviderError {
     )
 }
 fn cursor_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        _ if error.is_token_rejection() => cursor_error(),
-        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
-            signing_error()
-        }
-        _ => ProviderError::error(
-            ReasonCode::OperationFailed,
-            "Broker could not encode the log cursor",
-        ),
-    }
+    ContinuationFailures::new(
+        cursor_error(),
+        |_| {
+            ProviderError::error(
+                ReasonCode::OperationFailed,
+                "Broker could not encode the log cursor",
+            )
+        },
+        signing_error(),
+    )
+    .report(error)
 }
 
 /// Binds a cursor to the admitted context and configuration, the numeric

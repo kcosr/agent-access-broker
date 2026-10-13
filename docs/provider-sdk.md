@@ -739,8 +739,8 @@ cursor, reject the token or restart rather than weakening a restriction.
 
 ```rust check
 use agent_access_provider::{
-    ContinuationError, ContinuationFamily, ContinuationLifetime, ContinuationSigner, ProviderError,
-    ProviderInvocation, ReasonCode,
+    ContinuationError, ContinuationFailures, ContinuationFamily, ContinuationLifetime,
+    ContinuationSigner, ProviderError, ProviderInvocation, ReasonCode,
 };
 use std::time::Duration;
 
@@ -799,19 +799,20 @@ fn invalid_page_token() -> ProviderError {
 }
 
 fn page_token_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        _ if error.is_token_rejection() => invalid_page_token(),
-        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
+    ContinuationFailures::new(
+        invalid_page_token(),
+        |_| {
             ProviderError::error(
-                ReasonCode::CursorSigningUnavailable,
-                "page token signing is unavailable",
+                ReasonCode::OperationFailed,
+                "page token could not be sealed",
             )
-        }
-        _ => ProviderError::error(
-            ReasonCode::OperationFailed,
-            "page token could not be sealed",
+        },
+        ProviderError::error(
+            ReasonCode::CursorSigningUnavailable,
+            "page token signing is unavailable",
         ),
-    }
+    )
+    .report(error)
 }
 ```
 
@@ -826,10 +827,20 @@ instead; see [relayed upstream cursors](#relayed-upstream-cursors).
 
 ### Errors
 
-`ContinuationError::is_token_rejection()` separates a token the caller must not
-reuse (invalid, tampered, rebound, obsolete version, expired or too large) from a
-Broker-side failure. Report rejections as a caller error such as `input_invalid`
-with `decision = deny`, and a missing signing key as `cursor_signing_unavailable`.
+`ContinuationFailures` reports each `ContinuationError` as one of three provider
+failures:
+
+- A rejected token, which the caller must not reuse: invalid, tampered, rebound,
+  an obsolete version, expired, too large, or for a changed upstream query
+  (`ContinuationError::is_token_rejection()`). Report it as a caller error such
+  as `input_invalid` with `decision = deny`.
+- An oversized payload. Its failure is built from the family's cap.
+- An unavailable signing key, such as `cursor_signing_unavailable`.
+
+`.expired(..)`, `.upstream_query_changed(..)` and `.durable_key_unavailable(..)`
+word one variant differently from the rest of its category, for example to ask
+the caller to repeat a search whose authorization changed. The SDK assigns every
+variant to a category, so the provider's mapping needs no fallback arm.
 
 ### Relayed upstream cursors
 

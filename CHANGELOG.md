@@ -291,6 +291,12 @@ All notable changes to this project are documented in this file.
   owner carried as a keyed commitment; `ContinuationBinding` records its stage
   as a `ContinuationStage` type parameter (`AdmissionStage` by default, or
   `ScopeResolutionStage`).
+- `ContinuationFailures` reports each `ContinuationError` as a provider's
+  failure for rejected tokens, oversized payloads (given the family's cap) or
+  unavailable signing keys, optionally wording `Expired`,
+  `UpstreamQueryChanged` or `DurableKeyUnavailable` differently. CloudBees,
+  GitLab, Gmail, Jira and Confluence report their continuation failures
+  through it, with unchanged reasons, decisions and messages.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph

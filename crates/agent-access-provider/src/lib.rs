@@ -87,7 +87,8 @@
 //! and its normalized settings with a [`ContinuationBinding`], and seals and
 //! opens tokens with its [`ContinuationSigner`]. The binding lives only in the
 //! MAC context, a token never carries authority, and the host authorizes every
-//! continuation again.
+//! continuation again. [`ContinuationFailures`] reports each
+//! [`ContinuationError`] as the provider's failure.
 //!
 //! # Compatibility
 //!
@@ -221,9 +222,9 @@ pub use config::{
     validate_upstream_allowlist, validate_upstream_base_url,
 };
 pub use continuation::{
-    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFamily,
-    ContinuationLifetime, ContinuationOwner, ContinuationSigner, ContinuationStage,
-    ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
+    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFailures,
+    ContinuationFamily, ContinuationLifetime, ContinuationOwner, ContinuationSigner,
+    ContinuationStage, ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
 };
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,

@@ -594,14 +594,15 @@ fn oversized_page_token() -> ProviderError {
     )
 }
 fn page_token_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        _ if error.is_token_rejection() => page_token_error(),
-        ContinuationError::PayloadTooLarge { .. } => oversized_page_token(),
-        _ => ProviderError::error(
+    ContinuationFailures::new(
+        page_token_error(),
+        |_| oversized_page_token(),
+        ProviderError::error(
             ReasonCode::CursorSigningUnavailable,
             "Broker could not sign the Gmail search continuation",
         ),
-    }
+    )
+    .report(error)
 }
 fn protocol() -> ProviderError {
     ProviderError::error(

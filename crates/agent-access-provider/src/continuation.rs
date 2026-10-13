@@ -68,7 +68,10 @@
 //! }
 //! ```
 use crate::signing::{generate_local_key, local_hmac};
-use crate::{AdmittedContext, CredentialMode, DelegatedCredential, ScopeRequest, StableSigningKey};
+use crate::{
+    AdmittedContext, CredentialMode, DelegatedCredential, ProviderError, ScopeRequest,
+    StableSigningKey,
+};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
@@ -1129,6 +1132,119 @@ impl ContinuationError {
     }
 }
 
+/// How a provider reports each [`ContinuationError`] as a [`ProviderError`].
+///
+/// Every variant belongs to one of three categories, each with the
+/// provider's failure:
+///
+/// - `rejected`: a token the caller presented and must not reuse, the
+///   variants [`ContinuationError::is_token_rejection`] accepts. Usually a
+///   denial such as `input_invalid`.
+/// - `payload_too_large`: a payload over the family's cap, built from the
+///   cap [`ContinuationError::PayloadTooLarge`] reports. Nothing is sealed
+///   or truncated.
+/// - `signing_unavailable`: a key that cannot sign or verify.
+///
+/// [`Self::expired`], [`Self::upstream_query_changed`] and
+/// [`Self::durable_key_unavailable`] word one variant differently from the
+/// rest of its category. The SDK assigns every variant, including any later
+/// one, to its category, so a provider needs no fallback arm of its own.
+///
+/// ```
+/// use agent_access_provider::{
+///     ContinuationError, ContinuationFailures, ProviderError, ReasonCode,
+/// };
+///
+/// fn page_token_failure(error: ContinuationError) -> ProviderError {
+///     ContinuationFailures::new(
+///         ProviderError::deny(ReasonCode::InputInvalid, "page token is invalid"),
+///         |limit| {
+///             ProviderError::error(
+///                 ReasonCode::UpstreamProtocolFailed,
+///                 format!("the upstream page token exceeds {limit} bytes"),
+///             )
+///         },
+///         ProviderError::error(
+///             ReasonCode::CursorSigningUnavailable,
+///             "page token signing is unavailable",
+///         ),
+///     )
+///     .expired(ProviderError::deny(
+///         ReasonCode::InputInvalid,
+///         "page token is expired; list again without it",
+///     ))
+///     .report(error)
+/// }
+/// ```
+pub struct ContinuationFailures<P> {
+    rejected: ProviderError,
+    expired: Option<ProviderError>,
+    upstream_query_changed: Option<ProviderError>,
+    payload_too_large: P,
+    signing_unavailable: ProviderError,
+    durable_key_unavailable: Option<ProviderError>,
+}
+
+impl<P: FnOnce(usize) -> ProviderError> ContinuationFailures<P> {
+    /// The failures for rejected tokens, oversized payloads (given the
+    /// family's cap) and unavailable signing keys.
+    pub fn new(
+        rejected: ProviderError,
+        payload_too_large: P,
+        signing_unavailable: ProviderError,
+    ) -> Self {
+        Self {
+            rejected,
+            expired: None,
+            upstream_query_changed: None,
+            payload_too_large,
+            signing_unavailable,
+            durable_key_unavailable: None,
+        }
+    }
+
+    /// Reports [`ContinuationError::Expired`] as `failure` instead of the
+    /// rejection.
+    pub fn expired(mut self, failure: ProviderError) -> Self {
+        self.expired = Some(failure);
+        self
+    }
+
+    /// Reports [`ContinuationError::UpstreamQueryChanged`] as `failure`
+    /// instead of the rejection, for example to ask the caller to repeat the
+    /// search.
+    pub fn upstream_query_changed(mut self, failure: ProviderError) -> Self {
+        self.upstream_query_changed = Some(failure);
+        self
+    }
+
+    /// Reports [`ContinuationError::DurableKeyUnavailable`] as `failure`
+    /// instead of the signing failure, for example to name the missing key
+    /// configuration.
+    pub fn durable_key_unavailable(mut self, failure: ProviderError) -> Self {
+        self.durable_key_unavailable = Some(failure);
+        self
+    }
+
+    /// The provider's failure for `error`.
+    pub fn report(self, error: ContinuationError) -> ProviderError {
+        match error {
+            ContinuationError::Invalid
+            | ContinuationError::UnsupportedVersion
+            | ContinuationError::TokenTooLarge { .. } => self.rejected,
+            ContinuationError::Expired => self.expired.unwrap_or(self.rejected),
+            ContinuationError::UpstreamQueryChanged => {
+                self.upstream_query_changed.unwrap_or(self.rejected)
+            }
+            ContinuationError::PayloadTooLarge { limit } => (self.payload_too_large)(limit),
+            ContinuationError::SigningUnavailable => self.signing_unavailable,
+            ContinuationError::DurableKeyUnavailable => self
+                .durable_key_unavailable
+                .unwrap_or(self.signing_unavailable),
+        }
+    }
+}
+
 const fn unpadded_base64_len(bytes: usize) -> usize {
     match bytes.checked_mul(4) {
         Some(quadrupled) => quadrupled.div_ceil(3),
@@ -2176,6 +2292,92 @@ mod tests {
         assert!(large.max_payload_bytes() > MAX_PAYLOAD_CAP);
         assert_eq!(large.max_token_bytes(), response);
         assert!(PAGES.max_payload_bytes_within(usize::MAX) > 0);
+    }
+
+    const ALL_ERRORS: [ContinuationError; 8] = [
+        ContinuationError::Invalid,
+        ContinuationError::UnsupportedVersion,
+        ContinuationError::Expired,
+        ContinuationError::UpstreamQueryChanged,
+        ContinuationError::TokenTooLarge { limit: 7 },
+        ContinuationError::PayloadTooLarge { limit: 4093 },
+        ContinuationError::SigningUnavailable,
+        ContinuationError::DurableKeyUnavailable,
+    ];
+
+    fn failures() -> ContinuationFailures<impl FnOnce(usize) -> ProviderError> {
+        ContinuationFailures::new(
+            ProviderError::deny(crate::ReasonCode::InputInvalid, "rejected"),
+            |limit| {
+                ProviderError::error(
+                    crate::ReasonCode::UpstreamProtocolFailed,
+                    format!("payload over {limit}"),
+                )
+            },
+            ProviderError::error(crate::ReasonCode::CursorSigningUnavailable, "signing"),
+        )
+    }
+
+    /// Every variant takes its category's failure, the category
+    /// `is_token_rejection` names for rejected tokens, and the oversized
+    /// payload's failure receives the reported cap.
+    #[test]
+    fn failures_report_each_error_by_its_category() {
+        for error in ALL_ERRORS {
+            let failure = failures().report(error);
+            let expected = match error {
+                _ if error.is_token_rejection() => "rejected",
+                ContinuationError::PayloadTooLarge { .. } => "payload over 4093",
+                _ => "signing",
+            };
+            assert_eq!(failure.message, expected, "{error:?}");
+        }
+        let rejected = failures().report(ContinuationError::Invalid);
+        assert_eq!(rejected.decision(), crate::Decision::Deny);
+        assert_eq!(rejected.reason_code(), crate::ReasonCode::InputInvalid);
+        let unavailable = failures().report(ContinuationError::DurableKeyUnavailable);
+        assert_eq!(unavailable.decision(), crate::Decision::Error);
+        assert_eq!(
+            unavailable.reason_code(),
+            crate::ReasonCode::CursorSigningUnavailable
+        );
+    }
+
+    /// A variant-specific failure replaces its category's failure for that
+    /// variant only.
+    #[test]
+    fn variant_failures_replace_only_their_variant() {
+        let report = |error| {
+            failures()
+                .expired(ProviderError::deny(
+                    crate::ReasonCode::InputInvalid,
+                    "expired",
+                ))
+                .upstream_query_changed(ProviderError::deny(
+                    crate::ReasonCode::InputInvalid,
+                    "query changed",
+                ))
+                .durable_key_unavailable(ProviderError::error(
+                    crate::ReasonCode::UpstreamProtocolFailed,
+                    "durable key",
+                ))
+                .report(error)
+                .message
+        };
+        let messages: Vec<String> = ALL_ERRORS.into_iter().map(report).collect();
+        assert_eq!(
+            messages,
+            [
+                "rejected",
+                "rejected",
+                "expired",
+                "query changed",
+                "rejected",
+                "payload over 4093",
+                "signing",
+                "durable key",
+            ]
+        );
     }
 
     impl ContinuationFamily {
