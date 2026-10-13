@@ -199,6 +199,20 @@ unverified upload is a `failures` entry with `status: "unverified"` and its
 lists every created attachment. Inspect those objects instead of repeating the
 mutation.
 
+A Confluence write action sends its mutation request after its reads. When the
+Broker proves that request never reached Confluence, because no connection was
+established (including a connect timeout) or the request could not be built,
+the action fails with its ordinary `upstream_connection_failed` (`Confluence
+request failed`) or `upstream_timeout` (`Confluence request timed out`) and a
+result of `mutationStatus: "not_applied"`, `retrySafe: true`: nothing was
+applied, and the action can be repeated. This covers every page, blog, draft
+and comment write, and a page, blog, or draft attachment batch whose first
+upload was never sent. Page create, page draft create and page move audit
+records keep `sideEffectPossible: true` for every mutation failure. A read that
+was never sent, a later upload after earlier files were created, and a failure
+after the request may have been sent carry no such receipt; inspect the content
+before repeating those writes.
+
 ## Actions and lookup requirements
 
 Thirty-seven actions:

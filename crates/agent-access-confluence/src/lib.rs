@@ -2546,7 +2546,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         validate_created_comment(&response.value, action, &container)?;
         let result = json!({
             "comment": comment_result(&response.value, action, &container, Some("storage"))?,
@@ -2634,7 +2634,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(confluence_write_error(error)),
         };
         validate_comment_identity(&response.value, &inputs.comment_id, action.kind)?;
         require_current_comment(&response.value)?;
@@ -2725,7 +2725,7 @@ impl ConfluenceProvider {
             .backend
             .delete_comment(action.kind, &inputs.comment_id, credential)
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         let result = json!({
             "commentId": inputs.comment_id,
             "status": "deleted",
@@ -2912,7 +2912,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         validate_created_reply(
             &response.value,
             action,
@@ -3205,7 +3205,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(confluence_write_error(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "parentPageId": effective_parent_page_id,
@@ -3467,7 +3467,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(confluence_write_error(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "pageId": page.id,
@@ -3762,7 +3762,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(confluence_write_error(error)),
         };
         let page = response.value;
         if page.id != metadata.id || page.space != metadata.space {
@@ -3906,7 +3906,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(confluence_write_error(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "parentPageId": effective_parent_page_id,
@@ -4130,7 +4130,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut draft = response.value;
         draft.space = current.space;
         draft.space_web_url = space_response.value.web_url;
@@ -4264,7 +4264,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut draft = response.value;
         draft.space = current.value.space;
         draft.space_web_url = current.value.space_web_url;
@@ -4353,7 +4353,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut published = response.value;
         published.space = draft.space.clone();
         published.space_web_url = draft.space_web_url.clone();
@@ -4460,7 +4460,7 @@ impl ConfluenceProvider {
             .backend
             .discard_page_draft(&draft.id, credential)
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         match self
             .backend
             .draft_page(&draft.id, Some("storage"), lookup_credential)
@@ -4678,6 +4678,8 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
         // Set when Confluence throttled the verification of an applied upload.
         let mut unverified_attachment_id = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
@@ -4757,6 +4759,7 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     audit_attachments.push(json!({
                         "status": "failed",
                         "size": uploads[index].size,
@@ -4849,6 +4852,11 @@ impl ConfluenceProvider {
                         object_ids.clone(),
                     )
                 };
+            }
+            if stopped_unsent && attachment_ids.is_empty() {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
             }
             if unverified_attachment_id.is_some() {
                 error = error.unverified_after_throttling(
@@ -5073,6 +5081,8 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -5099,6 +5109,7 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -5133,6 +5144,11 @@ impl ConfluenceProvider {
             );
             if let Some(retry_after) = rate_limited {
                 error = error.interrupted_by_upstream_rate_limit("confluence", retry_after);
+            }
+            if stopped_unsent {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
             }
             return Err(error.with_audit(json!({
                 "provider": "confluence",
@@ -5696,7 +5712,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         let mut blog = response.value;
         blog.space = space.key;
         blog.space_web_url = space.web_url;
@@ -5799,7 +5815,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(confluence_write_error(error)),
         };
         let mut blog = response.value;
         blog.space = metadata.space.clone();
@@ -5906,7 +5922,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         let mut draft = response.value;
         draft.space = space_response.value.key;
         draft.space_web_url = space_response.value.web_url;
@@ -6014,7 +6030,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut draft = response.value;
         draft.space = current.space;
         draft.space_web_url = current.space_web_url;
@@ -6143,7 +6159,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut draft = response.value;
         draft.space = current.value.space;
         draft.space_web_url = current.value.space_web_url;
@@ -6232,7 +6248,7 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
+            .map_err(|error| confluence_write_failure(error, map_confluence_conflict))?;
         let mut published = response.value;
         published.space = draft.space.clone();
         published.space_web_url = draft.space_web_url.clone();
@@ -6336,7 +6352,7 @@ impl ConfluenceProvider {
             .backend
             .discard_blog_draft(&draft.id, credential)
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(confluence_write_error)?;
         match self
             .backend
             .draft_blog(&draft.id, Some("storage"), lookup_credential)
@@ -6554,6 +6570,8 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
         // Set when Confluence throttled the verification of an applied upload.
         let mut unverified_attachment_id = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
@@ -6633,6 +6651,7 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     audit_attachments.push(json!({
                         "status": "failed",
                         "size": uploads[index].size,
@@ -6725,6 +6744,11 @@ impl ConfluenceProvider {
                         object_ids.clone(),
                     )
                 };
+            }
+            if stopped_unsent && attachment_ids.is_empty() {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
             }
             if unverified_attachment_id.is_some() {
                 error = error.unverified_after_throttling(
@@ -6949,6 +6973,8 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -6981,6 +7007,7 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -7015,6 +7042,11 @@ impl ConfluenceProvider {
             );
             if let Some(retry_after) = rate_limited {
                 error = error.interrupted_by_upstream_rate_limit("confluence", retry_after);
+            }
+            if stopped_unsent {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
             }
             return Err(error.with_audit(json!({
                 "provider": "confluence",
@@ -11957,8 +11989,11 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
         }
         ConfluenceBackendError::RateLimited(_) => "upstream_rate_limited",
         ConfluenceBackendError::Validation { .. } => "input_invalid",
-        ConfluenceBackendError::Transport(_) => "upstream_connection_failed",
-        ConfluenceBackendError::Timeout => "upstream_timeout",
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => "upstream_connection_failed",
+        ConfluenceBackendError::NotSent { timed_out: true } | ConfluenceBackendError::Timeout => {
+            "upstream_timeout"
+        }
         ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
             "upstream_protocol_failed"
         }

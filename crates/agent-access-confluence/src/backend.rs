@@ -863,6 +863,11 @@ pub enum ConfluenceBackendError {
     RateLimited(Option<UpstreamRetryAfter>),
     #[error("upstream validation failed with status {status}")]
     Validation { status: u16, message: String },
+    /// The SDK proved the request never reached Confluence: it could not be
+    /// built, or no connection was established (`timed_out` for a connect
+    /// timeout). It reports the same reason as `Timeout` or `Transport`.
+    #[error("request was not sent")]
+    NotSent { timed_out: bool },
     #[error("transport: {0}")]
     Transport(String),
     #[error("request timed out")]
@@ -903,11 +908,12 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
             format!("Confluence rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        ConfluenceBackendError::Transport(_message) => ProviderError::error(
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => ProviderError::error(
             ReasonCode::UpstreamConnectionFailed,
             "Confluence request failed",
         ),
-        ConfluenceBackendError::Timeout => {
+        ConfluenceBackendError::NotSent { timed_out: true } | ConfluenceBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "Confluence request timed out")
         }
         ConfluenceBackendError::ResponseTooLarge => ProviderError::error(
@@ -919,6 +925,27 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
             "Confluence response protocol error",
         ),
     }
+}
+
+/// The failure of an action's own write, mapped by `map`. A request the SDK
+/// proved never reached Confluence also reports `not_applied`; use it only for
+/// the action's first write, never after another write applied.
+pub(crate) fn confluence_write_failure(
+    error: ConfluenceBackendError,
+    map: impl FnOnce(ConfluenceBackendError) -> ProviderError,
+) -> ProviderError {
+    let not_sent = matches!(error, ConfluenceBackendError::NotSent { .. });
+    let failure = map(error);
+    if not_sent {
+        failure.with_mutation_receipt(MutationReceipt::not_applied())
+    } else {
+        failure
+    }
+}
+
+/// [`confluence_write_failure`] with the ordinary mapping.
+pub(crate) fn confluence_write_error(error: ConfluenceBackendError) -> ProviderError {
+    confluence_write_failure(error, confluence_backend_error)
 }
 
 pub(crate) fn map_confluence_conflict(error: ConfluenceBackendError) -> ProviderError {
@@ -940,8 +967,11 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
         ConfluenceBackendError::HttpStatus(_) => ReasonCode::UpstreamFailed,
         ConfluenceBackendError::RateLimited(_) => ReasonCode::UpstreamRateLimited,
         ConfluenceBackendError::Validation { .. } => ReasonCode::InputInvalid,
-        ConfluenceBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
-        ConfluenceBackendError::Timeout => ReasonCode::UpstreamTimeout,
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
+        ConfluenceBackendError::NotSent { timed_out: true } | ConfluenceBackendError::Timeout => {
+            ReasonCode::UpstreamTimeout
+        }
         ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
             ReasonCode::UpstreamProtocolFailed
         }
@@ -2947,16 +2977,11 @@ pub(crate) async fn send_confluence_request(
 
 pub(crate) fn confluence_upstream_error(error: UpstreamError) -> ConfluenceBackendError {
     match error {
-        // A request that never reached the upstream fails as it always has:
-        // connect timeouts as timeouts, everything else as transport errors.
-        UpstreamError::Timeout
-        | UpstreamError::NotSent {
-            timed_out: true, ..
-        } => ConfluenceBackendError::Timeout,
-        UpstreamError::Transport(message)
-        | UpstreamError::NotSent {
-            detail: message, ..
-        } => ConfluenceBackendError::Transport(message),
+        // Only the SDK's own not-sent classification proves Confluence never
+        // received the request; every other failure may have reached it.
+        UpstreamError::NotSent { timed_out, .. } => ConfluenceBackendError::NotSent { timed_out },
+        UpstreamError::Timeout => ConfluenceBackendError::Timeout,
+        UpstreamError::Transport(message) => ConfluenceBackendError::Transport(message),
         UpstreamError::NotAllowed => ConfluenceBackendError::Protocol(
             "Confluence upstream URL is not allowlisted".to_string(),
         ),

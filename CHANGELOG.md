@@ -515,6 +515,13 @@ All notable changes to this project are documented in this file.
   sent) whose request the Broker proves was never sent now add
   `mutationStatus: "not_applied"`, `retrySafe: true` to their unchanged error,
   which previously carried no result.
+- Confluence write actions (page create, update and move; blog create and
+  update; page and blog draft create, stage, update, publish and discard;
+  footer comment add; comment update, delete and reply; and page, blog and draft
+  attachment batches whose first upload was not sent) whose request the Broker
+  proves was never sent now add `mutationStatus: "not_applied"`,
+  `retrySafe: true` to their unchanged error. Draft attachment batches keep
+  their `status: "partial"` result alongside the receipt.
 
 ### Fixed
 
