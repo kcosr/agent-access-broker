@@ -3,9 +3,11 @@ use agent_access_broker_host::BrokerApplication;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use std::fs;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufRead, BufReader};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,7 +27,7 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
     private_dir(temp.path());
     let first = BrokerConfigPaths::new(temp.path(), "first", true, true);
     write_config(&first);
-    let first_process = BrokerProcess::start(&first.config_path, free_addr());
+    let first_process = BrokerProcess::start(&first.config_path);
 
     let validate = Command::new(broker_bin())
         .arg("--config")
@@ -57,7 +59,7 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
     let shared_store = BrokerConfigPaths::new(temp.path(), "shared-store", true, true)
         .with_managed_store_path(first.managed_store_path.clone().unwrap());
     write_config(&shared_store);
-    let stderr = run_expect_startup_failure(&shared_store.config_path, free_addr());
+    let stderr = run_expect_startup_failure(&shared_store.config_path);
     assert!(
         stderr.contains("managed_store state lock is held"),
         "stderr did not identify managed_store lock: {stderr}"
@@ -66,7 +68,7 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
     let shared_audit = BrokerConfigPaths::new(temp.path(), "shared-audit", false, true)
         .with_audit_path(first.audit_path.clone().unwrap());
     write_config(&shared_audit);
-    let stderr = run_expect_startup_failure(&shared_audit.config_path, free_addr());
+    let stderr = run_expect_startup_failure(&shared_audit.config_path);
     assert!(
         stderr.contains("audit state lock is held"),
         "stderr did not identify audit lock: {stderr}"
@@ -87,15 +89,12 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
     let shared_spool = BrokerConfigPaths::new(temp.path(), "shared-spool", false, true)
         .with_spool_dir(first.spool_dir.clone());
     write_config(&shared_spool);
-    let addr = free_addr();
-    let stderr = run_expect_startup_failure(&shared_spool.config_path, addr);
+    // Failing without a broker_listening event, the conflicting broker
+    // never bound its public listener.
+    let stderr = run_expect_startup_failure(&shared_spool.config_path);
     assert!(
         stderr.contains("upload_spool state lock is held"),
         "stderr did not identify upload spool lock: {stderr}"
-    );
-    assert!(
-        TcpStream::connect(addr).is_err(),
-        "conflicting broker bound its public listener before failing"
     );
 
     drop(first_process);
@@ -125,7 +124,7 @@ fn audit_verify_needs_a_stopped_broker_and_a_sqlite_audit_database() {
     };
 
     // A running broker owns the audit state lock.
-    let process = BrokerProcess::start(&paths.config_path, free_addr());
+    let process = BrokerProcess::start(&paths.config_path);
     let held = verify(&paths.config_path);
     assert!(!held.status.success());
     let stderr = String::from_utf8_lossy(&held.stderr);
@@ -183,20 +182,22 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     private_dir(temp.path());
     let paths = BrokerConfigPaths::new(temp.path(), "startup-json", true, true);
     write_config(&paths);
-    let addr = free_addr();
 
     let process = BrokerProcess::start_with_env(
         &paths.config_path,
-        addr,
         &[("RUST_LOG", "agent_access_broker=notalevel")],
     );
-    let output = process.stop();
+    // broker_listening names the bound address, not the requested port 0.
+    let addr = process.addr();
+    assert!(addr.ip().is_loopback() && addr.port() != 0, "{addr}");
+    TcpStream::connect(addr).expect("the logged address accepts connections");
+    let (output, stderr) = process.stop();
     assert!(
         output.stdout.is_empty(),
         "serve mode should not write startup diagnostics to stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    let events = stderr_json_events(&output.stderr);
+    let events = stderr_json_events(stderr.as_bytes());
     let invalid_filter = event_by_name(&events, "logging_filter_invalid");
     assert_eq!(invalid_filter["envVar"], "RUST_LOG");
     assert_eq!(
@@ -214,7 +215,7 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     let config_path = paths.config_path.display().to_string();
     let address = addr.to_string();
     assert_eq!(starting["configPath"].as_str(), Some(config_path.as_str()));
-    assert_eq!(starting["publicListen"].as_str(), Some(address.as_str()));
+    assert_eq!(starting["publicListen"].as_str(), Some("127.0.0.1:0"));
     assert!(starting.get("adminListen").is_none());
     assert_eq!(starting["reloadTimeoutMs"].as_u64(), Some(30_000));
     assert_eq!(starting["bodyHardCapBytes"], Value::Null);
@@ -256,8 +257,8 @@ fn serve_allows_disjoint_state_sets() {
     write_config(&first);
     write_config(&second);
 
-    let first_process = BrokerProcess::start(&first.config_path, free_addr());
-    let second_process = BrokerProcess::start(&second.config_path, free_addr());
+    let first_process = BrokerProcess::start(&first.config_path);
+    let second_process = BrokerProcess::start(&second.config_path);
 
     drop(second_process);
     drop(first_process);
@@ -271,7 +272,7 @@ fn serve_auto_creates_state_directories_before_locking() {
     let paths = BrokerConfigPaths::new(temp.path(), "fresh", true, true);
     write_config(&paths);
 
-    let process = BrokerProcess::start(&paths.config_path, free_addr());
+    let process = BrokerProcess::start(&paths.config_path);
 
     let managed_store = paths.managed_store_path.as_ref().unwrap();
     let audit = paths.audit_path.as_ref().unwrap();
@@ -334,48 +335,79 @@ impl BrokerConfigPaths {
     }
 }
 
+/// A `serve` process on a loopback port the broker chose itself.
 struct BrokerProcess {
     child: Option<Child>,
+    stderr: Option<StderrLog>,
+    addr: SocketAddr,
 }
 
 impl BrokerProcess {
-    fn start(config_path: &Path, addr: SocketAddr) -> Self {
-        Self::start_with_env(config_path, addr, &[])
+    fn start(config_path: &Path) -> Self {
+        Self::start_with_env(config_path, &[])
     }
 
-    fn start_with_env(config_path: &Path, addr: SocketAddr, envs: &[(&str, &str)]) -> Self {
-        let mut command = broker_command(config_path, addr);
+    /// Starts `serve` on port 0 and waits until its stderr reports the public
+    /// listener's `broker_listening` event, which names the bound address.
+    /// The broker binds before logging that event, so every earlier startup
+    /// event has been written by then. Binding port 0 leaves no window in
+    /// which another process could take a port chosen in advance.
+    fn start_with_env(config_path: &Path, envs: &[(&str, &str)]) -> Self {
+        let mut command = broker_command(config_path);
         for (name, value) in envs {
             command.env(name, value);
         }
-        let mut child = command.spawn().unwrap();
-        let started_at = Instant::now();
+        let (mut process, mut stderr) = Self::spawn(command);
+        let deadline = Instant::now() + START_TIMEOUT;
         loop {
-            if TcpStream::connect(addr).is_ok() {
-                return Self { child: Some(child) };
-            }
-            if let Some(status) = child.try_wait().unwrap() {
-                let output = child.wait_with_output().unwrap();
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let Some(line) = stderr.next_line(remaining) else {
+                process.stderr = Some(stderr);
+                let (output, stderr) = process.stop();
                 panic!(
-                    "broker exited before listening: status={status}; stdout={}; stderr={}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
+                    "broker did not log broker_listening within {START_TIMEOUT:?}: status={}; stdout={}; stderr={stderr}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout)
                 );
+            };
+            if let Some(addr) = public_listening_address(&line) {
+                process.addr = addr;
+                process.stderr = Some(stderr);
+                return process;
             }
-            assert!(
-                started_at.elapsed() <= START_TIMEOUT,
-                "broker did not start listening on {addr}"
-            );
-            thread::sleep(Duration::from_millis(25));
         }
     }
 
-    fn stop(mut self) -> Output {
+    /// Spawns `command`, whose child the returned process kills when dropped,
+    /// and reads its stderr. The address is unknown until it is logged.
+    fn spawn(mut command: Command) -> (Self, StderrLog) {
+        let mut child = command.spawn().unwrap();
+        let stderr = StderrLog::read(child.stderr.take().unwrap());
+        let process = Self {
+            child: Some(child),
+            stderr: None,
+            addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+        };
+        (process, stderr)
+    }
+
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Kills the process and returns its stdout and complete stderr.
+    fn stop(mut self) -> (Output, String) {
         let mut child = self.child.take().expect("broker process is present");
         if child.try_wait().ok().flatten().is_none() {
             let _ = child.kill();
         }
-        child.wait_with_output().unwrap()
+        let output = child.wait_with_output().unwrap();
+        let stderr = self
+            .stderr
+            .take()
+            .expect("broker stderr is present")
+            .finish();
+        (output, stderr)
     }
 }
 
@@ -391,46 +423,107 @@ impl Drop for BrokerProcess {
     }
 }
 
-fn run_expect_startup_failure(config_path: &Path, addr: SocketAddr) -> String {
-    let mut child = broker_command(config_path, addr).spawn().unwrap();
-    let started_at = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            let output = child.wait_with_output().unwrap();
-            assert!(
-                !status.success(),
-                "broker unexpectedly exited successfully; stdout={}; stderr={}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            return String::from_utf8_lossy(&output.stderr).to_string();
+/// The address of a public `broker_listening` event line.
+fn public_listening_address(line: &str) -> Option<SocketAddr> {
+    let event = serde_json::from_str::<Value>(line).ok()?;
+    if event["event"] != "broker_listening" || event["listener"] != "public" {
+        return None;
+    }
+    Some(
+        event["address"]
+            .as_str()
+            .and_then(|address| address.parse().ok())
+            .unwrap_or_else(|| panic!("broker_listening has no socket address: {line}")),
+    )
+}
+
+/// A child's stderr, read line by line on a thread as it is written.
+struct StderrLog {
+    lines: mpsc::Receiver<String>,
+    seen: Vec<String>,
+    reader: thread::JoinHandle<()>,
+}
+
+impl StderrLog {
+    fn read(stderr: std::process::ChildStderr) -> Self {
+        let (sender, lines) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            lines,
+            seen: Vec::new(),
+            reader,
         }
-        if TcpStream::connect(addr).is_ok() {
-            let _ = child.kill();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "conflicting broker bound listener {addr}; stdout={}; stderr={}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        assert!(
-            started_at.elapsed() <= EXIT_TIMEOUT,
-            "broker did not fail within {:?}",
-            EXIT_TIMEOUT
-        );
-        thread::sleep(Duration::from_millis(25));
+    }
+
+    /// The next line, or `None` once stderr closes or `timeout` passes.
+    fn next_line(&mut self, timeout: Duration) -> Option<String> {
+        let line = self.lines.recv_timeout(timeout).ok()?;
+        self.seen.push(line.clone());
+        Some(line)
+    }
+
+    /// Every line, once the stopped child has closed stderr.
+    fn finish(mut self) -> String {
+        self.reader.join().unwrap();
+        self.seen.extend(self.lines.try_iter());
+        self.seen.join("\n")
     }
 }
 
-fn broker_command(config_path: &Path, addr: SocketAddr) -> Command {
+/// Runs `serve` on port 0, expecting it to fail before binding its public
+/// listener, and returns its stderr. A `broker_listening` event means it
+/// bound the listener first.
+fn run_expect_startup_failure(config_path: &Path) -> String {
+    let (mut process, mut stderr) = BrokerProcess::spawn(broker_command(config_path));
+    let deadline = Instant::now() + EXIT_TIMEOUT;
+    while let Some(line) = stderr.next_line(deadline.saturating_duration_since(Instant::now())) {
+        if public_listening_address(&line).is_some() {
+            process.stderr = Some(stderr);
+            let (output, stderr) = process.stop();
+            panic!(
+                "conflicting broker bound its public listener; stdout={}; stderr={stderr}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+    // Stderr closes as the process exits; reap it within the same bound.
+    let exiting = Instant::now();
+    let child = process.child.as_mut().expect("broker process is present");
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            exiting.elapsed() <= EXIT_TIMEOUT,
+            "broker did not fail within {EXIT_TIMEOUT:?}; stderr={}",
+            stderr.seen.join("\n")
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    process.stderr = Some(stderr);
+    let (output, stderr) = process.stop();
+    assert!(
+        !output.status.success(),
+        "broker unexpectedly exited successfully; stdout={}; stderr={stderr}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    stderr
+}
+
+fn broker_command(config_path: &Path) -> Command {
     let mut command = Command::new(broker_bin());
     command
         .arg("--config")
         .arg(config_path)
         .arg("serve")
         .arg("--listen")
-        .arg(addr.to_string())
+        .arg("127.0.0.1:0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
@@ -559,13 +652,6 @@ upload_spool_dir = "{spool_dir}"
         audit = audit,
     );
     fs::write(&paths.config_path, config).unwrap();
-}
-
-fn free_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    addr
 }
 
 fn state_lock_test_guard() -> MutexGuard<'static, ()> {

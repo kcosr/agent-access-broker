@@ -417,11 +417,14 @@ async fn run_service(
     let mut servers = Servers::new();
 
     let node_id = state.node_id();
+    // The bound address, which names the assigned port when `listen` asks
+    // for port 0.
+    let public_address = public_listener.local_addr()?;
     tracing::info!(
         event = "broker_listening",
         nodeId = node_id.as_str(),
         listener = "public",
-        address = %listen,
+        address = %public_address,
     );
     #[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
     let (public_app, mcp) = public_router(state.clone());
@@ -430,12 +433,12 @@ async fn run_service(
     servers.serve(public_listener, public_app, coordinator.clone());
     #[cfg(test)]
     let mut served_gateway_app = None;
-    if let Some((gateway_listen, gateway_listener)) = gateway_listener {
+    if let Some((gateway_address, gateway_listener)) = gateway_listener {
         tracing::info!(
             event = "broker_listening",
             nodeId = node_id.as_str(),
             listener = "gateway",
-            address = %gateway_listen,
+            address = %gateway_address,
         );
         let gateway_app = build_gateway_router(state.clone());
         #[cfg(test)]
@@ -480,10 +483,10 @@ async fn bind_listeners(
 ) -> Result<BoundListeners> {
     let public_listener = tokio::net::TcpListener::bind(listen).await?;
     let gateway_listener = match gateway_listen {
-        Some(gateway_listen) => Some((
-            gateway_listen,
-            tokio::net::TcpListener::bind(gateway_listen).await?,
-        )),
+        Some(gateway_listen) => {
+            let listener = tokio::net::TcpListener::bind(gateway_listen).await?;
+            Some((listener.local_addr()?, listener))
+        }
         None => None,
     };
     Ok((public_listener, gateway_listener))
