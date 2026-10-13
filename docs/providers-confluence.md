@@ -202,16 +202,27 @@ mutation.
 A Confluence write action sends its mutation request after its reads. When the
 Broker proves that request never reached Confluence, because no connection was
 established (including a connect timeout) or the request could not be built,
-the action fails with its ordinary `upstream_connection_failed` (`Confluence
-request failed`) or `upstream_timeout` (`Confluence request timed out`) and a
-result of `mutationStatus: "not_applied"`, `retrySafe: true`: nothing was
-applied, and the action can be repeated. This covers every page, blog, draft
-and comment write, and a page, blog, or draft attachment batch whose first
-upload was never sent. Page create, page draft create and page move audit
-records keep `sideEffectPossible: true` for every mutation failure. A read that
-was never sent, a later upload after earlier files were created, and a failure
-after the request may have been sent carry no such receipt; inspect the content
-before repeating those writes.
+the action keeps its ordinary failure and adds `mutationStatus: "not_applied"`,
+`retrySafe: true` to its result: nothing was applied, and the action can be
+repeated.
+
+- Page, blog, draft and comment writes, which send a single mutation, fail with
+  `upstream_connection_failed` (`Confluence request failed`) or
+  `upstream_timeout` (`Confluence request timed out`).
+- A page or blog attachment batch whose first upload was never sent keeps
+  `upstream_failed` with `Confluence attachment upload failed` or
+  `Confluence blog attachment upload failed`.
+- A page or blog draft attachment batch whose first upload was never sent keeps
+  `upstream_failed` with `Confluence page draft attachment upload partially
+  failed` or `Confluence blog draft attachment upload partially failed`, and its
+  result keeps `status: "partial"`, the empty `attachments` and `failures`
+  alongside the receipt.
+
+Page create, page draft create and page move audit records keep
+`sideEffectPossible: true` for every mutation failure. A read that was never
+sent, a later upload after earlier files were created, and a failure after the
+request may have been sent carry no such receipt; inspect the content before
+repeating those writes.
 
 ## Actions and lookup requirements
 

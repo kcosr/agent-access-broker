@@ -514,14 +514,18 @@ All notable changes to this project are documented in this file.
   `comment.property.delete`, and `attachment.add` when its first upload was not
   sent) whose request the Broker proves was never sent now add
   `mutationStatus: "not_applied"`, `retrySafe: true` to their unchanged error,
-  which previously carried no result.
+  which previously carried no result: `upstream_connection_failed` or
+  `upstream_timeout` for single writes, and `upstream_failed` with
+  `Jira attachment upload failed` for the attachment batch.
 - Confluence write actions (page create, update and move; blog create and
   update; page and blog draft create, stage, update, publish and discard;
   footer comment add; comment update, delete and reply; and page, blog and draft
   attachment batches whose first upload was not sent) whose request the Broker
   proves was never sent now add `mutationStatus: "not_applied"`,
-  `retrySafe: true` to their unchanged error. Draft attachment batches keep
-  their `status: "partial"` result alongside the receipt.
+  `retrySafe: true` to their unchanged error: `upstream_connection_failed` or
+  `upstream_timeout` for single writes, and `upstream_failed` with the batch's
+  existing message for attachment batches. Draft attachment batches keep their
+  `status: "partial"` result alongside the receipt.
 
 ### Fixed
 

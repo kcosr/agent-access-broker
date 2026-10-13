@@ -2264,7 +2264,7 @@ HTTP status; the receipt only adds what is known about the write:
 
 | `mutationStatus` | `retrySafe` | Meaning |
 | --- | --- | --- |
-| `not_applied` | `true` | The Broker proved the write's request never reached the upstream, for example because no connection was established. Nothing changed, and the request may be repeated. Native providers, Teams and imported MCP and OpenAPI writes report it; it accompanies an ordinary reason such as `upstream_connection_failed` or `upstream_timeout`. |
+| `not_applied` | `true` | The Broker proved the write's request never reached the upstream, for example because no connection was established. Nothing changed, and the request may be repeated. Native providers, Teams and imported MCP and OpenAPI writes report it with the failure's ordinary reason: usually `upstream_connection_failed` or `upstream_timeout`, but `upstream_failed` for a Jira or Confluence attachment batch whose first upload was never sent. |
 | `unknown` | `false` | The request may have reached the upstream, but no response said what happened. GitLab writes without a verification contract and dispatched imported MCP and OpenAPI writes report it. Inspect the target before repeating the write. |
 | `applied_unverified` | `false` | The upstream applied the write, or may have, but the Broker could not verify it; see `mutation_verification_failed` above. A success can also report it, such as an imported write or a CloudBees CI trigger without a queue location. |
 | `applied` | `false` | The write succeeded; repeating it would apply it again. |

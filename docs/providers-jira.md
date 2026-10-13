@@ -252,14 +252,16 @@ the mutation.
 A Jira write action sends its mutation request after its reads. When the Broker
 proves that request never reached Jira, because no connection was established
 (including a connect timeout) or the request could not be built, the action
-fails with its ordinary `upstream_connection_failed` (`Jira request failed`) or
-`upstream_timeout` (`Jira request timed out`) and a result of
-`mutationStatus: "not_applied"`, `retrySafe: true`: nothing was applied, and
-the action can be repeated. This covers every write action, and an
-`attachment.add` batch whose first upload was never sent. A read that was never
-sent, a later upload after earlier files were created, and a failure after the
-request may have been sent carry no such receipt; inspect the issue before
-repeating those writes.
+keeps its ordinary failure and adds `mutationStatus: "not_applied"`,
+`retrySafe: true` to its result: nothing was applied, and the action can be
+repeated. Every write action except `attachment.add` sends a single mutation
+and fails with `upstream_connection_failed` (`Jira request failed`) or
+`upstream_timeout` (`Jira request timed out`). An `attachment.add` batch whose
+first upload was never sent keeps `upstream_failed` with `Jira attachment
+upload failed` (see [Attachments](#attachments)). A read that was never sent, a
+later upload after earlier files were created, and a failure after the request
+may have been sent carry no such receipt; inspect the issue before repeating
+those writes.
 
 ## Read response formats
 
