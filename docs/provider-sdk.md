@@ -339,7 +339,7 @@ another type, is a `ProviderStateError`. Returned with `?`, it becomes the host'
 `broker_provider_contract_failed` with a diagnostic code; the state's contents
 are never logged.
 
-```rust
+```rust check
 use agent_access_provider::{
     ProviderError, ProviderInvocation, ProviderState, ResourceScopes, ScopeResolution,
 };
@@ -474,7 +474,7 @@ token serves, so the provider must check that on every use:
 3. Attach its `token()` only to requests for the provider's own origin, after
    the origin check in [credentials and origins](#credentials-and-origins).
 
-```rust
+```rust check
 use agent_access_provider::{DelegatedCredential, ProviderError, ReasonCode};
 
 const NOTES_TARGET: &str = "https://notes.example.com/";
@@ -632,7 +632,7 @@ with `bearer_auth` to a request for such a URL reaches that host.
   `get_following_redirects` rather than on the first request. The helper
   applies it only to hops on the base origin.
 
-```rust
+```rust check
 use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::RequestBuilder;
 use agent_access_provider::deps::url::Url;
@@ -737,7 +737,7 @@ policy, and the provider applies its containment and result checks again on
 every page. When a newly rewritten query is incompatible with an upstream
 cursor, reject the token or restart rather than weakening a restriction.
 
-```rust
+```rust check
 use agent_access_provider::{
     ContinuationError, ContinuationFamily, ContinuationLifetime, ContinuationSigner, ProviderError,
     ProviderInvocation, ReasonCode,
@@ -1118,7 +1118,7 @@ attribute and the `reqwest` and `url` types come from the SDK's `deps` module;
 the crate depends directly only on `serde` for its derives and on `serde_json`
 for the `json!` macro, on the SDK's semver lines.
 
-```toml
+```toml file=example-notes/Cargo.toml
 [package]
 name = "example-notes"
 version = "0.1.0"
@@ -1137,7 +1137,7 @@ wiremock = "0.6"
 
 ### Registration, resource type and configuration
 
-```rust
+```rust file=example-notes/src/lib.rs
 use agent_access_provider::deps::async_trait;
 use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::Response;
@@ -1261,7 +1261,7 @@ impl BackendConfig for NotesConfig {
 
 ### Descriptor
 
-```rust
+```rust file=example-notes/src/lib.rs
 /// The notes service. It depends on nothing but constants, so offline
 /// validation can call it before a provider exists.
 pub fn notes_descriptor() -> ServiceDescriptor {
@@ -1301,7 +1301,7 @@ pub fn notes_descriptor() -> ServiceDescriptor {
 
 ### Provider
 
-```rust
+```rust file=example-notes/src/lib.rs
 struct NotesProvider {
     client: UpstreamClient,
     max_response_bytes: u64,
@@ -1473,7 +1473,7 @@ The tests build the provider through `TestHost`, resolve scopes with
 `ScopeRequestFixture` and invoke it against a local mock upstream with
 `InvocationBuilder`, inside an invocation hook as the Broker runs it.
 
-```rust
+```rust file=example-notes/src/lib.rs
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -351,7 +351,13 @@ All notable changes to this project are documented in this file.
   and runs it against a synthetic CloudBees CI controller through that CLI.
   Every crate in `Cargo.lock` must already be in the download cache, and Cargo
   configuration outside the driver's private Cargo home must not apply to its
-  stage.
+  stage. In the same stage it builds and tests the code of the provider SDK and
+  downstream assembly guides, which marks every Rust block: `rust check` blocks
+  compile as modules of a generated SDK-only crate, `rust file=` and
+  `toml file=` blocks form the guides' example crates, staged in the provider
+  repository and beside the assembly, and `rust fragment` blocks are
+  deliberately not compiled. The assembly guide's example must share its
+  `main.rs` and `build.rs` with the fixture's assembly as the guide states.
 
 ### Changed
 

@@ -156,8 +156,11 @@ repository and a downstream Broker distribution from the clean candidate commit,
 builds and tests them and the candidate's CLI with `--locked --offline` against
 the shared Cargo download cache, reviews their lockfiles, and runs the
 assembled executable against a synthetic CloudBees CI controller through that
-CLI. Every locked crate must already be in the shared download cache, and no
-Cargo configuration may apply under `$TMPDIR` besides the one the driver writes:
+CLI. In the same stage it builds and tests the provider SDK and downstream
+assembly guides' marked [code blocks](testing.md#guide-code-blocks), so a guide
+whose code no longer builds against the candidate fails qualification. Every
+locked crate must already be in the shared download cache, and no Cargo
+configuration may apply under `$TMPDIR` besides the one the driver writes:
 
 ```bash
 node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \

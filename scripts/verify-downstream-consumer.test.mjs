@@ -7,12 +7,14 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
-  ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION, PROVIDER_PACKAGE,
-  ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, assemblyFeatureTreeArgs, assemblyFeatureViolations, expectedAssemblyStatus, foreignCargoConfigs, gitSourceId, inheritedWorkspaceDependencies,
-  inventoryFingerprint, isolatedGitEnvironment, lastTableHeader, manifestDependencies, normalizeProviderCrateManifest, parseConsumerArguments, parseLockfile,
-  processGroupAlive,
-  parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment,
-  stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
+  ASSEMBLY_GUIDE, ASSEMBLY_GUIDE_SHARED_FILES, ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION,
+  GUIDE_PROVIDER_URL, GUIDE_SNIPPET_PACKAGE, PROVIDER_GUIDE, PROVIDER_PACKAGE,
+  ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, assemblyFeatureTreeArgs, assemblyFeatureViolations, expectedAssemblyStatus, extractGuide,
+  foreignCargoConfigs, gitSourceId, guideBlockMarker, guideExamples, guideManifestPins, inheritedWorkspaceDependencies,
+  inventoryFingerprint, isolatedGitEnvironment, lastTableHeader, manifestDependencies, manifestPackageField, markdownCodeBlocks, normalizeProviderCrateManifest,
+  parseConsumerArguments, parseLockfile, processGroupAlive,
+  parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment, sharedAssemblyFiles,
+  snippetCrate, stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
 } from "./verify-downstream-consumer.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -162,6 +164,176 @@ test("the checked-in templates and the maintained provider crate stage cleanly",
   }
 });
 
+const fence = (info, body) => `\`\`\`${info}\n${body}\`\`\`\n`;
+const exampleManifest = (name, extra = "") => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\n`
+  + `${SDK_PACKAGE} = { git = "${CANONICAL_UPSTREAM_URL}", rev = "<full 40-character commit>" }\n${extra}`;
+
+test("Markdown code blocks keep their fence line, info string and lines, including indented and tilde fences", () => {
+  const text = "# Title\n\n```rust check\nfn a() {}\n```\n\n- item\n\n  ```toml file=x/Cargo.toml\n  [package]\n    name = \"x\"\n  ```\n\n"
+    + "~~~~text\n```\nnot a fence\n~~~\n~~~~~\n\n``` inline `code` ```\n```\n\n```\n";
+  assert.deepEqual(markdownCodeBlocks(text), [
+    { line: 3, info: "rust check", language: "rust", attributes: ["check"], text: "fn a() {}\n" },
+    { line: 9, info: "toml file=x/Cargo.toml", language: "toml", attributes: ["file=x/Cargo.toml"], text: "[package]\n  name = \"x\"\n" },
+    { line: 14, info: "text", language: "text", attributes: [], text: "```\nnot a fence\n~~~\n" },
+    { line: 21, info: "", language: "", attributes: [], text: "\n" },
+  ]);
+  assert.throws(() => markdownCodeBlocks("```rust check\nfn a() {}\n"), /opened at line 1 is not closed/);
+});
+
+test("every Rust block in a guide needs exactly one valid marker", () => {
+  const marker = (info) => {
+    const [language = "", ...attributes] = info.split(/\s+/).filter(Boolean);
+    return guideBlockMarker({ line: 7, info, language, attributes });
+  };
+  assert.deepEqual(marker("rust check"), { kind: "check" });
+  assert.deepEqual(marker("rust fragment"), { kind: "fragment" });
+  assert.deepEqual(marker("rust file=example-notes/src/lib.rs"), { kind: "file", crate: "example-notes", path: "src/lib.rs" });
+  assert.deepEqual(marker("rust file=team-broker/build.rs"), { kind: "file", crate: "team-broker", path: "build.rs" });
+  assert.deepEqual(marker("rust file=a/tests/flow.rs"), { kind: "file", crate: "a", path: "tests/flow.rs" });
+  assert.deepEqual(marker("toml file=team-broker/Cargo.toml"), { kind: "file", crate: "team-broker", path: "Cargo.toml" });
+  for (const info of ["toml", "bash", "text", "", "json title=x"]) assert.deepEqual(marker(info), { kind: "unchecked" });
+  for (const [info, pattern] of [
+    ["rust", /line 7: a Rust block needs exactly one marker/],
+    ["rust check fragment", /exactly one marker/],
+    ["rust check title=x", /exactly one marker/],
+    ["rust ignore", /exactly one marker/],
+    ["rust,check", /write the info string as `rust <marker>`/],
+    ["rust,ignore", /`rust <marker>`/],
+    ["Rust check", /`rust <marker>`/],
+    ["rs check", /`rust <marker>`/],
+    ["rust file=Notes/src/lib.rs", /unsupported marker/],
+    ["rust file=notes/lib.rs", /unsupported marker/],
+    ["rust file=notes/src/../lib.rs", /unsupported marker/],
+    ["rust file=notes/Cargo.toml", /unsupported marker/],
+    ["rust file=notes", /unsupported marker/],
+    ["toml file=notes/src/lib.rs", /unsupported marker/],
+    ["toml check", /only `toml file=<crate>\/Cargo\.toml` marks/],
+    ["toml file=notes/Cargo.toml extra", /only `toml file=<crate>\/Cargo\.toml` marks/],
+    ["bash check", /only `toml file=<crate>\/Cargo\.toml` marks/],
+    ["text fragment", /only `toml file=<crate>\/Cargo\.toml` marks/],
+  ]) assert.throws(() => marker(info), pattern, info);
+});
+
+test("guide crates join their marked blocks in document order with one manifest naming the crate", () => {
+  const guide = [
+    "# Guide", fence("toml file=notes/Cargo.toml", exampleManifest("notes")), fence("rust file=notes/src/lib.rs", "pub fn a() {}\n"),
+    fence("rust check", "fn standalone() {}\n"), fence("toml", "[providers.notes]\n"), fence("rust fragment", "let x = y?;\n"),
+    fence("rust file=notes/src/lib.rs", "pub fn b() {}\n\npub fn c() {}\n"), fence("rust file=notes/tests/flow.rs", "#[test]\nfn flow() {}\n"),
+  ].join("\n");
+  const { crates, checks, blocks } = extractGuide("docs/guide.md", guide, { standalone: true });
+  assert.deepEqual(blocks.map((block) => [block.line, block.kind]), [[2, "file"], [12, "file"], [16, "check"], [20, "unchecked"], [24, "fragment"],
+    [28, "file"], [34, "file"]]);
+  assert.deepEqual(checks, [{ line: 16, text: "fn standalone() {}\n" }]);
+  assert.equal(crates.length, 1);
+  assert.equal(crates[0].name, "notes");
+  assert.equal(crates[0].manifestLine, 2);
+  assert.equal(crates[0].manifest, exampleManifest("notes"));
+  assert.deepEqual(crates[0].files, [
+    { path: "src/lib.rs", text: "pub fn a() {}\n\npub fn b() {}\n\npub fn c() {}\n", origins: [{ guideLine: 13, fileLine: 1 }, { guideLine: 29, fileLine: 3 }] },
+    { path: "tests/flow.rs", text: "#[test]\nfn flow() {}\n", origins: [{ guideLine: 35, fileLine: 1 }] },
+  ]);
+  const rejects = (text, pattern, options = { standalone: true }) => assert.throws(() => extractGuide("docs/guide.md", text, options), pattern);
+  rejects(fence("rust check", "fn a() {}\n"), /docs\/guide\.md: the Rust block at line 1 is marked check, but only docs\/provider-sdk\.md compiles/, {});
+  rejects(fence("rust", "fn a() {}\n"), /docs\/guide\.md: the `rust` block at line 1: a Rust block needs exactly one marker/);
+  rejects(fence("rust file=notes/src/lib.rs", "fn a() {}\n"), /example crate notes has no `toml file=notes\/Cargo\.toml` block/);
+  rejects(fence("toml file=notes/Cargo.toml", exampleManifest("notes")), /example crate notes has no src\/lib\.rs or src\/main\.rs block/);
+  rejects(`${fence("toml file=notes/Cargo.toml", exampleManifest("other"))}${fence("rust file=notes/src/lib.rs", "")}`,
+    /notes\/Cargo\.toml at line 1 must declare package notes; found other/);
+  rejects(`${fence("toml file=notes/Cargo.toml", exampleManifest("notes"))}${fence("toml file=notes/Cargo.toml", exampleManifest("notes"))}`,
+    /line 10 defines notes\/Cargo\.toml again; line 1 defines it/);
+  assert.equal(manifestPackageField(`[package]\nname = "a" # comment\nedition = "2024"\n[dependencies]\nname = "b"\n`, "name"), "a");
+  assert.equal(manifestPackageField(`[dependencies]\nname = "b"\n`, "name"), null);
+});
+
+test("standalone blocks compile as one module each in a generated SDK-only crate", () => {
+  const crate = snippetCrate("docs/provider-sdk.md", [{ line: 42, text: "fn a() {}\n" }, { line: 77, text: "fn b() {}\n" }]);
+  assert.equal(crate.name, GUIDE_SNIPPET_PACKAGE);
+  assert.equal(manifestPackageField(crate.manifest, "name"), GUIDE_SNIPPET_PACKAGE);
+  assert.equal(manifestPackageField(crate.manifest, "edition"), "2024");
+  assert.deepEqual(manifestDependencies(crate.manifest).entries.map((entry) => [entry.key, entry.spec]), [[SDK_PACKAGE, { workspace: true }]]);
+  assert.deepEqual(crate.files.map((file) => [file.path, file.origins]), [["src/lib.rs", []], ["src/line_42.rs", [{ guideLine: 43, fileLine: 1 }]],
+    ["src/line_77.rs", [{ guideLine: 78, fileLine: 1 }]]]);
+  assert.match(crate.files[0].text, /^#!\[allow\(dead_code\)\]$/m);
+  assert.match(crate.files[0].text, /^\/\/\/ docs\/provider-sdk\.md, the block whose fence opens at line 42\.\nmod line_42;\n/m);
+  assert.equal(crate.files[2].text, "fn b() {}\n");
+});
+
+test("guide manifest placeholders are staged like the fixture's sentinel pins", () => {
+  const manifest = `${exampleManifest("example-notes")}\n[dev-dependencies]\n`
+    + `${SDK_PACKAGE} = { git = "${CANONICAL_UPSTREAM_URL}", rev = "<full 40-character commit>", features = ["test-support"] }\n`;
+  const { text, rewrites } = rewriteStagedManifest(guideManifestPins(manifest), [upstream]);
+  assert.equal(text, manifest.replaceAll(`"${CANONICAL_UPSTREAM_URL}", rev = "<full 40-character commit>"`, `"${upstreamUrl}", rev = "${commit}"`));
+  assert.deepEqual(rewrites.map((rewrite) => rewrite.table), ["dependencies", "dev-dependencies"]);
+  const assembly = `[dependencies]\nagent-access-broker-host = { git = "${CANONICAL_UPSTREAM_URL}", rev = "<full upstream commit>" }\n`
+    + `example-notes = { git = "${GUIDE_PROVIDER_URL}", rev = "<full provider commit>" }\n`;
+  const notes = { canonical: GUIDE_PROVIDER_URL, url: providerUrl, rev: providerCommit, packages: new Set(["example-notes"]) };
+  assert.deepEqual(rewriteStagedManifest(guideManifestPins(assembly), [notes, upstream]).rewrites.map((rewrite) => [rewrite.package, rewrite.staged.git]),
+    [["agent-access-broker-host", upstreamUrl], ["example-notes", providerUrl]]);
+  assert.throws(() => rewriteStagedManifest(guideManifestPins(`[dependencies]\n${SDK_PACKAGE} = ${pin(CANONICAL_UPSTREAM_URL, commit)}\n`), [upstream]),
+    /must pin the sentinel rev/);
+  assert.throws(() => rewriteStagedManifest(guideManifestPins(`[dependencies]\nexample-notes = { git = "${CANONICAL_PROVIDER_URL}", rev = "<x>" }\n`),
+    [notes, upstream]), /must use exactly https:\/\/git\.example\.com\/notes-team/);
+  assert.throws(() => rewriteStagedManifest(guideManifestPins(`[dependencies]\nexample-notes = { path = "../notes" }\n`), [notes, upstream]),
+    /must not use path/);
+});
+
+test("the assembly guide's shared files must equal the fixture's with the stated renames", () => {
+  const shared = [{ path: "build.rs", renames: [["FIXTURE_", "GUIDE_"]] }, { path: "src/main.rs", renames: [["fixture_crate", "guide_crate"]] }];
+  const fixtureFiles = new Map([["build.rs", "emit(\"FIXTURE_REVISION\");\nemit(\"FIXTURE_VERSION\");\n"], ["src/main.rs", "use fixture_crate::run;\nfn main() { run() }\n"]]);
+  const guideMain = "use guide_crate::run;\nfn main() { run() }\n";
+  const { files, checks } = sharedAssemblyFiles({ guideFiles: new Map([["src/lib.rs", "pub fn run() {}\n"], ["src/main.rs", guideMain]]), fixtureFiles, shared });
+  assert.deepEqual([...files], [["src/lib.rs", "pub fn run() {}\n"], ["src/main.rs", guideMain], ["build.rs", "emit(\"GUIDE_REVISION\");\nemit(\"GUIDE_VERSION\");\n"]]);
+  assert.deepEqual(checks.map((check) => [check.path, check.staged]), [["build.rs", "fixture file with the renames"],
+    ["src/main.rs", "guide block, equal to the fixture file with the renames"]]);
+  assert.throws(() => sharedAssemblyFiles({ guideFiles: new Map([["src/main.rs", guideMain.replace("run() }", "run(); }")]]), fixtureFiles, shared }),
+    /shows a src\/main\.rs that differs from the fixture's .*first at its line 2: "fn main\(\) \{ run\(\); \}" instead of "fn main\(\) \{ run\(\) \}"/);
+  assert.throws(() => sharedAssemblyFiles({ guideFiles: new Map([["src/main.rs", `${guideMain}// more\n`]]), fixtureFiles, shared }),
+    /first at its line 3: "\/\/ more" instead of ""/);
+  assert.throws(() => sharedAssemblyFiles({ guideFiles: new Map(), fixtureFiles: new Map([...fixtureFiles, ["build.rs", "emit();\n"]]), shared }),
+    /fixture's build\.rs no longer contains "FIXTURE_"; update what docs\/downstream-assembly\.md states/);
+  assert.throws(() => sharedAssemblyFiles({ guideFiles: new Map(), fixtureFiles: new Map([["build.rs", "FIXTURE_"]]), shared }),
+    /fixture assembly template has no src\/main\.rs/);
+});
+
+const sharedFixtureFiles = () => new Map(ASSEMBLY_GUIDE_SHARED_FILES.map(({ path }) => [path, read(`tests/downstream-consumer/assembly-repo/${path}`)]));
+
+test("the checked-in guides yield the staged example crates and share files with the fixture as they state", () => {
+  const workspace = new Set(parseLockfile(read("Cargo.lock")).packages.filter((entry) => entry.source === null).map((entry) => entry.name));
+  const reservedNames = new Set([...workspace, ASSEMBLY_PACKAGE]);
+  const examples = guideExamples({ providerGuide: read(PROVIDER_GUIDE), assemblyGuide: read(ASSEMBLY_GUIDE), fixtureFiles: sharedFixtureFiles(), reservedNames });
+  assert.deepEqual(examples.destinations.map(({ crate, repository, directory }) => [crate.name, repository, directory]), [
+    ["example-notes", "provider", "crates/example-notes"], [GUIDE_SNIPPET_PACKAGE, "provider", `crates/${GUIDE_SNIPPET_PACKAGE}`], ["team-broker", "guide-assembly", "."]]);
+  const rust = examples.inventory.guides.flatMap(({ path, blocks }) => blocks.filter((block) => /^rust\b/.test(block.info)).map((block) => [path, block.kind]));
+  assert.ok(rust.every(([, kind]) => ["check", "file", "fragment"].includes(kind)));
+  assert.ok(rust.filter(([path, kind]) => path === PROVIDER_GUIDE && kind === "check").length >= 1);
+  assert.deepEqual(examples.assemblyCrate.files.map((file) => [file.path, file.fixture ?? "guide"]),
+    [["src/lib.rs", "guide"], ["src/main.rs", "guide"], ["build.rs", "tests/downstream-consumer/assembly-repo/build.rs"]]);
+  assert.match(examples.assemblyCrate.files[2].text, /cargo:rustc-env=TEAM_BROKER_\{prefix\}_REVISION/);
+  assert.match(examples.assemblyCrate.files[2].text, /\("NOTES", "example-notes"\)/);
+  // Both guide manifests stage against the fixture's sources.
+  const notes = { canonical: GUIDE_PROVIDER_URL, url: providerUrl, rev: providerCommit, packages: new Set(["example-notes", GUIDE_SNIPPET_PACKAGE]) };
+  for (const crate of [...examples.providerCrates, examples.assemblyCrate]) {
+    const staged = rewriteStagedManifest(guideManifestPins(crate.manifest), [notes, { ...upstream, packages: workspace }]);
+    assert.ok(!staged.text.includes(CANONICAL_UPSTREAM_URL) && !staged.text.includes(GUIDE_PROVIDER_URL), crate.name);
+    assert.equal(manifestPackageField(crate.manifest, "edition"), "2024", crate.name);
+  }
+  assert.throws(() => guideExamples({ providerGuide: read(PROVIDER_GUIDE), assemblyGuide: read(ASSEMBLY_GUIDE), fixtureFiles: sharedFixtureFiles(),
+    reservedNames: new Set(["team-broker"]) }), /must not reuse an upstream, fixture or other guide crate name: team-broker/);
+  assert.throws(() => guideExamples({ providerGuide: read(PROVIDER_GUIDE), assemblyGuide: "", fixtureFiles: sharedFixtureFiles(), reservedNames }),
+    /must mark exactly one example assembly crate; found none/);
+  assert.throws(() => guideExamples({ providerGuide: "", assemblyGuide: read(ASSEMBLY_GUIDE), fixtureFiles: sharedFixtureFiles(), reservedNames }),
+    /docs\/provider-sdk\.md marks no example crate/);
+});
+
+test("Rust blocks outside the checked guides are marked as fragments, so none is silently unchecked", () => {
+  const files = execFileSync("git", ["ls-files", "-z", "--", "*.md"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+  assert.ok(files.includes(PROVIDER_GUIDE) && files.includes(ASSEMBLY_GUIDE));
+  const unchecked = files.filter((file) => ![PROVIDER_GUIDE, ASSEMBLY_GUIDE].includes(file)).flatMap((file) => markdownCodeBlocks(read(file))
+    .filter((block) => /^(?:rust|rs)(?![a-z0-9_-])/i.test(block.language) && block.info !== "rust fragment")
+    .map((block) => `${file}:${block.line} (${block.info})`));
+  assert.deepEqual(unchecked, []);
+});
+
 const lockText = (packages) => `# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n${packages.map((entry) =>
   `\n[[package]]\nname = "${entry.name}"\nversion = "${entry.version}"\n${entry.source ? `source = "${entry.source}"\n` : ""}`
   + `${entry.checksum ? `checksum = "${entry.checksum}"\n` : ""}${entry.dependencies ? `dependencies = [\n${entry.dependencies.map((name) => ` "${name}",\n`).join("")}]\n` : ""}`).join("")}`;
@@ -206,15 +378,23 @@ test("lockfile review requires exact sources, one SDK identity and candidate thi
     { name: SDK_PACKAGE, version: "0.1.0", source: upstreamSource },
     { name: "serde_derive", version: "1.0.200", source: CRATES_IO_SOURCE, checksum: checksum("2") },
   ];
-  const review = (providerPackages, assemblyPackages) => reviewLockfiles({ candidate: parseLockfile(candidateLock),
-    staged: [{ repository: "provider", lock: parseLockfile(lockText(providerPackages)), members: [PROVIDER_PACKAGE] },
-      { repository: "assembly", lock: parseLockfile(lockText(assemblyPackages)), members: [ASSEMBLY_PACKAGE] }],
-    upstreamSource, providerSource });
+  const guideLock = [
+    { name: "team-broker", version: "1.4.0" },
+    { name: "agent-access-broker-host", version: "0.1.0", source: upstreamSource },
+    { name: "example-notes", version: "0.1.0", source: providerSource },
+    { name: SDK_PACKAGE, version: "0.1.0", source: upstreamSource },
+  ];
+  const providerPackages = new Set([PROVIDER_PACKAGE, "example-notes"]);
+  const review = (providerPackagesLock, assemblyPackages, guidePackages = guideLock) => reviewLockfiles({ candidate: parseLockfile(candidateLock),
+    staged: [{ repository: "provider", lock: parseLockfile(lockText(providerPackagesLock)), members: [PROVIDER_PACKAGE] },
+      { repository: "assembly", lock: parseLockfile(lockText(assemblyPackages)), members: [ASSEMBLY_PACKAGE] },
+      { repository: "guide-assembly", lock: parseLockfile(lockText(guidePackages)), members: ["team-broker"] }],
+    upstreamSource, providerSource, providerPackages });
   const passing = review(providerLock, assemblyLock);
   assert.deepEqual(passing.errors, []);
   assert.deepEqual(passing.sdkPackageIds, [`${SDK_PACKAGE} 0.1.0 ${upstreamSource}`]);
   assert.deepEqual(passing.summary.map((entry) => [entry.repository, entry.workspace, entry.upstream, entry.provider, entry.thirdParty]),
-    [["provider", 1, 1, 0, 1], ["assembly", 1, 2, 1, 1]]);
+    [["provider", 1, 1, 0, 1], ["assembly", 1, 2, 1, 1], ["guide-assembly", 1, 2, 1, 0]]);
   const withEntry = (packages, index, change) => packages.map((entry, position) => (position === index ? { ...entry, ...change } : entry));
   const failures = [
     [review(withEntry(providerLock, 1, { source: gitSourceId(upstreamUrl.replace("upstream", "other"), commit) }), assemblyLock), /does not resolve to/],
@@ -227,6 +407,8 @@ test("lockfile review requires exact sources, one SDK identity and candidate thi
     [review(providerLock, [...assemblyLock, { name: "left-pad", version: "1.0.0", source: "git+https://example.test/left-pad.git#abc" }]), /unexpected source/],
     [review(providerLock.filter((entry) => entry.name !== PROVIDER_PACKAGE), assemblyLock), /member agent-access-conformance is missing/],
     [review(providerLock, withEntry(assemblyLock, 1, { name: "agent-access-unknown" })), /not a candidate workspace package/],
+    [review(providerLock, assemblyLock, withEntry(guideLock, 2, { name: "other-notes" })), /guide-assembly: other-notes .* is not a provider repository package/],
+    [review(providerLock, assemblyLock, withEntry(guideLock, 3, { source: gitSourceId(upstreamUrl, providerCommit) })), /exactly one agent-access-provider package ID/],
   ];
   for (const [result, pattern] of failures) assert.ok(result.errors.some((error) => pattern.test(error)), `${pattern}: ${result.errors.join("; ")}`);
 });
@@ -369,9 +551,10 @@ test("the status must match the assembly's identity, locked sources and fingerpr
 test("environment sanitization keeps only build parallelism of the Cargo settings", () => {
   const { env, removed } = sanitizedEnvironment({ PATH: "/bin", HOME: "/home/x", CARGO_HOME: "/c", CARGO_TARGET_DIR: "/t", CARGO_PROFILE_DEV_DEBUG: "0",
     RUSTFLAGS: "-C x", RUSTC_WRAPPER: "sccache", RUSTUP_TOOLCHAIN: "nightly", CC: "clang", AGENT_ACCESS_BROKER_CONFIG: "/x", RUSTUP_HOME: "/r",
-    CARGO_BUILD_JOBS: "4" });
+    DOWNSTREAM_BROKER_QUALIFICATION: "release", TEAM_BROKER_REVISION: "f".repeat(40), CARGO_BUILD_JOBS: "4" });
   assert.deepEqual(env, { PATH: "/bin", HOME: "/home/x", RUSTUP_HOME: "/r", CARGO_BUILD_JOBS: "4" });
-  assert.deepEqual(removed, ["AGENT_ACCESS_BROKER_CONFIG", "CARGO_HOME", "CARGO_PROFILE_DEV_DEBUG", "CARGO_TARGET_DIR", "CC", "RUSTC_WRAPPER", "RUSTFLAGS", "RUSTUP_TOOLCHAIN"]);
+  assert.deepEqual(removed, ["AGENT_ACCESS_BROKER_CONFIG", "CARGO_HOME", "CARGO_PROFILE_DEV_DEBUG", "CARGO_TARGET_DIR", "CC",
+    "DOWNSTREAM_BROKER_QUALIFICATION", "RUSTC_WRAPPER", "RUSTFLAGS", "RUSTUP_TOOLCHAIN", "TEAM_BROKER_REVISION"]);
 });
 
 test("the private Cargo home replaces crates.io with the cache directory and fetches Git through the CLI", () => {

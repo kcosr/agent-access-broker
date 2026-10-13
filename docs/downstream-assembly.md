@@ -154,7 +154,7 @@ Google OAuth dialect and the MCP import adapter from upstream, together with the
 [SDK guide's worked example](provider-sdk.md#worked-example), which a separate
 repository owns. Its manifest pins both repositories by full revision:
 
-```toml
+```toml file=team-broker/Cargo.toml
 [package]
 name = "team-broker"
 version = "1.4.0"
@@ -187,7 +187,7 @@ provider repository entry. The release pipeline sets `TEAM_BROKER_REVISION` and
 `TEAM_BROKER_QUALIFICATION` only for a build from a verified clean checkout that
 it qualifies.
 
-```rust
+```rust file=team-broker/src/lib.rs
 //! The modules this distribution links, and its identity.
 use agent_access_broker_host::{
     AssemblyIdentity, BrokerComposition, CompositionError, ModuleProvenance, SourceRevision,
@@ -264,7 +264,7 @@ mod tests {
 [`main.rs`](../tests/downstream-consumer/assembly-repo/src/main.rs) with this
 crate's name:
 
-```rust
+```rust file=team-broker/src/main.rs
 use agent_access_broker_host::{BrokerApplication, BrokerExit};
 use team_broker::{build_identity, composition};
 
@@ -446,9 +446,12 @@ repository with its own manifest, lockfile and full-revision pins.
 reviews the lockfiles for one SDK package identity and exact sources, runs the
 provider's tests with SDK test support, checks the release feature graph, and
 starts the assembled executable against a synthetic CloudBees CI controller,
-exercising it with the candidate's CLI. Upstream release qualification runs it
-as the `downstream-consumer` gate; after publication, `--source canonical`
-qualifies the canonical remote pins.
+exercising it with the candidate's CLI. In the same stage, pinned the same way,
+it builds and tests this guide's [example assembly](#example-assembly) and the
+code of the [provider SDK guide](provider-sdk.md), including its worked example,
+and checks the files the example shares with the fixture. Upstream release
+qualification runs it as the `downstream-consumer` gate; after publication,
+`--source canonical` qualifies the canonical remote pins.
 
 For in-process acceptance tests, enable the host's `test-support` feature in
 development dependencies only and start the assembly's own
