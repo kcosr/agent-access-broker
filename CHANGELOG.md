@@ -172,6 +172,9 @@ All notable changes to this project are documented in this file.
   workspace and third-party types their signatures expose.
   `node scripts/public-api.mjs check` fails when the candidate's API differs
   from the inventory. `0.2.0` is the first released baseline.
+- Release qualification runs a required `public-api` gate
+  (`node scripts/public-api.mjs check`). Preflight requires the pinned nightly
+  and `cargo-public-api` and records their versions in `qualification.json`.
 
 ### Changed
 

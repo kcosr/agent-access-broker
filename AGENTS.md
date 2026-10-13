@@ -477,15 +477,21 @@ empty evidence directory outside the checkout:
 node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
-The driver runs the required standalone Rust, crate-boundary, portal, script,
-documentation, sample-config, Unix signal, native release-provenance, and notice
-checks. It
+The driver runs the required standalone Rust, crate-boundary, public API, portal,
+script, documentation, sample-config, Unix signal, native release-provenance, and
+notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
-`contentless_delete`, and rejects Cargo target runners, including through
-configuration includes. See the [full prerequisites](docs/release-readiness.md#qualify-the-candidate).
+`contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
+0.52.0 for the public API gate, and rejects Cargo target runners, including
+through configuration includes. The public API gate checks the candidate
+against its own `api/` inventory; for a release on an existing compatible line,
+also review `git diff <previous-release-tag> -- api/`, where a patch release
+may not remove or change any line. See the
+[full prerequisites](docs/release-readiness.md#qualify-the-candidate) and
+[public API compatibility](docs/release-readiness.md#public-api-compatibility).
 
 Qualification accepts any clean branch or detached commit for PR validation and
 rechecks that `HEAD` stays clean and unchanged. A merge that changes the SHA

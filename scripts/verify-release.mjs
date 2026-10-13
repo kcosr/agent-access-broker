@@ -6,6 +6,7 @@ import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync,
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryBinaries } from "./portal-binaries.mjs";
+import { inspectPublicApiToolchain } from "./public-api.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { inspectLocalToolchain, provenanceBuildPlan } from "./verify-release-provenance.mjs";
@@ -72,6 +73,8 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "doc-links", command: [node, "scripts/check-doc-links.mjs"] },
     { id: "rust-format", command: cargoCommand("fmt", "--check"), cargo: true },
     { id: "crate-boundaries", command: [node, "scripts/check-crate-boundaries.mjs"], cargo: true },
+    // Runs the pinned nightly rustdoc in target/public-api; it sets its own toolchain environment.
+    { id: "public-api", command: [node, "scripts/public-api.mjs", "check"] },
     { id: "portal-unit", command: portal("test:unit") },
     { id: "portal-build", command: portal("build") },
     { id: "rust-tests", command: cargoCommand("test", ...native, "--workspace", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
@@ -127,6 +130,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
       "Browser tests mix real-service fixtures and mocked UI contracts; optional delegated OAuth runs only when OAUTH_STUB_REPO is configured.",
       "Native host results do not establish cross-platform, other Linux distribution, or hermetic-build guarantees.",
       "No runtime archive is assembled; package extraction/checksum acceptance remains a distribution gate.",
+      "The public API gate matches the candidate against its own checked-in api/ inventory; compatibility with the previous release on the same line is a separate review of the api/ diff.",
     ],
     delegatedOAuthFixture: env.OAUTH_STUB_REPO ? "configured; see browser log for outcome" : "not configured; optional browser fixture skipped",
   };
@@ -146,6 +150,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
     report.toolchain = { ...toolchain, node: process.version,
       npm: capture(root, npmVersionCommand[0], npmVersionCommand.slice(1), baseEnv),
       python: capture(root, "python3", ["--version"], baseEnv),
+      publicApi: inspectPublicApiToolchain({ env: baseEnv }),
     };
     const provenancePlan = provenanceBuildPlan(report.commit, { root, env: baseEnv, toolchain });
     const cargoEnv = { ...provenancePlan.env };
