@@ -3985,13 +3985,10 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         take_backend_operations(&capped_backend),
         ["project", "project", "project"]
     );
-    assert!(
-        !capped_broker
-            .audit()
-            .unwrap()
-            .text()
-            .contains(FINAL_CAP_SENTINEL)
-    );
+    // The capped broker has its own audit store.
+    let capped_audit = capped_broker.audit().unwrap();
+    capped_audit.require_action("gitlab", "project.view");
+    assert!(!capped_audit.text().contains(FINAL_CAP_SENTINEL));
     stop(capped_broker).await;
 }
 

@@ -4549,6 +4549,20 @@ async fn invoke_download_can_return_raw_stream_with_metadata_header() {
     assert_eq!(multipart.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(invocations.load(Ordering::SeqCst), 2);
 
+    // Each broker's own store holds its download, so the absence check
+    // below covers both.
+    require_audit_request(
+        &audit_path,
+        "agent-req-download-raw",
+        "jira",
+        "attachment.download",
+    );
+    require_audit_request(
+        &live_audit_path,
+        "agent-req-download-live-raw",
+        "jira",
+        "attachment.download",
+    );
     let audit = read_audit_text(&audit_path) + &read_audit_text(&live_audit_path);
     assert!(audit.contains("\"service\":\"jira\""));
     assert!(audit.contains("\"action\":\"attachment.download\""));
