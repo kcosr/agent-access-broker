@@ -75,9 +75,11 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
 The output directory must be new or empty and outside the checkout. The driver
-runs the required standalone Rust, crate-boundary, public API, portal
-build/unit/browser, script, documentation, sample-config, Unix signal, native
-release-provenance, and notice checks. It writes `qualification.json`, per-gate logs, and native Rust notices.
+runs the required standalone Rust, crate-boundary, public API, downstream
+consumer, portal build/unit/browser, script, documentation, sample-config, Unix
+signal, native release-provenance, and notice checks. It writes
+`qualification.json`, per-gate logs, native Rust notices, and the downstream
+consumer evidence in `downstream-consumer/`.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
 exclusions and platform applicability are recorded explicitly.
@@ -148,6 +150,23 @@ untested workflows passed. Live provider tests require separately configured
 accounts and approved test resources. Run them only with the individually named
 commands in the testing/provider guides; deterministic tests alone do not prove
 compatibility with every upstream deployment.
+
+The required downstream consumer gate uses the CLI from the same build. It
+stages a separately owned provider repository and a downstream Broker
+distribution from the clean candidate commit, builds and tests them with
+`--locked --offline` against the shared Cargo download cache, reviews their
+lockfiles, and runs the assembled executable against a synthetic CloudBees CI
+controller. Every locked crate must already be in the shared download cache:
+
+```bash
+node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
+  --evidence-dir /absolute/external/downstream-consumer \
+  --cli "$PWD/target/$BROKER_BUILD_TARGET/debug/agent-access"
+```
+
+It pins upstream to a staged local clone. After publication, run it again with
+`--source canonical` to qualify the canonical remote pin. See the
+[fixture README](../tests/downstream-consumer/README.md).
 
 Validate all three published configuration templates:
 

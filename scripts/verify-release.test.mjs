@@ -99,6 +99,12 @@ test("qualification uses required native/browser gates and fresh paths without p
   const publicApi = plan.find((entry) => entry.id === "public-api");
   assert.deepEqual(publicApi.command, [process.execPath, "scripts/public-api.mjs", "check"]);
   assert.equal(publicApi.cargo, undefined, "the inventory selects its own pinned nightly, not the release toolchain");
+  const downstream = plan.findIndex((entry) => entry.id === "downstream-consumer");
+  assert.equal(downstream, plan.findIndex((entry) => entry.id === "rust-build") + 1);
+  assert.deepEqual(plan[downstream].command, [process.execPath, "scripts/verify-downstream-consumer.mjs", "--commit", commit,
+    "--evidence-dir", path.join(outputDir, "downstream-consumer"),
+    "--cli", path.join(root, "target", nativeTarget, "debug", "agent-access")]);
+  assert.equal(plan[downstream].cargo, undefined);
   const browser = plan.find((entry) => entry.id === "portal-browser");
   assert.equal(browser.binaries.brokerBinary, path.join(root, "target", nativeTarget, "debug", "agent-access-broker"));
   assert.ok(plan.find((entry) => entry.id === "browser-prerequisites").command.at(-1).includes("chromium.launch"));

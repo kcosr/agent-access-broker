@@ -79,6 +79,8 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "portal-build", command: portal("build") },
     { id: "rust-tests", command: cargoCommand("test", ...native, "--workspace", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
     { id: "rust-build", command: cargoCommand("build", ...native, "-p", "agent-access-broker", "-p", "agent-access"), cargo: true },
+    { id: "downstream-consumer", command: [node, "scripts/verify-downstream-consumer.mjs", "--commit", commit,
+      "--evidence-dir", join(outputDir, "downstream-consumer"), "--cli", binaries.cliBinary] },
     { id: "rust-clippy", command: cargoCommand("clippy", ...native, "--all-targets", "--all-features", "--", "-D", "warnings"), cargo: true },
     { id: "unix-signals", command: cargoCommand("test", ...native, "-p", "agent-access-broker-host", "--lib",
       "lifecycle::tests::unix_signal_smoke_in_isolated_child_processes", "--", "--ignored", "--exact", "--color=never"), cargo: true, notApplicable: platform === "win32" },
@@ -127,6 +129,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
     exclusions: [
       "Ignored live-provider smokes and administrator deployment/backup acceptance are not run.",
       "Cross-repository ingress and screening stacks are not part of standalone qualification.",
+      "The downstream consumer builds against a staged local clone of the candidate; the canonical remote pin is qualified separately after publication.",
       "Browser tests mix real-service fixtures and mocked UI contracts; optional delegated OAuth runs only when OAUTH_STUB_REPO is configured.",
       "Native host results do not establish cross-platform, other Linux distribution, or hermetic-build guarantees.",
       "No runtime archive is assembled; package extraction/checksum acceptance remains a distribution gate.",

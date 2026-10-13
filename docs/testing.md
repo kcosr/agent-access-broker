@@ -268,6 +268,27 @@ use synthetic rustdoc JSON and Cargo metadata, check the reviewed entry points
 against the repository's own metadata, and run with the other script tests. See the [inventory guide](../api/README.md) for the file format and review
 rules.
 
+The independent downstream consumer check stages a separately owned provider
+repository and a downstream Broker distribution from a clean commit and builds
+them as another team would, with their own manifests, lockfiles and
+full-revision Git pins. Run it from a clean checkout with a freshly built CLI
+and a new evidence directory outside the checkout:
+
+```bash
+node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
+  --evidence-dir /absolute/new/evidence/directory \
+  --cli "$PWD/target/debug/agent-access"
+```
+
+It builds with `--locked --offline` from the shared Cargo download cache and
+never downloads crates; populate the cache with `cargo fetch --locked` first.
+The provider repository runs the conformance crate's unit tests, and the
+assembly's executable is started against a synthetic CloudBees CI controller
+and exercised through the CLI. The
+[fixture README](../tests/downstream-consumer/README.md) describes the templates,
+pin rules, lockfile review, offline dependency source and evidence. The pure
+functions of the driver are tested with the other script tests.
+
 On Unix, run the real-signal parent fixture separately:
 
 ```bash
