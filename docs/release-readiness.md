@@ -111,7 +111,7 @@ node scripts/check-doc-links.mjs
 On Unix, also run the required isolated real-signal parent fixture:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 It tests SIGTERM/SIGINT shutdown and SIGUSR2 reload without live credentials.

@@ -25,7 +25,7 @@ const temporary = (t) => {
 
 test("the Unix signal gate rejects a successful zero-match run or an ignored parent", () => {
   const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n";
-  assert.doesNotThrow(() => assertUnixSignalTestExecuted(`running 1 test\ntest tests::unix_signal_smoke_in_isolated_child_processes ... ok\n${summary}`));
+  assert.doesNotThrow(() => assertUnixSignalTestExecuted(`running 1 test\ntest lifecycle::tests::unix_signal_smoke_in_isolated_child_processes ... ok\n${summary}`));
   for (const output of [
     "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.00s\n",
     "running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 32 filtered out; finished in 0.00s\n",

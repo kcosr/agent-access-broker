@@ -39,11 +39,15 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- Broker HTTP, MCP, management, gateway, and reload events now log under
-  `agent_access_broker_host::…` targets instead of `agent_access_broker::…`;
-  update module-level `RUST_LOG` directives accordingly. The default filter
-  still covers them, and the `agent_access_broker::handlers::oidc` diagnostic
-  target is unchanged.
+- Broker process lifecycle, HTTP, MCP, management, gateway, and reload events
+  now log under `agent_access_broker_host::…` targets instead of
+  `agent_access_broker` and `agent_access_broker::…`; lifecycle events such as
+  `broker_starting`, `broker_listening`, and `broker_shutdown` use
+  `agent_access_broker_host::lifecycle`. Update module-level `RUST_LOG`
+  directives accordingly. The default filter now names
+  `agent_access_broker_host=info` explicitly, which the `fallback` field of
+  `logging_filter_invalid` reports. The `agent_access_broker::handlers::oidc`
+  diagnostic target is unchanged.
 
 ### Fixed
 

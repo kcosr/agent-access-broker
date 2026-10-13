@@ -65,9 +65,16 @@ impl BrokerComposition {
             .collect())
     }
 
-    #[cfg(test)]
     pub(crate) fn registry(&self) -> &Arc<BackendRegistry> {
         &self.registry
+    }
+
+    /// A composition over a registry that host tests already build.
+    #[cfg(test)]
+    pub(crate) fn from_registry(registry: BackendRegistry) -> Self {
+        Self {
+            registry: Arc::new(registry),
+        }
     }
 }
 

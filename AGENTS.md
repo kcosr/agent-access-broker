@@ -166,7 +166,7 @@ cargo run --locked -p agent-access -- --config agent-access.sample.toml config v
 On Unix, also run the isolated real-signal parent fixture explicitly:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 It requires no live credentials and starts its own guarded child fixtures; do
@@ -239,15 +239,18 @@ and audit checks through the real `agent-access` binary.
   registers it and generates `apps/portal/unit/conformance.fixture.json`
   (regenerate with `UPDATE_PORTAL_FIXTURES=1`).
 - `crates/agent-access-broker-host`: the broker host library: module
-  composition (`src/composition.rs`), HTTP routers and handlers, management,
-  HTTP MCP serving, portal serving, the Git smart HTTP gateway, reload, and
-  runtime state, plus the broker unit-test tree
+  composition (`src/composition.rs`), the broker application (`src/application.rs`:
+  command parsing, `config validate`, `audit verify`, exit statuses) and its
+  `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
+  bounded shutdown), HTTP routers and handlers, management, HTTP MCP serving,
+  portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
+  broker unit-test tree
   (`src/tests/`). Its production code depends on no backend or import adapter;
   tests link the real backends through `src/test_composition.rs`.
-- `crates/agent-access-broker`: the `agent-access-broker` binary: process
-  lifecycle, command dispatch, and build stamping; `composition()` in
-  `src/backends.rs` selects the modules the binary links and
-  `src/build_info.rs` supplies the status the host serves.
+- `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
+  assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
+  in `src/backends.rs` selects the modules it links and `src/build_info.rs`
+  stamps its identity and build status.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.

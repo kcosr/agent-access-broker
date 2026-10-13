@@ -137,19 +137,23 @@ also includes a same-origin browser portal frontend:
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules and request authorization.
 - **`agent-access-broker-host`** — the broker host library: module
-  composition (`BrokerComposition`), HTTP routers, request decoding, host-matched gateway dispatch, source/proxy-chain
+  composition (`BrokerComposition`), the application (`BrokerApplication`:
+  command parsing, configuration validation, audit verification, and the
+  `serve` lifecycle with listeners, signals, reload, and bounded shutdown), HTTP
+  routers, request decoding, host-matched gateway dispatch, source/proxy-chain
   derivation, dynamic config reload, management routing, and HTTP MCP serving.
   It depends on core and never on a backend or import adapter.
-- **`agent-access-broker`** — the service binary: process lifecycle, listeners,
-  command dispatch, build stamping, and the modules it links (`main.rs`,
-  `composition()` in `backends.rs`, and `build_info.rs`).
+- **`agent-access-broker`** — the service binary: a thin assembly that selects
+  the modules it links (`composition()` in `backends.rs`), stamps its identity
+  and build status (`build_info.rs`), and runs the host application
+  (`main.rs`).
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static
   assets and served from the broker public listener when `[portal]` is enabled.
 
 Core owns the engine and the conceptual contract. The host owns the network
-surface; the broker binary owns process lifecycle and backend selection. The CLI never sees broker-held execution
+surface and the process lifecycle; the broker binary selects the modules it links. The CLI never sees broker-held execution
 credentials and never makes authorization decisions; it is a thin client over the broker's HTTP API.
 
 ```mermaid
@@ -1470,7 +1474,7 @@ The production service observability surface is structured JSON tracing plus the
 audit store. Only `agent-access-broker serve` installs the JSON subscriber;
 CLI validation commands keep their human command-line output. The default
 service filter is
-`agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn`, and
+`agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn`, and
 `RUST_LOG` can override it without adding broker config keys.
 
 Every public and gateway HTTP request receives an `http.request` span. The span

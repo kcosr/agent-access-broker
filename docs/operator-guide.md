@@ -342,6 +342,12 @@ agent-access-broker --config /etc/agent-access-broker/config.toml serve \
   --listen 127.0.0.1:8787
 ```
 
+Without `--config`, broker commands read the file named by
+`AGENT_ACCESS_BROKER_CONFIG`, or else `/etc/agent-access/broker.toml`. Commands
+exit `0` on success, `1` on a runtime or startup failure, `2` for invalid
+arguments or a command that does not apply to the configuration, and `3` when
+the configuration or the compiled module composition is invalid.
+
 The public listener exposes health, discovery, authenticated runtime specs,
 invoke, self-service management, browser auth, and admin management routes under
 `/v1`; when `[portal]` is enabled it also serves the same-origin portal under
@@ -622,21 +628,23 @@ does not install the service subscriber.
 The default service filter is:
 
 ```text
-agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn
+agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn
 ```
 
 Override it with `RUST_LOG` using standard `tracing_subscriber::EnvFilter`
 syntax. An invalid `RUST_LOG` does not prevent startup; the broker falls back to
-the default and emits one `logging_filter_invalid` warning event. HTTP, MCP,
-management, gateway, and reload events use `agent_access_broker_host::…`
-targets, which the `agent_access_broker` directive matches by prefix.
+the default and emits one `logging_filter_invalid` warning event. Process
+lifecycle (`agent_access_broker_host::lifecycle`), HTTP, MCP, management,
+gateway, and reload events use `agent_access_broker_host::…` targets. Target
+directives match by prefix, so an `agent_access_broker` directive also covers
+them; use the full module path to select one host module.
 
 Microsoft OIDC exposes a permanent, opt-in identity diagnostic at the narrow
 `agent_access_broker::handlers::oidc=debug` target. Enable it without enabling
 debug output from dependencies or the rest of the broker:
 
 ```text
-RUST_LOG=agent_access_broker=info,agent_access_core=info,agent_access_provider=info,agent_access_broker::handlers::oidc=debug,axum=warn,tower=warn
+RUST_LOG=agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,agent_access_broker::handlers::oidc=debug,axum=warn,tower=warn
 ```
 
 For systemd, set that value in an `Environment="RUST_LOG=..."` service drop-in,
@@ -663,7 +671,7 @@ Durable audit records are unchanged.
 Example event:
 
 ```json
-{"level":"INFO","target":"agent_access_broker","event":"broker_listening","nodeId":"broker-prod-1","listener":"public","address":"127.0.0.1:8787"}
+{"level":"INFO","target":"agent_access_broker_host::lifecycle","event":"broker_listening","nodeId":"broker-prod-1","listener":"public","address":"127.0.0.1:8787"}
 ```
 
 The `http.request` span, the `broker_listening` and `config_reload_completed`

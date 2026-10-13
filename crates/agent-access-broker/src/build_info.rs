@@ -1,19 +1,21 @@
-use agent_access_broker_host::{BrokerBuildStatus, BuildProvenance};
-use agent_access_core::{API_CATALOG_VERSION, SEND_SCHEMA_VERSION};
+use agent_access_broker_host::{AssemblyIdentity, BrokerBuildStatus};
 
-/// This executable's build status, stamped by `build.rs`.
-pub fn broker_build_status() -> BrokerBuildStatus {
-    let build_provenance = match env!("AGENT_ACCESS_EMBEDDED_BUILD_PROVENANCE") {
-        "release" => BuildProvenance::Release,
-        "unavailable" => BuildProvenance::Unavailable,
+/// This executable's identity, stamped by `build.rs`.
+pub fn build_identity() -> AssemblyIdentity {
+    let identity = AssemblyIdentity::new("agent-access-broker", env!("CARGO_PKG_VERSION"))
+        .with_about("Agent Access Broker service");
+    match (
+        env!("AGENT_ACCESS_EMBEDDED_BUILD_PROVENANCE"),
+        env!("AGENT_ACCESS_EMBEDDED_BUILD_COMMIT"),
+    ) {
+        ("release", commit) if !commit.is_empty() => identity.with_release_commit(commit),
+        ("unavailable", "") => identity,
         _ => unreachable!("build.rs emits a closed build provenance"),
-    };
-    let build_commit = env!("AGENT_ACCESS_EMBEDDED_BUILD_COMMIT");
-    BrokerBuildStatus {
-        broker_version: env!("CARGO_PKG_VERSION"),
-        build_commit: (!build_commit.is_empty()).then_some(build_commit),
-        build_provenance,
-        catalog_version: API_CATALOG_VERSION,
-        send_schema_version: SEND_SCHEMA_VERSION,
     }
+}
+
+/// This executable's build status, for tests that construct host state
+/// directly.
+pub fn broker_build_status() -> BrokerBuildStatus {
+    build_identity().build_status()
 }

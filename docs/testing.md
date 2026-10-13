@@ -203,11 +203,11 @@ Its unit tests use synthetic metadata and run with the other script tests.
 On Unix, run the real-signal parent fixture separately:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 The parent starts guarded child fixtures for SIGTERM/SIGINT shutdown and SIGUSR2
-reload. Never invoke `tests::unix_signal_smoke_child_harness` directly; it is an
+reload. Never invoke `lifecycle::tests::unix_signal_smoke_child_harness` directly; it is an
 entrypoint for the parent. Do not broaden this command to all ignored tests,
 which include separately authorized live-provider smokes. Record the signal
 fixture as not applicable on non-Unix platforms.

@@ -192,7 +192,7 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     assert_eq!(invalid_filter["envVar"], "RUST_LOG");
     assert_eq!(
         invalid_filter["fallback"],
-        "agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn"
+        "agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn"
     );
     assert!(
         invalid_filter["error"]
