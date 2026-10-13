@@ -85,10 +85,13 @@ cargo +nightly-2026-07-13 rustdoc --locked -p <package> --lib \
   -- -Z unstable-options --output-format json --cap-lints allow
 ```
 
-`cargo tree -e normal` with the same features supplies the feature set each
-dependency resolves to under the surface and the versions of public
-dependencies. Selection surfaces and exposed sections are rendered from
-restricted copies of the rustdoc JSON. Every surface is rendered with:
+`cargo tree -e normal`, with the surface's default and requested features,
+supplies the features Cargo activates for the surface and each of its
+dependencies, including local features that other features enable, and the
+versions of public dependencies. Generation, coverage and exposure use these
+expanded feature sets; a surface's file name uses only its requested feature.
+Selection surfaces and exposed sections are rendered from restricted copies of
+the rustdoc JSON. Every surface is rendered with:
 
 ```bash
 cargo-public-api --rustdoc-json <file.json> --color never --omit blanket-impls

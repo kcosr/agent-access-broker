@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,8 @@ import {
   SELECTION_ENTRY_POINTS, compareInventories, compatibleLine, dependencyLines, exposureClosure,
   formatComparison, inspectPublicApiToolchain, inventorySurfaces, parsePublicApiArguments,
   parseResolvedPackages, pruneToEntryPoints, publicApiEnvironment, reachableIds, referencedIds,
-  renderInventory, rustdocArguments, synthesizeExposure, treeArguments, visibleNames,
+  renderInventory, resolvedSurfaceFeatures, rustdocArguments, surfaceCoverage, synthesizeExposure, treeArguments,
+  visibleNames,
 } from "./public-api.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -118,7 +119,7 @@ const fixtureEntryPoints = { "x-native": ["x_native::NATIVE"], "x-adapter": ["x_
 
 test("surfaces cover the SDK and host with and without test support, the assembly and linked selections", () => {
   const surfaces = inventorySurfaces(fixtureMetadata(), fixtureEntryPoints);
-  assert.deepEqual(surfaces.map((surface) => [surface.file, surface.features, surface.entryPoints]), [
+  assert.deepEqual(surfaces.map((surface) => [surface.file, surface.requested, surface.entryPoints]), [
     ["x-broker.txt", [], null],
     ["x-host.txt", [], null],
     ["x-provider.txt", [], null],
@@ -126,9 +127,64 @@ test("surfaces cover the SDK and host with and without test support, the assembl
     ["x-adapter.txt", [], ["registration"]],
     ["x-native.txt", [], ["NATIVE"]],
   ]);
-  const withDefault = metadata([metadataPackage("x-provider", "sdk", { features: { default: ["std"], std: [], "test-support": [] } })]);
-  assert.deepEqual(inventorySurfaces(withDefault, {}).map((surface) => [surface.file, surface.features]),
-    [["x-provider.txt", ["default"]], ["x-provider.test-support.txt", ["default", "test-support"]]]);
+  assert.ok(surfaces.every((surface) => surface.features === undefined), "Cargo resolves the activated features");
+});
+
+// A real workspace whose SDK default and test-support features enable other
+// local features, and a host that depends on the SDK's defaults.
+function featureWorkspace(t) {
+  const directory = mkdtempSync(path.join(tmpdir(), "public-api-features-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const write = (file, contents) => {
+    mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+    writeFileSync(path.join(directory, file), contents);
+  };
+  const manifest = (name, body) => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${body}`;
+  write("Cargo.toml", '[workspace]\nmembers = ["provider", "host"]\nresolver = "2"\n');
+  write("provider/Cargo.toml", manifest("x-provider", '\n[features]\ndefault = ["std"]\nstd = []\ntest-support = ["mock"]\nmock = []\n'));
+  write("host/Cargo.toml", manifest("x-host", '\n[dependencies]\nx-provider = { path = "../provider" }\n'));
+  for (const crate of ["provider", "host"]) write(`${crate}/src/lib.rs`, "");
+  const env = { ...process.env };
+  delete env.CARGO_TARGET_DIR;
+  const run = (args) => execFileSync("cargo", args, { cwd: directory, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  run(["generate-lockfile", "--offline"]);
+  return (pkg, requested) => parseResolvedPackages(run([...treeArguments(pkg, requested), "--offline"]));
+}
+
+test("real cargo tree: surfaces compare Cargo's expanded features, including locally enabled ones", (t) => {
+  const tree = featureWorkspace(t);
+  const surface = (requested) => ({ package: "x-provider", library: "x_provider", requested, entryPoints: null,
+    file: requested.length ? "x-provider.test-support.txt" : "x-provider.txt" });
+  const plain = { ...surface([]), features: resolvedSurfaceFeatures(surface([]), tree("x-provider", [])) };
+  const testSupport = { ...surface(["test-support"]),
+    features: resolvedSurfaceFeatures(surface(["test-support"]), tree("x-provider", ["test-support"])) };
+  assert.deepEqual(plain.features, ["default", "std"]);
+  assert.deepEqual(testSupport.features, ["default", "mock", "std", "test-support"]);
+
+  // The host resolves the SDK with the same expanded set as the SDK's default
+  // surface, so that surface covers the SDK items the host names.
+  const underHost = tree("x-host", []).get("x_provider");
+  assert.deepEqual(underHost.map((entry) => entry.features), [["default", "std"]]);
+  const loads = [];
+  const coverage = surfaceCoverage([plain, testSupport], (name, features) => {
+    loads.push(`${name}:${features.join(",")}`);
+    return sdk();
+  });
+  assert.ok(coverage("x-provider", underHost[0].features).has(3));
+  assert.ok(coverage("x-provider", testSupport.features).has(3));
+  assert.equal(coverage("x-provider", ["default"]), null, "an unexpanded feature list matches no surface");
+  assert.equal(coverage("x-host", []), null);
+  assert.deepEqual(loads, ["x-provider:default,std", "x-provider:default,mock,std,test-support"]);
+});
+
+test("a surface's requested features must be among those Cargo activates for it", () => {
+  const surface = { package: "x-provider", library: "x_provider", requested: ["test-support"], file: "x-provider.test-support.txt" };
+  const resolved = (line) => parseResolvedPackages(line);
+  assert.deepEqual(resolvedSurfaceFeatures(surface, resolved("x-provider v0.1.0 (/w/provider)\tx_provider\tmock,test-support\n")),
+    ["mock", "test-support"]);
+  assert.throws(() => resolvedSurfaceFeatures(surface, resolved("x-provider v0.1.0 (/w/provider)\tx_provider\tdefault\n")),
+    /did not activate the requested features test-support of x-provider/);
+  assert.throws(() => resolvedSurfaceFeatures(surface, resolved("x-host v0.1.0 (/w/host)\tx_host\t\n")), /resolved x-provider 0 times/);
 });
 
 test("every linked native or adapter needs reviewed root entry points, and no others may be listed", () => {
@@ -382,5 +438,7 @@ test("Cargo runs the pinned nightly in the isolated target without inherited ove
   assert.deepEqual(rustdocArguments("agent-access-broker", [], target).slice(4, 9),
     ["agent-access-broker", "--lib", "--target-dir", target, "--no-default-features"]);
   assert.deepEqual(treeArguments("agent-access-broker-host", []), ["tree", "--locked", "-p", "agent-access-broker-host",
-    "--no-default-features", "-e", "normal", "--prefix", "none", "--format", "{p}\t{lib}\t{f}"]);
+    "-e", "normal", "--prefix", "none", "--format", "{p}\t{lib}\t{f}"]);
+  assert.deepEqual(treeArguments("agent-access-provider", ["test-support"]).slice(3, 6),
+    ["agent-access-provider", "--features", "test-support"]);
 });

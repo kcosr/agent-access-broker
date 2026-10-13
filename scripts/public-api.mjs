@@ -65,19 +65,14 @@ export function surfaceFile(surface) {
   return `${surface.package}${surface.requested.length ? `.${surface.requested.join("+")}` : ""}.txt`;
 }
 
-// A package's exact feature set for the requested features: its declared
-// default feature, if any, plus the requested ones. Generation always passes
-// `--no-default-features` with this list, matching `cargo tree` resolution.
-export function exactFeatures(pkg, requested = []) {
-  return sortedUnique([...(pkg.features?.default ? ["default"] : []), ...requested]);
-}
-
 const roleOf = (pkg) => pkg.metadata?.["agent-access"]?.role;
 const libraryOf = (pkg) => pkg.targets?.find((target) => target.kind.includes("lib"))?.name;
 
 // The supported surfaces, from `cargo metadata --no-deps` and the reviewed
 // selection entry points. Every native or adapter crate an assembly links must
-// have entry points, and every entry point must belong to such a crate.
+// have entry points, and every entry point must belong to such a crate. A
+// surface names its requested features, which select its file; the features
+// Cargo activates for them come from `resolvedSurfaceFeatures`.
 export function inventorySurfaces(metadata, entryPoints = SELECTION_ENTRY_POINTS) {
   const members = new Set(metadata.workspace_members ?? []);
   const packages = (metadata.packages ?? []).filter((pkg) => members.has(pkg.id))
@@ -91,8 +86,7 @@ export function inventorySurfaces(metadata, entryPoints = SELECTION_ENTRY_POINTS
       errors.push(`${pkg.name} (${roleOf(pkg)}) has no library target to inventory`);
       return;
     }
-    const entry = { package: pkg.name, library, role: roleOf(pkg), requested,
-      features: exactFeatures(pkg, requested), entryPoints: selection };
+    const entry = { package: pkg.name, library, role: roleOf(pkg), requested, entryPoints: selection };
     surfaces.push({ ...entry, file: surfaceFile(entry) });
   };
   for (const pkg of packages) {
@@ -329,6 +323,22 @@ export function parseResolvedPackages(output) {
   return libraries;
 }
 
+// The features Cargo activates for a surface package with its default and
+// requested features: the `{f}` set from `cargo tree`, which includes local
+// features that other features enable. Generation, coverage and exposure all
+// use these expanded sets, as `cargo tree` reports them for dependencies too.
+export function resolvedSurfaceFeatures(surface, resolved) {
+  const own = (resolved.get(surface.library) ?? []).filter((entry) => entry.package === surface.package);
+  if (own.length !== 1) {
+    throw new Error(`${surface.file}: cargo tree resolved ${surface.package} ${own.length} times`);
+  }
+  const missing = surface.requested.filter((feature) => !own[0].features.includes(feature));
+  if (missing.length) {
+    throw new Error(`${surface.file}: cargo tree did not activate the requested features ${missing.join(", ")} of ${surface.package}`);
+  }
+  return own[0].features;
+}
+
 // The semver-compatible line of a version: `1` for 1.4.2, `0.12` for 0.12.28.
 export function compatibleLine(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
@@ -398,6 +408,23 @@ export function exposureClosure({ surface, surfaceJson, resolved, workspace, loa
   const sections = [...exposed.values()].sort((left, right) => left.package.localeCompare(right.package)
     || left.features.join(",").localeCompare(right.features.join(",")));
   return { sections, dependencies: [...dependencies].sort() };
+}
+
+// What the full surfaces render: for a package and an expanded feature set,
+// the IDs reachable in the full surface with exactly those features, or null
+// when no full surface has them. Feature sets are compared as Cargo expands
+// them, for surfaces and dependencies alike.
+export function surfaceCoverage(surfaces, load) {
+  const sets = new Map();
+  return (name, features) => {
+    if (!surfaces.some((surface) => !surface.entryPoints && surface.package === name && sameFeatures(surface.features, features))) return null;
+    const key = `${name}\0${features.join(",")}`;
+    if (!sets.has(key)) {
+      const json = load(name, features);
+      sets.set(key, reachableIds(json, [json.root]));
+    }
+    return sets.get(key);
+  };
 }
 
 // One `dependency <package> <compatible lines>` line per third-party crate
@@ -580,9 +607,10 @@ export function rustdocArguments(pkg, features, targetDirectory) {
     ...featureArguments(features), "--", "-Z", "unstable-options", "--output-format", "json", "--cap-lints", "allow"];
 }
 
-export function treeArguments(pkg, features) {
-  return ["tree", "--locked", "-p", pkg, ...featureArguments(features), "-e", "normal",
-    "--prefix", "none", "--format", "{p}\t{lib}\t{f}"];
+// Resolves a surface with its default features and the requested ones.
+export function treeArguments(pkg, requested) {
+  return ["tree", "--locked", "-p", pkg, ...(requested.length ? ["--features", requested.join(",")] : []),
+    "-e", "normal", "--prefix", "none", "--format", "{p}\t{lib}\t{f}"];
 }
 
 export const CARGO_PUBLIC_API_ARGUMENTS = Object.freeze(["--color", "never", "--omit", "blanket-impls"]);
@@ -604,7 +632,13 @@ export function generateInventories({ root = ROOT, env = process.env, toolchain,
   try {
     const metadata = JSON.parse(capture(toolchain.cargo, ["metadata", "--locked", "--no-deps", "--format-version", "1"],
       { cwd: root, env: cargoEnv }));
-    const surfaces = inventorySurfaces(metadata);
+    const resolutions = new Map();
+    const surfaces = inventorySurfaces(metadata).map((surface) => {
+      const resolved = parseResolvedPackages(capture(toolchain.cargo, treeArguments(surface.package, surface.requested),
+        { cwd: root, env: cargoEnv }));
+      resolutions.set(surface.file, resolved);
+      return { ...surface, features: resolvedSurfaceFeatures(surface, resolved) };
+    });
     const members = new Set(metadata.workspace_members);
     const packages = new Map(metadata.packages.filter((pkg) => members.has(pkg.id)).map((pkg) => [pkg.name, pkg]));
     const workspace = new Map([...packages.values()].filter(libraryOf).map((pkg) => [libraryOf(pkg), { package: pkg.name }]));
@@ -628,16 +662,7 @@ export function generateInventories({ root = ROOT, env = process.env, toolchain,
       documents.set(key, json);
       return json;
     };
-    const coverageSets = new Map();
-    const coverage = (name, features) => {
-      if (!surfaces.some((surface) => !surface.entryPoints && surface.package === name && sameFeatures(surface.features, features))) return null;
-      const key = `${name}\0${features.join(",")}`;
-      if (!coverageSets.has(key)) {
-        const json = load(name, features);
-        coverageSets.set(key, reachableIds(json, [json.root]));
-      }
-      return coverageSets.get(key);
-    };
+    const coverage = surfaceCoverage(surfaces, load);
     let renders = 0;
     const render = (json) => {
       const file = join(scratch, `render-${renders++}.json`);
@@ -651,12 +676,7 @@ export function generateInventories({ root = ROOT, env = process.env, toolchain,
     const inventories = new Map();
     for (const surface of surfaces) {
       log(`public-api: rendering ${surface.file}`);
-      const resolved = parseResolvedPackages(capture(toolchain.cargo, treeArguments(surface.package, surface.features),
-        { cwd: root, env: cargoEnv }));
-      const own = resolved.get(surface.library)?.find((entry) => entry.package === surface.package);
-      if (!own || !sameFeatures(own.features, surface.features)) {
-        throw new Error(`${surface.file}: cargo tree resolved ${surface.package} with features ${featureLabel(own?.features ?? [])}, expected ${featureLabel(surface.features)}`);
-      }
+      const resolved = resolutions.get(surface.file);
       const document = load(surface.package, surface.features);
       const surfaceJson = surface.entryPoints ? pruneToEntryPoints(document, surface.entryPoints) : document;
       const closure = exposureClosure({ surface, surfaceJson, resolved, workspace, load, coverage });
