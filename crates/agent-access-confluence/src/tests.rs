@@ -670,7 +670,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
     let create_error = create_provider.invoke(create_request).await.unwrap_err();
 
     assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
-    assert!(create_error.result.is_none());
+    assert_eq!(
+        create_error.result.as_deref(),
+        Some(&json!({"mutationStatus": "unknown", "retrySafe": false}))
+    );
     assert_eq!(
         create_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
@@ -5405,8 +5408,13 @@ async fn http_backend_comment_mutations_fail_closed_on_conflict_and_delete_statu
         .delete_comment(ConfluenceCommentKind::Footer, "5002", &credential())
         .await
         .unwrap_err();
+    // Confluence answered the delete with an unexpected success status: the
+    // write was accepted, but its response is unexpected.
+    let ConfluenceBackendError::AcceptedUnreadable(delete_error) = delete_error else {
+        panic!("expected an accepted delete, got {delete_error:?}");
+    };
     assert!(
-        matches!(delete_error, ConfluenceBackendError::Protocol(message) if message.contains("unexpected success status"))
+        matches!(*delete_error, ConfluenceBackendError::Protocol(message) if message.contains("unexpected success status"))
     );
 }
 
@@ -6017,6 +6025,9 @@ struct PageMoveTestBackend {
     fail_move: bool,
     /// What a failing create, draft create or move returns.
     mutation_failure: ConfluenceBackendError,
+    /// What a read-back after a mutation returns instead of the throttling
+    /// the `throttle_*` flags select.
+    readback_failure: Option<ConfluenceBackendError>,
     preserve_parent_on_move: bool,
     preserve_order_on_move: bool,
     /// Throttle hierarchy reads once a create or move has applied.
@@ -6029,9 +6040,9 @@ struct PageMoveTestBackend {
 impl PageMoveTestBackend {
     fn throttled_after_mutation(&self, throttle: bool) -> Result<(), ConfluenceBackendError> {
         if throttle && self.mutated.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(ConfluenceBackendError::RateLimited(Some(
-                UpstreamRetryAfter::after_seconds(30),
-            )));
+            return Err(self.readback_failure.clone().unwrap_or(
+                ConfluenceBackendError::RateLimited(Some(UpstreamRetryAfter::after_seconds(30))),
+            ));
         }
         Ok(())
     }
@@ -6070,7 +6081,8 @@ impl PageMoveTestBackend {
             fail_create: false,
             fail_draft_create: false,
             fail_move: false,
-            mutation_failure: ConfluenceBackendError::Timeout,
+            mutation_failure: ConfluenceBackendError::NoResponse { timed_out: true },
+            readback_failure: None,
             preserve_parent_on_move: false,
             preserve_order_on_move: false,
             throttle_hierarchy_after_mutation: false,
@@ -8403,10 +8415,19 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
 }
 
 #[tokio::test]
-async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
+async fn write_receipts_follow_what_confluence_may_have_applied() {
     let not_applied = json!({"mutationStatus": "not_applied", "retrySafe": true});
-    // Only the SDK's not-sent proof becomes `NotSent`, which keeps the
-    // reason and message a timeout or transport failure reports.
+    let unknown = json!({"mutationStatus": "unknown", "retrySafe": false});
+    let write = ConfluenceWrite::new(json!({"pageId": "123456"}));
+    let unverified = json!({
+        "mutationStatus": "applied_unverified",
+        "retrySafe": false,
+        "verificationStage": "mutation_response",
+        "safeLocators": {"pageId": "123456"},
+    });
+    // Only the SDK's not-sent proof becomes `NotSent`; a send that may have
+    // reached Confluence becomes `NoResponse`. Both keep the reason and
+    // message a timeout or transport failure reports.
     for (timed_out, reason, message) in [
         (
             false,
@@ -8419,41 +8440,87 @@ async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
             "Confluence request timed out",
         ),
     ] {
-        let error = confluence_upstream_error(UpstreamError::NotSent {
+        let unsent = confluence_upstream_error(UpstreamError::NotSent {
             timed_out,
             detail: "connection refused".to_string(),
         });
-        assert_eq!(error, ConfluenceBackendError::NotSent { timed_out });
-        assert_eq!(confluence_backend_reason_code(&error), reason);
-        assert_eq!(sanitized_backend_reason(&error), reason.as_str());
-        for write in [
-            confluence_write_error(error.clone()),
-            confluence_write_failure(error.clone(), map_confluence_conflict),
-        ] {
-            assert_eq!(write.decision(), Decision::Error);
-            assert_eq!(write.reason_code(), reason);
-            assert_eq!(write.message, message);
-            assert_eq!(write.result.as_deref(), Some(&not_applied));
+        assert_eq!(unsent, ConfluenceBackendError::NotSent { timed_out });
+        let unanswered = confluence_upstream_error(if timed_out {
+            UpstreamError::Timeout
+        } else {
+            UpstreamError::Transport("reset".to_string())
+        });
+        assert_eq!(unanswered, ConfluenceBackendError::NoResponse { timed_out });
+        for (error, receipt) in [(unsent, &not_applied), (unanswered, &unknown)] {
+            assert_eq!(confluence_backend_reason_code(&error), reason);
+            assert_eq!(sanitized_backend_reason(&error), reason.as_str());
+            for failure in [
+                write.failed(error.clone()),
+                write.failed_with(error.clone(), map_confluence_conflict),
+            ] {
+                assert_eq!(failure.decision(), Decision::Error);
+                assert_eq!(failure.reason_code(), reason);
+                assert_eq!(failure.message, message);
+                assert_eq!(failure.result.as_deref(), Some(receipt));
+            }
+            // Reads carry no mutation receipt.
+            let read = confluence_backend_error(error);
+            assert_eq!(read.reason_code(), reason);
+            assert!(read.result.is_none());
         }
-        // Reads carry no mutation receipt.
-        let read = confluence_backend_error(error);
-        assert_eq!(read.reason_code(), reason);
-        assert!(read.result.is_none());
     }
-    // Failures that may have reached Confluence are never reported as unsent.
+    // A 5xx may follow a committed write; a success status followed by an
+    // unreadable response means Confluence accepted it.
     assert_eq!(
-        confluence_upstream_error(UpstreamError::Timeout),
-        ConfluenceBackendError::Timeout
+        write
+            .failed(ConfluenceBackendError::HttpStatus(504))
+            .result
+            .as_deref(),
+        Some(&unknown)
     );
-    assert_eq!(
-        confluence_upstream_error(UpstreamError::Transport("reset".to_string())),
-        ConfluenceBackendError::Transport("reset".to_string())
-    );
-    for error in [
-        ConfluenceBackendError::Timeout,
-        ConfluenceBackendError::Transport("reset".to_string()),
+    for (error, reason) in [
+        (ConfluenceBackendError::Timeout, ReasonCode::UpstreamTimeout),
+        (
+            ConfluenceBackendError::Transport("response read failed".to_string()),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (
+            ConfluenceBackendError::ResponseTooLarge,
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            ConfluenceBackendError::Protocol("shape".to_string()),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
     ] {
-        assert!(confluence_write_error(error).result.is_none());
+        let accepted = accepted_if_success(200)(error.clone());
+        let failure = write.failed(accepted);
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(
+            failure.message,
+            confluence_backend_error(error.clone()).message
+        );
+        assert_eq!(failure.result.as_deref(), Some(&unverified));
+        // The same failure after an error status, or before sending, is not
+        // an accepted write.
+        assert_eq!(accepted_if_success(409)(error.clone()), error);
+        assert!(write.failed(error).result.is_none());
+    }
+    // Rejections, conflicts and throttling carry no receipt.
+    for error in [
+        ConfluenceBackendError::Conflict,
+        ConfluenceBackendError::HttpStatus(400),
+        ConfluenceBackendError::Forbidden,
+        ConfluenceBackendError::RateLimited(None),
+        confluence_upstream_error(UpstreamError::NotAllowed),
+    ] {
+        let failure = write.failed_with(error, map_confluence_conflict);
+        assert!(
+            failure
+                .result
+                .as_deref()
+                .is_none_or(|result| result.get("mutationStatus").is_none())
+        );
     }
 
     // Unsent placement writes report the receipt and keep their audit.
@@ -8516,6 +8583,35 @@ async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
         assert_eq!(audit["upstreamFailure"], "upstream_connection_failed");
     }
 
+    // A read-back that fails after the page was created leaves it
+    // unverified at the read-back stage, with the read-back's reason.
+    let backend = PageMoveTestBackend {
+        throttle_hierarchy_after_mutation: true,
+        readback_failure: Some(ConfluenceBackendError::NoResponse { timed_out: true }),
+        ..PageMoveTestBackend::new()
+    };
+    let error = ConfluenceProvider::with_backend(
+        confluence_config(),
+        ProviderLimits::default(),
+        Arc::new(backend),
+    )
+    .invoke(space_scope(invocation(
+        "page.create",
+        json!({"space": "ENG", "title": "Created", "contentFormat": "storage", "content": "<p>body</p>"}),
+    )))
+    .await
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "post_create_readback",
+            "safeLocators": {"pageId": "900001", "parentPageId": "55555"},
+        }))
+    );
+
     // An attachment batch whose first upload was never sent applied nothing.
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", closed.local_addr().unwrap());
@@ -8542,6 +8638,79 @@ async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
         "upstream_connection_failed"
     );
     assert_eq!(audit["attachments"][1]["status"], "skipped");
+}
+
+#[tokio::test]
+async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
+    let attachment = json!({
+        "results": [{
+            "id": "att1",
+            "title": "first.txt",
+            "metadata": { "mediaType": "text/plain" },
+            "extensions": { "fileSize": 5 }
+        }]
+    });
+    let unknown = json!({"mutationStatus": "unknown", "retrySafe": false});
+    for (first_ok, failure_status, message, receipt) in [
+        // The first upload got a 5xx, which may follow an applied upload.
+        (
+            false,
+            500,
+            "Confluence attachment upload failed",
+            Some(&unknown),
+        ),
+        // The first upload was rejected: nothing was applied.
+        (false, 400, "Confluence attachment upload failed", None),
+        // An upload applied before the next one was rejected.
+        (
+            true,
+            400,
+            "Confluence attachment upload partially failed",
+            Some(&unknown),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        if first_ok {
+            Mock::given(method("POST"))
+                .and(path("/wiki/rest/api/content/123456/child/attachment"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(attachment.clone()))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/wiki/rest/api/content/123456/child/attachment"))
+            .respond_with(ResponseTemplate::new(failure_status))
+            .mount(&server)
+            .await;
+        let mut config = confluence_config();
+        config.attachments.media_types = vec!["text/plain".to_string()];
+        let error = ConfluenceProvider::with_backend(
+            config,
+            ProviderLimits::default(),
+            Arc::new(http_confluence_backend_for_server(&server)),
+        )
+        .invoke(page_attachment_add_invocation(&["first", "second"]))
+        .await
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(error.message, message);
+        let result = error.result.as_deref();
+        assert_eq!(
+            result.and_then(|result| result.get("mutationStatus")),
+            receipt.map(|receipt| &receipt["mutationStatus"]),
+            "{message} {failure_status}"
+        );
+        if first_ok {
+            let result = result.unwrap();
+            assert_eq!(result["status"], "partial");
+            assert_eq!(result["attachments"][0]["attachmentId"], "att1");
+            assert_eq!(result["retrySafe"], false);
+        } else {
+            assert_eq!(result, receipt);
+        }
+    }
 }
 
 /// A page `attachment.add` of one text file per name, admitted with the

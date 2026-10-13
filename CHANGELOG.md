@@ -564,6 +564,17 @@ All notable changes to this project are documented in this file.
   `upstream_timeout` for single writes, and `upstream_failed` with the batch's
   existing message for attachment batches. Draft attachment batches keep their
   `status: "partial"` result alongside the receipt.
+- Confluence write failures that may have applied now carry a receipt with
+  their unchanged reason and message: `mutationStatus: "unknown"`,
+  `retrySafe: false` when the mutation request got no response (or an
+  unclassified failure) or a 5xx; `mutationStatus: "applied_unverified"` at
+  `mutation_response` when Confluence answered with a success status whose
+  response then failed, did not parse or did not match the request, or when
+  anything after the accepted write failed; and `applied_unverified` at the
+  read-back stage when a read-back request failed (throttled read-backs keep
+  their `mutation_verification_failed`). Page, blog and draft attachment
+  batches in which an upload may have applied report `unknown` alongside their
+  result, unless throttling already reported `applied_unverified`.
 
 ### Fixed
 

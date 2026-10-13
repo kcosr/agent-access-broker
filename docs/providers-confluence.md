@@ -218,11 +218,27 @@ repeated.
   result keeps `status: "partial"`, the empty `attachments` and `failures`
   alongside the receipt.
 
-Page create, page draft create and page move audit records keep
-`sideEffectPossible: true` for every mutation failure. A read that was never
-sent, a later upload after earlier files were created, and a failure after the
-request may have been sent carry no such receipt; inspect the content before
-repeating those writes.
+A read that was never sent carries no receipt.
+
+Every other write failure after which Confluence may have applied the write
+keeps its ordinary reason and message and reports what Confluence may have
+done:
+
+| What happened | Receipt |
+| --- | --- |
+| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Confluence or a proxy answered 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
+| Confluence answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request; or anything after the accepted write failed, such as a read-back, a draft handle or the result size | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"`, or the read-back stage (such as `post_create_readback`) when a read-back request failed |
+| A page, blog or draft attachment batch failed after an upload may have created its attachment: an earlier upload succeeded, or the failing upload got no response, a 5xx or an unreadable success response | `mutationStatus: "unknown"`, `retrySafe: false`, alongside the batch's result |
+
+`safeLocators` name the target from the validated request and the reads before
+the write, such as the `pageId`, `blogId`, `commentId`, `parentCommentId`,
+`containerId`, or the `space` and `parentPageId` of a create; a failed
+read-back keeps the locators its throttled form reports. A throttled read-back
+or batch keeps its `mutation_verification_failed`/`applied_unverified`
+outcome. A 4xx rejection, a version conflict and throttling of the write itself
+carry no receipt. Page create, page draft create and page move audit records
+keep `sideEffectPossible: true` for every mutation failure. Inspect the content
+before repeating a write with a `retrySafe: false` receipt.
 
 ## Actions and lookup requirements
 
