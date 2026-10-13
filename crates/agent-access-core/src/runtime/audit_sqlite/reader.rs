@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::sync::{Notify, Semaphore};
+use tracing::Instrument;
 
 /// How often an interrupt is repeated until SQLite reports that the query
 /// stopped. SQLite clears a pending interrupt when a statement starts on an
@@ -93,9 +94,9 @@ impl AuditReaderPool {
         }
     }
 
-    /// Runs `work` on a pooled connection on a blocking thread. `work` must
-    /// finish (drop) every statement it prepares, so the read transaction
-    /// ends before it returns.
+    /// Runs `work` on a pooled connection on a blocking thread, inside the
+    /// caller's tracing span. `work` must finish (drop) every statement it
+    /// prepares, so the read transaction ends before it returns.
     pub(in crate::runtime) async fn run<T, F>(&self, work: F) -> Result<T, AuditQueryError>
     where
         T: Send + 'static,
@@ -106,7 +107,7 @@ impl AuditReaderPool {
         let control = Arc::new(QueryControl::new(deadline));
         // Interrupts the query if this future is dropped before it finishes.
         let _disconnect = CancelOnDrop(Arc::clone(&control));
-        tokio::spawn(watchdog(Arc::clone(&control)));
+        tokio::spawn(watchdog(Arc::clone(&control)).in_current_span());
         let tokio_deadline = tokio::time::Instant::from_std(deadline);
         let permit = match tokio::time::timeout_at(
             tokio_deadline,
@@ -128,11 +129,16 @@ impl AuditReaderPool {
         };
         let shared = Arc::clone(&self.shared);
         let task_control = Arc::clone(&control);
+        // The blocking thread runs in the caller's span, so anything the query
+        // logs stays correlated with the request that issued it.
+        let span = tracing::Span::current();
         let task = tokio::task::spawn_blocking(move || {
-            // Both are released only once the connection is back.
-            let _permit = permit;
-            let _admission = admission;
-            execute(&shared, &task_control, work)
+            span.in_scope(|| {
+                // Both are released only once the connection is back.
+                let _permit = permit;
+                let _admission = admission;
+                execute(&shared, &task_control, work)
+            })
         });
         match tokio::time::timeout_at(tokio_deadline, task).await {
             Ok(Ok(result)) => result,

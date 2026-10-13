@@ -7005,7 +7005,9 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, ManagedStoreError> + Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    // Keep the store work in the caller's span for log correlation.
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(operation))
         .await
         .map_err(|error| {
             ManagedStoreError::Unavailable(format!("managed store task failed: {error}"))

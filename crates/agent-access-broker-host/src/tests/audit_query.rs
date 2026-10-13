@@ -924,7 +924,9 @@ async fn successful_queries_are_neither_audited_nor_logged() {
     }
     assert_eq!(fixture.records().len(), before);
     // A query on the same routes whose stored record cannot be read is
-    // logged, so the capture observes how these routes are handled.
+    // logged, so the capture observes how these routes are handled. The
+    // database work itself runs in the request's span on the audit reader's
+    // blocking thread (core `query_work_runs_in_the_callers_span`).
     let unreadable = uuid::Uuid::new_v4().to_string();
     fixture
         .append(synthetic(&unreadable, 40, "alice", "fake", "echo"))

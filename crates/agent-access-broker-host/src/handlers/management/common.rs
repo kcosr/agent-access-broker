@@ -557,7 +557,9 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, agent_access_core::ManagedStoreError> + Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    // Keep the store work in the request's span for log correlation.
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(operation))
         .await
         .map_err(|error| {
             agent_access_core::ManagedStoreError::Unavailable(format!(

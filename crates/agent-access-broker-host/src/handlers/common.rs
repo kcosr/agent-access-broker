@@ -327,9 +327,13 @@ pub(crate) async fn resolve_identity_blocking(
     snapshot: Arc<RuntimeSnapshot>,
     headers: HeaderMap,
 ) -> Result<agent_access_core::IdentityContext, agent_access_core::IdentityFailure> {
-    tokio::task::spawn_blocking(move || snapshot.runtime.resolve_identity(&headers))
-        .await
-        .unwrap_or(Err(agent_access_core::IdentityFailure::Invalid))
+    // Keep identity resolution in the request's span for log correlation.
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        span.in_scope(|| snapshot.runtime.resolve_identity(&headers))
+    })
+    .await
+    .unwrap_or(Err(agent_access_core::IdentityFailure::Invalid))
 }
 
 pub(crate) fn request_id_from_headers(
