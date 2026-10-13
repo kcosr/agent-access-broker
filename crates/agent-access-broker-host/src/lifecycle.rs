@@ -1228,8 +1228,14 @@ mod tests {
     /// A loopback listener whose port stays bound, but not listening, by the
     /// returned socket after the listener closes. Neither another listener
     /// nor a client's ephemeral port can take the port meanwhile, so a
-    /// refused connection shows that this listener closed.
-    #[cfg(unix)]
+    /// refused connection shows that this listener closed. The cfg is the
+    /// one under which Tokio provides `TcpSocket::set_reuseport`.
+    #[cfg(all(
+        unix,
+        not(target_os = "solaris"),
+        not(target_os = "illumos"),
+        not(target_os = "cygwin")
+    ))]
     fn listener_with_reserved_port() -> (tokio::net::TcpListener, tokio::net::TcpSocket) {
         let listener = tokio::net::TcpSocket::new_v4().unwrap();
         listener.set_reuseport(true).unwrap();
@@ -1244,9 +1250,19 @@ mod tests {
     async fn public_server_stops_on_shutdown_trigger() {
         let coordinator = ShutdownCoordinator::new();
         let mut servers = Servers::new();
-        #[cfg(unix)]
+        #[cfg(all(
+            unix,
+            not(target_os = "solaris"),
+            not(target_os = "illumos"),
+            not(target_os = "cygwin")
+        ))]
         let (public_listener, _reserved) = listener_with_reserved_port();
-        #[cfg(not(unix))]
+        #[cfg(not(all(
+            unix,
+            not(target_os = "solaris"),
+            not(target_os = "illumos"),
+            not(target_os = "cygwin")
+        )))]
         let public_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let public_addr = public_listener.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "ok" }));
