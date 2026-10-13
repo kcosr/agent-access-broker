@@ -4692,10 +4692,14 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let upstream_addr = listener.local_addr().unwrap();
         // The accept deadline starts with the first Broker request, not
-        // during the store and runtime setup before it.
+        // during the store and runtime setup before it. The sender drops if
+        // the test fails first; the wait for it is bounded too.
         let (request_started, request_start) = std::sync::mpsc::channel::<()>();
         let upstream = std::thread::spawn(move || {
-            if request_start.recv().is_err() {
+            if request_start
+                .recv_timeout(Duration::from_secs(300))
+                .is_err()
+            {
                 return;
             }
             let deadline = Instant::now() + Duration::from_secs(10);

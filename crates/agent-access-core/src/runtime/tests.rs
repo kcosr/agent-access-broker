@@ -450,8 +450,34 @@ pub(super) fn install_audit_writer_hook(
 
 fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {
     let (lock, condition) = &**gate;
-    *lock.lock().unwrap() = true;
+    *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
     condition.notify_all();
+}
+
+/// How long a writer test hook holds the writer at a gate. The hook runs
+/// while the writer holds the global hook mutex, so a test that fails
+/// before releasing its gate must not park the writer indefinitely.
+const GATE_HOLD_LIMIT: Duration = Duration::from_secs(30);
+
+/// Holds the calling writer until `gate` is released or
+/// [`GATE_HOLD_LIMIT`] passes.
+fn wait_at_gate(gate: &(Mutex<bool>, Condvar)) {
+    let (lock, condition) = gate;
+    let released = lock.lock().unwrap_or_else(|error| error.into_inner());
+    let _ = condition
+        .wait_timeout_while(released, GATE_HOLD_LIMIT, |released| !*released)
+        .unwrap_or_else(|error| error.into_inner());
+}
+
+/// Releases a gate when dropped, including when the test unwinds. Declared
+/// after the hook guard, it drops first, so the writer leaves the hook
+/// before the hook guard takes the hook mutex.
+struct GateRelease(Arc<(Mutex<bool>, Condvar)>);
+
+impl Drop for GateRelease {
+    fn drop(&mut self) {
+        release_gate(&self.0);
+    }
 }
 
 fn audit_records(path: &Path) -> Vec<Value> {
@@ -524,13 +550,10 @@ async fn durable_append_waits_for_sync_before_ack(durability: AuditDurability) {
             if let Some(sender) = hook_event_tx.lock().unwrap().take() {
                 let _ = sender.send(event);
             }
-            let (lock, condition) = &*hook_gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = condition.wait(released).unwrap();
-            }
+            wait_at_gate(&hook_gate);
         }
     });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         durability,
         ..jsonl_audit_config(audit_path.display().to_string())
@@ -624,13 +647,10 @@ async fn retention_prune_runs_after_triggering_append_ack() {
             if let Some(sender) = hook_event_tx.lock().unwrap().take() {
                 let _ = sender.send(event);
             }
-            let (lock, condition) = &*hook_gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = condition.wait(released).unwrap();
-            }
+            wait_at_gate(&hook_gate);
         }
     });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 1,
         ..jsonl_audit_config(audit_path.display().to_string())
@@ -1890,13 +1910,10 @@ async fn audit_sink_revalidates_parent_before_retention_prune() {
             if let Some(sender) = started_tx.lock().unwrap().take() {
                 let _ = sender.send(());
             }
-            let (lock, condition) = &*hook_gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = condition.wait(released).unwrap();
-            }
+            wait_at_gate(&hook_gate);
         }
     });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 0,
         ..jsonl_audit_config(audit_path.display().to_string())
