@@ -192,12 +192,22 @@ It requires no live credentials and starts its own guarded child fixtures; do
 not run the ignored child directly or use a broad `-- --ignored`. Record it as
 not applicable on non-Unix platforms. See `docs/testing.md` for the full suite.
 
-The fake-provider vertical smoke is included in `cargo test`; it starts an
-in-process broker and invokes it through the real `agent-access` binary.
+Tests outside the host, including the CLI smokes, start in-process brokers
+only through the host's `test-support` feature: `test_support::IsolatedBroker`
+runs the assembly's `composition()` and `build_identity()` on a real
+configuration file through the production startup, reload and drain, and
+`ProviderFixture` serves stub providers for configured native kinds. The host exports no router or
+reload state and the assembly library exports only those two functions, so do
+not add a raw construction path for tests. Host unit tests under
+`crates/agent-access-broker-host/src/tests/` may use the crate's internals.
 
-The Jira read smoke is also included in `cargo test`; it injects a stubbed Jira
-backend into the broker and drives typed `agent-access jira issue view/search`,
-project issue-type discovery and its create workflow, and issue comment commands.
+The fake-provider vertical smoke is included in `cargo test`; it starts an
+isolated broker and invokes it through the real `agent-access` binary.
+
+The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
+backend as a provider fixture and drives typed `agent-access jira issue
+view/search`, project issue-type discovery and its create workflow, and issue
+comment commands.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
 
@@ -207,11 +217,11 @@ also require the documented confirmation sentinels and an explicitly throwaway
 MR/source branch. Never run that binary with a broad `-- --ignored`; use only
 the individually named exact commands in `docs/testing.md`.
 
-The GitLab REST smoke is included in `cargo test`; it injects a stubbed GitLab
-backend into the broker and drives typed `agent-access gitlab` read, mutation,
-repository, and CI commands.
+The GitLab REST smoke is included in `cargo test`; it serves a stubbed GitLab
+backend as a provider fixture and drives typed `agent-access gitlab` read,
+mutation, repository, and CI commands.
 
-The CloudBees CI smoke is included in `cargo test`; it runs an in-process
+The CloudBees CI smoke is included in `cargo test`; it runs an isolated
 broker against a stubbed controller and drives typed and JSON-send downloads,
 stdio MCP output, bounded reads, build triggers, redirect rejection,
 and audit checks through the real `agent-access` binary.
@@ -284,14 +294,17 @@ and audit checks through the real `agent-access` binary.
   portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
   broker unit-test tree
   (`src/tests/`). Its production code depends on no backend or import adapter;
-  tests link the real backends through `src/test_composition.rs`. The
+  tests link the real backends through `src/test_composition.rs`. Its public
+  API is the composition, the application, the assembly identity and the build
+  status; routers, reload and runtime state stay crate-private. The
   `test-support` feature adds `src/test_support.rs`: isolated broker
   applications for acceptance tests, with provider fixtures and read-only store
   views. Release builds never enable it.
 - `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
   assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
-  in `src/backends.rs` selects the modules it links and `src/build_info.rs`
-  stamps its identity, including the release commit for its workspace modules.
+  in `src/backends.rs` selects the modules it links and `build_identity()` in
+  `src/build_info.rs` stamps its identity, including the release commit for its
+  workspace modules. Its library exports only those two functions.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.

@@ -187,6 +187,20 @@ All notable changes to this project are documented in this file.
     `OAuthDialectError`; matches need a fallback arm that rejects the
     unsupported variant. `ProviderFailureStatus` is now exhaustive.
   Serialized and stored shapes are unchanged.
+- The `agent-access-broker` library exports only `composition()`, the modules
+  the distribution links, and `build_identity()`, the executable's identity.
+  Its router, reload-state and registry exports (`build_router`,
+  `build_public_router`, `build_gateway_router`, `build_reloadable_state`,
+  `ReloadableState`, `validate_reload_timeout`, `validate_shutdown_timeout`,
+  `backend_registry` and `broker_build_status`) are removed, and
+  `agent-access-broker-host` keeps its routers and reload state private, so
+  they have no other import path. Run a broker with
+  `BrokerApplication::new(composition, identity)`; start one in tests with the
+  host's `test-support` feature (`test_support::IsolatedBroker`); read the
+  build status with `BrokerApplication::status()`, whose
+  `BrokerBuildStatus` is now `agent_access_broker_host::BrokerBuildStatus`; and
+  read selected kinds, resource types, route specifications and configured
+  service descriptors from `BrokerComposition`.
 
 ### Added
 

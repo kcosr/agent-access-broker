@@ -162,13 +162,20 @@ also includes a same-origin browser portal frontend:
   `serve` lifecycle with listeners, signals, reload, and bounded shutdown), HTTP
   routers, request decoding, host-matched gateway dispatch, source/proxy-chain
   derivation, dynamic config reload, management routing, and HTTP MCP serving.
-  It depends on core and never on a backend or import adapter.
+  It depends on core and never on a backend or import adapter. Its public API
+  is the composition, the application, the assembly identity and the build
+  status; its routers and reload and runtime state are private, so other
+  crates, including their tests, start a broker only through the application.
+  The `test-support` feature adds `test_support::IsolatedBroker`, which runs a
+  composition through that same startup, reload and drain for acceptance
+  tests.
 - **`agent-access-broker`** — the service binary: a thin assembly that selects
   the modules it links (`composition()` in `backends.rs`), stamps its assembly
-  identity and the release commit of its workspace modules (`build_info.rs`),
-  and runs the host application (`main.rs`). The host checks that identity
-  against the composition and derives the build status served at
-  `/v1/broker/status`.
+  identity and the release commit of its workspace modules (`build_identity()`
+  in `build_info.rs`), and runs the host application (`main.rs`). Its library
+  exports only those two functions, which the binary and the acceptance tests
+  pass to the host. The host checks that identity against the composition and
+  derives the build status served at `/v1/broker/status`.
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static

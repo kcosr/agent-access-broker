@@ -156,6 +156,19 @@ conformance fixture records. The feature adds construction and control APIs
 only. Release builds must not enable it, and test binaries into which Cargo
 unifies it keep production semantics.
 
+Outside the host, tests start an in-process broker only through
+`IsolatedBroker`; process-level tests, such as the assembly's `state_locks` and
+`exit_status`, run the built executable. The host exports no router, reload
+state or runtime state, and the `agent-access-broker` library exports only
+`composition()` and `build_identity()`, which the CLI smokes and the assembly's
+acceptance tests pass to `IsolatedBroker::new`. They compare a served status
+with `BrokerApplication::status()` for the same composition and identity, and
+CLI unit tests read route specifications and configured service descriptors
+from the composition's read-only projection rather than rebuilding the backend
+registry. Host unit tests under `crates/agent-access-broker-host/src/tests/`
+run inside the crate and may also drive its internal routers and runtime
+snapshots directly.
+
 Tests that assert `tracing` events call
 `install_trace_capture()`, which installs one capturing dispatcher as the test
 binary's global default, then start a capture and run the observed work through
