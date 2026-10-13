@@ -7,18 +7,17 @@ use agent_access_provider::{BackendConfig, BackendRegistration};
 
 const SERVICE: &str = "loopback_fixture";
 
-static DEVELOPMENT_REGISTRATION: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[],
-    parse: parse_backend_config::<LoopbackFixture>,
-    development_only: true,
-};
-static PRODUCTION_REGISTRATION: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[],
-    parse: parse_backend_config::<LoopbackFixture>,
-    development_only: false,
-};
+static DEVELOPMENT_REGISTRATION: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<LoopbackFixture>,
+)
+.development_only();
+static PRODUCTION_REGISTRATION: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<LoopbackFixture>,
+);
 
 /// A backend whose one client asks for the direct loopback route, labeled
 /// and identified like the host's OAuth clients.
@@ -108,12 +107,12 @@ fn a_production_registration_is_denied_the_loopback_route_whatever_its_label() {
 /// The shipped `oauth_stub` records backend, selected with its own
 /// development-only registration or with a production marker on the same
 /// parser.
-static PRODUCTION_RECORDS: BackendRegistration = BackendRegistration {
-    kind: "oauth_stub",
-    resource_types: agent_access_fake::OAUTH_STUB_BACKEND.resource_types,
-    parse: agent_access_fake::OAUTH_STUB_BACKEND.parse,
-    development_only: false,
-};
+static PRODUCTION_RECORDS: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "oauth_stub",
+    parse_backend_config::<agent_access_fake::OAuthStubProviderConfig>,
+)
+.with_resource_types(&[&agent_access_fake::OAUTH_COLLECTION_RESOURCE]);
 
 fn records_config(registration: &'static BackendRegistration) -> BrokerConfig {
     let mut config = tests::base_fake_config();

@@ -235,10 +235,12 @@ into an immutable `BrokerComposition` that every command and runtime
 generation shares. Building it rejects invalid identifiers and duplicate
 backend kinds, resource types, dialects, and adapters; an import's companion
 dialect counts as selected, so selecting it again with `.oauth(..)` is a
-duplicate. Each
-`BackendRegistration` names a kind, the resource types the
+duplicate. Each `BackendRegistration` is a `static` built with its `const`
+constructor and builder methods. It names the declaring package (name and
+version, captured with `module_metadata!()`), a kind, the resource types the
 backend defines, a strict parser for its `[providers.<kind>]` table, and whether
-it is a development fixture. Parsing a configuration routes each provider table
+it is a development fixture. OAuth dialect and import adapter registrations
+carry the same package metadata. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
 supplies the resource type registry (the broker's own `git_repository` type
 plus every backend's types, in registration order). Development fixtures are

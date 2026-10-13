@@ -145,12 +145,11 @@ pub(crate) fn validate_gitlab_webhook_destinations(patterns: &[String], errors: 
     }
 }
 
-pub static GITLAB_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "gitlab",
-    resource_types: &[],
-    parse: parse_backend_config::<GitlabProviderConfig>,
-    development_only: false,
-};
+pub static GITLAB_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "gitlab",
+    parse_backend_config::<GitlabProviderConfig>,
+);
 
 impl BackendConfig for GitlabProviderConfig {
     fn kind(&self) -> &'static str {

@@ -53,12 +53,12 @@ pub(crate) fn default_confluence_body_max_bytes() -> u64 {
     2 * 1024 * 1024
 }
 
-pub static CONFLUENCE_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "confluence",
-    resource_types: &[&CONFLUENCE_SPACE_RESOURCE],
-    parse: parse_backend_config::<ConfluenceProviderConfig>,
-    development_only: false,
-};
+pub static CONFLUENCE_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "confluence",
+    parse_backend_config::<ConfluenceProviderConfig>,
+)
+.with_resource_types(&[&CONFLUENCE_SPACE_RESOURCE]);
 
 impl BackendConfig for ConfluenceProviderConfig {
     fn kind(&self) -> &'static str {

@@ -61,6 +61,7 @@ fn records_resource(registration: &OAuthRegistrationConfig) -> Option<String> {
 
 fn companion_import() -> ImportedAdapterRegistration {
     imported_adapter_registration(
+        agent_access_provider::module_metadata!(),
         &COMPANION_IMPORT,
         Some(ImportOAuthCompanion {
             dialect: &STUB_OAUTH_DIALECT,
@@ -101,7 +102,11 @@ fn config() -> BrokerConfig {
         .unwrap()
         .with_imported_adapters([
             companion_import(),
-            imported_adapter_registration(&STATIC_IMPORT, None),
+            imported_adapter_registration(
+                agent_access_provider::module_metadata!(),
+                &STATIC_IMPORT,
+                None,
+            ),
         ])
         .unwrap();
     let mut config = crate::parse_broker_config_raw(

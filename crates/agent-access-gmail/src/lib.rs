@@ -23,12 +23,11 @@ const DEADLINE: Duration = Duration::from_secs(30);
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GmailConfig {}
-pub static GMAIL_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "gmail",
-    resource_types: &[],
-    parse: parse_backend_config::<GmailConfig>,
-    development_only: false,
-};
+pub static GMAIL_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "gmail",
+    parse_backend_config::<GmailConfig>,
+);
 impl BackendConfig for GmailConfig {
     fn kind(&self) -> &'static str {
         "gmail"

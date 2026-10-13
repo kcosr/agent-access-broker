@@ -927,7 +927,7 @@ fn the_mcp_selection_contributes_its_companion_exactly_once() {
     assert_eq!(
         registry
             .import_authentication("mcp_http")
-            .map(|companion| companion.dialect.id),
+            .map(|companion| companion.dialect.id()),
         Some("mcp_oauth")
     );
     // Selecting the same static again is a duplicate, in either order.

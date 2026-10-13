@@ -257,8 +257,8 @@ fn oauth_binding_allowed(
     else {
         return false;
     };
-    binding.adapter_id.as_deref() == Some(companion.dialect.id)
-        && registration.adapter.as_str() == companion.dialect.id
+    binding.adapter_id.as_deref() == Some(companion.dialect.id())
+        && registration.adapter.as_str() == companion.dialect.id()
         && profile.target == definition.endpoint
         && profile.audience == definition.endpoint
         && (companion.approved_resource)(registration).as_deref()
@@ -280,7 +280,7 @@ fn import_authentication(config: &BrokerConfig) -> serde_json::Value {
                 .oauth
                 .registrations
                 .iter()
-                .filter(|(_, registration)| registration.adapter.as_str() == companion.dialect.id)
+                .filter(|(_, registration)| registration.adapter.as_str() == companion.dialect.id())
                 .filter_map(|(id, registration)| {
                     let resource = (companion.approved_resource)(registration)?;
                     let profiles = registration
@@ -304,7 +304,7 @@ fn import_authentication(config: &BrokerConfig) -> serde_json::Value {
                 .collect::<Vec<_>>();
             json!({
                 "importKind": kind,
-                "dialectId": companion.dialect.id,
+                "dialectId": companion.dialect.id(),
                 "registrations": registrations,
             })
         })

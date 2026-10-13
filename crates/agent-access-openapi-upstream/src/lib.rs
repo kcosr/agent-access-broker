@@ -21,7 +21,11 @@ use url::Url;
 /// The `openapi_http` import selection. OpenAPI imports use static
 /// credentials only, so it declares no OAuth companion.
 pub fn registration() -> ImportedAdapterRegistration {
-    imported_adapter_registration(&OpenApiAdapter, None)
+    imported_adapter_registration(
+        agent_access_provider::module_metadata!(),
+        &OpenApiAdapter,
+        None,
+    )
 }
 
 #[derive(Debug)]

@@ -15,11 +15,12 @@ use url::Url;
 
 /// The development `stub` OAuth dialect, selected independently of the
 /// `oauth_stub` records backend.
-pub static STUB_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
-    id: "stub",
-    development_only: true,
-    dialect: &StubDialect,
-};
+pub static STUB_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "stub",
+    &StubDialect,
+)
+.development_only();
 
 struct StubDialect;
 

@@ -21,12 +21,13 @@ static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor {
         validate: |value| value.starts_with("secret-"),
     }],
 };
-static BACKEND: BackendRegistration = BackendRegistration {
-    kind: "attribute_fixture",
-    resource_types: &[&TYPE],
-    parse: parse_backend_config::<FixtureConfig>,
-    development_only: true,
-};
+static BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "attribute_fixture",
+    parse_backend_config::<FixtureConfig>,
+)
+.with_resource_types(&[&TYPE])
+.development_only();
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

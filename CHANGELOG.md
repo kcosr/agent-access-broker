@@ -59,6 +59,15 @@ All notable changes to this project are documented in this file.
   `cloudbees_ci`, `gmail`, `teams` or `oauth_stub` (`fake` was already
   reserved). A native provider registration with kind `broker` is rejected when
   the binary's registry is built, even if never configured.
+- `BackendRegistration` and `OAuthDialectRegistration` are non-exhaustive with
+  private fields. Declare them with the `const` constructors
+  (`BackendRegistration::new(module_metadata!(), kind, parser)` with
+  `.with_resource_types(..)` and `.development_only()`, and
+  `OAuthDialectRegistration::new(module_metadata!(), id, dialect)`) and read
+  them through accessors such as `kind()`, `resource_types()`,
+  `is_development_only()`, `parse_config()`, `id()` and `dialect()`. Each
+  registration, including an `ImportedAdapterRegistration`, records its
+  declaring package's name and version as `ModuleMetadata`.
 
 ### Added
 

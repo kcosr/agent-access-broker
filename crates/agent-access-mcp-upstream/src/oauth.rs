@@ -8,11 +8,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
-static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
-    id: "mcp_oauth",
-    development_only: false,
-    dialect: &McpOAuthDialect,
-};
+static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "mcp_oauth",
+    &McpOAuthDialect,
+);
 
 /// Personal MCP import connections: a registration approves the resource
 /// pinned by its validated adapter settings.

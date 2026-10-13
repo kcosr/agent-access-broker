@@ -1955,7 +1955,7 @@ impl BrokerRuntime {
             .filter(|service| {
                 registry
                     .get(service)
-                    .is_some_and(|registration| registration.development_only)
+                    .is_some_and(|registration| registration.is_development_only())
             })
             .map(|service| {
                 format!(

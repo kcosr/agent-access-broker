@@ -52,8 +52,9 @@ impl ClientCaller {
         deployment: &DeploymentConfig,
     ) -> Self {
         Self::Native {
-            kind: registration.kind,
-            development: registration.development_only && development_fixtures_enabled(deployment),
+            kind: registration.kind(),
+            development: registration.is_development_only()
+                && development_fixtures_enabled(deployment),
         }
     }
 
@@ -408,11 +409,17 @@ mod tests {
 
     #[test]
     fn the_deployment_decides_the_development_category() {
-        let registration = |development_only| BackendRegistration {
-            kind: "fixture",
-            resource_types: &[],
-            parse: agent_access_fake::FAKE_BACKEND.parse,
-            development_only,
+        let registration = |development_only| {
+            let registration = BackendRegistration::new(
+                agent_access_provider::module_metadata!(),
+                "fixture",
+                agent_access_provider::parse_backend_config::<agent_access_fake::FakeProviderConfig>,
+            );
+            if development_only {
+                registration.development_only()
+            } else {
+                registration
+            }
         };
         let deployment = |environment: &str, enable_fake_service| DeploymentConfig {
             environment: environment.into(),

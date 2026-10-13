@@ -36,12 +36,13 @@ const SERVICE: &str = "conformance";
 const LABEL: &str = "providers.conformance";
 const MAX_PING_MESSAGE_BYTES: usize = 1024;
 
-pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[&CONFORMANCE_ITEM_RESOURCE, &CONFORMANCE_ENDPOINT_RESOURCE],
-    parse: parse_backend_config::<ConformanceConfig>,
-    development_only: true,
-};
+pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<ConformanceConfig>,
+)
+.with_resource_types(&[&CONFORMANCE_ITEM_RESOURCE, &CONFORMANCE_ENDPOINT_RESOURCE])
+.development_only();
 
 /// Items on shelves, identified as `shelf/item` with up to two nested
 /// shelves. Namespaces cover a shelf and everything below it.

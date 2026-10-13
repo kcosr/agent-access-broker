@@ -774,20 +774,18 @@ fn retained_unavailable_oauth_binding_does_not_block_other_import_administration
 fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
     // A native kind selected without a provider table still owns its name.
     static OBSERVABILITY_KIND: agent_access_provider::BackendRegistration =
-        agent_access_provider::BackendRegistration {
-            kind: "observability",
-            resource_types: &[],
-            parse: agent_access_provider::parse_backend_config::<
-                agent_access_fake::FakeProviderConfig,
-            >,
-            development_only: false,
-        };
+        agent_access_provider::BackendRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "observability",
+            agent_access_provider::parse_backend_config::<agent_access_fake::FakeProviderConfig>,
+        );
     let fixture = fixture();
     let mut colliding = fixture.config.clone();
     colliding.providers = ProvidersConfig::new(Arc::new(
         agent_access_core::BackendRegistry::new([&OBSERVABILITY_KIND])
             .unwrap()
             .with_imported_adapters([agent_access_core::imports::imported_adapter_registration(
+                agent_access_provider::module_metadata!(),
                 &super::conformance_import::CONFORMANCE_IMPORT_ADAPTER,
                 None,
             )])

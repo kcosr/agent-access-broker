@@ -14,15 +14,15 @@ const ISSUER: &str = "https://accounts.google.com";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";
 const USERINFO: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
-pub static GOOGLE_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
-    id: "google",
-    development_only: false,
-    dialect: &GoogleDialect {
+pub static GOOGLE_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "google",
+    &GoogleDialect {
         token: TOKEN,
         userinfo: USERINFO,
         profile: "https://gmail.googleapis.com/gmail/v1/users/me/profile",
     },
-};
+);
 struct GoogleDialect {
     token: &'static str,
     userinfo: &'static str,
@@ -32,15 +32,18 @@ struct GoogleDialect {
 #[cfg(feature = "test-support")]
 pub(crate) fn test_dialect(base: &str) -> &'static OAuthDialectRegistration {
     let endpoint = |path| &*Box::leak(format!("{base}{path}").into_boxed_str());
-    Box::leak(Box::new(OAuthDialectRegistration {
-        id: "google",
-        development_only: true,
-        dialect: Box::leak(Box::new(GoogleDialect {
-            token: endpoint("/token"),
-            userinfo: endpoint("/userinfo"),
-            profile: endpoint("/gmail/v1/users/me/profile"),
-        })),
-    }))
+    Box::leak(Box::new(
+        OAuthDialectRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "google",
+            Box::leak(Box::new(GoogleDialect {
+                token: endpoint("/token"),
+                userinfo: endpoint("/userinfo"),
+                profile: endpoint("/gmail/v1/users/me/profile"),
+            })),
+        )
+        .development_only(),
+    ))
 }
 
 #[async_trait]
@@ -308,7 +311,7 @@ mod tests {
     }
     #[test]
     fn endpoints_consent_and_issuer_are_explicit() {
-        let dialect = GOOGLE_OAUTH_DIALECT.dialect;
+        let dialect = GOOGLE_OAUTH_DIALECT.dialect();
         let mut c = config();
         dialect.validate_registration(&c).unwrap();
         let client = OAuthClient {

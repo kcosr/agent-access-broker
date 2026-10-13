@@ -109,6 +109,47 @@ mod tests {
     }
 
     #[test]
+    fn registrations_name_their_declaring_packages() {
+        let registry = backend_registry();
+        let natives = registry
+            .registrations()
+            .map(|registration| (registration.kind(), registration.module()))
+            .collect::<Vec<_>>();
+        let dialects = ["google", "stub", "mcp_oauth"].map(|id| {
+            let dialect = registry.oauth_dialect(id).unwrap();
+            (dialect.id(), dialect.module())
+        });
+        let adapters = import_adapters().map(|adapter| (adapter.kind(), adapter.module()));
+        let packages = natives
+            .iter()
+            .chain(&dialects)
+            .chain(&adapters)
+            .map(|(id, module)| {
+                assert_eq!(module.crate_version(), env!("CARGO_PKG_VERSION"), "{id}");
+                (*id, module.crate_name())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            packages,
+            [
+                ("jira", "agent-access-jira"),
+                ("confluence", "agent-access-confluence"),
+                ("gitlab", "agent-access-gitlab"),
+                ("cloudbees_ci", "agent-access-cloudbees-ci"),
+                ("fake", "agent-access-fake"),
+                ("gmail", "agent-access-gmail"),
+                ("teams", "agent-access-teams"),
+                ("oauth_stub", "agent-access-fake"),
+                ("google", "agent-access-gmail"),
+                ("stub", "agent-access-fake"),
+                ("mcp_oauth", "agent-access-mcp-upstream"),
+                ("mcp_http", "agent-access-mcp-upstream"),
+                ("openapi_http", "agent-access-openapi-upstream"),
+            ]
+        );
+    }
+
+    #[test]
     fn every_compiled_builtin_has_readable_aggregate_and_ready_scoped_mcp_names() {
         // Exercise the actual registered configuration parsers and descriptors.
         // Parsing and projection do not resolve credentials or contact providers.

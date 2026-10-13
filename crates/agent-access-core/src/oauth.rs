@@ -616,7 +616,7 @@ impl OAuthManager {
             let dialect = dialects
                 .oauth_dialect(registration.adapter.as_str())
                 .ok_or(OAuthError::Configuration)?
-                .dialect;
+                .dialect();
             if !dialect.supports_server_default_scopes()
                 && registration
                     .permission_profiles
@@ -1967,11 +1967,12 @@ pub(crate) mod tests {
     // explicit-scope contract or coupling core to a protocol adapter.
     struct DefaultScopeDialect;
     pub(crate) static DEFAULT_SCOPE_DIALECT: agent_access_provider::OAuthDialectRegistration =
-        agent_access_provider::OAuthDialectRegistration {
-            id: "default_scope_fixture",
-            development_only: true,
-            dialect: &DefaultScopeDialect,
-        };
+        agent_access_provider::OAuthDialectRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "default_scope_fixture",
+            &DefaultScopeDialect,
+        )
+        .development_only();
 
     #[async_trait::async_trait]
     impl OAuthDialect for DefaultScopeDialect {
@@ -1982,7 +1983,7 @@ pub(crate) mod tests {
             Ok(())
         }
         fn upstream_allowlist(&self, config: &OAuthRegistrationConfig) -> Vec<String> {
-            STUB_OAUTH_DIALECT.dialect.upstream_allowlist(config)
+            STUB_OAUTH_DIALECT.dialect().upstream_allowlist(config)
         }
         fn authorization_url(
             &self,
@@ -1999,7 +2000,7 @@ pub(crate) mod tests {
             Ok(url)
         }
         fn callback_issuer(&self, config: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
-            STUB_OAUTH_DIALECT.dialect.callback_issuer(config)
+            STUB_OAUTH_DIALECT.dialect().callback_issuer(config)
         }
         fn refresh_replay(&self, _config: &OAuthRegistrationConfig) -> RefreshReplay {
             RefreshReplay::Consuming
@@ -2656,7 +2657,7 @@ pub(crate) mod tests {
             let (_dir, store, ring, original, _server) = fixture().await;
             let mut config = original.config().clone();
             let registration = config.registrations.get_mut("stub").unwrap();
-            registration.adapter = OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id);
+            registration.adapter = OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id());
             let profile = registration.permission_profiles.get_mut("read").unwrap();
             profile.scope_mode = OAuthScopeMode::ServerDefault;
             profile.scopes = None;
@@ -2729,7 +2730,7 @@ pub(crate) mod tests {
         let (_dir, store, ring, original, _server) = fixture().await;
         let mut explicit = original.config().clone();
         explicit.registrations.get_mut("stub").unwrap().adapter =
-            OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id);
+            OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id());
         let manager = default_scope_manager(store.clone(), ring.clone(), explicit.clone());
         manager.activate().unwrap();
         let state = start(&manager, OAuthConnectIntent::Connect).await;

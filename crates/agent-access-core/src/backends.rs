@@ -35,28 +35,28 @@ impl BackendRegistry {
         let mut errors = Vec::new();
         let mut kinds = BTreeMap::new();
         for registration in &registrations {
-            if !is_service_name(registration.kind) {
+            if !is_service_name(registration.kind()) {
                 errors.push(format!(
                     "backend kind {} is not a valid service name",
-                    registration.kind
+                    registration.kind()
                 ));
-            } else if registration.kind == "broker" {
+            } else if registration.kind() == "broker" {
                 // Reserved even when selected but never configured.
                 errors.push(
                     "backend kind broker is reserved for the Broker control-plane namespace".into(),
                 );
             }
-            if kinds.insert(registration.kind, ()).is_some() {
+            if kinds.insert(registration.kind(), ()).is_some() {
                 errors.push(format!(
                     "backend kind {} is registered more than once",
-                    registration.kind
+                    registration.kind()
                 ));
             }
         }
         let types = std::iter::once(HOST_RESOURCE_TYPE).chain(
             registrations
                 .iter()
-                .flat_map(|registration| registration.resource_types.iter().copied()),
+                .flat_map(|registration| registration.resource_types().iter().copied()),
         );
         let resource_types = ResourceTypeRegistry::new(types).unwrap_or_else(|type_errors| {
             errors.extend(type_errors);
@@ -145,15 +145,15 @@ impl BackendRegistry {
         &mut self,
         dialect: &'static OAuthDialectRegistration,
     ) -> Result<(), String> {
-        if !is_service_name(dialect.id) {
+        if !is_service_name(dialect.id()) {
             Err(format!(
                 "OAuth dialect {} is not a valid identifier",
-                dialect.id
+                dialect.id()
             ))
-        } else if self.oauth_dialect(dialect.id).is_some() {
+        } else if self.oauth_dialect(dialect.id()).is_some() {
             Err(format!(
                 "OAuth dialect {} is registered more than once",
-                dialect.id
+                dialect.id()
             ))
         } else {
             self.oauth_dialects.push(dialect);
@@ -184,11 +184,11 @@ impl BackendRegistry {
         self.oauth_dialects
             .iter()
             .copied()
-            .find(|dialect| dialect.id == id)
+            .find(|dialect| dialect.id() == id)
     }
 
     pub fn oauth_dialect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.oauth_dialects.iter().map(|dialect| dialect.id)
+        self.oauth_dialects.iter().map(|dialect| dialect.id())
     }
 
     /// A registry with no backends or OAuth dialects: only the broker's own
@@ -201,7 +201,7 @@ impl BackendRegistry {
         self.registrations
             .iter()
             .copied()
-            .find(|registration| registration.kind == kind)
+            .find(|registration| registration.kind() == kind)
     }
 
     pub fn registrations(&self) -> impl Iterator<Item = &'static BackendRegistration> + '_ {
@@ -215,11 +215,11 @@ impl BackendRegistry {
         self.registrations()
             .find(|registration| {
                 registration
-                    .resource_types
+                    .resource_types()
                     .iter()
                     .any(|descriptor| &descriptor.id == resource_type)
             })
-            .map(|registration| registration.kind)
+            .map(|registration| registration.kind())
     }
 
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
@@ -252,7 +252,7 @@ impl BackendRegistry {
         for (kind, table) in tables {
             let kind = kind.into_inner();
             let Some(registration) = self.get(&kind) else {
-                let expected = self.registrations().map(|r| r.kind).collect::<Vec<_>>();
+                let expected = self.registrations().map(|r| r.kind()).collect::<Vec<_>>();
                 return Err(with_input(rejection(
                     table,
                     Rejection::UnknownBackend {
@@ -267,11 +267,12 @@ impl BackendRegistry {
                     Rejection::NotATable("a provider configuration table"),
                 )));
             }
-            let config =
-                (registration.parse)(ValueDeserializer::from(table)).map_err(with_input)?;
+            let config = registration
+                .parse_config(ValueDeserializer::from(table))
+                .map_err(with_input)?;
             debug_assert_eq!(
                 config.kind(),
-                registration.kind,
+                registration.kind(),
                 "a backend parser must produce its own kind"
             );
             configured
@@ -431,7 +432,7 @@ impl ProvidersConfig {
         &self,
     ) -> impl Iterator<Item = (&'static BackendRegistration, &dyn BackendConfig)> + '_ {
         self.registry.registrations().filter_map(|registration| {
-            self.get_kind(registration.kind)
+            self.get_kind(registration.kind())
                 .map(|config| (registration, config))
         })
     }
@@ -443,7 +444,7 @@ impl ProvidersConfig {
         let registered = self
             .registry
             .registrations()
-            .filter_map(|registration| self.get_kind(registration.kind));
+            .filter_map(|registration| self.get_kind(registration.kind()));
         let unregistered = self
             .backends
             .iter()
@@ -458,16 +459,17 @@ mod tests {
     use super::*;
     use agent_access_fake::{OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 
-    static SECOND_STUB: OAuthDialectRegistration = OAuthDialectRegistration {
-        id: "stub",
-        development_only: true,
-        dialect: STUB_OAUTH_DIALECT.dialect,
-    };
-    static INVALID: OAuthDialectRegistration = OAuthDialectRegistration {
-        id: "Not A Name",
-        development_only: false,
-        dialect: STUB_OAUTH_DIALECT.dialect,
-    };
+    static SECOND_STUB: OAuthDialectRegistration = OAuthDialectRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "stub",
+        STUB_OAUTH_DIALECT.dialect(),
+    )
+    .development_only();
+    static INVALID: OAuthDialectRegistration = OAuthDialectRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "Not A Name",
+        STUB_OAUTH_DIALECT.dialect(),
+    );
 
     #[test]
     fn an_empty_registry_has_no_fixture_dialect_service_or_resource_type() {
@@ -494,7 +496,7 @@ mod tests {
         assert_eq!(registry.oauth_dialect_ids().collect::<Vec<_>>(), ["stub"]);
         assert!(registry.oauth_dialect("outlook").is_none());
         assert_eq!(
-            registry.resource_owner(&OAUTH_STUB_BACKEND.resource_types[0].id),
+            registry.resource_owner(&OAUTH_STUB_BACKEND.resource_types()[0].id),
             Some("oauth_stub")
         );
         let errors = registry

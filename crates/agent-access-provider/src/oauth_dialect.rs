@@ -6,8 +6,8 @@
 //! authorization server family can live outside core.
 use crate::host::UpstreamClientFactory;
 use crate::{
-    ClientProfile, EgressDeclaration, ProviderBuildError, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, complete_upstream_trace,
+    ClientProfile, EgressDeclaration, ModuleMetadata, ProviderBuildError, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -150,19 +150,62 @@ pub struct OAuthTarget {
 }
 
 /// A dialect the broker binary links, under the `adapter` name registrations
-/// select it by.
+/// select it by. Declare it as a `static` with the `const` builder.
+#[non_exhaustive]
 pub struct OAuthDialectRegistration {
-    pub id: &'static str,
-    /// Allowed only in non-production deployments with the development
-    /// fixtures enabled.
-    pub development_only: bool,
-    pub dialect: &'static dyn OAuthDialect,
+    module: ModuleMetadata,
+    id: &'static str,
+    development_only: bool,
+    dialect: &'static dyn OAuthDialect,
+}
+
+impl OAuthDialectRegistration {
+    /// `dialect` from `module`, selected by the adapter name `id`. It is not
+    /// a development fixture.
+    pub const fn new(
+        module: ModuleMetadata,
+        id: &'static str,
+        dialect: &'static dyn OAuthDialect,
+    ) -> Self {
+        Self {
+            module,
+            id,
+            development_only: false,
+            dialect,
+        }
+    }
+
+    /// Marks the dialect as a development fixture: allowed only in
+    /// non-production deployments with the development fixtures enabled.
+    pub const fn development_only(mut self) -> Self {
+        self.development_only = true;
+        self
+    }
+
+    /// The package that declares this dialect.
+    pub const fn module(&self) -> ModuleMetadata {
+        self.module
+    }
+
+    /// The `adapter` name OAuth registrations select the dialect by.
+    pub const fn id(&self) -> &'static str {
+        self.id
+    }
+
+    pub const fn is_development_only(&self) -> bool {
+        self.development_only
+    }
+
+    pub const fn dialect(&self) -> &'static dyn OAuthDialect {
+        self.dialect
+    }
 }
 
 impl std::fmt::Debug for OAuthDialectRegistration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OAuthDialectRegistration")
+            .field("module", &self.module)
             .field("id", &self.id)
             .field("development_only", &self.development_only)
             .finish_non_exhaustive()

@@ -18,6 +18,7 @@ pub static CONFORMANCE_IMPORT_ADAPTER: ConformanceImportAdapter = ConformanceImp
 pub fn registry() -> BackendRegistry {
     crate::backend_registry()
         .with_imported_adapters([imported_adapter_registration(
+            agent_access_provider::module_metadata!(),
             &CONFORMANCE_IMPORT_ADAPTER,
             None,
         )])

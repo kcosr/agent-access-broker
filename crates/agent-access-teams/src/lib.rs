@@ -98,12 +98,12 @@ impl std::fmt::Debug for TeamsConfig {
     }
 }
 
-pub static TEAMS_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "teams",
-    resource_types: &[&TEAMS_DESTINATION_RESOURCE],
-    parse: parse_backend_config::<TeamsConfig>,
-    development_only: false,
-};
+pub static TEAMS_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "teams",
+    parse_backend_config::<TeamsConfig>,
+)
+.with_resource_types(&[&TEAMS_DESTINATION_RESOURCE]);
 
 impl TeamsConfig {
     fn origins(&self) -> Result<Vec<Url>, String> {

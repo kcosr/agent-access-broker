@@ -1314,12 +1314,12 @@ pub struct CloudbeesCiControllerConfig {
     pub web_base_url: Option<String>,
 }
 
-pub static CLOUDBEES_CI_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "cloudbees_ci",
-    resource_types: &[&CLOUDBEES_CI_JOB_RESOURCE],
-    parse: parse_backend_config::<CloudbeesCiProviderConfig>,
-    development_only: false,
-};
+pub static CLOUDBEES_CI_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "cloudbees_ci",
+    parse_backend_config::<CloudbeesCiProviderConfig>,
+)
+.with_resource_types(&[&CLOUDBEES_CI_JOB_RESOURCE]);
 
 impl BackendConfig for CloudbeesCiProviderConfig {
     fn kind(&self) -> &'static str {

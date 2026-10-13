@@ -24,6 +24,7 @@ mod finalization;
 pub mod host;
 mod identifiers;
 mod invocation;
+mod module;
 mod oauth_dialect;
 pub mod presentation;
 mod provider;
@@ -55,6 +56,7 @@ pub use error::*;
 pub use finalization::*;
 pub use identifiers::*;
 pub use invocation::*;
+pub use module::ModuleMetadata;
 pub use oauth_dialect::*;
 pub use presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, PresentationBudget,

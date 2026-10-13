@@ -48,12 +48,13 @@ static JOB: ResourceTypeDescriptor = ResourceTypeDescriptor {
         example: "team-ci/payments",
     }),
 };
-static BACKEND: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[&JOB],
-    parse: parse_backend_config::<FixtureConfig>,
-    development_only: true,
-};
+static BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<FixtureConfig>,
+)
+.with_resource_types(&[&JOB])
+.development_only();
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

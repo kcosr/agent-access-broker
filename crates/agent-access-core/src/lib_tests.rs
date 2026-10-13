@@ -4943,18 +4943,18 @@ fn programmatic_provider_configs_must_name_registered_backends() {
 
 #[test]
 fn backend_registries_reject_conflicting_registrations() {
-    static SHADOW_FAKE: BackendRegistration = BackendRegistration {
-        kind: "fake",
-        resource_types: &[],
-        parse: parse_backend_config::<FakeProviderConfig>,
-        development_only: true,
-    };
-    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration {
-        kind: "jira_mirror",
-        resource_types: &[&agent_access_jira::JIRA_PROJECT_RESOURCE],
-        parse: parse_backend_config::<agent_access_jira::JiraProviderConfig>,
-        development_only: false,
-    };
+    static SHADOW_FAKE: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "fake",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .development_only();
+    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "jira_mirror",
+        parse_backend_config::<agent_access_jira::JiraProviderConfig>,
+    )
+    .with_resource_types(&[&agent_access_jira::JIRA_PROJECT_RESOURCE]);
     let errors = BackendRegistry::new([&FAKE_BACKEND, &SHADOW_FAKE]).unwrap_err();
     assert_eq!(errors, ["backend kind fake is registered more than once"]);
     let errors =
@@ -5035,12 +5035,12 @@ fn inline_and_dotted_provider_tables_parse_like_table_headers() {
 
 #[test]
 fn backend_kinds_must_be_service_names() {
-    static INVALID_KIND: BackendRegistration = BackendRegistration {
-        kind: "Not A Service",
-        resource_types: &[],
-        parse: parse_backend_config::<FakeProviderConfig>,
-        development_only: true,
-    };
+    static INVALID_KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "Not A Service",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .development_only();
     assert_eq!(
         BackendRegistry::new([&INVALID_KIND]).unwrap_err(),
         ["backend kind Not A Service is not a valid service name"]
@@ -5088,12 +5088,11 @@ fn every_selected_native_kind_stays_reserved_for_gateways() {
 
 #[test]
 fn the_broker_namespace_is_reserved_even_for_an_unconfigured_native_kind() {
-    static BROKER_KIND: BackendRegistration = BackendRegistration {
-        kind: "broker",
-        resource_types: &[],
-        parse: parse_backend_config::<FakeProviderConfig>,
-        development_only: false,
-    };
+    static BROKER_KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "broker",
+        parse_backend_config::<FakeProviderConfig>,
+    );
     assert_eq!(
         BackendRegistry::new([&FAKE_BACKEND, &BROKER_KIND]).unwrap_err(),
         ["backend kind broker is reserved for the Broker control-plane namespace"]

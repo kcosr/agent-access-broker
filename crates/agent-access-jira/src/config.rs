@@ -247,12 +247,12 @@ pub(crate) fn jira_comment_property_prefix_reserved(prefix: &str) -> bool {
         .any(|reserved| prefix.starts_with(reserved))
 }
 
-pub static JIRA_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "jira",
-    resource_types: &[&JIRA_PROJECT_RESOURCE],
-    parse: parse_backend_config::<JiraProviderConfig>,
-    development_only: false,
-};
+pub static JIRA_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "jira",
+    parse_backend_config::<JiraProviderConfig>,
+)
+.with_resource_types(&[&JIRA_PROJECT_RESOURCE]);
 
 impl BackendConfig for JiraProviderConfig {
     fn kind(&self) -> &'static str {

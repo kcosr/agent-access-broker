@@ -34,7 +34,11 @@ pub use transport::PROTOCOL_VERSION;
 /// as the import-authentication role. Selecting it registers that dialect;
 /// an assembly must not select the dialect separately.
 pub fn registration() -> ImportedAdapterRegistration {
-    imported_adapter_registration(&McpAdapter, Some(oauth::IMPORT_AUTHENTICATION))
+    imported_adapter_registration(
+        agent_access_provider::module_metadata!(),
+        &McpAdapter,
+        Some(oauth::IMPORT_AUTHENTICATION),
+    )
 }
 
 #[derive(Debug)]

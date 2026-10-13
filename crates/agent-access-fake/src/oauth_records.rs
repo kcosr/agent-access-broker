@@ -21,12 +21,13 @@ use url::Url;
 /// The development OAuth test-records backend. Its per-user credential is
 /// the caller's delegated OAuth connection, configured separately under
 /// `[credentials.per_user.oauth_stub]` and `[oauth.registrations]`.
-pub static OAUTH_STUB_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "oauth_stub",
-    resource_types: &[&OAUTH_COLLECTION_RESOURCE],
-    parse: parse_backend_config::<OAuthStubProviderConfig>,
-    development_only: true,
-};
+pub static OAUTH_STUB_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "oauth_stub",
+    parse_backend_config::<OAuthStubProviderConfig>,
+)
+.with_resource_types(&[&OAUTH_COLLECTION_RESOURCE])
+.development_only();
 
 /// Collections served by the development OAuth test provider.
 pub static OAUTH_COLLECTION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
@@ -474,11 +475,11 @@ mod tests {
 
     #[test]
     fn the_registration_is_a_development_fixture_owning_oauth_collections() {
-        assert!(OAUTH_STUB_BACKEND.development_only);
-        assert_eq!(OAUTH_STUB_BACKEND.kind, "oauth_stub");
+        assert!(OAUTH_STUB_BACKEND.is_development_only());
+        assert_eq!(OAUTH_STUB_BACKEND.kind(), "oauth_stub");
         assert_eq!(
             OAUTH_STUB_BACKEND
-                .resource_types
+                .resource_types()
                 .iter()
                 .map(|descriptor| descriptor.id.as_str())
                 .collect::<Vec<_>>(),

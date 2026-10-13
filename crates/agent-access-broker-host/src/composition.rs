@@ -31,7 +31,7 @@ impl BrokerComposition {
     pub fn native_kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.registry
             .registrations()
-            .map(|registration| registration.kind)
+            .map(|registration| registration.kind())
     }
 
     /// Selected OAuth dialect IDs, including the companion dialects that
@@ -172,23 +172,23 @@ mod tests {
     use agent_access_jira::JIRA_BACKEND;
     use agent_access_provider::{GIT_REPOSITORY_RESOURCE, ResourceType};
 
-    static INVALID_KIND: BackendRegistration = BackendRegistration {
-        kind: "Not A Kind",
-        resource_types: &[],
-        parse: FAKE_BACKEND.parse,
-        development_only: true,
-    };
-    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration {
-        kind: "jira_mirror",
-        resource_types: JIRA_BACKEND.resource_types,
-        parse: JIRA_BACKEND.parse,
-        development_only: false,
-    };
-    static SECOND_GOOGLE: OAuthDialectRegistration = OAuthDialectRegistration {
-        id: "google",
-        development_only: false,
-        dialect: GOOGLE_OAUTH_DIALECT.dialect,
-    };
+    static INVALID_KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "Not A Kind",
+        agent_access_provider::parse_backend_config::<agent_access_fake::FakeProviderConfig>,
+    )
+    .development_only();
+    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "jira_mirror",
+        agent_access_provider::parse_backend_config::<agent_access_jira::JiraProviderConfig>,
+    )
+    .with_resource_types(JIRA_BACKEND.resource_types());
+    static SECOND_GOOGLE: OAuthDialectRegistration = OAuthDialectRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "google",
+        GOOGLE_OAUTH_DIALECT.dialect(),
+    );
 
     const MINIMAL_CONFIG: &str = r#"
 [identity]
@@ -335,11 +335,11 @@ default_decision = "deny"
 
     #[test]
     fn an_import_companion_cannot_be_selected_again_as_a_dialect() {
-        static SECOND_MCP_OAUTH: OAuthDialectRegistration = OAuthDialectRegistration {
-            id: "mcp_oauth",
-            development_only: false,
-            dialect: GOOGLE_OAUTH_DIALECT.dialect,
-        };
+        static SECOND_MCP_OAUTH: OAuthDialectRegistration = OAuthDialectRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "mcp_oauth",
+            GOOGLE_OAUTH_DIALECT.dialect(),
+        );
         let error = BrokerComposition::builder()
             .oauth(&SECOND_MCP_OAUTH)
             .import_adapter(agent_access_mcp_upstream::registration())
@@ -353,12 +353,11 @@ default_decision = "deny"
 
     #[test]
     fn the_reserved_broker_kind_is_rejected_even_if_never_configured() {
-        static BROKER_KIND: BackendRegistration = BackendRegistration {
-            kind: "broker",
-            resource_types: &[],
-            parse: FAKE_BACKEND.parse,
-            development_only: false,
-        };
+        static BROKER_KIND: BackendRegistration = BackendRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "broker",
+            agent_access_provider::parse_backend_config::<agent_access_fake::FakeProviderConfig>,
+        );
         let error = BrokerComposition::builder()
             .native(&FAKE_BACKEND)
             .native(&BROKER_KIND)

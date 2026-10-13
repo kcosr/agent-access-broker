@@ -1565,7 +1565,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
             ));
             continue;
         };
-        if !dialect.dialect.supports_server_default_scopes()
+        if !dialect.dialect().supports_server_default_scopes()
             && registration
                 .permission_profiles
                 .values()
@@ -1575,12 +1575,12 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
                 "oauth.registrations.{name}: {adapter} does not support server_default scope mode"
             ));
         }
-        if let Err(reason) = dialect.dialect.validate_registration(registration) {
+        if let Err(reason) = dialect.dialect().validate_registration(registration) {
             errors.push(format!(
                 "oauth.registrations.{name} is not a valid {adapter} registration: {reason}"
             ));
         }
-        if dialect.development_only && !development_fixtures_enabled {
+        if dialect.is_development_only() && !development_fixtures_enabled {
             errors.push(format!(
                 "oauth.registrations.{name} uses the development-only {adapter} dialect, which requires non-production deployment.enable_fake_service"
             ));
@@ -4311,7 +4311,7 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
             ));
             continue;
         };
-        if registration.development_only && !config.deployment.enable_fake_service {
+        if registration.is_development_only() && !config.deployment.enable_fake_service {
             errors.push(format!(
                 "providers.{kind} is a development backend and requires deployment.enable_fake_service"
             ));

@@ -152,8 +152,16 @@ mod tests {
     fn import_errors(environment: &str, enable_fake_service: bool, kind: &str) -> Vec<String> {
         let registry = BackendRegistry::empty()
             .with_imported_adapters([
-                imported_adapter_registration(&DEVELOPMENT_ADAPTER, None),
-                imported_adapter_registration(&PRODUCTION_ADAPTER, None),
+                imported_adapter_registration(
+                    agent_access_provider::module_metadata!(),
+                    &DEVELOPMENT_ADAPTER,
+                    None,
+                ),
+                imported_adapter_registration(
+                    agent_access_provider::module_metadata!(),
+                    &PRODUCTION_ADAPTER,
+                    None,
+                ),
             ])
             .unwrap();
         let mut config = parse_broker_config_raw(

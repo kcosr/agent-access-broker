@@ -2,8 +2,8 @@
 //! builds a backend from its `[providers.<kind>]` table.
 use crate::host::UpstreamClientFactory;
 use crate::{
-    EgressProxyConfig, Provider, ProviderAttributionConfig, ProviderBuildError, ProviderLimits,
-    ResourceTypeDescriptor, ServiceDescriptor, StableSigningKey,
+    EgressProxyConfig, ModuleMetadata, Provider, ProviderAttributionConfig, ProviderBuildError,
+    ProviderLimits, ResourceTypeDescriptor, ServiceDescriptor, StableSigningKey,
 };
 use serde::de::DeserializeOwned;
 use std::any::Any;
@@ -16,17 +16,93 @@ pub type BackendConfigParser =
 
 /// A backend this build links. The broker binary lists its registrations;
 /// a `[providers.<kind>]` table configures one of them.
+///
+/// Declare it as a `static` with the `const` builder:
+///
+/// ```
+/// # use agent_access_provider::{BackendConfig, BackendRegistration, module_metadata};
+/// # fn parse(
+/// #     _: toml::de::ValueDeserializer<'_>,
+/// # ) -> Result<Box<dyn BackendConfig>, toml::de::Error> {
+/// #     unimplemented!()
+/// # }
+/// pub static EXAMPLE_BACKEND: BackendRegistration =
+///     BackendRegistration::new(module_metadata!(), "example", parse);
+/// assert_eq!(EXAMPLE_BACKEND.kind(), "example");
+/// assert!(EXAMPLE_BACKEND.resource_types().is_empty());
+/// ```
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct BackendRegistration {
+    module: ModuleMetadata,
+    kind: &'static str,
+    resource_types: &'static [&'static ResourceTypeDescriptor],
+    parse: BackendConfigParser,
+    development_only: bool,
+}
+
+impl BackendRegistration {
+    /// A backend from `module` serving `kind`, whose `[providers.<kind>]`
+    /// table `parse` reads. It defines no resource types and is not a
+    /// development fixture.
+    pub const fn new(
+        module: ModuleMetadata,
+        kind: &'static str,
+        parse: BackendConfigParser,
+    ) -> Self {
+        Self {
+            module,
+            kind,
+            resource_types: &[],
+            parse,
+            development_only: false,
+        }
+    }
+
+    /// Declares the resource types the backend defines, in listing order.
+    pub const fn with_resource_types(
+        mut self,
+        resource_types: &'static [&'static ResourceTypeDescriptor],
+    ) -> Self {
+        self.resource_types = resource_types;
+        self
+    }
+
+    /// Marks the backend as a development fixture: it is accepted only when
+    /// the deployment enables fake services, and never in production.
+    pub const fn development_only(mut self) -> Self {
+        self.development_only = true;
+        self
+    }
+
+    /// The package that declares this backend.
+    pub const fn module(&self) -> ModuleMetadata {
+        self.module
+    }
+
     /// The `[providers.<kind>]` table name, which is also the service the
     /// backend serves.
-    pub kind: &'static str,
+    pub const fn kind(&self) -> &'static str {
+        self.kind
+    }
+
     /// Resource types the backend defines, in listing order.
-    pub resource_types: &'static [&'static ResourceTypeDescriptor],
-    pub parse: BackendConfigParser,
-    /// Development fixtures are accepted only when the deployment enables
-    /// fake services, and never in production.
-    pub development_only: bool,
+    pub const fn resource_types(&self) -> &'static [&'static ResourceTypeDescriptor] {
+        self.resource_types
+    }
+
+    pub const fn is_development_only(&self) -> bool {
+        self.development_only
+    }
+
+    /// Parses this backend's `[providers.<kind>]` table with its strict
+    /// parser.
+    pub fn parse_config(
+        &self,
+        table: toml::de::ValueDeserializer<'_>,
+    ) -> Result<Box<dyn BackendConfig>, toml::de::Error> {
+        (self.parse)(table)
+    }
 }
 
 /// Parser for a backend whose configuration deserializes directly into `T`.

@@ -182,12 +182,13 @@ pub fn fake_service_provider() -> ServiceProvider {
     ServiceProvider::new(fake_descriptor(), Arc::new(FakeProvider))
 }
 
-pub static FAKE_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "fake",
-    resource_types: &[&FAKE_PROJECT_RESOURCE],
-    parse: parse_backend_config::<FakeProviderConfig>,
-    development_only: true,
-};
+pub static FAKE_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "fake",
+    parse_backend_config::<FakeProviderConfig>,
+)
+.with_resource_types(&[&FAKE_PROJECT_RESOURCE])
+.development_only();
 
 impl BackendConfig for FakeProviderConfig {
     fn kind(&self) -> &'static str {
