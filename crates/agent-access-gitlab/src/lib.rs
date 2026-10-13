@@ -20,8 +20,8 @@ use agent_access_content::{ContentWriteError, plain_text_to_gitlab_markdown_boun
 use agent_access_provider::*;
 use async_trait::async_trait;
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use chrono::{DateTime, Utc};
 use futures_util::stream;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 pub use provisioning::{
@@ -61,11 +61,24 @@ const GITLAB_MAX_PER_PAGE: u32 = 100;
 const GITLAB_MAX_SUGGESTIONS_PER_APPLY: usize = 100;
 const GITLAB_WEBHOOK_EVENT_MAX_PER_PAGE: u32 = 20;
 const GITLAB_WEBHOOK_HEADER_MAX_BYTES: usize = 8192;
-const GITLAB_PAGE_TOKEN_CONTEXT: &[u8] = b"gitlab-list-pagination/v1\0";
-const GITLAB_PAGE_TOKEN_CLOCK_SKEW_SECONDS: i64 = 60;
-const GITLAB_PAGE_TOKEN_TTL_MINUTES: i64 = 15;
-const GITLAB_PAGE_TOKEN_MAX_BYTES: usize = 4096;
-const GITLAB_PAGE_TOKEN_VERSION: u8 = 1;
+/// List continuations: the next GitLab page, or the next local offset of a
+/// draft-note list, for one action's exact project, filters, sort, projection
+/// and page size.
+const GITLAB_PAGE_TOKENS: ContinuationFamily = ContinuationFamily::new(
+    "gitlab",
+    "list-page",
+    GITLAB_PAGE_TOKEN_VERSION,
+    ContinuationLifetime::StableWhenConfigured,
+    GITLAB_PAGE_TOKEN_PAYLOAD_BYTES,
+)
+.expires_after(Duration::from_secs(GITLAB_PAGE_TOKEN_TTL_MINUTES * 60))
+.clock_skew(Duration::from_secs(GITLAB_PAGE_TOKEN_CLOCK_SKEW_SECONDS));
+const GITLAB_PAGE_TOKEN_VERSION: u8 = 2;
+/// The next page as a big-endian `u32`.
+const GITLAB_PAGE_TOKEN_PAYLOAD_BYTES: usize = 4;
+const GITLAB_PAGE_TOKEN_CLOCK_SKEW_SECONDS: u64 = 60;
+const GITLAB_PAGE_TOKEN_TTL_MINUTES: u64 = 15;
+const GITLAB_PAGE_TOKEN_MAX_BYTES: usize = GITLAB_PAGE_TOKENS.max_token_bytes();
 const NOTE_LIST_ORDER_BY: &[&str] = &["created_at", "updated_at"];
 const ISSUE_SEARCH_ORDER_BY: &[&str] = &[
     "created_at",
@@ -147,26 +160,8 @@ pub struct GitlabProvider {
     config_fingerprint: String,
     limits: ProviderLimits,
     backend: Arc<dyn GitlabBackend>,
-    pagination_signer: OpaqueTokenSigner,
+    pagination_signer: ContinuationSigner,
     attribution: ProviderAttributionConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct GitlabPageTokenPayload {
-    v: u8,
-    service: String,
-    action: String,
-    project: String,
-    project_id: u64,
-    principal: String,
-    credential_mode: String,
-    provider_fingerprint: String,
-    request_hash: String,
-    max_results: u32,
-    next_page: u32,
-    issued_at: i64,
-    expires_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -207,7 +202,7 @@ impl GitlabProvider {
             config_fingerprint,
             limits,
             backend,
-            pagination_signer: OpaqueTokenSigner::new(host.stable_signing_key().cloned()),
+            pagination_signer: ContinuationSigner::new(host.stable_signing_key().cloned()),
             attribution: host.attribution().clone(),
         })
     }
@@ -219,7 +214,7 @@ impl GitlabProvider {
             config_fingerprint,
             limits: ProviderLimits::default(),
             backend,
-            pagination_signer: OpaqueTokenSigner::new(None),
+            pagination_signer: ContinuationSigner::new(None),
             attribution: ProviderAttributionConfig::default(),
         }
     }
@@ -352,8 +347,23 @@ struct GitlabPageTokenContext<'a> {
     max_results: u32,
 }
 
+/// Binds a page token to the admitted context and provider configuration, the
+/// confirmed project path and numeric ID, the hash of the action's normalized
+/// filters, sort and projection, and the page size.
+fn gitlab_page_token_binding(
+    family: &ContinuationFamily,
+    context: &GitlabPageTokenContext<'_>,
+) -> ContinuationBinding {
+    family
+        .bind(context.request.context(), context.provider_fingerprint)
+        .text("project", &context.project.path_with_namespace)
+        .number("projectId", context.project.id)
+        .text("request", context.request_hash)
+        .number("maxResults", u64::from(context.max_results))
+}
+
 fn encode_gitlab_page_token(
-    signer: &OpaqueTokenSigner,
+    signer: &ContinuationSigner,
     context: &GitlabPageTokenContext<'_>,
     next_page: u32,
     now: DateTime<Utc>,
@@ -361,98 +371,51 @@ fn encode_gitlab_page_token(
     if next_page < 2 {
         return Err(gitlab_page_token_error());
     }
-    let expires_at = now + ChronoDuration::minutes(GITLAB_PAGE_TOKEN_TTL_MINUTES);
-    let payload = GitlabPageTokenPayload {
-        v: GITLAB_PAGE_TOKEN_VERSION,
-        service: "gitlab".to_string(),
-        action: context.request.action().to_owned(),
-        project: context.project.path_with_namespace.clone(),
-        project_id: context.project.id,
-        principal: context.request.identity().principal.clone(),
-        credential_mode: context.request.credential_mode().as_str().to_owned(),
-        provider_fingerprint: context.provider_fingerprint.to_string(),
-        request_hash: context.request_hash.to_string(),
-        max_results: context.max_results,
-        next_page,
-        issued_at: now.timestamp(),
-        expires_at: expires_at.timestamp(),
-    };
-    let payload = serde_json::to_vec(&payload).map_err(|_| {
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "failed to encode GitLab pagination token",
+    signer
+        .seal_at(
+            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context),
+            &next_page.to_be_bytes(),
+            now.into(),
         )
-    })?;
-    let signature = signer
-        .sign(GITLAB_PAGE_TOKEN_CONTEXT, &payload)
-        .map_err(|_| {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "GitLab pagination signing key is unavailable",
-            )
-        })?;
-    let token = format!("{}.{}", URL_SAFE_NO_PAD.encode(payload), signature);
-    if token.len() > GITLAB_PAGE_TOKEN_MAX_BYTES {
-        return Err(ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "GitLab pagination token exceeded its size bound",
-        ));
-    }
-    Ok(token)
+        .map_err(gitlab_page_token_failure)
 }
 
 fn decode_gitlab_page_token(
-    signer: &OpaqueTokenSigner,
+    signer: &ContinuationSigner,
     token: &str,
     context: &GitlabPageTokenContext<'_>,
     now: DateTime<Utc>,
 ) -> Result<u32, ProviderError> {
-    if token.is_empty() || token.len() > GITLAB_PAGE_TOKEN_MAX_BYTES {
-        return Err(gitlab_page_token_error());
-    }
-    let (payload_part, signature) = token.split_once('.').ok_or_else(gitlab_page_token_error)?;
-    if payload_part.is_empty() || signature.is_empty() || signature.contains('.') {
-        return Err(gitlab_page_token_error());
-    }
-    let payload = URL_SAFE_NO_PAD
-        .decode(payload_part)
+    let payload = signer
+        .open_at(
+            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context),
+            token,
+            now.into(),
+        )
+        .map_err(gitlab_page_token_failure)?;
+    let next_page = <[u8; GITLAB_PAGE_TOKEN_PAYLOAD_BYTES]>::try_from(payload.as_slice())
+        .map(u32::from_be_bytes)
         .map_err(|_| gitlab_page_token_error())?;
-    let signature_valid = signer
-        .verify(GITLAB_PAGE_TOKEN_CONTEXT, &payload, signature)
-        .map_err(|_| {
+    if next_page < 2 {
+        return Err(gitlab_page_token_error());
+    }
+    Ok(next_page)
+}
+
+fn gitlab_page_token_failure(error: ContinuationError) -> ProviderError {
+    match error {
+        _ if error.is_token_rejection() => gitlab_page_token_error(),
+        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
             ProviderError::error(
                 ReasonCode::UpstreamProtocolFailed,
                 "GitLab pagination signing key is unavailable",
             )
-        })?;
-    if !signature_valid {
-        return Err(gitlab_page_token_error());
+        }
+        _ => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "GitLab pagination token exceeded its size bound",
+        ),
     }
-    let payload: GitlabPageTokenPayload =
-        serde_json::from_slice(&payload).map_err(|_| gitlab_page_token_error())?;
-    let now = now.timestamp();
-    let maximum_expiry = payload
-        .issued_at
-        .checked_add(ChronoDuration::minutes(GITLAB_PAGE_TOKEN_TTL_MINUTES).num_seconds())
-        .ok_or_else(gitlab_page_token_error)?;
-    if payload.v != GITLAB_PAGE_TOKEN_VERSION
-        || payload.service != "gitlab"
-        || payload.action != context.request.action()
-        || payload.project != context.project.path_with_namespace
-        || payload.project_id != context.project.id
-        || payload.principal != context.request.identity().principal
-        || payload.credential_mode != context.request.credential_mode().as_str()
-        || payload.provider_fingerprint != context.provider_fingerprint
-        || payload.request_hash != context.request_hash
-        || payload.max_results != context.max_results
-        || payload.next_page < 2
-        || payload.issued_at > now.saturating_add(GITLAB_PAGE_TOKEN_CLOCK_SKEW_SECONDS)
-        || payload.expires_at <= now
-        || payload.expires_at > maximum_expiry
-    {
-        return Err(gitlab_page_token_error());
-    }
-    Ok(payload.next_page)
 }
 
 fn gitlab_page_token_error() -> ProviderError {
@@ -8396,7 +8359,7 @@ fn gitlab_search_documentation(merge_requests: bool, max_results: u32) -> Value 
             "maxResults": max_results,
             "requestTokenField": "pageToken", "responseTokenField": "nextPageToken",
             "tokenLifetimeMinutes": GITLAB_PAGE_TOKEN_TTL_MINUTES,
-            "continuation": "Pass nextPageToken as pageToken with the same action, project, filters, sort, and maxResults. Tokens are signed and bound to the principal, credential mode, confirmed project, and provider endpoint; each request is reauthorized. isLast indicates completion. Upstream offset pagination is not snapshot-isolated."
+            "continuation": "Pass nextPageToken as pageToken with the same action, project, filters, sort, and maxResults. Tokens are signed and bound to the execution context, principal, credential mode, confirmed project, and provider endpoint; each request is reauthorized. isLast indicates completion. Upstream offset pagination is not snapshot-isolated."
         },
         "examples": [
             {"project": "team/service"},

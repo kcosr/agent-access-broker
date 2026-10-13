@@ -2,7 +2,9 @@ use super::*;
 use crate::{
     ActionIo, GitlabContentConfig, GitlabWebhooksConfig, SearchLimitsConfig, raw_download_io,
 };
-use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential, test_signing_key};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Duration as ChronoDuration;
 use wiremock::matchers::{
     body_json, body_string, method, path, query_param, query_param_is_missing,
 };
@@ -900,7 +902,7 @@ fn branch_and_commit_validation_fail_closed() {
 
 #[test]
 fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry() {
-    let signer = OpaqueTokenSigner::new(None);
+    let signer = ContinuationSigner::new(None);
     let request = test_invocation(
         "issue.search",
         json!({ "project": "sip/service", "state": "opened" }),
@@ -1014,6 +1016,20 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         )
         .is_err()
     );
+    let changed_context = InvocationBuilder::from(request.clone())
+        .execution_context("external")
+        .build();
+    assert!(
+        decode(
+            &changed_context,
+            &project,
+            "provider-fingerprint",
+            &request_hash,
+            100,
+            now,
+        )
+        .is_err()
+    );
     let mut changed_project = project.clone();
     changed_project.id = 43;
     assert!(
@@ -1072,17 +1088,10 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
 
-    let (payload, signature) = token.split_once('.').unwrap();
-    let mut tampered_signature = signature.as_bytes().to_vec();
-    tampered_signature[0] = if tampered_signature[0] == b'A' {
-        b'B'
-    } else {
-        b'A'
-    };
-    let tampered = format!(
-        "{payload}.{}",
-        String::from_utf8(tampered_signature).unwrap()
-    );
+    let mut tampered = token.clone().into_bytes();
+    let middle = tampered.len() / 2;
+    tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
+    let tampered = String::from_utf8(tampered).unwrap();
     let context = GitlabPageTokenContext {
         request: &request,
         project: &project,
@@ -1091,6 +1100,108 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         max_results: 100,
     };
     assert!(decode_gitlab_page_token(&signer, &tampered, &context, now).is_err());
+}
+
+#[test]
+fn gitlab_page_tokens_reject_other_versions_purposes_and_oversize_and_keep_their_lifetime() {
+    let signer = ContinuationSigner::new(None);
+    let request = test_invocation("issue.search", json!({ "project": "sip/service" }));
+    let project = test_project();
+    let now = Utc::now();
+    let context = GitlabPageTokenContext {
+        request: &request,
+        project: &project,
+        provider_fingerprint: "provider-fingerprint",
+        request_hash: "request-hash",
+        max_results: 20,
+    };
+    let token = encode_gitlab_page_token(&signer, &context, 2, now).unwrap();
+    // The schema bound is the exact encoded size, and the token carries only
+    // the version, expiry, next page and MAC.
+    assert_eq!(token.len(), GITLAB_PAGE_TOKEN_MAX_BYTES);
+    assert_eq!(GITLAB_PAGE_TOKEN_MAX_BYTES, 60);
+    assert_eq!(
+        URL_SAFE_NO_PAD.decode(&token).unwrap().len(),
+        1 + 8 + 4 + 32
+    );
+    for family in [
+        ContinuationFamily::new(
+            "gitlab",
+            "list-page",
+            1,
+            ContinuationLifetime::StableWhenConfigured,
+            GITLAB_PAGE_TOKEN_PAYLOAD_BYTES,
+        )
+        .expires_after(Duration::from_secs(900)),
+        ContinuationFamily::new(
+            "gitlab",
+            "draft-page",
+            GITLAB_PAGE_TOKEN_VERSION,
+            ContinuationLifetime::StableWhenConfigured,
+            GITLAB_PAGE_TOKEN_PAYLOAD_BYTES,
+        )
+        .expires_after(Duration::from_secs(900)),
+    ] {
+        let foreign = signer
+            .seal_at(
+                &gitlab_page_token_binding(&family, &context),
+                &2_u32.to_be_bytes(),
+                now.into(),
+            )
+            .unwrap();
+        let error = decode_gitlab_page_token(&signer, &foreign, &context, now).unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(
+            error.message,
+            "GitLab pagination token is invalid or expired"
+        );
+    }
+    let oversized = format!("{token}A");
+    assert_eq!(
+        decode_gitlab_page_token(&signer, &oversized, &context, now)
+            .unwrap_err()
+            .reason_code(),
+        ReasonCode::InputInvalid
+    );
+
+    // Without a stable key another provider instance rejects the token; with
+    // one, instances sharing it accept each other's tokens.
+    assert!(
+        decode_gitlab_page_token(&ContinuationSigner::new(None), &token, &context, now).is_err()
+    );
+    let key = test_signing_key(4);
+    let shared = encode_gitlab_page_token(
+        &ContinuationSigner::new(Some(key.clone())),
+        &context,
+        3,
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        decode_gitlab_page_token(&ContinuationSigner::new(Some(key)), &shared, &context, now)
+            .unwrap(),
+        3
+    );
+
+    struct Unavailable;
+    impl StableSigningKey for Unavailable {
+        fn hmac_base64url(&self, _: &[u8], _: &[u8]) -> Result<String, SigningError> {
+            Err(SigningError)
+        }
+    }
+    let failing = ContinuationSigner::new(Some(Arc::new(Unavailable)));
+    for error in [
+        encode_gitlab_page_token(&failing, &context, 2, now).unwrap_err(),
+        decode_gitlab_page_token(&failing, &shared, &context, now).unwrap_err(),
+    ] {
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(
+            error.message,
+            "GitLab pagination signing key is unavailable"
+        );
+    }
 }
 
 #[test]
