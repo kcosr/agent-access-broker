@@ -119,8 +119,6 @@ pub enum ReasonCode {
     UpstreamRateLimited,
     UpstreamConnectionFailed,
     UpstreamProtocolFailed,
-    CloudbeesCiLogChunkExceeded,
-    CloudbeesCiLogScanExceeded,
     CursorSigningUnavailable,
     UpstreamTimeout,
     OperationCancelled,
@@ -251,8 +249,6 @@ impl ReasonCode {
             Self::UpstreamRateLimited => "upstream_rate_limited",
             Self::UpstreamConnectionFailed => "upstream_connection_failed",
             Self::UpstreamProtocolFailed => "upstream_protocol_failed",
-            Self::CloudbeesCiLogChunkExceeded => "cloudbees_ci_log_chunk_exceeded",
-            Self::CloudbeesCiLogScanExceeded => "cloudbees_ci_log_scan_exceeded",
             Self::CursorSigningUnavailable => "cursor_signing_unavailable",
             Self::UpstreamTimeout => "upstream_timeout",
             Self::OperationCancelled => "operation_cancelled",
@@ -372,9 +368,7 @@ impl ReasonCode {
             Self::GatewayMethodDenied => 405,
             Self::BodySizeDenied
             | Self::AttachmentSizeDenied
-            | Self::AttachmentIntegrityMismatch
-            | Self::CloudbeesCiLogChunkExceeded
-            | Self::CloudbeesCiLogScanExceeded => 413,
+            | Self::AttachmentIntegrityMismatch => 413,
             Self::GatewayRequestCapExceeded | Self::GitPrefixCapExceeded => 413,
             Self::BodyFormatUnsupported
             | Self::ResponseFormatUnsupported
@@ -501,8 +495,6 @@ impl ReasonCode {
             Self::UpstreamRateLimited,
             Self::UpstreamConnectionFailed,
             Self::UpstreamProtocolFailed,
-            Self::CloudbeesCiLogChunkExceeded,
-            Self::CloudbeesCiLogScanExceeded,
             Self::CursorSigningUnavailable,
             Self::UpstreamTimeout,
             Self::OperationCancelled,

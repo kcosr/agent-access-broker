@@ -291,8 +291,8 @@ impl CloudbeesCiProvider {
                     _ => return Err(protocol_error()),
                 };
                 if text.len() as u64 > LOG_LIMIT {
-                    return Err(ProviderError::deny(
-                        ReasonCode::CloudbeesCiLogChunkExceeded,
+                    return Err(ProviderError::domain(
+                        &CLOUDBEES_CI_LOG_CHUNK_EXCEEDED,
                         "Pipeline node log exceeds the bounded read limit",
                     ));
                 }
@@ -764,10 +764,13 @@ mod tests {
                 assert_eq!(result["log"]["hasMore"], true);
                 assert!(result["log"].get("consoleUrl").is_none());
             } else {
+                let error = result.unwrap_err();
                 assert_eq!(
-                    result.unwrap_err().reason_code(),
-                    ReasonCode::CloudbeesCiLogChunkExceeded
+                    error.reason_code(),
+                    agent_access_provider::ProviderReason::from(&CLOUDBEES_CI_LOG_CHUNK_EXCEEDED)
                 );
+                assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+                assert_eq!(error.reason_code().http_status(), 413);
             }
         }
     }

@@ -74,6 +74,12 @@ All notable changes to this project are documented in this file.
   from a module that is no longer linked stay readable. The wire spelling is
   unchanged; compare with `ReasonCodeId::standard()` or
   `ReasonCodeId::from(ReasonCode::…)`.
+- `ReasonCode::CloudbeesCiLogChunkExceeded` and
+  `ReasonCode::CloudbeesCiLogScanExceeded` are removed from the standard
+  vocabulary. CloudBees CI now declares `cloudbees_ci_log_chunk_exceeded` and
+  `cloudbees_ci_log_scan_exceeded` as its own domain reasons
+  (`CLOUDBEES_CI_LOG_CHUNK_EXCEEDED`, `CLOUDBEES_CI_LOG_SCAN_EXCEEDED`); their
+  wire spelling, `decision = deny`, HTTP 413, and CLI exit 2 are unchanged.
 - `ProviderError`'s decision and reason are private and fixed at construction;
   read them with `decision()` and `reason_code()`, which returns a
   `ProviderReason` handle (a standard reason, a backend's registered domain

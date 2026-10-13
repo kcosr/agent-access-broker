@@ -603,7 +603,7 @@ impl CloudbeesCiProvider {
             _ => unreachable!(),
         };
         if options.mode == "tail" && scan.decoder.limited {
-            return Err(ProviderError::deny(ReasonCode::CloudbeesCiLogScanExceeded,
+            return Err(ProviderError::domain(&CLOUDBEES_CI_LOG_SCAN_EXCEEDED,
                 "The scan ceiling prevented reaching the log end; increasing maxBytes cannot help. Use head, an applicable Pipeline step log, an operator-adjusted scan ceiling, or a separately authorized download")
                 .with_result(json!({"stopReason":"scan_limit","scannedBytes":scan.decoder.scanned,"maxLogScanBytes":self.log_scan_limit,"reachedEnd":false})));
         }
@@ -955,7 +955,12 @@ mod tests {
         assert_eq!(search["matches"], json!([]));
         assert_eq!(search["stopReason"], "scan_limit");
         let tail = read(&ci, inputs("tail")).await.unwrap_err();
-        assert_eq!(tail.reason_code(), ReasonCode::CloudbeesCiLogScanExceeded);
+        assert_eq!(
+            tail.reason_code(),
+            agent_access_provider::ProviderReason::from(&CLOUDBEES_CI_LOG_SCAN_EXCEEDED)
+        );
+        assert_eq!(tail.decision(), agent_access_provider::Decision::Deny);
+        assert_eq!(tail.reason_code().http_status(), 413);
         assert!(!tail.message.contains("xxxxx"));
     }
 

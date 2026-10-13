@@ -2215,7 +2215,7 @@ reason code in the sanitized portal error URL.
 | 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
 | 405 | `gateway_method_denied` |
 | 408 | `operation_cancelled` |
-| 413 | `body_size_denied`, `attachment_size_denied`, `attachment_integrity_mismatch`, `cloudbees_ci_log_chunk_exceeded`, `cloudbees_ci_log_scan_exceeded`, `gateway_request_cap_exceeded`, `git_prefix_cap_exceeded` |
+| 413 | `body_size_denied`, `attachment_size_denied`, `attachment_integrity_mismatch`, `gateway_request_cap_exceeded`, `git_prefix_cap_exceeded` |
 | 415 | `body_format_unsupported`, `response_format_unsupported`, `attachment_media_type_denied`, `gateway_content_type_denied` |
 | 429 | `rate_limited`, `concurrency_limited`, `upstream_rate_limited` |
 | 424 | `upstream_unauthorized`, `upstream_forbidden`, `upstream_failed` |
@@ -2301,6 +2301,13 @@ provider and is not a standard reason. Kinds whose prefixes overlap, such as
 `gitlab` and `gitlab_dedicated`, coexist while their codes differ. A provider
 whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 `broker_`, registers only without domain reasons.
+
+| Reason code | Provider | Decision | HTTP |
+| --- | --- | --- | --- |
+| `cloudbees_ci_log_chunk_exceeded` | CloudBees CI | deny | 413 |
+| `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
+
+See [CloudBees CI errors](providers-cloudbees-ci.md#errors) for when they occur.
 
 `upstream_rate_limited` means the upstream service throttled the request; the
 Broker's own limits use `rate_limited`. Jira, Confluence, GitLab REST, CloudBees

@@ -389,8 +389,6 @@ fn reason_codes_have_expected_statuses() {
         "response_format_unsupported"
     );
     assert_eq!(ReasonCode::BodySizeDenied.http_status(), 413);
-    assert_eq!(ReasonCode::CloudbeesCiLogChunkExceeded.http_status(), 413);
-    assert_eq!(ReasonCode::CloudbeesCiLogScanExceeded.http_status(), 413);
     assert_eq!(ReasonCode::CursorSigningUnavailable.http_status(), 503);
     assert_eq!(ReasonCode::BodySizeDenied.as_str(), "body_size_denied");
     assert_eq!(
@@ -4963,6 +4961,80 @@ fn backend_registries_reject_conflicting_registrations() {
         errors,
         ["resource type jira_project is registered more than once"]
     );
+}
+
+#[test]
+fn backend_registries_give_each_domain_reason_one_owner() {
+    // A second module whose kind normalizes to the CloudBees prefix may
+    // register its own codes, but never one CloudBees already owns.
+    static SAME_PREFIX_CODE: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::deny(
+            "cloudbees_ci_log_chunk_exceeded",
+            agent_access_provider::ProviderFailureStatus::ContentTooLarge,
+        );
+    static OWN_CODE: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::error(
+            "cloudbees_ci_queue_frozen",
+            agent_access_provider::ProviderFailureStatus::ServiceUnavailable,
+        );
+    static SAME_PREFIX: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "cloudbees-ci",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .with_domain_reasons(&[&OWN_CODE]);
+    static CONFLICTING: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "cloudbees-ci",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .with_domain_reasons(&[&SAME_PREFIX_CODE]);
+    let registry = BackendRegistry::new([&CLOUDBEES_CI_BACKEND, &SAME_PREFIX]).unwrap();
+    let cloudbees = registry.get("cloudbees_ci").unwrap();
+    assert!(cloudbees.declares_domain_reason(&CLOUDBEES_CI_LOG_CHUNK_EXCEEDED));
+    assert!(cloudbees.declares_domain_reason(&SAME_PREFIX_CODE));
+    assert!(!cloudbees.declares_domain_reason(&OWN_CODE));
+    assert!(!cloudbees.declares_domain_reason(
+        &agent_access_provider::ProviderReasonDefinition::error(
+            "cloudbees_ci_log_chunk_exceeded",
+            agent_access_provider::ProviderFailureStatus::ContentTooLarge,
+        )
+    ));
+    assert_eq!(
+        BackendRegistry::new([&CLOUDBEES_CI_BACKEND, &CONFLICTING]).unwrap_err(),
+        [
+            "domain reason cloudbees_ci_log_chunk_exceeded is declared by backend kinds \
+             cloudbees_ci and cloudbees-ci"
+        ]
+    );
+}
+
+#[test]
+fn cloudbees_log_limits_are_its_own_deny_413_reasons() {
+    assert_eq!(
+        CLOUDBEES_CI_BACKEND
+            .domain_reasons()
+            .iter()
+            .map(|reason| (
+                reason.code(),
+                reason.decision(),
+                reason.status().as_u16(),
+                cli_exit_code_for_http_status(reason.status().as_u16()),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("cloudbees_ci_log_chunk_exceeded", Decision::Deny, 413, 2),
+            ("cloudbees_ci_log_scan_exceeded", Decision::Deny, 413, 2),
+        ]
+    );
+    for reason in CLOUDBEES_CI_BACKEND.domain_reasons() {
+        assert!(
+            ReasonCodeId::new(reason.code())
+                .unwrap()
+                .standard()
+                .is_none()
+        );
+    }
 }
 
 #[test]

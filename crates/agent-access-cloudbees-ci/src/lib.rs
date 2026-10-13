@@ -4,14 +4,15 @@
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
     CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, EgressRoute,
-    ExecutionCredential, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
-    ProviderLimits, ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
-    RedirectRules, ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest,
-    ScopeResolution, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, UpstreamRetryAfter, ValidationContext,
-    complete_upstream_trace, current_provider_action, is_service_name, parse_backend_config,
-    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    ExecutionCredential, Provider, ProviderBuildError, ProviderError, ProviderFailureStatus,
+    ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderResult,
+    ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
+    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
+    current_provider_action, is_service_name, parse_backend_config, upstream_rate_limited,
+    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -1314,12 +1315,30 @@ pub struct CloudbeesCiControllerConfig {
     pub web_base_url: Option<String>,
 }
 
+/// A Pipeline node log whose text exceeds the bounded read limit.
+pub static CLOUDBEES_CI_LOG_CHUNK_EXCEEDED: ProviderReasonDefinition =
+    ProviderReasonDefinition::deny(
+        "cloudbees_ci_log_chunk_exceeded",
+        ProviderFailureStatus::ContentTooLarge,
+    );
+
+/// A `tail` log read the scan ceiling stopped before the log end.
+pub static CLOUDBEES_CI_LOG_SCAN_EXCEEDED: ProviderReasonDefinition =
+    ProviderReasonDefinition::deny(
+        "cloudbees_ci_log_scan_exceeded",
+        ProviderFailureStatus::ContentTooLarge,
+    );
+
 pub static CLOUDBEES_CI_BACKEND: BackendRegistration = BackendRegistration::new(
     agent_access_provider::module_metadata!(),
     "cloudbees_ci",
     parse_backend_config::<CloudbeesCiProviderConfig>,
 )
-.with_resource_types(&[&CLOUDBEES_CI_JOB_RESOURCE]);
+.with_resource_types(&[&CLOUDBEES_CI_JOB_RESOURCE])
+.with_domain_reasons(&[
+    &CLOUDBEES_CI_LOG_CHUNK_EXCEEDED,
+    &CLOUDBEES_CI_LOG_SCAN_EXCEEDED,
+]);
 
 impl BackendConfig for CloudbeesCiProviderConfig {
     fn kind(&self) -> &'static str {

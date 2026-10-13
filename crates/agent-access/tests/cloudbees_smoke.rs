@@ -674,6 +674,143 @@ async fn throttled_controller_reaches_cli_stderr_and_stdio_mcp_text_as_the_broke
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn domain_reasons_keep_their_wire_status_cli_exit_mcp_error_and_audit() {
+    let controller = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/team-ci/job/payments/job/build-api/42/execution/node/6/wfapi/log",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "nodeId":"6", "nodeStatus":"SUCCESS", "length":65_537,
+            "hasMore":false, "text":"x".repeat(65_537)
+        })))
+        .mount(&controller)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/team-ci/job/payments/job/build-api/42/consoleText"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(vec![b'x'; 5000], "text/plain"))
+        .mount(&controller)
+        .await;
+    let temp = private_tempdir();
+    let principal_token = temp.path().join("principal-token");
+    std::fs::write(&principal_token, "ci-principal-token").unwrap();
+    let mut config = required_config(&controller, temp.path(), &principal_token);
+    config
+        .providers
+        .get_mut::<CloudbeesCiProviderConfig>()
+        .unwrap()
+        .max_log_scan_bytes = 2000;
+    let (broker_url, broker) = start_broker(config).await;
+    let config_path = temp.path().join("client.toml");
+    std::fs::write(&config_path, format!("[service]\nurl = {broker_url:?}\n[identity]\nheader = \"X-Agent-Access-Identity-Token\"\nscheme = \"raw\"\ntoken_file = {:?}\n", principal_token.display().to_string())).unwrap();
+    let cases = [
+        (
+            "build.pipeline.node.log.read",
+            json!({"controller":"team-ci","job":JOB,"buildNumber":42,"nodeId":"6"}),
+            "cloudbees_ci_log_chunk_exceeded",
+        ),
+        (
+            "build.log.read",
+            json!({"controller":"team-ci","job":JOB,"buildNumber":42,"mode":"tail","maxBytes":1024}),
+            "cloudbees_ci_log_scan_exceeded",
+        ),
+    ];
+    for (action, inputs, reason) in &cases {
+        let response = reqwest::Client::new()
+            .post(format!("{broker_url}/v1/invoke/cloudbees_ci/{action}"))
+            .header("X-Agent-Access-Request-Id", "cloudbees-domain-reason")
+            .header("X-Agent-Access-Identity-Token", "ci-principal-token")
+            .json(&json!({ "inputs": inputs }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let envelope: Value = response.json().await.unwrap();
+        assert_eq!(
+            status,
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "{action}: {envelope}"
+        );
+        assert_eq!(envelope["decision"], "deny", "{envelope}");
+        assert_eq!(envelope["reasonCode"], *reason, "{envelope}");
+
+        let request = temp.path().join("send.json");
+        std::fs::write(
+            &request,
+            serde_json::to_vec(&json!({
+                "version":"agent-access.send.v1","kind":"invoke",
+                "service":"cloudbees_ci","action":action,"inputs":inputs
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+            .arg("--config")
+            .arg(&config_path)
+            .args(["send", "--request-file", request.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{action}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["decision"], "deny", "{envelope}");
+        assert_eq!(envelope["reasonCode"], *reason, "{envelope}");
+    }
+
+    let mut mcp = StdioMcp::start(&config_path);
+    mcp.request("initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"cloudbees-domain-reason-smoke","version":"1"}})).await;
+    mcp.notify("notifications/initialized", json!({}));
+    let tool_listing = mcp.request("tools/list", json!({})).await;
+    let tools = tool_listing["result"]["tools"].as_array().unwrap().clone();
+    for (action, inputs, reason) in &cases {
+        let name = tools
+            .iter()
+            .find(|tool| tool["_meta"]["agent-access/action"] == *action)
+            .unwrap()["name"]
+            .clone();
+        let response = mcp
+            .request(
+                "tools/call",
+                json!({"name":name,"arguments":{"inputs":inputs}}),
+            )
+            .await;
+        let result = &response["result"];
+        assert_eq!(result["isError"], true, "{response}");
+        assert_eq!(
+            result["structuredContent"]["decision"], "deny",
+            "{response}"
+        );
+        assert_eq!(
+            result["structuredContent"]["reasonCode"], *reason,
+            "{response}"
+        );
+    }
+    mcp.finish().await;
+
+    let audit = std::fs::read_to_string(temp.path().join("audit.jsonl")).unwrap();
+    let records = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for (action, _, reason) in &cases {
+        let failures = records
+            .iter()
+            .filter(|record| record["service"] == "cloudbees_ci" && record["action"] == *action)
+            .collect::<Vec<_>>();
+        assert_eq!(failures.len(), 3, "{action}: {audit}");
+        for record in failures {
+            assert_eq!(record["decision"], "deny", "{record}");
+            assert_eq!(record["reasonCode"], *reason, "{record}");
+        }
+    }
+    broker.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_downloads_require_access_to_the_requested_job() {
     let controller = MockServer::start().await;
     let temp = private_tempdir();
