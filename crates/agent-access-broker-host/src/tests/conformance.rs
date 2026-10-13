@@ -27,12 +27,16 @@ const PORTAL_FIXTURE: &str = concat!(
 
 /// The linked backends plus the conformance backend.
 fn registry() -> Arc<BackendRegistry> {
+    Arc::new(conformance_registry())
+}
+
+fn conformance_registry() -> BackendRegistry {
     let linked = crate::backend_registry();
     let registrations = linked
         .registrations()
         .chain([&CONFORMANCE_BACKEND])
         .collect::<Vec<_>>();
-    Arc::new(BackendRegistry::new(registrations).unwrap())
+    BackendRegistry::new(registrations).unwrap()
 }
 
 /// A broker serving the conformance backend at `base_url`, with its secrets
@@ -818,21 +822,19 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
 /// `UPDATE_PORTAL_FIXTURES=1`.
 #[test]
 fn conformance_portal_fixture_matches_the_broker() {
-    let config = parse_broker_config_raw(
-        "conformance.toml",
-        &broker_toml(
-            "https://conformance.example.test",
-            Path::new("/nonexistent"),
-        ),
-        &registry(),
-    )
-    .unwrap();
-    let descriptor =
-        agent_access_conformance::conformance_descriptor(config.providers.get().unwrap());
+    let composition = crate::BrokerComposition::from_registry(conformance_registry());
     let fixture = json!({
         "resourceType": CONFORMANCE_ITEM_RESOURCE.metadata(),
         "endpointType": CONFORMANCE_ENDPOINT_RESOURCE.metadata(),
-        "service": crate::handlers::management::policy::service_catalog(&config.credentials, descriptor.capabilities(), Some(&descriptor.credentials)),
+        "service": crate::test_support::portal_service_catalog(
+            &composition,
+            &broker_toml(
+                "https://conformance.example.test",
+                Path::new("/nonexistent"),
+            ),
+            "conformance",
+        )
+        .unwrap(),
     });
     let rendered = format!("{}\n", serde_json::to_string_pretty(&fixture).unwrap());
     if std::env::var_os("UPDATE_PORTAL_FIXTURES").is_some() {

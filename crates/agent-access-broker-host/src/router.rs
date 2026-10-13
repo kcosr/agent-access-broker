@@ -84,9 +84,15 @@ pub fn build_router(runtime: BrokerRuntime, build_status: BrokerBuildStatus) -> 
 }
 
 pub fn build_public_router(state: Arc<ReloadableState>) -> Router {
+    public_router(state).0
+}
+
+/// The public router and the HTTP MCP endpoint it serves.
+pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp::Endpoint) {
     let node_id = state.node_id();
     let mcp = crate::mcp::Endpoint::new(state.clone());
-    Router::new()
+    let endpoint = mcp.clone();
+    let router = Router::new()
         .route(
             "/mcp",
             axum::routing::any(crate::mcp::handle).layer(axum::Extension(mcp.clone())),
@@ -466,7 +472,8 @@ pub fn build_public_router(state: Arc<ReloadableState>) -> Router {
             verify_caller_ingress,
         ))
         .layer(RequestTracingLayer::new(ListenerKind::Public, &node_id))
-        .with_state(AppState { reloadable: state })
+        .with_state(AppState { reloadable: state });
+    (router, endpoint)
 }
 
 pub fn build_gateway_router(state: Arc<ReloadableState>) -> Router {

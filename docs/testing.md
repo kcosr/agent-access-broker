@@ -130,6 +130,28 @@ each requested label, base URL, profile and route in `built_clients()`. Core's
 own network tests cover proxy precedence, credential resolution and the
 literal-loopback caller categories against the real host factory.
 
+Broker acceptance tests use the `test-support` feature of
+`agent-access-broker-host`. Its `test_support::IsolatedBroker` starts an
+assembly's composition and identity on one real configuration file, either a
+TOML document written privately (`0600` in a `0700` fixture directory) or a
+test-owned path, through the same startup as `serve`: configuration validation,
+state locks, readiness, reload publication, and operation and audit drain. Its
+loopback listeners are bound to ephemeral ports when the fixture is created, so
+a configuration can name their addresses, such as `[mcp] public_url`. It
+installs no process signal handler or global log subscriber.
+`RunningBroker::reload` and `shutdown` stand in for SIGUSR2 and SIGTERM. `join`
+ends HTTP MCP sessions a client left open, as process exit does, and returns a
+drain report once every state lock is released, so a test can restart on the
+same state. `ProviderFixture` is
+a fixture control, not an embedding API: it supplies the provider of a
+selected native kind that the configuration configures, built for each
+generation, while configuration validation, admission and generation ownership
+still apply. `RunningBroker::audit` and `managed_store` give read-only views of
+the fixture's stores, and `portal_service_catalog` exports the grant catalog
+that the portal conformance fixture records. The feature adds construction and
+control APIs only. Release builds must not enable it, and test binaries into
+which Cargo unifies it keep production semantics.
+
 Tests that assert `tracing` events call
 `install_trace_capture()`, which installs one capturing dispatcher as the test
 binary's global default, then start a capture and run the observed work through
@@ -360,8 +382,9 @@ only for an authorized invocation of its endpoint. It also checks
 `apps/portal/unit/conformance.fixture.json`, which the portal's unit tests
 (`npm --prefix apps/portal run test:unit`) use to exercise resource labels,
 namespace coverage, grant choices, and private attribute fields for a backend
-the portal was not written for. After changing the conformance backend or the
-policy catalog shape, regenerate the fixture with
+the portal was not written for; its grant catalog comes from
+`test_support::portal_service_catalog`. After changing the conformance backend
+or the policy catalog shape, regenerate the fixture with
 `UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker-host conformance_portal_fixture`.
 CloudBees CI coverage includes deterministic provider, policy/config,
 managed-store migration, typed CLI parser/lowering, and an in-process Broker

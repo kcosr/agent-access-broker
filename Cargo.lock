@@ -121,6 +121,7 @@ name = "agent-access-broker-host"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
  "agent-access-conformance",

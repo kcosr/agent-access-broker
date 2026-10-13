@@ -7,6 +7,11 @@ license.workspace = true
 [package.metadata.agent-access]
 role = "host"
 
+[features]
+# Isolated broker applications for acceptance tests: construction and
+# control APIs only. Release builds must not enable it.
+test-support = ["agent-access-core/test-support"]
+
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
 agent-access-provider = { path = "../agent-access-provider" }
@@ -40,6 +45,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# The host's own integration tests use its test support.
+agent-access-broker-host = { path = ".", features = ["test-support"] }
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
 agent-access-confluence = { path = "../agent-access-confluence" }
 agent-access-conformance = { path = "../agent-access-conformance" }

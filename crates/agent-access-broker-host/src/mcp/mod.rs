@@ -166,6 +166,13 @@ struct ProtocolPermits {
 }
 tokio::task_local! { static CURRENT_REQUEST: Admitted; }
 impl Endpoint {
+    /// Closes every open session, releasing the broker state each holds, as
+    /// process exit does after `serve` returns.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) async fn close_sessions(&self) {
+        self.0.sessions.close_all().await;
+    }
+
     pub(crate) fn new(state: Arc<ReloadableState>) -> Self {
         let mut key = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut key);

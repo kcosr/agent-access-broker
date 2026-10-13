@@ -18,6 +18,8 @@ mod owned;
 #[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]
+mod provider_fixture_tests;
+#[cfg(test)]
 mod provider_state_tests;
 #[cfg(test)]
 mod resource_attribute_tests;
@@ -1650,6 +1652,76 @@ pub struct BrokerRuntime {
     /// The effective node ID; see [`crate::resolve_node_id`].
     node_id: Arc<str>,
     config_generation: Option<u64>,
+    /// Test-fixture provider instances, inherited by reload candidates.
+    /// Empty, and zero-sized, outside test-support builds.
+    provider_fixtures: ProviderFixtureSlot,
+}
+
+/// The provider fixtures a test-support runtime was constructed with. Each
+/// generation built from it, including reload candidates, asks the same
+/// fixtures again. Production builds have no fixture field at all.
+#[derive(Clone, Default)]
+struct ProviderFixtureSlot {
+    #[cfg(any(test, feature = "test-support"))]
+    fixtures: Option<crate::test_support::ProviderFixtures>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ProviderFixtureSlot {
+    /// Rejects fixtures that name an unselected or unconfigured native kind
+    /// in the startup configuration.
+    fn check_startup(&self, config: &BrokerConfig) -> Result<(), RuntimeError> {
+        let Some(fixtures) = &self.fixtures else {
+            return Ok(());
+        };
+        let registry = config.providers.registry();
+        let errors = fixtures
+            .kinds()
+            .filter_map(|kind| {
+                if registry.get(kind).is_none() {
+                    Some(format!(
+                        "provider fixture {kind} names no selected native provider"
+                    ))
+                } else if config.providers.get_kind(kind).is_none() {
+                    Some(format!(
+                        "provider fixture {kind} has no [providers.{kind}] configuration"
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(RuntimeError::Config(ConfigError::Invalid { errors }))
+        }
+    }
+
+    /// The fixture's provider for the configured registration `kind`, if
+    /// the fixture supplies one. It must serve the service `kind`.
+    fn build(
+        &self,
+        kind: &str,
+        descriptor: &ServiceDescriptor,
+        host: &BuildContext<'_>,
+        backend: &dyn BackendConfig,
+    ) -> Option<Result<ServiceProvider, RuntimeError>> {
+        let provider = self.fixtures.as_ref()?.build(
+            kind,
+            &crate::test_support::ProviderFixtureContext::new(descriptor, host, backend),
+        )?;
+        Some(if provider.descriptor.service == kind {
+            Ok(provider)
+        } else {
+            Err(RuntimeError::Config(ConfigError::Invalid {
+                errors: vec![format!(
+                    "provider fixture {kind} serves service {}",
+                    provider.descriptor.service
+                )],
+            }))
+        })
+    }
 }
 
 /// One admitted operation awaiting dispatch. It pins the provider instance
@@ -1749,6 +1821,7 @@ impl BrokerRuntime {
             None,
             environment,
             Arc::new(AuditRuntimeRegistry::new()),
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1757,7 +1830,35 @@ impl BrokerRuntime {
         audit_registry: Arc<AuditRuntimeRegistry>,
     ) -> Result<Self, RuntimeError> {
         let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
-        Self::new_with_identity_reuse(config, None, environment, audit_registry)
+        Self::new_with_identity_reuse(
+            config,
+            None,
+            environment,
+            audit_registry,
+            ProviderFixtureSlot::default(),
+        )
+    }
+
+    /// A startup runtime, as [`Self::new_with_audit_registry`] builds it,
+    /// except that `fixtures` supply the providers of the configured native
+    /// kinds they name, in this generation and every reload candidate built
+    /// from it. Each named kind must be selected and configured here.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_with_provider_fixtures(
+        config: BrokerConfig,
+        audit_registry: Arc<AuditRuntimeRegistry>,
+        fixtures: crate::test_support::ProviderFixtures,
+    ) -> Result<Self, RuntimeError> {
+        let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
+        Self::new_with_identity_reuse(
+            config,
+            None,
+            environment,
+            audit_registry,
+            ProviderFixtureSlot {
+                fixtures: Some(fixtures),
+            },
+        )
     }
 
     pub fn new_for_reload(config: BrokerConfig, previous: &Self) -> Result<Self, RuntimeError> {
@@ -1766,6 +1867,7 @@ impl BrokerRuntime {
             Some(previous),
             Arc::clone(previous.network.environment()),
             Arc::clone(&previous.audit_registry),
+            previous.provider_fixtures.clone(),
         )
     }
 
@@ -1779,6 +1881,7 @@ impl BrokerRuntime {
             None,
             Arc::new(environment),
             Arc::new(AuditRuntimeRegistry::new()),
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1787,8 +1890,13 @@ impl BrokerRuntime {
         previous: Option<&Self>,
         egress_proxy_environment: Arc<EgressProxyEnvironment>,
         audit_registry: Arc<AuditRuntimeRegistry>,
+        provider_fixtures: ProviderFixtureSlot,
     ) -> Result<Self, RuntimeError> {
         validate_broker_config(&config)?;
+        #[cfg(any(test, feature = "test-support"))]
+        if previous.is_none() {
+            provider_fixtures.check_startup(&config)?;
+        }
         preflight_configured_egress_proxies(&config)?;
         let network = HostNetwork::new(
             ProviderLimits::from(&config.limits),
@@ -1820,6 +1928,13 @@ impl BrokerRuntime {
                     agent_access_provider::host::service_signing_key(key, &descriptor.service)
                 }),
             );
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(provider) =
+                provider_fixtures.build(registration.kind(), &descriptor, &host, backend)
+            {
+                providers.push(provider?);
+                continue;
+            }
             providers.push(ServiceProvider::new(descriptor, backend.build(&host)?));
         }
         Self::with_providers_and_identity_reuse(
@@ -1829,6 +1944,7 @@ impl BrokerRuntime {
             network,
             broker_token_hasher,
             audit_registry,
+            provider_fixtures,
         )
     }
 
@@ -1859,6 +1975,7 @@ impl BrokerRuntime {
             network,
             broker_token_hasher,
             Arc::new(AuditRuntimeRegistry::new()),
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1869,6 +1986,7 @@ impl BrokerRuntime {
         network: HostNetwork,
         broker_token_hasher: Option<BrokerTokenHasher>,
         audit_registry: Arc<AuditRuntimeRegistry>,
+        provider_fixtures: ProviderFixtureSlot,
     ) -> Result<Self, RuntimeError> {
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
         validate_broker_config(&config)?;
@@ -2050,6 +2168,7 @@ impl BrokerRuntime {
             audit_registry,
             node_id,
             config_generation: None,
+            provider_fixtures,
         };
         runtime.initialize_import_dispatch(previous);
         runtime.initialize_scoped_mcp_readiness(None);

@@ -4,6 +4,7 @@ use crate::handlers::management::common::{
     management_failure_envelope, management_response, management_success_envelope,
     management_success_response,
 };
+use crate::lifecycle::StartupHooks;
 use crate::observability;
 use crate::state::{AppState, ReloadableState, RuntimeSnapshot};
 use agent_access_core::{
@@ -51,6 +52,30 @@ pub async fn build_reloadable_state(
     reload_timeout: Duration,
     shutdown_timeout: Duration,
 ) -> anyhow::Result<Arc<ReloadableState>> {
+    start_reloadable_state(
+        config_path,
+        backends,
+        build_status,
+        body_hard_cap,
+        reload_timeout,
+        shutdown_timeout,
+        StartupHooks::default(),
+    )
+    .await
+}
+
+/// Loads, validates and locks the startup configuration and builds its
+/// generation-1 state, with what `hooks` add for an isolated test
+/// application.
+pub(crate) async fn start_reloadable_state(
+    config_path: PathBuf,
+    backends: Arc<BackendRegistry>,
+    build_status: BrokerBuildStatus,
+    body_hard_cap: Option<u64>,
+    reload_timeout: Duration,
+    shutdown_timeout: Duration,
+    #[cfg_attr(not(test), allow(unused_mut))] mut hooks: StartupHooks,
+) -> anyhow::Result<Arc<ReloadableState>> {
     validate_reload_timeout(reload_timeout)?;
     let (config, raw) = load_broker_config_with_raw(&config_path, &backends)?;
     let startup_body_limit = config
@@ -75,7 +100,8 @@ pub async fn build_reloadable_state(
         None,
     )?;
     let audit_registry = Arc::new(AuditRuntimeRegistry::new());
-    let runtime = BrokerRuntime::new_with_audit_registry(config, Arc::clone(&audit_registry))
+    let runtime = hooks
+        .startup_runtime(config, Arc::clone(&audit_registry))
         .map_err(|error| {
             let details = match &error {
                 RuntimeError::Config(ConfigError::Invalid { errors }) => Some(errors.join("; ")),
@@ -89,10 +115,11 @@ pub async fn build_reloadable_state(
         })?
         .with_config_generation(1);
     runtime.local_state_readiness().await?;
-    let snapshot =
-        RuntimeSnapshot::new_microsoft_oidc_candidate(1, hash, runtime, state_locks).await?;
+    let snapshot = hooks
+        .startup_snapshot(1, hash, runtime, state_locks)
+        .await?;
     snapshot.reconcile_microsoft_oidc_provider()?;
-    Ok(Arc::new(ReloadableState::from_snapshot(
+    let state = ReloadableState::from_snapshot(
         config_path,
         backends,
         build_status,
@@ -101,7 +128,10 @@ pub async fn build_reloadable_state(
         reload_timeout,
         shutdown_timeout,
         audit_registry,
-    )))
+    );
+    #[cfg(test)]
+    let state = hooks.customize_state(state);
+    Ok(Arc::new(state))
 }
 
 struct CandidateAdmission {
@@ -802,6 +832,22 @@ pub(crate) struct ConfigOperationResponse {
     pub(crate) result: Value,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl ConfigOperationResponse {
+    /// `allow`, `deny` or `error`, as audited.
+    pub(crate) fn decision(&self) -> &'static str {
+        self.decision.as_str()
+    }
+
+    pub(crate) fn reason_code(&self) -> Option<&'static str> {
+        self.reason_code.map(ReasonCode::as_str)
+    }
+
+    pub(crate) fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+}
+
 struct ReloadFailureContext<'a> {
     active: Arc<RuntimeSnapshot>,
     trigger: ReloadTrigger,
@@ -831,7 +877,9 @@ impl Drop for ReloadProgressGuard<'_> {
 }
 
 impl ReloadableState {
-    pub async fn reload_from_signal(&self) {
+    /// Reloads as SIGUSR2 requests, audited as the system, and returns the
+    /// outcome.
+    pub(crate) async fn reload_from_signal(&self) -> ConfigOperationResponse {
         let source = SourceContext {
             listener: "signal".to_string(),
             remote: "process".to_string(),
@@ -847,15 +895,14 @@ impl ReloadableState {
             brokerRequestId = broker_request_id.as_str(),
             configGeneration = self.current().generation,
         );
-        let _response = self
-            .reload(
-                ReloadTrigger::Signal,
-                "signal".to_string(),
-                broker_request_id.clone(),
-                source,
-                None,
-            )
-            .await;
+        self.reload(
+            ReloadTrigger::Signal,
+            "signal".to_string(),
+            broker_request_id.clone(),
+            source,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn reload(

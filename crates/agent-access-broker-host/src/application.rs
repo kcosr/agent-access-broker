@@ -3,7 +3,7 @@
 use crate::BrokerBuildStatus;
 use crate::composition::{BrokerComposition, CompositionError};
 use crate::identity::AssemblyIdentity;
-use crate::lifecycle::{self, LoggingMode, ServeOptions, SignalSource};
+use crate::lifecycle::{self, ServeControl, ServeOptions};
 use agent_access_core::{
     AuditStoreType, AuditVerifyReport, BrokerConfig, ConfigError, HostConfigError, RuntimeError,
     StateLockSet, load_broker_config, resolve_node_id, validate_broker_config,
@@ -175,12 +175,11 @@ impl BrokerApplication {
             self.composition.clone(),
             self.identity,
             options,
-            SignalSource::process(),
-            LoggingMode::Process,
+            ServeControl::process(),
         ));
         runtime.shutdown_timeout(shutdown_timeout);
         match result {
-            Ok(()) => BrokerExit::status(EXIT_SUCCESS),
+            Ok(_drained) => BrokerExit::status(EXIT_SUCCESS),
             Err(error) => BrokerExit::failed(error),
         }
     }

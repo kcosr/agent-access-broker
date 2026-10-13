@@ -205,6 +205,13 @@ All notable changes to this project are documented in this file.
   `tokio`, `toml` and `url` items, each under a module named after its
   package. The SDK's crate documentation records their versions, the supported
   surface, the trust model and the compatibility policy.
+- `agent-access-broker-host` has a `test-support` feature for acceptance
+  tests. `test_support::IsolatedBroker` starts a composition on a real
+  configuration file through the production startup, reload and drain logic,
+  with explicit reload, shutdown and join instead of process signals.
+  `ProviderFixture` supplies the providers of configured native kinds, and
+  read-only views expose the fixture's audit and managed stores. Release builds
+  must not enable the feature.
 
 ### Changed
 

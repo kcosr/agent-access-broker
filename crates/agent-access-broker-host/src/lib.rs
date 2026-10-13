@@ -15,6 +15,8 @@ mod operations;
 mod reload;
 mod router;
 mod state;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 #[cfg(test)]
 mod test_composition;

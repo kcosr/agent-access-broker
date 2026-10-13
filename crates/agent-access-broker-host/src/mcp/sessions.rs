@@ -89,6 +89,22 @@ impl Sessions {
         self.bindings.lock().await.len()
     }
 
+    /// Closes every open session, as process exit ends them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn close_all(&self) {
+        let ids = self
+            .inner
+            .sessions
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.close_session(&id).await;
+        }
+    }
+
     async fn reap_config(&self, generation: u64, broker_config: &agent_access_core::BrokerConfig) {
         let config = &broker_config.mcp;
         let security_profile = security_profile(broker_config);

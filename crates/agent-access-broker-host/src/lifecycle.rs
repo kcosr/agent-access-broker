@@ -3,9 +3,10 @@
 use crate::BrokerBuildStatus;
 use crate::composition::BrokerComposition;
 use crate::identity::AssemblyIdentity;
-use crate::reload::{build_reloadable_state, validate_shutdown_timeout};
-use crate::router::{build_gateway_router, build_public_router};
+use crate::reload::{start_reloadable_state, validate_shutdown_timeout};
+use crate::router::{build_gateway_router, public_router};
 use crate::state::ReloadableState;
+use agent_access_core::{AuditRuntimeRegistry, BrokerConfig, BrokerRuntime, RuntimeError};
 use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
@@ -37,6 +38,10 @@ pub(crate) enum LoggingMode {
     /// Installs the process-global JSON subscriber on stderr, filtered by
     /// `RUST_LOG` or else [`DEFAULT_LOG_FILTER`].
     Process,
+    /// Installs nothing: events reach whatever dispatcher the caller's task
+    /// has, as in an isolated test application.
+    #[cfg(any(test, feature = "test-support"))]
+    Ambient,
 }
 
 impl LoggingMode {
@@ -53,6 +58,8 @@ impl LoggingMode {
                 }
                 Ok(())
             }
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Ambient => Ok(()),
         }
     }
 }
@@ -62,7 +69,7 @@ pub(crate) struct SignalSource {
     /// Resolves with the cause once shutdown is requested.
     shutdown: BoxFuture<'static, ShutdownCause>,
     /// Yields once per reload request and ends when no more can arrive.
-    reload: BoxStream<'static, ()>,
+    reload: BoxStream<'static, ReloadRequest>,
 }
 
 impl SignalSource {
@@ -75,6 +82,180 @@ impl SignalSource {
             reload: process_reload_requests(),
         }
     }
+
+    /// Requests from an isolated test application instead of process
+    /// signals: `shutdown` resolving (or its sender dropping) shuts down, and
+    /// each item of `reload` reloads as SIGUSR2 would. Installs no handler.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn controlled(
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+        reload: tokio::sync::mpsc::UnboundedReceiver<ReloadRequest>,
+    ) -> Self {
+        Self {
+            shutdown: async move {
+                let _ = shutdown.await;
+                ShutdownCause::Requested
+            }
+            .boxed(),
+            reload: futures_util::stream::unfold(reload, |mut reload| async move {
+                reload.recv().await.map(|request| (request, reload))
+            })
+            .boxed(),
+        }
+    }
+}
+
+/// One request to reload the configuration, as SIGUSR2 makes.
+pub(crate) struct ReloadRequest {
+    /// Receives the reload's outcome; process signals have no receiver.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) outcome:
+        Option<tokio::sync::oneshot::Sender<crate::reload::ConfigOperationResponse>>,
+}
+
+impl ReloadRequest {
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn signal() -> Self {
+        Self {
+            #[cfg(any(test, feature = "test-support"))]
+            outcome: None,
+        }
+    }
+}
+
+/// How a `serve` run is driven: its request source, its logging, and what
+/// an isolated test application adds to startup.
+pub(crate) struct ServeControl {
+    pub(crate) signals: SignalSource,
+    pub(crate) logging: LoggingMode,
+    pub(crate) startup: StartupHooks,
+}
+
+impl ServeControl {
+    /// The broker process: process signals and the process-global log
+    /// subscriber.
+    pub(crate) fn process() -> Self {
+        Self {
+            signals: SignalSource::process(),
+            logging: LoggingMode::Process,
+            startup: StartupHooks::default(),
+        }
+    }
+}
+
+/// What an isolated test application adds to startup. The process has
+/// none, and outside test-support builds the type is empty.
+#[derive(Default)]
+pub(crate) struct StartupHooks {
+    /// Loopback listeners bound before startup, so the test knows their
+    /// addresses before it writes the configuration.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) listeners: Option<PreboundListeners>,
+    /// Told once the listeners serve.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) listening: Option<tokio::sync::oneshot::Sender<Listening>>,
+    /// Providers that replace configured registrations' own in every
+    /// generation.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) provider_fixtures: Option<agent_access_core::test_support::ProviderFixtures>,
+    /// Host tests' Microsoft OIDC transport and clock for the startup
+    /// generation.
+    #[cfg(test)]
+    pub(crate) microsoft_oidc: Option<(
+        Arc<dyn crate::state::MicrosoftOidcTransport>,
+        Arc<dyn agent_access_core::microsoft_oidc::MicrosoftOidcClock>,
+    )>,
+    /// Host tests' invocation limiter, such as one with a manual clock.
+    #[cfg(test)]
+    pub(crate) invocation_limiter: Option<crate::ingress::invocation_limits::InvocationLimiter>,
+}
+
+impl StartupHooks {
+    /// Builds the startup generation's runtime.
+    pub(crate) fn startup_runtime(
+        &self,
+        config: BrokerConfig,
+        audit_registry: Arc<AuditRuntimeRegistry>,
+    ) -> Result<BrokerRuntime, RuntimeError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(fixtures) = &self.provider_fixtures {
+            return BrokerRuntime::new_with_provider_fixtures(
+                config,
+                audit_registry,
+                fixtures.clone(),
+            );
+        }
+        BrokerRuntime::new_with_audit_registry(config, audit_registry)
+    }
+
+    /// Builds the startup generation's snapshot.
+    pub(crate) async fn startup_snapshot(
+        &self,
+        generation: u64,
+        config_hash: String,
+        runtime: BrokerRuntime,
+        state_locks: Arc<agent_access_core::StateLockSet>,
+    ) -> Result<Arc<crate::state::RuntimeSnapshot>, agent_access_core::ManagedStoreError> {
+        #[cfg(test)]
+        if let Some((transport, clock)) = &self.microsoft_oidc {
+            return crate::state::RuntimeSnapshot::new_microsoft_oidc_candidate_with_components(
+                generation,
+                config_hash,
+                runtime,
+                state_locks,
+                Some(Arc::clone(transport)),
+                Some(Arc::clone(clock)),
+            )
+            .await;
+        }
+        crate::state::RuntimeSnapshot::new_microsoft_oidc_candidate(
+            generation,
+            config_hash,
+            runtime,
+            state_locks,
+        )
+        .await
+    }
+
+    /// Applies host tests' replacements to the startup state.
+    #[cfg(test)]
+    pub(crate) fn customize_state(&mut self, state: ReloadableState) -> ReloadableState {
+        match self.invocation_limiter.take() {
+            Some(limiter) => state.with_invocation_limiter(limiter),
+            None => state,
+        }
+    }
+}
+
+/// The listeners an isolated test application binds before startup.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct PreboundListeners {
+    pub(crate) public: std::net::TcpListener,
+    pub(crate) gateway: Option<std::net::TcpListener>,
+}
+
+/// A serving isolated test application's state and HTTP MCP endpoint.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct Listening {
+    pub(crate) state: Arc<ReloadableState>,
+    pub(crate) mcp: crate::mcp::Endpoint,
+    /// The routers the listeners serve, for in-process host tests.
+    #[cfg(test)]
+    pub(crate) public_app: axum::Router,
+    #[cfg(test)]
+    pub(crate) gateway_app: Option<axum::Router>,
+}
+
+/// How a completed shutdown drained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrainReport {
+    /// Operations still unfinalized when the operation drain ended.
+    pub(crate) unfinished_operations: usize,
+    /// Whether listeners or lifecycle tasks were cut off at the shutdown
+    /// deadline.
+    pub(crate) forced: bool,
+    /// Why the audit store failed to drain, if it did.
+    pub(crate) audit_error: Option<String>,
 }
 
 /// Serves until a shutdown request, a listener failure, or a startup error,
@@ -83,14 +264,18 @@ pub(crate) async fn serve(
     composition: BrokerComposition,
     identity: AssemblyIdentity,
     options: ServeOptions,
-    signals: SignalSource,
-    logging: LoggingMode,
-) -> Result<()> {
+    control: ServeControl,
+) -> Result<DrainReport> {
+    let ServeControl {
+        signals,
+        logging,
+        startup,
+    } = control;
     logging.install()?;
     let result = match identity.build_status(&composition) {
         Ok(build) => {
             emit_broker_starting(&build, &options);
-            run_service(&composition, build, options, signals).await
+            run_service(&composition, build, options, signals, startup).await
         }
         Err(error) => Err(error.into()),
     };
@@ -169,7 +354,9 @@ async fn run_service(
     build: BrokerBuildStatus,
     options: ServeOptions,
     signals: SignalSource,
-) -> Result<()> {
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(unused_mut))]
+    mut startup: StartupHooks,
+) -> Result<DrainReport> {
     let ServeOptions {
         config_path,
         listen,
@@ -179,23 +366,27 @@ async fn run_service(
         shutdown_timeout,
     } = options;
     validate_shutdown_timeout(shutdown_timeout)?;
-    let state = build_reloadable_state(
+    #[cfg(any(test, feature = "test-support"))]
+    let listening = startup.listening.take();
+    #[cfg(any(test, feature = "test-support"))]
+    let prebound = startup.listeners.take();
+    let state = start_reloadable_state(
         config_path,
         Arc::clone(composition.registry()),
         build,
         body_hard_cap,
         reload_timeout,
         shutdown_timeout,
+        startup,
     )
     .await?;
-    let public_listener = tokio::net::TcpListener::bind(listen).await?;
-    let gateway_listener = match gateway_listen {
-        Some(gateway_listen) => Some((
-            gateway_listen,
-            tokio::net::TcpListener::bind(gateway_listen).await?,
-        )),
-        None => None,
+    #[cfg(any(test, feature = "test-support"))]
+    let (public_listener, gateway_listener) = match prebound {
+        Some(prebound) => prebound.into_tokio()?,
+        None => bind_listeners(listen, gateway_listen).await?,
     };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let (public_listener, gateway_listener) = bind_listeners(listen, gateway_listen).await?;
 
     let coordinator = ShutdownCoordinator::new();
     let SignalSource { shutdown, reload } = signals;
@@ -216,13 +407,18 @@ async fn run_service(
         listener = "public",
         address = %listen,
     );
-    let public_app = build_public_router(state.clone());
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
+    let (public_app, mcp) = public_router(state.clone());
+    #[cfg(test)]
+    let served_public_app = public_app.clone();
     spawn_public_server(
         &mut servers,
         public_listener,
         public_app,
         coordinator.clone(),
     );
+    #[cfg(test)]
+    let mut served_gateway_app = None;
     if let Some((gateway_listen, gateway_listener)) = gateway_listener {
         tracing::info!(
             event = "broker_listening",
@@ -231,12 +427,27 @@ async fn run_service(
             address = %gateway_listen,
         );
         let gateway_app = build_gateway_router(state.clone());
+        #[cfg(test)]
+        {
+            served_gateway_app = Some(gateway_app.clone());
+        }
         spawn_gateway_server(
             &mut servers,
             gateway_listener,
             gateway_app,
             coordinator.clone(),
         );
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(listening) = listening {
+        let _ = listening.send(Listening {
+            state: state.clone(),
+            mcp,
+            #[cfg(test)]
+            public_app: served_public_app,
+            #[cfg(test)]
+            gateway_app: served_gateway_app,
+        });
     }
 
     drain_lifecycle(
@@ -249,6 +460,42 @@ async fn run_service(
         shutdown_timeout,
     )
     .await
+}
+
+type BoundListeners = (
+    tokio::net::TcpListener,
+    Option<(SocketAddr, tokio::net::TcpListener)>,
+);
+
+/// Binds the public listener and, when configured, the gateway listener.
+async fn bind_listeners(
+    listen: SocketAddr,
+    gateway_listen: Option<SocketAddr>,
+) -> Result<BoundListeners> {
+    let public_listener = tokio::net::TcpListener::bind(listen).await?;
+    let gateway_listener = match gateway_listen {
+        Some(gateway_listen) => Some((
+            gateway_listen,
+            tokio::net::TcpListener::bind(gateway_listen).await?,
+        )),
+        None => None,
+    };
+    Ok((public_listener, gateway_listener))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl PreboundListeners {
+    fn into_tokio(self) -> Result<BoundListeners> {
+        let public = tokio::net::TcpListener::from_std(self.public)?;
+        let gateway = match self.gateway {
+            Some(gateway) => Some((
+                gateway.local_addr()?,
+                tokio::net::TcpListener::from_std(gateway)?,
+            )),
+            None => None,
+        };
+        Ok((public, gateway))
+    }
 }
 
 fn spawn_public_server(
@@ -297,7 +544,7 @@ async fn drain_lifecycle(
     shutdown_signal_task: JoinHandle<()>,
     reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
     shutdown_timeout: Duration,
-) -> Result<()> {
+) -> Result<DrainReport> {
     let mut listener_error = None;
     loop {
         tokio::select! {
@@ -387,19 +634,31 @@ async fn drain_lifecycle(
         );
     }
 
-    if let Err(error) = operation_drain.await {
-        tracing::error!(event = "operation_shutdown_failed", error = %error);
-    }
+    let unfinished_operations = match operation_drain.await {
+        Ok(unfinished) => unfinished,
+        Err(error) => {
+            tracing::error!(event = "operation_shutdown_failed", error = %error);
+            0
+        }
+    };
     let remaining = remaining_shutdown_time(&coordinator, shutdown_timeout)
         .unwrap_or_else(|| Duration::from_millis(100));
-    if let Err(error) = state.shutdown_audit(remaining).await {
-        tracing::error!(event = "audit_shutdown_failed", error = %error);
-    }
+    let audit_error = match state.shutdown_audit(remaining).await {
+        Ok(()) => None,
+        Err(error) => {
+            tracing::error!(event = "audit_shutdown_failed", error = %error);
+            Some(error.to_string())
+        }
+    };
 
     if let Some(error) = listener_error {
         return Err(error);
     }
-    Ok(())
+    Ok(DrainReport {
+        unfinished_operations,
+        forced: timed_out || lifecycle_timed_out,
+        audit_error,
+    })
 }
 
 async fn drain_servers_until_deadline(
@@ -479,6 +738,9 @@ enum ShutdownCause {
     Signal(&'static str),
     ListenerError(String),
     ListenerFinished,
+    /// An isolated test application asked to shut down.
+    #[cfg(any(test, feature = "test-support"))]
+    Requested,
 }
 
 #[derive(Clone)]
@@ -559,6 +821,8 @@ fn log_shutdown_started(cause: &ShutdownCause) {
         ShutdownCause::Signal(signal) => ("signal", Some(*signal)),
         ShutdownCause::ListenerError(error) => ("listener_error", Some(error.as_str())),
         ShutdownCause::ListenerFinished => ("listener_finished", None),
+        #[cfg(any(test, feature = "test-support"))]
+        ShutdownCause::Requested => ("requested", None),
     };
     tracing::info!(
         event = "broker_shutdown",
@@ -612,7 +876,7 @@ async fn wait_for_shutdown_signal() -> ShutdownCause {
 }
 
 #[cfg(unix)]
-fn process_reload_requests() -> BoxStream<'static, ()> {
+fn process_reload_requests() -> BoxStream<'static, ReloadRequest> {
     futures_util::stream::once(async { reload_signal_receiver().ok() })
         .filter_map(futures_util::future::ready)
         .flat_map(unix_reload_requests)
@@ -626,20 +890,23 @@ fn reload_signal_receiver() -> std::io::Result<tokio::signal::unix::Signal> {
 
 /// One item per signal delivered to an installed handler.
 #[cfg(unix)]
-fn unix_reload_requests(signal: tokio::signal::unix::Signal) -> BoxStream<'static, ()> {
+fn unix_reload_requests(signal: tokio::signal::unix::Signal) -> BoxStream<'static, ReloadRequest> {
     futures_util::stream::unfold(signal, |mut signal| async move {
-        signal.recv().await.map(|()| ((), signal))
+        signal
+            .recv()
+            .await
+            .map(|()| (ReloadRequest::signal(), signal))
     })
     .boxed()
 }
 
 #[cfg(not(unix))]
-fn process_reload_requests() -> BoxStream<'static, ()> {
+fn process_reload_requests() -> BoxStream<'static, ReloadRequest> {
     futures_util::stream::pending().boxed()
 }
 
 async fn run_reload_signal_loop(
-    mut requests: BoxStream<'static, ()>,
+    mut requests: BoxStream<'static, ReloadRequest>,
     state: Arc<ReloadableState>,
     coordinator: ShutdownCoordinator,
     reload_tasks: Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>,
@@ -648,14 +915,23 @@ async fn run_reload_signal_loop(
         tokio::select! {
             _ = coordinator.wait() => break,
             received = requests.next() => {
-                if received.is_none() || coordinator.is_shutdown() {
+                let Some(request) = received else {
+                    break;
+                };
+                if coordinator.is_shutdown() {
                     break;
                 }
                 let mut reload_tasks = reload_tasks.lock().await;
                 let state = state.clone();
                 if coordinator.before_shutdown(|| {
                     let handle = tokio::spawn(async move {
-                        state.reload_from_signal().await;
+                        let outcome = state.reload_from_signal().await;
+                        #[cfg(any(test, feature = "test-support"))]
+                        if let Some(respond) = request.outcome {
+                            let _ = respond.send(outcome);
+                        }
+                        #[cfg(not(any(test, feature = "test-support")))]
+                        let _ = (request, outcome);
                     });
                     track_reload_task(&mut reload_tasks, handle);
                 }).is_none() {
@@ -1051,17 +1327,18 @@ path="{}"
             ),
         )
         .unwrap();
-        let state = build_reloadable_state(
+        let state = start_reloadable_state(
             config_path,
             Arc::new(backend_registry()),
             broker_build_status(),
             None,
             Duration::from_secs(1),
             Duration::from_secs(2),
+            StartupHooks::default(),
         )
         .await
         .unwrap();
-        let app = build_public_router(state.clone());
+        let app = public_router(state.clone()).0;
         let (reading_body, body_started) = tokio::sync::oneshot::channel();
         let (release_body, resume_body) = tokio::sync::oneshot::channel();
         let body = Body::from_stream(futures_util::stream::once(async move {
@@ -1238,7 +1515,10 @@ path="{}"
         let reload_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let (request, requests) = tokio::sync::mpsc::unbounded_channel();
         let requests = futures_util::stream::unfold(requests, |mut requests| async move {
-            requests.recv().await.map(|()| ((), requests))
+            requests
+                .recv()
+                .await
+                .map(|()| (ReloadRequest::signal(), requests))
         })
         .boxed();
         let loop_task = tokio::spawn(run_reload_signal_loop(
@@ -1322,13 +1602,14 @@ upload_spool_dir = "{}"
             ),
         )
         .unwrap();
-        build_reloadable_state(
+        start_reloadable_state(
             config,
             Arc::new(backend_registry()),
             broker_build_status(),
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            StartupHooks::default(),
         )
         .await
         .unwrap()

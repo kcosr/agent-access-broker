@@ -276,7 +276,10 @@ and audit checks through the real `agent-access` binary.
   portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
   broker unit-test tree
   (`src/tests/`). Its production code depends on no backend or import adapter;
-  tests link the real backends through `src/test_composition.rs`.
+  tests link the real backends through `src/test_composition.rs`. The
+  `test-support` feature adds `src/test_support.rs`: isolated broker
+  applications for acceptance tests, with provider fixtures and read-only store
+  views. Release builds never enable it.
 - `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
   assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
   in `src/backends.rs` selects the modules it links and `src/build_info.rs`

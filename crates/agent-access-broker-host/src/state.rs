@@ -514,7 +514,7 @@ impl RuntimeSnapshot {
         .await
     }
 
-    async fn new_microsoft_oidc_candidate_with_components(
+    pub(crate) async fn new_microsoft_oidc_candidate_with_components(
         generation: u64,
         config_hash: String,
         runtime: BrokerRuntime,
