@@ -18,9 +18,10 @@
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BuildContext, ClientProfile,
     CorrelationContext, CredentialMode, Decision, DelegatedBindingId, EgressDeclaration,
-    EgressRoute, ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity,
-    ProviderAttributionConfig, ProviderError, ProviderInvocation, ProviderLimits, ProviderState,
-    ReasonCode, ResourceAttributes, ScopeRequest, StableSigningKey,
+    EgressRoute, ExecutionAccess, ExecutionCredential, HookContext, HookPhase, InvocationAuthority,
+    InvocationIdentity, ProviderAttributionConfig, ProviderError, ProviderInvocation,
+    ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode, ResourceAttributes,
+    ScopeRequest, StableSigningKey,
 };
 use serde_json::Value;
 use std::error::Error;
@@ -305,6 +306,14 @@ pub enum HostPort {
     /// [`DelegatedLease`](crate::DelegatedLease): acquiring, revalidating,
     /// rejecting and recovering a delegated credential.
     DelegatedLease,
+    /// The admitted operation the host hands a provider: its authority
+    /// accessors and its provider state. A provider that asks for an
+    /// authority its action was not admitted with
+    /// ([`AuthorityMismatch`](crate::AuthorityMismatch)), or finds its own
+    /// state missing or of another type
+    /// ([`ProviderStateError`](crate::ProviderStateError)), passes on
+    /// `broker_provider_contract_failed` with its diagnostic code.
+    AdmittedOperation,
 }
 
 impl HostPort {
@@ -324,8 +333,35 @@ impl HostPort {
                     ReasonCode::VersionConflict | ReasonCode::CredentialInvalid
                 )
             ),
+            Self::AdmittedOperation => matches!(
+                (decision, reason),
+                (Decision::Error, ReasonCode::BrokerProviderContractFailed)
+            ),
         }
     }
+}
+
+/// The context of one provider hook the host runs: its service and action,
+/// the hook phase, and the domain reasons the service's backend registered
+/// (none for an imported service), pinned with the prepared operation.
+pub fn hook_context(
+    service: impl Into<String>,
+    action: impl Into<String>,
+    phase: HookPhase,
+    domain_reasons: &'static [&'static ProviderReasonDefinition],
+) -> HookContext {
+    HookContext::new(service.into(), action.into(), phase, domain_reasons)
+}
+
+/// Runs `future` as the provider hook `context` describes. Its service and
+/// action become the current provider action, and upstream traces it starts,
+/// including from work it moves onto other tasks with
+/// [`InvocationScope`](crate::InvocationScope), are checked against it.
+pub async fn with_hook_context<F: std::future::Future>(
+    context: HookContext,
+    future: F,
+) -> F::Output {
+    crate::correlation::with_hook(context, future).await
 }
 
 /// Marks `error` as a failure `port` produced. Its decision and reason are

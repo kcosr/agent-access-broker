@@ -100,7 +100,8 @@ also includes a same-origin browser portal frontend:
   (`descriptor.rs`), resource types (`resource.rs`), the `Provider` trait and
   its invocation, result, and error types, standard reason codes and the subset
   providers may report (`reason.rs`), provider-owned domain reasons and the
-  reason handles errors, streams, and traces carry (`domain_reason.rs`),
+  reason handles errors, streams, and traces carry (`domain_reason.rs`), the
+  hook contract the host checks provider outcomes against (`contract.rs`),
   upstream throttling (`upstream_rate_limit.rs`: bounded `Retry-After` parsing,
   the shared `upstream_rate_limited` error, and the applied-unverified
   `mutation_verification_failed` for throttling after an applied write), the

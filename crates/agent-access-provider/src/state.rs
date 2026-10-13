@@ -83,11 +83,14 @@ impl ProviderStateError {
 
 impl From<ProviderStateError> for ProviderError {
     fn from(error: ProviderStateError) -> Self {
-        ProviderError::error(
-            ReasonCode::BrokerProviderContractFailed,
-            "provider operation state is unavailable",
+        crate::host::port_failure(
+            crate::host::HostPort::AdmittedOperation,
+            ProviderError::error(
+                ReasonCode::BrokerProviderContractFailed,
+                "provider operation state is unavailable",
+            )
+            .with_internal_diagnostic_code(error.diagnostic_code()),
         )
-        .with_internal_diagnostic_code(error.diagnostic_code())
     }
 }
 

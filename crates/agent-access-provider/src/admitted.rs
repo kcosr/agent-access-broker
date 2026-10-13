@@ -61,11 +61,14 @@ impl AuthorityMismatch {
 
 impl From<AuthorityMismatch> for ProviderError {
     fn from(error: AuthorityMismatch) -> Self {
-        ProviderError::error(
-            ReasonCode::BrokerProviderContractFailed,
-            "provider operation authority is unavailable",
+        crate::host::port_failure(
+            crate::host::HostPort::AdmittedOperation,
+            ProviderError::error(
+                ReasonCode::BrokerProviderContractFailed,
+                "provider operation authority is unavailable",
+            )
+            .with_internal_diagnostic_code(error.diagnostic_code()),
         )
-        .with_internal_diagnostic_code(error.diagnostic_code())
     }
 }
 

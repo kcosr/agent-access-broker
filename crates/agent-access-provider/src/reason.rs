@@ -543,6 +543,17 @@ pub enum HookPhase {
     CredentialVerification,
 }
 
+impl HookPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScopeResolution => "scope_resolution",
+            Self::BodyAdmission => "body_admission",
+            Self::Invocation => "invocation",
+            Self::CredentialVerification => "credential_verification",
+        }
+    }
+}
+
 /// Which failure decisions a provider-emittable standard reason allows.
 #[derive(Clone, Copy)]
 enum FailureDecisions {
@@ -625,6 +636,14 @@ impl ReasonCode {
         self.provider_rule().is_some_and(|(decisions, phases)| {
             decisions.permit(decision) && phases.contains(&phase)
         })
+    }
+
+    /// Whether an upstream trace in a hook running in `phase` may carry this
+    /// standard reason. A trace confers no decision, so any decision the
+    /// provider may report it with in that hook qualifies.
+    pub fn permits_provider_trace(self, phase: HookPhase) -> bool {
+        self.provider_rule()
+            .is_some_and(|(_, phases)| phases.contains(&phase))
     }
 
     /// Whether a provider may report this reason with an allow decision:

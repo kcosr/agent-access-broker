@@ -16,6 +16,7 @@ mod backend;
 mod capabilities;
 mod config;
 mod continuation;
+mod contract;
 mod correlation;
 mod credential;
 mod delegated;
@@ -54,6 +55,7 @@ pub use continuation::{
     ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
     ContinuationOwner, ContinuationSigner,
 };
+pub use contract::*;
 pub use correlation::*;
 pub use credential::*;
 pub use delegated::*;

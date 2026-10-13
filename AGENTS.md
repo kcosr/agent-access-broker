@@ -202,16 +202,17 @@ and audit checks through the real `agent-access` binary.
 
 - `crates/agent-access-provider`: the backend contract: service descriptors,
   resource types, the `Provider` trait and its invocation/result/error types,
-  reason codes, the OAuth dialect and delegated-credential contracts, and the
-  host services backends use (upstream HTTP clients built through the host's
-  client factory, egress declarations and sanitized routes, upstream
-  allowlists, correlation, upstream trace events, token signing and
-  continuation envelopes). Its `host`
-  module is the construction interface core implements (`BuildContext`,
+  reason codes and the hook contract the host checks provider failures, late
+  streams and upstream traces against (`contract.rs`), the OAuth dialect and
+  delegated-credential contracts, and the host services backends use
+  (upstream HTTP clients built through the host's client factory, egress
+  declarations and sanitized routes, upstream allowlists, correlation,
+  upstream trace events, token signing and continuation envelopes). Its
+  `host` module is the construction interface core implements (`BuildContext`,
   `UpstreamClientFactory`) and the only constructor of host-owned values
   (scope requests, static execution credentials, delegated binding
-  identities, admitted requests, final invocations); it resolves no secrets,
-  loads no TLS files and reads no process environment.
+  identities, admitted requests, final invocations, hook contexts); it
+  resolves no secrets, loads no TLS files and reads no process environment.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller

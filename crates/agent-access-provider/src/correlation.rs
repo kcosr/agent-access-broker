@@ -35,6 +35,27 @@ tokio::task_local! {
     static CURRENT_PROVIDER_ACTION: (String, String);
 }
 
+tokio::task_local! {
+    static CURRENT_HOOK: crate::HookContext;
+}
+
+/// Runs `future` as the provider hook `context` describes, with its service
+/// and action as the current provider action.
+pub(crate) async fn with_hook<F: std::future::Future>(
+    context: crate::HookContext,
+    future: F,
+) -> F::Output {
+    let action = (context.service().to_owned(), context.action().to_owned());
+    CURRENT_HOOK
+        .scope(context, CURRENT_PROVIDER_ACTION.scope(action, future))
+        .await
+}
+
+/// The provider hook the current task runs, if the host is running one.
+pub fn current_hook_context() -> Option<crate::HookContext> {
+    CURRENT_HOOK.try_with(Clone::clone).ok()
+}
+
 pub async fn with_correlation_context<F>(correlation: CorrelationContext, future: F) -> F::Output
 where
     F: std::future::Future,
@@ -66,6 +87,7 @@ where
 pub struct InvocationScope {
     correlation: Option<CorrelationContext>,
     action: Option<(String, String)>,
+    hook: Option<crate::HookContext>,
     finalization: Option<crate::ProviderFinalizationContext>,
     span: tracing::Span,
 }
@@ -75,6 +97,7 @@ impl InvocationScope {
         Self {
             correlation: current_correlation_context(),
             action: current_provider_action(),
+            hook: current_hook_context(),
             finalization: crate::current_provider_finalization(),
             span: tracing::Span::current(),
         }
@@ -84,6 +107,12 @@ impl InvocationScope {
     pub async fn run<F: std::future::Future>(self, future: F) -> F::Output {
         use tracing::Instrument;
         let future = future.instrument(self.span);
+        let future = async {
+            match self.hook {
+                Some(hook) => CURRENT_HOOK.scope(hook, future).await,
+                None => future.await,
+            }
+        };
         let scoped = async {
             match (self.correlation, self.action) {
                 (Some(correlation), Some(action)) => {
