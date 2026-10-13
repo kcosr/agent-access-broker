@@ -111,7 +111,8 @@ file may exist in `.cargo` directories above it.
    `test-support`, and its resolved graph, including development dependencies
    and the guide's crates, contains no core, host, assembly, CLI or
    import-adapter crate. The guide's code passes `rustfmt --check` and its
-   crates' `cargo test`.
+   crates' `cargo test`, and the build's dep-info shows that rustc read every
+   staged guide Rust file.
 9. The assembly passes `rustfmt --check` and `cargo test`, then `cargo build`
    builds the executable last, so it carries no development features. For the
    host target, `cargo tree -e normal,build --format '{p}\t{f}'` lists every
@@ -119,7 +120,7 @@ file may exist in `.cargo` directories above it.
    the assembly's own defaults enable; no package may resolve `test-support`,
    although the assembly's tests enable the host's through a development
    dependency. The assembly guide's example passes `rustfmt --check` and
-   `cargo test`.
+   `cargo test`, with every staged Rust file compiled.
 10. Process acceptance starts the built assembly executable with a generated
    development configuration: CloudBees CI pointed at a synthetic loopback
    controller, the conformance provider configured, a synthetic static

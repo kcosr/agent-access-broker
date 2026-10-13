@@ -356,7 +356,9 @@ All notable changes to this project are documented in this file.
   compile as modules of a generated SDK-only crate, `rust file=` and
   `toml file=` blocks form the guides' example crates, staged in the provider
   repository and beside the assembly, and `rust fragment` blocks are
-  deliberately not compiled. The assembly guide's example must share its
+  deliberately not compiled. Guide code blocks may not open inside a
+  blockquote or on a list item's marker line, and every staged Rust file must
+  be read by a compiled target. The assembly guide's example must share its
   `main.rs` and `build.rs` with the fixture's assembly as the guide states.
 
 ### Changed

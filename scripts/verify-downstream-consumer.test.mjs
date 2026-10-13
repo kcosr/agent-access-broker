@@ -8,13 +8,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
   ASSEMBLY_GUIDE, ASSEMBLY_GUIDE_SHARED_FILES, ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION,
-  GUIDE_PROVIDER_URL, GUIDE_SNIPPET_PACKAGE, PROVIDER_GUIDE, PROVIDER_PACKAGE,
+  GUIDE_PROVIDER_URL, GUIDE_SNIPPET_PACKAGE, PROVIDER_GUIDE, PROVIDER_PACKAGE, compiledSourceFiles, dependencyInfoFiles,
   ProcessSupervisor, SDK_PACKAGE, SENTINEL_REV, assertAssemblyStatus, assertStartingEvent, assemblyFeatureTreeArgs, assemblyFeatureViolations, expectedAssemblyStatus, extractGuide,
   foreignCargoConfigs, gitSourceId, guideBlockMarker, guideExamples, guideManifestPins, inheritedWorkspaceDependencies,
   inventoryFingerprint, isolatedGitEnvironment, lastTableHeader, manifestDependencies, manifestPackageField, markdownCodeBlocks, normalizeProviderCrateManifest,
   parseConsumerArguments, parseLockfile, processGroupAlive,
   parseTomlValue, providerBoundaryViolations, reviewLockfiles, rewriteStagedManifest, runProcessAcceptance, sanitizedEnvironment, sharedAssemblyFiles,
-  snippetCrate, stagedCargoConfig, thirdPartyLockSeed, toolchainChannel,
+  snippetCrate, stagedCargoConfig, thirdPartyLockSeed, toolchainChannel, unmarkedRustBlocks,
 } from "./verify-downstream-consumer.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -172,12 +172,43 @@ test("Markdown code blocks keep their fence line, info string and lines, includi
   const text = "# Title\n\n```rust check\nfn a() {}\n```\n\n- item\n\n  ```toml file=x/Cargo.toml\n  [package]\n    name = \"x\"\n  ```\n\n"
     + "~~~~text\n```\nnot a fence\n~~~\n~~~~~\n\n``` inline `code` ```\n```\n\n```\n";
   assert.deepEqual(markdownCodeBlocks(text), [
-    { line: 3, info: "rust check", language: "rust", attributes: ["check"], text: "fn a() {}\n" },
-    { line: 9, info: "toml file=x/Cargo.toml", language: "toml", attributes: ["file=x/Cargo.toml"], text: "[package]\n  name = \"x\"\n" },
-    { line: 14, info: "text", language: "text", attributes: [], text: "```\nnot a fence\n~~~\n" },
-    { line: 21, info: "", language: "", attributes: [], text: "\n" },
+    { line: 3, info: "rust check", language: "rust", attributes: ["check"], container: null, text: "fn a() {}\n" },
+    { line: 9, info: "toml file=x/Cargo.toml", language: "toml", attributes: ["file=x/Cargo.toml"], container: null, text: "[package]\n  name = \"x\"\n" },
+    { line: 14, info: "text", language: "text", attributes: [], container: null, text: "```\nnot a fence\n~~~\n" },
+    { line: 21, info: "", language: "", attributes: [], container: null, text: "\n" },
   ]);
   assert.throws(() => markdownCodeBlocks("```rust check\nfn a() {}\n"), /opened at line 1 is not closed/);
+  assert.deepEqual(markdownCodeBlocks("-\titem\n\n\t```rust check\n\tfn a() {}\n\t```\n"),
+    [{ line: 3, info: "rust check", language: "rust", attributes: ["check"], container: null, text: "fn a() {}\n" }]);
+});
+
+test("fences opened after blockquote or list-item markers are reported as container blocks", () => {
+  const text = "> Note:\n>\n> ```rust\n> fn broken( {}\n> ```\n\n> > ```rust,ignore\n> > fn nested( {}\n> > ```\n\n"
+    + "- ```rust\n  fn listed( {}\n  ```\n\n1) ~~~rust check\n   fn numbered() {}\n   ~~~\n\n"
+    + "> ```rust ignore\n> fn unclosed( {}\n\n```rust check\nfn after() {}\n```\n";
+  assert.deepEqual(markdownCodeBlocks(text).map(({ line, info, container, text: body }) => [line, info, container, body]), [
+    [3, "rust", "blockquote", "fn broken( {}\n"],
+    [7, "rust,ignore", "blockquote", "fn nested( {}\n"],
+    [11, "rust", "list item", "fn listed( {}\n"],
+    [15, "rust check", "list item", "fn numbered() {}\n"],
+    [19, "rust ignore", "blockquote", "fn unclosed( {}\n"],
+    [22, "rust check", null, "fn after() {}\n"],
+  ]);
+  // Inside an ordinary fence, container-prefixed fence lines are content.
+  assert.deepEqual(markdownCodeBlocks("````md\n> ```rust\n> fn x() {}\n> ```\n````\n").map((block) => [block.info, block.container]), [["md", null]]);
+  // Outside the checked guides, any Rust block not marked fragment is reported, including inside containers.
+  assert.deepEqual(unmarkedRustBlocks(text).map((block) => block.line), [3, 7, 11, 15, 19, 22]);
+  assert.deepEqual(unmarkedRustBlocks("```rust fragment\nlet x = y?;\n```\n> ```rust fragment\n> z\n> ```\n```bash\nls\n```\n"), []);
+});
+
+test("guides reject code blocks inside blockquotes or opened on list-item marker lines", () => {
+  const rejects = (text, pattern) => assert.throws(() => extractGuide("docs/guide.md", text, { standalone: true }), pattern);
+  rejects("> ```rust\n> fn broken( {}\n> ```\n", /docs\/guide\.md: the code block at line 1 opens inside a blockquote marker line \("rust"\)/);
+  rejects("> ```rust ignore\n> fn broken( {}\n> ```\n", /line 1 opens inside a blockquote marker line \("rust ignore"\)/);
+  rejects("> ```rust,ignore\n> fn broken( {}\n> ```\n", /line 1 opens inside a blockquote marker line \("rust,ignore"\)/);
+  rejects("> ```rust check\n> fn fine() {}\n> ```\n", /opens inside a blockquote marker line/);
+  rejects("Intro\n\n> > ```text\n> > note\n> > ```\n", /line 3 opens inside a blockquote marker line/);
+  rejects("- ```rust file=notes/src/lib.rs\n  fn listed() {}\n  ```\n", /line 1 opens inside a list item marker line/);
 });
 
 test("every Rust block in a guide needs exactly one valid marker", () => {
@@ -328,10 +359,43 @@ test("the checked-in guides yield the staged example crates and share files with
 test("Rust blocks outside the checked guides are marked as fragments, so none is silently unchecked", () => {
   const files = execFileSync("git", ["ls-files", "-z", "--", "*.md"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
   assert.ok(files.includes(PROVIDER_GUIDE) && files.includes(ASSEMBLY_GUIDE));
-  const unchecked = files.filter((file) => ![PROVIDER_GUIDE, ASSEMBLY_GUIDE].includes(file)).flatMap((file) => markdownCodeBlocks(read(file))
-    .filter((block) => /^(?:rust|rs)(?![a-z0-9_-])/i.test(block.language) && block.info !== "rust fragment")
-    .map((block) => `${file}:${block.line} (${block.info})`));
+  const unchecked = files.filter((file) => ![PROVIDER_GUIDE, ASSEMBLY_GUIDE].includes(file))
+    .flatMap((file) => unmarkedRustBlocks(read(file)).map((block) => `${file}:${block.line} (${block.info})`));
   assert.deepEqual(unchecked, []);
+});
+
+test("dep-info prerequisites are read with their escapes, ignoring comments and targets", () => {
+  const files = dependencyInfoFiles("/target/debug/deps/notes-1.d: crates/notes/src/lib.rs crates/notes/src/my\\ file.rs\n\n"
+    + "/target/debug/deps/libnotes-1.rlib: crates/notes/src/lib.rs\n\ncrates/notes/src/lib.rs:\n# env-dep:NOTES_REVISION=abc\n");
+  assert.deepEqual([...files], ["crates/notes/src/lib.rs", "crates/notes/src/my file.rs"]);
+});
+
+test("real cargo test: only files a target's module tree reaches count as compiled", (t) => {
+  const directory = temporary(t);
+  const write = (file, contents) => {
+    mkdirSync(join(directory, file, ".."), { recursive: true });
+    writeFileSync(join(directory, file), contents);
+  };
+  write("Cargo.toml", '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n\n[profile.dev]\ndebug = false\nincremental = false\n');
+  write("crates/notes/Cargo.toml", '[package]\nname = "notes"\nversion = "0.1.0"\nedition = "2024"\n');
+  write("crates/notes/src/lib.rs", "mod nested;\npub fn a() {}\n");
+  write("crates/notes/src/nested.rs", "#[cfg(test)]\nmod inner;\n");
+  write("crates/notes/src/nested/inner.rs", "#[test]\nfn inner() {}\n");
+  write("crates/notes/src/main.rs", "fn main() {}\n");
+  write("crates/notes/build.rs", "fn main() {}\n");
+  write("crates/notes/tests/flow.rs", "#[test]\nfn flow() {}\n");
+  // Broken code nothing declares: Cargo never compiles it, so the build passes.
+  write("crates/notes/src/orphan.rs", "fn broken( {}\n");
+  const toolchain = inspectLocalToolchain(root, { env: sanitizedEnvironment(process.env).env });
+  const env = { ...sanitizedEnvironment(process.env).env, CARGO_HOME: join(directory, "cargo-home"), RUSTC: toolchain.rustcPath };
+  execFileSync(toolchain.cargoPath, ["test", "--offline", "--quiet"], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
+  const compiled = compiledSourceFiles(join(directory, "target"), directory);
+  const source = (path) => join(directory, "crates", "notes", path);
+  for (const path of ["src/lib.rs", "src/nested.rs", "src/nested/inner.rs", "src/main.rs", "build.rs", "tests/flow.rs"]) {
+    assert.ok(compiled.has(source(path)), path);
+  }
+  assert.ok(!compiled.has(source("src/orphan.rs")));
+  assert.equal(compiledSourceFiles(join(directory, "missing-target"), directory).size, 0);
 });
 
 const lockText = (packages) => `# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n${packages.map((entry) =>

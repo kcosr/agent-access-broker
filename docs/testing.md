@@ -531,8 +531,11 @@ string, after the language and a space, what the check does with it:
 Every `rust` block in the two guides carries exactly one of these markers. An
 unmarked block, an unknown marker or a comma-joined info string such as
 `rust,ignore` fails the check, so leaving code out of it is always explicit.
-Other blocks, such as configuration `toml` and `bash`, are not compiled.
-Markdown elsewhere in the repository may contain only `rust fragment` blocks.
+Other blocks, such as configuration `toml` and `bash`, are not compiled. A
+guide code block must start at the top level or be indented under a list item;
+one opened inside a blockquote or on a list item's marker line fails the check.
+Markdown elsewhere in the repository may contain only `rust fragment` blocks,
+wherever they appear.
 
 The check reads both guides from the candidate commit. The provider guide's
 example crates and the generated crate for its `rust check` blocks become
@@ -542,7 +545,10 @@ own workspace, with its provider repository URL mapped to that staged provider
 repository. Their placeholder pins are mapped like the fixture's sentinel pins,
 their lockfiles are reviewed with the fixture's, and they build in the fixture
 templates' development profile. It runs `rustfmt --check` on the code the
-guides show and `cargo test --locked --offline` on every example crate.
+guides show and `cargo test --locked --offline` on every example crate. Cargo
+compiles only the files a target's module tree reaches, so the check then reads
+the build's dep-info and fails if any staged Rust file, such as a marked
+`src/extra.rs` that no `mod` declares, was not compiled.
 
 Where the assembly guide says its example shares a file with the fixture's
 assembly template, the check holds it to that: the guide's `src/main.rs` must

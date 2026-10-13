@@ -285,33 +285,52 @@ export function manifestPackageField(text, field) {
   return null;
 }
 
+// A fence line: indentation, any blockquote (`>`) or list-item (`-`, `+`,
+// `*`, `1.`, `1)`) markers, the fence run and the info string.
+const FENCE_LINE = /^([ \t]*(?:(?:>|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t]))[ \t]*)*)(`{3,}|~{3,})(.*)$/;
+
 // The fenced code blocks of a Markdown document, with the 1-based line of
 // each opening fence and its info string split into the language and the
-// whitespace-separated attributes after it. Fences may be indented, as in
-// list items; that indentation is removed from the block's lines.
+// whitespace-separated attributes after it. A fence indented only by
+// whitespace, as under a list item, is ordinary; its indentation is removed
+// from the block's lines. A fence opened after a blockquote or list-item
+// marker is reported with `container` set, so that callers can refuse code
+// they would otherwise read differently from a Markdown renderer; a
+// blockquote's fence also ends where the blockquote does.
 export function markdownCodeBlocks(text) {
   const blocks = [];
   let open = null;
+  const finish = () => {
+    const { line, info, language, attributes, container, lines } = open;
+    blocks.push({ line, info, language, attributes, container, text: `${lines.join("\n")}\n` });
+    open = null;
+  };
   text.split("\n").forEach((line, index) => {
-    if (!open) {
-      const fence = /^( *)(`{3,}|~{3,})(.*)$/.exec(line);
-      if (!fence || (fence[2][0] === "`" && fence[3].includes("`"))) return;
-      const info = fence[3].trim();
-      const [language = "", ...attributes] = info.split(/\s+/).filter(Boolean);
-      open = { line: index + 1, indent: fence[1].length, fence: fence[2], info, language, attributes, lines: [] };
+    if (open?.container === "blockquote" && !/^[ \t]*>/.test(line)) finish();
+    const fence = FENCE_LINE.exec(line);
+    if (open) {
+      const closes = fence && fence[2][0] === open.fence[0] && fence[2].length >= open.fence.length && !fence[3].trim()
+        && (open.container === "blockquote" ? /^[ \t>]*$/.test(fence[1]) : /^[ \t]*$/.test(fence[1]));
+      if (closes) finish();
+      else open.lines.push(open.container === "blockquote" ? line.replace(/^[ \t]*(?:>[ \t]?)+/, "")
+        : line.slice(Math.min(open.indent, /^[ \t]*/.exec(line)[0].length)));
       return;
     }
-    const close = /^ *(`{3,}|~{3,})\s*$/.exec(line);
-    if (close && close[1][0] === open.fence[0] && close[1].length >= open.fence.length) {
-      const { line: opened, info, language, attributes, lines } = open;
-      blocks.push({ line: opened, info, language, attributes, text: `${lines.join("\n")}\n` });
-      open = null;
-    } else {
-      open.lines.push(line.slice(Math.min(open.indent, /^ */.exec(line)[0].length)));
-    }
+    if (!fence || (fence[2][0] === "`" && fence[3].includes("`"))) return;
+    const info = fence[3].trim();
+    const [language = "", ...attributes] = info.split(/\s+/).filter(Boolean);
+    const container = fence[1].includes(">") ? "blockquote" : /[^ \t]/.test(fence[1]) ? "list item" : null;
+    open = { line: index + 1, indent: fence[1].length, fence: fence[2], info, language, attributes, container, lines: [] };
   });
+  if (open?.container === "blockquote") finish();
   if (open) throw new Error(`The code block opened at line ${open.line} is not closed`);
   return blocks;
+}
+
+// The Rust blocks of a Markdown document outside the checked guides that are
+// not marked `rust fragment`: code there is never compiled.
+export function unmarkedRustBlocks(text) {
+  return markdownCodeBlocks(text).filter((block) => /^(?:rust|rs)(?![a-z0-9_-])/i.test(block.language) && block.info !== "rust fragment");
 }
 
 // The guides whose code the driver builds. Their markers are described in
@@ -378,6 +397,10 @@ export function extractGuide(guide, text, { standalone = false } = {}) {
   const checks = [];
   const blocks = [];
   for (const block of markdownCodeBlocks(text)) {
+    if (block.container) {
+      throw new Error(`${guide}: the code block at line ${block.line} opens inside a ${block.container} marker line ("${block.info}"); `
+        + "start guide code blocks at the top level or indent them under a list item");
+    }
     let marker;
     try {
       marker = guideBlockMarker(block);
@@ -449,6 +472,39 @@ agent-access-provider.workspace = true
     ...modules.flatMap((module) => [`/// ${guide}, the block whose fence opens at line ${module.line}.`, `mod ${module.module};`]), ""].join("\n");
   return { guide, name, manifest, manifestLine: null, files: [{ path: "src/lib.rs", text: lib, origins: [] },
     ...modules.map((module) => ({ path: `src/${module.module}.rs`, text: module.text, origins: [{ guideLine: module.line + 1, fileLine: 1 }] }))] };
+}
+
+// The prerequisites named by a Makefile-style dep-info file, unescaped.
+export function dependencyInfoFiles(text) {
+  const files = new Set();
+  for (const line of text.split("\n")) {
+    if (line.startsWith("#")) continue;
+    const separator = /(?<!\\):(?=[ \t]|$)/.exec(line);
+    if (!separator) continue;
+    for (const token of line.slice(separator.index + 1).match(/(?:\\.|[^\s\\])+/g) ?? []) files.add(token.replace(/\\(.)/g, "$1"));
+  }
+  return files;
+}
+
+// Every source file rustc read for the units built in a target directory's
+// debug profile: the dep-info of its dependency and build-script units, with
+// relative paths resolved against the workspace root Cargo runs rustc in.
+export function compiledSourceFiles(targetDirectory, workspaceRoot) {
+  const compiled = new Set();
+  const read = (directory) => {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".d")) continue;
+      for (const file of dependencyInfoFiles(readFileSync(join(directory, entry.name), "utf8"))) compiled.add(resolve(workspaceRoot, file));
+    }
+  };
+  const debug = join(targetDirectory, "debug");
+  read(join(debug, "deps"));
+  const build = join(debug, "build");
+  if (existsSync(build)) {
+    for (const unit of readdirSync(build, { withFileTypes: true })) if (unit.isDirectory()) read(join(build, unit.name));
+  }
+  return compiled;
 }
 
 // Guide manifests write each Git revision as a placeholder such as
@@ -1455,6 +1511,18 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       const shown = crate.files.filter((file) => file.origins.length).map((file) => file.path);
       if (shown.length) await execute(label, rustfmt, ["--check", "--edition", edition, ...shown], { cwd: directory, env: cargoEnv });
     };
+    // Cargo compiles only the files a target's module tree reaches, so a guide
+    // file that no compiled target reads would otherwise pass unchecked.
+    const assertGuideFilesCompiled = (root, crates) => {
+      const compiled = compiledSourceFiles(join(root, "target"), root);
+      const files = crates.flatMap(({ crate, directory }) => crate.files.map((file) => join(directory, file.path)));
+      const missing = files.filter((path) => !compiled.has(path));
+      if (missing.length) {
+        throw new Error(`No compiled target reads ${missing.map((path) => relative(root, path)).join(", ")}, so that guide code is not checked; `
+          + "declare each file as a module of a compiled target, or mark its blocks fragment");
+      }
+      return files.length;
+    };
     const upstreamSource = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamSourceUrl, rev: commit, packages: upstreamNames };
     const providerPackages = new Set([PROVIDER_PACKAGE, ...guides.providerCrates.map((crate) => crate.name)]);
     const mapping = { schemaVersion: 1, mode: source, candidate: { commit, committedAt: report.upstream.committedAt },
@@ -1610,7 +1678,9 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       }
       await cargo("guide-provider-test", paths.provider, ["test", "--locked", "--offline",
         ...guides.providerCrates.flatMap((crate) => ["-p", crate.name]), ...targetDirectory(paths.provider)]);
-      record.detail = { crates: guides.providerCrates.map((crate) => crate.name) };
+      const compiledFiles = assertGuideFilesCompiled(paths.provider,
+        guides.providerCrates.map((crate) => ({ crate, directory: join(paths.provider, "crates", crate.name) })));
+      record.detail = { crates: guides.providerCrates.map((crate) => crate.name), compiledFiles };
     });
 
     const binary = join(paths.assembly, "target", "debug", executable(ASSEMBLY_PACKAGE));
@@ -1646,7 +1716,8 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       await formatGuideFiles("guide-format-assembly", paths.guideAssembly, guides.assemblyCrate);
       await execute("guide-assembly-test", toolchain.cargoPath, ["test", "--locked", "--offline", ...targetDirectory(paths.guideAssembly)],
         { cwd: paths.guideAssembly, env: { ...cargoEnv, CARGO_PROFILE_DEV_DEBUG: "false", CARGO_PROFILE_DEV_INCREMENTAL: "false" } });
-      record.detail = { crate: guides.assemblyCrate.name };
+      const compiledFiles = assertGuideFilesCompiled(paths.guideAssembly, [{ crate: guides.assemblyCrate, directory: paths.guideAssembly }]);
+      record.detail = { crate: guides.assemblyCrate.name, compiledFiles };
     });
 
     await step("process-acceptance", async (record) => {
