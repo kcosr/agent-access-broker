@@ -203,8 +203,13 @@ derives `Deserialize`. Reject unknown fields with
 The SDK provides pure validators for common fields:
 `validate_upstream_base_url` (HTTPS, or loopback HTTP outside production),
 `validate_upstream_allowlist`, `validate_egress_proxy_config`,
-`validate_tenant_host` and the attachment and limit relation checks. None of
-them reads files, the process environment or secret references; the host
+`validate_tenant_host` and the attachment and limit relation checks. For any
+other list of URL patterns, such as destinations a provider lets the upstream
+deliver to, `validate_url_patterns` applies the allowlist grammar (a fixed
+host, no embedded credentials, path segments that are literal, `*` or `**`)
+under a `UrlPatternPolicy` that chooses the schemes, whether the list may be
+empty, and whether queries, fragments and normalized repeats are rejected. None
+of them reads files, the process environment or secret references; the host
 resolves secret references such as a proxy's `password_ref`.
 
 ### Building a provider

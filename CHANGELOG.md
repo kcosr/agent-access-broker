@@ -383,6 +383,10 @@ All notable changes to this project are documented in this file.
   declared `Content-Length` over the cap before reading and returns a typed
   `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with `timed_out`)
   for the provider to map.
+- The provider SDK validates URL pattern lists with `validate_url_patterns`
+  and a `UrlPatternPolicy`: the allowlist grammar (a fixed host, no embedded
+  credentials, literal, `*` or `**` path segments) plus the policy's schemes,
+  emptiness, query and fragment, and repeat rules.
 
 ### Changed
 
@@ -454,6 +458,9 @@ All notable changes to this project are documented in this file.
   `upstream_connection_failed`. A GitLab, Jira or Confluence download whose
   body overruns its `Content-Length` now fails before the excess is delivered
   instead of at the end, still with `upstream_protocol_failed`.
+- The GitLab webhook destination diagnostic for repeated patterns now reads
+  `contains duplicate normalized entry` instead of
+  `contains duplicate normalized destination`.
 
 ### Fixed
 

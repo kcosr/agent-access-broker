@@ -3563,7 +3563,7 @@ fn gitlab_webhook_destination_policy_is_optional_and_strictly_validated() {
         "https://hooks.example.com/gitlab/**".to_string(),
     ];
     let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(&errors, "contains duplicate normalized destination");
+    assert_contains(&errors, "contains duplicate normalized entry");
 }
 
 #[test]

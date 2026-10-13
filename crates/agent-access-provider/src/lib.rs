@@ -213,13 +213,13 @@ pub use capabilities::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
 };
 pub use config::{
-    AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, default_attachment_max_bytes,
-    default_attachment_max_total_bytes, default_download_max_bytes, is_env_name,
-    is_literal_loopback, is_loopback_or_localhost, is_secret_ref, validate_attachment_limits,
-    validate_egress_proxy_config, validate_formats_allow_empty,
+    AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, UrlPatternPolicy,
+    default_attachment_max_bytes, default_attachment_max_total_bytes, default_download_max_bytes,
+    is_env_name, is_literal_loopback, is_loopback_or_localhost, is_secret_ref,
+    validate_attachment_limits, validate_egress_proxy_config, validate_formats_allow_empty,
     validate_non_empty_control_free_string, validate_provider_limit_relation,
     validate_provider_upload_limit_relation, validate_tenant_host, validate_upload_limits,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    validate_upstream_allowlist, validate_upstream_base_url, validate_url_patterns,
 };
 pub use continuation::{
     AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFailures,
