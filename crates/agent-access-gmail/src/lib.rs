@@ -217,10 +217,19 @@ impl GmailProvider {
                 )
                 .await
                 .map_err(|e| {
-                    ProviderError::error(
-                        e.reason_code(),
-                        if method == Method::GET { "Gmail request failed" } else { "Gmail request failed; mutation outcome may be unknown, inspect before retrying" },
-                    )
+                    if method == Method::GET {
+                        ProviderError::error(e.reason_code(), "Gmail request failed")
+                    } else if matches!(e, UpstreamError::NotSent { .. }) {
+                        // Nothing reached Gmail: an earlier attempt could only
+                        // have been rejected with 401, so nothing was applied.
+                        ProviderError::error(e.reason_code(), "Gmail request failed")
+                            .with_mutation_receipt(MutationReceipt::not_applied())
+                    } else {
+                        ProviderError::error(
+                            e.reason_code(),
+                            "Gmail request failed; mutation outcome may be unknown, inspect before retrying",
+                        )
+                    }
                 })?;
             budget.last_status = Some(response.status().as_u16());
             // A 401 explicitly rejected authentication. Only that response may

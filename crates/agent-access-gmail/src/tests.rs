@@ -536,6 +536,61 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
     }
 }
 
+#[tokio::test]
+async fn only_proven_unsent_mutations_are_not_applied() {
+    use tokio::io::AsyncReadExt;
+    let host = agent_access_provider::test_support::TestHost::default();
+    let gmail = |origin: &str| {
+        GmailProvider::new(
+            Url::parse(&format!("{origin}/gmail/v1/users/me/")).unwrap(),
+            &host,
+            &host.limits,
+        )
+        .unwrap()
+    };
+    // A closed port refuses the connection: nothing reached Gmail.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    for action in ["message.trash", "thread.archive", "message.view"] {
+        let error = gmail(&origin)
+            .invoke(invocation(action, json!({"id":"a123"})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(error.message, "Gmail request failed");
+        if action.ends_with(".view") {
+            // Reads carry no mutation receipt.
+            assert!(error.result.is_none());
+        } else {
+            assert_eq!(
+                error.result.as_deref(),
+                Some(&json!({"mutationStatus":"not_applied","retrySafe":true})),
+                "{action}"
+            );
+        }
+    }
+    // A mutation read in full and then dropped unanswered may have applied.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(socket.read_u8().await.unwrap());
+        }
+        assert!(head.starts_with(b"POST /gmail/v1/users/me/messages/a123/trash "));
+    });
+    let error = gmail(&origin)
+        .invoke(invocation("message.trash", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert!(error.message.contains("mutation outcome may be unknown"));
+    assert!(error.result.is_none());
+}
+
 #[test]
 fn oversized_part_metadata_preserves_every_message_in_a_thread() {
     let mut attachment = message();

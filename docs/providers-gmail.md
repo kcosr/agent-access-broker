@@ -171,6 +171,11 @@ are never treated as proof of authorization.
 A 401 permits one credential recovery after explicit authentication rejection.
 Transport errors, 403, 429 and server failures never replay mutations. A failed or
 timed-out mutation can have an unknown outcome: inspect the mail before retrying.
+A mutation the Broker proves was never sent, because no connection to Gmail was
+established, instead fails with its ordinary `upstream_connection_failed` or
+`upstream_timeout`, the message `Gmail request failed` and a result of
+`mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and it can
+be repeated.
 Google HTTP 429 and the 403 rate-limit reasons `rateLimitExceeded`,
 `userRateLimitExceeded` and `dailyLimitExceeded` map to `upstream_rate_limited`,
 separately from permission denial, with the bounded `Retry-After` wait when Google

@@ -502,6 +502,12 @@ All notable changes to this project are documented in this file.
   failed`; Teams: `Teams notification request was not sent`, which also covers
   a refused endpoint URL). Both previously carried no result. Reads, including
   the trigger's job read, carry no receipt.
+- A Gmail archive, trash or restore whose request the Broker proves was never
+  sent now reports `mutationStatus: "not_applied"`, `retrySafe: true` with its
+  unchanged `upstream_connection_failed` or `upstream_timeout`, and its message
+  drops the `mutation outcome may be unknown, inspect before retrying` suffix
+  (`Gmail request failed`). Mutations that may have reached Gmail keep the
+  suffix and carry no result.
 
 ### Fixed
 
