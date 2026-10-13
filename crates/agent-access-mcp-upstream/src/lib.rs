@@ -473,7 +473,7 @@ async fn connect(
     let info = |version| {
         ClientConfig::new(
             ClientCapabilities::default(),
-            Implementation::new("agent-access-broker", env!("CARGO_PKG_VERSION")),
+            Implementation::new(HOST_IMPLEMENTATION.name, HOST_IMPLEMENTATION.version),
         )
         .with_protocol_version(version)
     };

@@ -299,8 +299,8 @@ fn assert_legacy_requests(fixture: &CompatFixture, session: Option<&str>) {
                 assert_eq!(request.body["params"]["protocolVersion"], PREVIOUS);
                 assert_eq!(request.body["params"]["capabilities"], json!({}));
                 assert_eq!(
-                    request.body["params"]["clientInfo"]["name"],
-                    "agent-access-broker"
+                    request.body["params"]["clientInfo"],
+                    json!({"name": "agent-access-broker-host", "version": env!("CARGO_PKG_VERSION")})
                 );
             }
             _ => {

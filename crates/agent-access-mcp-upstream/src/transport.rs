@@ -11,6 +11,7 @@ use crate::{
     },
     schema::encode_header,
 };
+use agent_access_core::imports::HOST_IMPLEMENTATION;
 use agent_access_provider::{
     DelegatedCredential, InvocationScope, ProviderError, ProviderFinalizationContext, ReasonCode,
     UpstreamCall, UpstreamClient, UpstreamError, UpstreamRetryAfter, complete_upstream_trace,
@@ -734,7 +735,7 @@ async fn send_message(
         if modern {
             params.insert("_meta".into(), json!({
                 "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientInfo": {"name":"agent-access-broker", "version": env!("CARGO_PKG_VERSION")},
+                "io.modelcontextprotocol/clientInfo": {"name": HOST_IMPLEMENTATION.name, "version": HOST_IMPLEMENTATION.version},
                 "io.modelcontextprotocol/clientCapabilities": {}
             }));
         } else {

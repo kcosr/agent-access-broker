@@ -160,6 +160,13 @@ async fn fixture_handler(
             .unwrap(),
         &json!({})
     );
+    // The client names the Broker host and its version, not this adapter.
+    assert_eq!(
+        request
+            .pointer("/params/_meta/io.modelcontextprotocol~1clientInfo")
+            .unwrap(),
+        &json!({"name": "agent-access-broker-host", "version": env!("CARGO_PKG_VERSION")})
+    );
     assert!(!headers.contains_key("mcp-session-id"));
     assert!(!headers.contains_key("last-event-id"));
     let result = match request["method"].as_str().unwrap() {

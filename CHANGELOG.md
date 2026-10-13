@@ -138,6 +138,10 @@ All notable changes to this project are documented in this file.
   `3` instead of `1` when the configuration cannot be read, parsed, or
   validated at startup, matching `config validate`. Other startup and runtime
   failures still exit `1`, and the `Error: …` message is unchanged.
+- Imported MCP connections send `clientInfo`
+  `{"name": "agent-access-broker-host", "version": <host version>}`, naming the
+  Broker host implementation, instead of `agent-access-broker` with the adapter
+  package version.
 
 ### Fixed
 

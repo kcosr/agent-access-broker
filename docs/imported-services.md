@@ -260,6 +260,10 @@ select a lifecycle automatically under their existing operation deadline:
 | `2026-07-28` | `server/discover`, then requests with current protocol metadata and headers |
 | `2025-11-25` | `initialize`, validate the selected version and tools capability, then `notifications/initialized` |
 
+Both lifecycles identify the client as the Broker host implementation:
+`clientInfo` is `{"name": "agent-access-broker-host", "version": "<host version>"}`,
+whatever the executable that links the host is called.
+
 Each operation first probes the current version, which is preferred when both
 are available. A valid advertisement supporting only the previous revision, or
 a recognized rejection of the startup probe, permits one legacy initialization
