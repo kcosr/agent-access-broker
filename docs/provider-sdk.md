@@ -852,22 +852,16 @@ size it with
 The continuation then always fits the result it is returned in.
 
 A family whose tokens must be read during scope resolution, before the host
-admits a credential mode, declares `.opened_during_scope_resolution()`. Scope
-resolution binds the token with `family.bind_scope(&request, configuration)` and
-opens it with `ContinuationSigner::open_during_scope_resolution`. That binding
-covers only what scope resolution knows: the service, the action (unless
-shared), the execution context, the configuration and the provider's fields. The
-token's owner travels inside it as a keyed ownership commitment. Scope
-resolution accepts the token only when the current principal could own it, and
-after admission the provider opens it again with `open`, which checks the
-admitted credential mode and principal.
-
-### Low-level signing
-
-`OpaqueTokenSigner` and the `StableSigningKey` port sign arbitrary bytes with a
-service-scoped key; every signature also covers the service name, so one
-provider's tokens never verify for another. New token families use continuation
-envelopes rather than this primitive.
+admits a credential mode, declares `.opened_during_scope_resolution()`.
+Confluence draft handles name the space to authorize this way. Scope resolution
+binds the token with `family.bind_scope(&request, configuration)` and opens it
+with `ContinuationSigner::open_during_scope_resolution`. That binding covers
+only what scope resolution knows: the service, the action (unless shared), the
+execution context, the configuration and the provider's fields. The token's owner
+travels inside it as a keyed ownership commitment. Scope resolution accepts the
+token only when the current principal could own it, and after admission the
+provider opens it again with `open`, which checks the admitted credential mode
+and principal.
 
 ## Reasons and outcomes
 

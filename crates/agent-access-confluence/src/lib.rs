@@ -25,9 +25,7 @@ use agent_access_content::{append_adf_attribution, append_confluence_storage_att
 #[allow(unused_imports)]
 use agent_access_provider::*;
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveTime, SecondsFormat, Utc};
+use chrono::{NaiveDate, NaiveTime};
 use futures_util::stream;
 use regex::Regex;
 use reqwest::Method;
@@ -41,15 +39,11 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
-const DRAFT_HANDLE_TOKEN_CONTEXT: &[u8] = b"confluence-draft-handle/v1\0";
-const DRAFT_ATTACHMENT_LIST_TOKEN_CONTEXT: &[u8] = b"confluence-draft-attachment-list/v1\0";
-const ATTACHMENT_LIST_TOKEN_TTL_MINUTES: i64 = 15;
 const MAX_COMMENT_PARENT_DEPTH: usize = 16;
 const DRAFT_ATTACHMENT_LOOKUP_PAGE_SIZE: u32 = 200;
 const MAX_DRAFT_ATTACHMENT_LOOKUP_PAGES: usize = 100;
 const MAX_PAGE_ANCESTOR_LOOKUP_PAGES: usize = 100;
 const MAX_PAGE_DIRECT_CHILD_LOOKUP_PAGES: usize = 100;
-const DRAFT_HANDLE_PREFIX: &str = "aab_confluence_draft_v2_";
 const CONFLUENCE_ATTRIBUTION_START_MARKER: &str = "<!-- agent-access-attribution:start -->";
 const CONFLUENCE_ATTRIBUTION_END_MARKER: &str = "<!-- agent-access-attribution:end -->";
 
@@ -74,8 +68,7 @@ pub struct ConfluenceProvider {
     config: ConfluenceProviderConfig,
     limits: ProviderLimits,
     backend: Arc<dyn ConfluenceBackend>,
-    pagination_signer: ConfluenceTokenSigner,
-    /// Seals search and list continuations.
+    /// Seals list and search continuations and draft handles.
     continuations: ConfluenceContinuations,
     attribution: ProviderAttributionConfig,
 }
@@ -92,7 +85,6 @@ impl ConfluenceProvider {
             host.clients(),
         )?);
         Ok(Self {
-            pagination_signer: ConfluenceTokenSigner::new(host.stable_signing_key().cloned()),
             continuations: ConfluenceContinuations::new(
                 &config,
                 &limits,
@@ -111,7 +103,6 @@ impl ConfluenceProvider {
         backend: Arc<dyn ConfluenceBackend>,
     ) -> Self {
         Self {
-            pagination_signer: ConfluenceTokenSigner::new(None),
             continuations: ConfluenceContinuations::new(&config, &limits, None),
             config,
             limits,
@@ -135,7 +126,6 @@ impl ConfluenceProvider {
         stable_signing_key: Arc<dyn StableSigningKey>,
     ) -> Self {
         Self {
-            pagination_signer: ConfluenceTokenSigner::new(Some(stable_signing_key.clone())),
             continuations: ConfluenceContinuations::new(&config, &limits, Some(stable_signing_key)),
             config,
             limits,
@@ -143,78 +133,6 @@ impl ConfluenceProvider {
             attribution: ProviderAttributionConfig::default(),
         }
     }
-}
-
-/// Signs Confluence's cursors and draft handles with the broker's token
-/// signer, reporting failures as Confluence errors.
-#[derive(Clone)]
-struct ConfluenceTokenSigner(OpaqueTokenSigner);
-
-impl ConfluenceTokenSigner {
-    fn new(stable: Option<Arc<dyn StableSigningKey>>) -> Self {
-        Self(OpaqueTokenSigner::new(stable))
-    }
-
-    fn sign_with_context(&self, context: &[u8], payload: &[u8]) -> Result<String, ProviderError> {
-        self.0
-            .sign(context, payload)
-            .map_err(|_| pagination_signing_unavailable())
-    }
-
-    fn stable_sign_with_context(
-        &self,
-        context: &[u8],
-        payload: &[u8],
-    ) -> Result<String, ProviderError> {
-        if !self.0.is_durable() {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence draft actions require broker_tokens.hash_key_ref",
-            ));
-        }
-        self.0.sign_durable(context, payload).map_err(|_| {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence draft signing key is unavailable",
-            )
-        })
-    }
-
-    fn stable_verify_with_context(
-        &self,
-        context: &[u8],
-        payload: &[u8],
-        signature: &str,
-    ) -> Result<(), ProviderError> {
-        match self.0.verify_durable(context, payload, signature) {
-            Ok(true) => Ok(()),
-            _ => Err(invalid_draft_handle_error()),
-        }
-    }
-
-    fn verify_with_context(
-        &self,
-        context: &[u8],
-        payload: &[u8],
-        signature: &str,
-        invalid_message: &'static str,
-    ) -> Result<(), ProviderError> {
-        match self.0.verify(context, payload, signature) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(ProviderError::deny(
-                ReasonCode::InputInvalid,
-                invalid_message,
-            )),
-            Err(_) => Err(pagination_signing_unavailable()),
-        }
-    }
-}
-
-fn pagination_signing_unavailable() -> ProviderError {
-    ProviderError::error(
-        ReasonCode::UpstreamProtocolFailed,
-        "Confluence pagination signing key is unavailable",
-    )
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,347 +172,13 @@ enum ConfluenceDraftOrigin {
     Staged,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct ConfluenceDraftHandlePayload {
-    v: u8,
-    service: String,
-    content_type: ConfluenceDraftContentType,
-    content_id: String,
-    space: String,
-    space_id: String,
-    tenant_host: String,
-    origin: ConfluenceDraftOrigin,
-    parent_page_id: Option<String>,
-    parent_content_id: Option<String>,
-    base_version: Option<u64>,
-    credential_mode: String,
-    principal: Option<String>,
-    signing_key_class: String,
-}
-
-impl ConfluenceDraftHandlePayload {
-    fn new(
-        content_type: ConfluenceDraftContentType,
-        content: &ConfluenceDraftContent,
-        origin: ConfluenceDraftOrigin,
-        base_version: Option<u64>,
-        request: &AdmittedRequest,
-        tenant_host: &str,
-    ) -> Self {
-        let principal = (request.credential_mode() == CredentialMode::PerUser)
-            .then(|| request.identity().principal.clone());
-        Self {
-            v: 2,
-            service: "confluence".to_string(),
-            content_type,
-            parent_page_id: content.parent_page_id.clone(),
-            parent_content_id: (origin == ConfluenceDraftOrigin::Staged)
-                .then(|| content.id.clone()),
-            base_version,
-            content_id: content.id.clone(),
-            space: content.space.clone(),
-            space_id: content.space_id.clone(),
-            tenant_host: tenant_host.to_string(),
-            origin,
-            credential_mode: request.credential_mode().as_str().to_owned(),
-            principal,
-            signing_key_class: "broker_token_hash_key".to_string(),
+impl ConfluenceDraftOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Staged => "staged",
         }
     }
-
-    fn validate_unbound(
-        &self,
-        expected_type: ConfluenceDraftContentType,
-        expected_id: &str,
-        tenant_host: &str,
-    ) -> Result<(), ProviderError> {
-        if self.v != 2
-            || self.service != "confluence"
-            || self.content_type != expected_type
-            || self.content_id != expected_id
-            || self.tenant_host != tenant_host
-            || self.signing_key_class != "broker_token_hash_key"
-            || !is_space_key(&self.space)
-            || !is_page_id(&self.space_id)
-            || expected_type.validate_id(&self.content_id).is_err()
-            || self
-                .parent_page_id
-                .as_deref()
-                .is_some_and(|id| validate_page_id(id).is_err())
-            || (expected_type == ConfluenceDraftContentType::Blog && self.parent_page_id.is_some())
-            || self
-                .parent_content_id
-                .as_deref()
-                .is_some_and(|id| expected_type.validate_id(id).is_err())
-        {
-            return Err(invalid_draft_handle_error());
-        }
-        match self.origin {
-            ConfluenceDraftOrigin::New
-                if self.parent_content_id.is_none() && self.base_version.is_none() => {}
-            ConfluenceDraftOrigin::Staged
-                if self.parent_content_id.as_deref() == Some(self.content_id.as_str())
-                    && self.base_version.is_some_and(|version| version > 0) => {}
-            _ => return Err(invalid_draft_handle_error()),
-        }
-        if self.credential_mode != "service" && self.credential_mode != "per_user" {
-            return Err(invalid_draft_handle_error());
-        }
-        Ok(())
-    }
-
-    fn validate_for_request(
-        &self,
-        expected_type: ConfluenceDraftContentType,
-        expected_id: &str,
-        request: &AdmittedRequest,
-        tenant_host: &str,
-    ) -> Result<(), ProviderError> {
-        self.validate_unbound(expected_type, expected_id, tenant_host)?;
-        if self.credential_mode != request.credential_mode().as_str() {
-            return Err(invalid_draft_handle_error());
-        }
-        match self.credential_mode.as_str() {
-            "service" if self.principal.is_none() => Ok(()),
-            "per_user"
-                if self.principal.as_deref() == Some(request.identity().principal.as_str()) =>
-            {
-                Ok(())
-            }
-            _ => Err(invalid_draft_handle_error()),
-        }
-    }
-}
-
-fn encode_confluence_draft_handle(
-    signer: &ConfluenceTokenSigner,
-    payload: &ConfluenceDraftHandlePayload,
-) -> Result<String, ProviderError> {
-    let payload_bytes = serde_json::to_vec(payload).map_err(|_| {
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "failed to encode Confluence draft handle",
-        )
-    })?;
-    let payload_encoded = URL_SAFE_NO_PAD.encode(&payload_bytes);
-    let signature = signer.stable_sign_with_context(DRAFT_HANDLE_TOKEN_CONTEXT, &payload_bytes)?;
-    Ok(format!(
-        "{DRAFT_HANDLE_PREFIX}{payload_encoded}.{signature}"
-    ))
-}
-
-fn decode_confluence_draft_handle_unbound(
-    signer: &ConfluenceTokenSigner,
-    token: &str,
-    expected_type: ConfluenceDraftContentType,
-    expected_id: &str,
-    tenant_host: &str,
-) -> Result<ConfluenceDraftHandlePayload, ProviderError> {
-    let Some(raw) = token.strip_prefix(DRAFT_HANDLE_PREFIX) else {
-        return Err(invalid_draft_handle_error());
-    };
-    let (payload_part, signature_part) =
-        raw.split_once('.').ok_or_else(invalid_draft_handle_error)?;
-    if payload_part.is_empty() || signature_part.is_empty() || signature_part.contains('.') {
-        return Err(invalid_draft_handle_error());
-    }
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(payload_part)
-        .map_err(|_| invalid_draft_handle_error())?;
-    signer.stable_verify_with_context(
-        DRAFT_HANDLE_TOKEN_CONTEXT,
-        &payload_bytes,
-        signature_part,
-    )?;
-    let payload: ConfluenceDraftHandlePayload =
-        serde_json::from_slice(&payload_bytes).map_err(|_| invalid_draft_handle_error())?;
-    payload.validate_unbound(expected_type, expected_id, tenant_host)?;
-    Ok(payload)
-}
-
-fn decode_confluence_draft_handle(
-    signer: &ConfluenceTokenSigner,
-    token: &str,
-    expected_type: ConfluenceDraftContentType,
-    expected_id: &str,
-    request: &AdmittedRequest,
-    tenant_host: &str,
-) -> Result<ConfluenceDraftHandlePayload, ProviderError> {
-    let payload = decode_confluence_draft_handle_unbound(
-        signer,
-        token,
-        expected_type,
-        expected_id,
-        tenant_host,
-    )?;
-    payload.validate_for_request(expected_type, expected_id, request, tenant_host)?;
-    Ok(payload)
-}
-
-fn invalid_draft_handle_error() -> ProviderError {
-    ProviderError::deny(
-        ReasonCode::InvalidDraftHandle,
-        "Confluence draft handle is invalid",
-    )
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct ConfluenceDraftAttachmentListTokenPayload {
-    v: u8,
-    service: String,
-    action: String,
-    content_type: ConfluenceDraftContentType,
-    content_id: String,
-    space: String,
-    space_id: String,
-    tenant_host: String,
-    origin: ConfluenceDraftOrigin,
-    parent_page_id: Option<String>,
-    base_version: Option<u64>,
-    credential_mode: String,
-    principal: Option<String>,
-    next_position: String,
-    issued_at: String,
-    expires_at: String,
-}
-
-impl ConfluenceDraftAttachmentListTokenPayload {
-    fn new(
-        handle: &ConfluenceDraftHandlePayload,
-        request: &AdmittedRequest,
-        next_position: String,
-    ) -> Self {
-        let issued_at = Utc::now();
-        let expires_at = issued_at + ChronoDuration::minutes(ATTACHMENT_LIST_TOKEN_TTL_MINUTES);
-        Self {
-            v: 2,
-            service: "confluence".to_string(),
-            action: request.action().to_owned(),
-            content_type: handle.content_type,
-            content_id: handle.content_id.clone(),
-            space: handle.space.clone(),
-            space_id: handle.space_id.clone(),
-            tenant_host: handle.tenant_host.clone(),
-            origin: handle.origin,
-            parent_page_id: handle.parent_page_id.clone(),
-            base_version: handle.base_version,
-            credential_mode: handle.credential_mode.clone(),
-            principal: handle.principal.clone(),
-            next_position,
-            issued_at: issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-            expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-        }
-    }
-
-    fn validate_binding(
-        &self,
-        handle: &ConfluenceDraftHandlePayload,
-        request: &AdmittedRequest,
-    ) -> Result<(), ProviderError> {
-        if self.v != 2
-            || self.service != "confluence"
-            || self.action != request.action()
-            || self.content_type != handle.content_type
-            || self.content_id != handle.content_id
-            || self.space != handle.space
-            || self.space_id != handle.space_id
-            || self.tenant_host != handle.tenant_host
-            || self.origin != handle.origin
-            || self.parent_page_id != handle.parent_page_id
-            || self.base_version != handle.base_version
-            || self.credential_mode != handle.credential_mode
-            || self.principal != handle.principal
-            || self.credential_mode != request.credential_mode().as_str()
-        {
-            return Err(ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "Confluence draft attachment pagination token does not match this request",
-            ));
-        }
-        let expires_at = DateTime::parse_from_rfc3339(&self.expires_at)
-            .map_err(|_| {
-                ProviderError::deny(
-                    ReasonCode::InputInvalid,
-                    "Confluence draft attachment pagination token expiry is invalid",
-                )
-            })?
-            .with_timezone(&Utc);
-        if Utc::now() >= expires_at {
-            return Err(ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "Confluence draft attachment pagination token is expired",
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn encode_confluence_draft_attachment_list_token(
-    signer: &ConfluenceTokenSigner,
-    handle: &ConfluenceDraftHandlePayload,
-    request: &AdmittedRequest,
-    next_position: String,
-) -> Result<String, ProviderError> {
-    let payload = ConfluenceDraftAttachmentListTokenPayload::new(handle, request, next_position);
-    let payload_bytes = serde_json::to_vec(&payload).map_err(|_| {
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "failed to encode Confluence draft attachment pagination token",
-        )
-    })?;
-    let payload_encoded = URL_SAFE_NO_PAD.encode(&payload_bytes);
-    let signature =
-        signer.sign_with_context(DRAFT_ATTACHMENT_LIST_TOKEN_CONTEXT, &payload_bytes)?;
-    Ok(format!("{payload_encoded}.{signature}"))
-}
-
-fn decode_confluence_draft_attachment_list_token(
-    signer: &ConfluenceTokenSigner,
-    token: &str,
-    handle: &ConfluenceDraftHandlePayload,
-    request: &AdmittedRequest,
-) -> Result<String, ProviderError> {
-    let (payload_part, signature_part) = token.split_once('.').ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "Confluence draft attachment pagination token is malformed",
-        )
-    })?;
-    if payload_part.is_empty() || signature_part.is_empty() || signature_part.contains('.') {
-        return Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "Confluence draft attachment pagination token is malformed",
-        ));
-    }
-    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_part).map_err(|_| {
-        ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "Confluence draft attachment pagination token payload is invalid",
-        )
-    })?;
-    signer.verify_with_context(
-        DRAFT_ATTACHMENT_LIST_TOKEN_CONTEXT,
-        &payload_bytes,
-        signature_part,
-        "Confluence draft attachment pagination token signature is invalid",
-    )?;
-    let payload: ConfluenceDraftAttachmentListTokenPayload = serde_json::from_slice(&payload_bytes)
-        .map_err(|_| {
-            ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "Confluence draft attachment pagination token payload is invalid",
-            )
-        })?;
-    payload.validate_binding(handle, request)?;
-    decoded_attachment_next_position(Some(&payload.next_position), false).map_err(|_| {
-        ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "Confluence draft attachment pagination token position is invalid",
-        )
-    })?;
-    Ok(payload.next_position)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1653,62 +1237,6 @@ impl ConfluenceProvider {
                 let inputs = parse_page_draft_stage_inputs(inputs)?;
                 Err(page_scope_requires_lookup(inputs.page_id))
             }
-            "page.draft.view" | "page.draft.publish" => {
-                let inputs = parse_page_draft_body_format_inputs(action, inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.update" => {
-                let inputs = parse_page_draft_update_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.discard" => {
-                let inputs = parse_page_draft_discard_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.verify" => {
-                let inputs = parse_page_draft_verify_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.attachment.add" => {
-                let inputs = parse_page_draft_attachment_add_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.attachment.download" => {
-                let inputs = parse_page_draft_attachment_download_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "page.draft.attachment.list" => {
-                let inputs = parse_page_draft_attachment_list_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Page,
-                    &inputs.page_id,
-                    &inputs.draft_handle,
-                )
-            }
             "attachment.add" => {
                 let inputs = parse_attachment_add_inputs(inputs)?;
                 Err(page_scope_requires_lookup(inputs.page_id))
@@ -1756,62 +1284,6 @@ impl ConfluenceProvider {
                 let inputs = parse_blog_draft_stage_inputs(inputs)?;
                 Err(blog_scope_requires_lookup(inputs.blog_id))
             }
-            "blog.draft.view" | "blog.draft.publish" => {
-                let inputs = parse_blog_draft_body_format_inputs(action, inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.update" => {
-                let inputs = parse_blog_draft_update_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.discard" => {
-                let inputs = parse_blog_draft_discard_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.verify" => {
-                let inputs = parse_blog_draft_verify_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.attachment.add" => {
-                let inputs = parse_blog_draft_attachment_add_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.attachment.download" => {
-                let inputs = parse_blog_draft_attachment_download_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
-            "blog.draft.attachment.list" => {
-                let inputs = parse_blog_draft_attachment_list_inputs(inputs)?;
-                self.draft_handle_scopes(
-                    ConfluenceDraftContentType::Blog,
-                    &inputs.blog_id,
-                    &inputs.draft_handle,
-                )
-            }
             "blog.attachment.add" => {
                 let inputs = parse_blog_attachment_add_inputs(inputs)?;
                 Err(blog_scope_requires_lookup(inputs.blog_id))
@@ -1838,6 +1310,130 @@ impl ConfluenceProvider {
             )),
         }
     }
+}
+
+/// The draft handle a handle-based draft action presents, with the content
+/// type and ID its inputs name; `None` for every other action.
+fn draft_handle_reference(
+    action: &str,
+    inputs: &Value,
+) -> Result<Option<(ConfluenceDraftContentType, String, String)>, ProviderError> {
+    let reference = match action {
+        "page.draft.view" | "page.draft.publish" => {
+            let inputs = parse_page_draft_body_format_inputs(action, inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.update" => {
+            let inputs = parse_page_draft_update_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.discard" => {
+            let inputs = parse_page_draft_discard_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.verify" => {
+            let inputs = parse_page_draft_verify_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.attachment.add" => {
+            let inputs = parse_page_draft_attachment_add_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.attachment.download" => {
+            let inputs = parse_page_draft_attachment_download_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "page.draft.attachment.list" => {
+            let inputs = parse_page_draft_attachment_list_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Page,
+                inputs.page_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.view" | "blog.draft.publish" => {
+            let inputs = parse_blog_draft_body_format_inputs(action, inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.update" => {
+            let inputs = parse_blog_draft_update_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.discard" => {
+            let inputs = parse_blog_draft_discard_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.verify" => {
+            let inputs = parse_blog_draft_verify_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.attachment.add" => {
+            let inputs = parse_blog_draft_attachment_add_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.attachment.download" => {
+            let inputs = parse_blog_draft_attachment_download_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        "blog.draft.attachment.list" => {
+            let inputs = parse_blog_draft_attachment_list_inputs(inputs)?;
+            (
+                ConfluenceDraftContentType::Blog,
+                inputs.blog_id,
+                inputs.draft_handle,
+            )
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(reference))
 }
 
 impl ConfluenceProvider {
@@ -2171,6 +1767,13 @@ impl Provider for ConfluenceProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
+        if let Some((content_type, content_id, draft_handle)) =
+            draft_handle_reference(request.action(), request.inputs())?
+        {
+            return self
+                .draft_handle_scopes(&request, content_type, &content_id, &draft_handle)
+                .map(ScopeResolution::resources);
+        }
         self.lookup_scopes(
             request.action(),
             request.inputs(),
@@ -5291,11 +4894,11 @@ impl ConfluenceProvider {
             .next_page_token
             .as_deref()
             .map(|token| {
-                decode_confluence_draft_attachment_list_token(
-                    &self.pagination_signer,
-                    token,
+                self.continuations.open_draft_attachment_page(
+                    request.context(),
+                    credential,
                     &handle,
-                    request.admitted(),
+                    token,
                 )
             })
             .transpose()?;
@@ -5317,11 +4920,11 @@ impl ConfluenceProvider {
             .next_position
             .clone()
             .map(|position| {
-                encode_confluence_draft_attachment_list_token(
-                    &self.pagination_signer,
+                self.continuations.seal_draft_attachment_page(
+                    request.context(),
+                    credential,
                     &handle,
-                    request.admitted(),
-                    position,
+                    &position,
                 )
             })
             .transpose()?;
@@ -7159,11 +6762,11 @@ impl ConfluenceProvider {
             .next_page_token
             .as_deref()
             .map(|token| {
-                decode_confluence_draft_attachment_list_token(
-                    &self.pagination_signer,
-                    token,
+                self.continuations.open_draft_attachment_page(
+                    request.context(),
+                    credential,
                     &handle,
-                    request.admitted(),
+                    token,
                 )
             })
             .transpose()?;
@@ -7185,11 +6788,11 @@ impl ConfluenceProvider {
             .next_position
             .clone()
             .map(|position| {
-                encode_confluence_draft_attachment_list_token(
-                    &self.pagination_signer,
+                self.continuations.seal_draft_attachment_page(
+                    request.context(),
+                    credential,
                     &handle,
-                    request.admitted(),
-                    position,
+                    &position,
                 )
             })
             .transpose()?;
@@ -7766,38 +7369,41 @@ impl ConfluenceProvider {
             })))
     }
 
+    /// Resolves a draft action's space from its handle before policy: the
+    /// handle must be one this provider issued, in this execution context and
+    /// tenant, for the content the inputs name, and ownable by the caller.
     fn draft_handle_scopes(
         &self,
+        request: &ScopeRequest<'_>,
         content_type: ConfluenceDraftContentType,
         content_id: &str,
         draft_handle: &str,
     ) -> Result<ResourceScopes, ProviderError> {
-        let handle = decode_confluence_draft_handle_unbound(
-            &self.pagination_signer,
-            draft_handle,
+        let handle = self.continuations.open_draft_handle_for_scope(
+            request,
             content_type,
             content_id,
-            &self.config.tenant_host,
+            draft_handle,
         )?;
         let mut scopes = ResourceScopes::new();
         scopes.insert("space".to_string(), vec![handle.space]);
         Ok(scopes)
     }
 
+    /// Opens a handle after admission, for the admitted owner, and checks it
+    /// names the authorized space.
     fn decode_draft_handle_for_request(
         &self,
         content_type: ConfluenceDraftContentType,
         content_id: &str,
         draft_handle: &str,
         request: &AdmittedRequest,
-    ) -> Result<ConfluenceDraftHandlePayload, ProviderError> {
-        let handle = decode_confluence_draft_handle(
-            &self.pagination_signer,
-            draft_handle,
+    ) -> Result<ConfluenceDraftHandle, ProviderError> {
+        let handle = self.continuations.open_draft_handle(
+            request.context(),
             content_type,
             content_id,
-            request,
-            &self.config.tenant_host,
+            draft_handle,
         )?;
         ensure_authorized_draft_handle(&handle, request.resource_scopes()?)?;
         Ok(handle)
@@ -7811,15 +7417,9 @@ impl ConfluenceProvider {
         base_version: Option<u64>,
         request: &ProviderInvocation,
     ) -> Result<String, ProviderError> {
-        let payload = ConfluenceDraftHandlePayload::new(
-            content_type,
-            content,
-            origin,
-            base_version,
-            request.admitted(),
-            &self.config.tenant_host,
-        );
-        encode_confluence_draft_handle(&self.pagination_signer, &payload)
+        let handle = ConfluenceDraftHandle::new(content_type, content, origin, base_version);
+        self.continuations
+            .seal_draft_handle(request.context(), &handle)
     }
 
     async fn draft_page_response_with_space(
@@ -10720,7 +10320,7 @@ fn page_placement_failure_audit_partial(
 }
 
 fn ensure_authorized_draft_handle(
-    handle: &ConfluenceDraftHandlePayload,
+    handle: &ConfluenceDraftHandle,
     scopes: &ResourceScopes,
 ) -> Result<(), ProviderError> {
     let authorized_space = authorized_single_scope(scopes, "space")?;
@@ -10768,7 +10368,7 @@ fn require_draft_version_one(content: &ConfluenceDraftContent) -> Result<(), Pro
     }
 }
 
-fn draft_publish_version(handle: &ConfluenceDraftHandlePayload) -> Result<u64, ProviderError> {
+fn draft_publish_version(handle: &ConfluenceDraftHandle) -> Result<u64, ProviderError> {
     match handle.origin {
         ConfluenceDraftOrigin::New => Ok(1),
         ConfluenceDraftOrigin::Staged => handle
@@ -10781,7 +10381,7 @@ fn draft_publish_version(handle: &ConfluenceDraftHandlePayload) -> Result<u64, P
 
 fn ensure_draft_content_matches_handle(
     content: &ConfluenceDraftContent,
-    handle: &ConfluenceDraftHandlePayload,
+    handle: &ConfluenceDraftHandle,
 ) -> Result<(), ProviderError> {
     require_draft_content(content, handle.content_type)?;
     if content.id != handle.content_id
@@ -10797,7 +10397,7 @@ fn ensure_draft_content_matches_handle(
     Ok(())
 }
 
-fn reject_staged_draft_discard(handle: &ConfluenceDraftHandlePayload) -> Result<(), ProviderError> {
+fn reject_staged_draft_discard(handle: &ConfluenceDraftHandle) -> Result<(), ProviderError> {
     if handle.origin == ConfluenceDraftOrigin::Staged {
         return Err(ProviderError::deny(
             ReasonCode::ServiceActionDenied,
@@ -10807,9 +10407,7 @@ fn reject_staged_draft_discard(handle: &ConfluenceDraftHandlePayload) -> Result<
     Ok(())
 }
 
-fn reject_staged_draft_attachment_add(
-    handle: &ConfluenceDraftHandlePayload,
-) -> Result<(), ProviderError> {
+fn reject_staged_draft_attachment_add(handle: &ConfluenceDraftHandle) -> Result<(), ProviderError> {
     if handle.origin == ConfluenceDraftOrigin::Staged {
         return Err(ProviderError::deny(
             ReasonCode::ServiceActionDenied,
@@ -10820,7 +10418,7 @@ fn reject_staged_draft_attachment_add(
 }
 
 fn reject_staged_draft_attachment_read(
-    handle: &ConfluenceDraftHandlePayload,
+    handle: &ConfluenceDraftHandle,
 ) -> Result<(), ProviderError> {
     if handle.origin == ConfluenceDraftOrigin::Staged {
         return Err(ProviderError::deny(
@@ -12407,7 +12005,7 @@ fn validate_blog_body_format(value: &str) -> Result<(), ProviderError> {
 }
 
 fn validate_draft_handle_input(value: &str) -> Result<(), ProviderError> {
-    if value.starts_with(DRAFT_HANDLE_PREFIX) && value.len() <= 8192 {
+    if value.starts_with(DRAFT_HANDLE_PREFIX) && value.len() <= DRAFT_HANDLE_MAX_BYTES {
         Ok(())
     } else {
         Err(invalid_draft_handle_error())

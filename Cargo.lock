@@ -201,7 +201,6 @@ dependencies = [
  "agent-access-content",
  "agent-access-provider",
  "async-trait",
- "base64 0.22.1",
  "bytes",
  "chrono",
  "futures-util",

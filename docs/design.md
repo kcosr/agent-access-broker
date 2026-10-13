@@ -376,11 +376,10 @@ on redirect targets.
 
 The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
-resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
-page tokens, Gmail and Jira search page tokens, and Confluence search cursors
-and attachment and comment list tokens use it; Confluence keeps its own handling
-for draft handles, which the Confluence documentation describes. A provider that
-uses the envelope declares each token family once: its service and purpose, a
+resumable cursor, page token or handle. Every native provider that returns such
+a token uses it: CloudBees CI log cursors, GitLab REST page tokens, Gmail and
+Jira search page tokens, and Confluence search cursors, list tokens and draft
+handles. A provider declares each token family once: its service and purpose, a
 version, an explicit payload cap (a family relaying an upstream token may
 instead derive it at construction from a configured limit), an optional expiry,
 and a signing lifetime:
@@ -419,12 +418,12 @@ arrives in a bounded upstream response and the continuation leaves in a
 bounded result.
 
 A family whose tokens are read during scope resolution, before the host admits
-a credential mode, binds only what scope resolution knows: service, action or
-handle scope, execution context, configuration and the provider's fields. Its
-owner travels in the token as a keyed ownership commitment: scope resolution
-accepts the token only when the current principal could own it, and the
-provider opens it again after admission, when the commitment must match the
-admitted credential mode and principal.
+a credential mode (Confluence draft handles), binds only what scope resolution
+knows: service, action or handle scope, execution context, configuration and
+the provider's fields. Its owner travels in the token as a keyed ownership
+commitment: scope resolution accepts the token only when the current principal
+could own it, and the provider opens it again after admission, when the
+commitment must match the admitted credential mode and principal.
 
 ### Assembly identity
 

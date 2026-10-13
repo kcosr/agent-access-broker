@@ -358,6 +358,10 @@ agent-access confluence page draft publish 123456789 --draft-handle '<draftHandl
 agent-access confluence page draft discard 123456789 --draft-handle '<draftHandle>'
 ```
 
+Pass `draftHandle` exactly as returned. It does not expire, but it works only in
+the execution context that created it, and a handle created with a per-user
+credential works only for that user.
+
 All twenty Confluence current page/blog, draft, and comment writes use exactly
 one of `--content` or `--content-file` plus required `--content-format`.
 Current page create/update allow

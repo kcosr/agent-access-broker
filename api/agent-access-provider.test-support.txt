@@ -1252,25 +1252,6 @@ impl core::marker::Unpin for agent_access_provider::OAuthTokenEncoding
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenEncoding
-#[non_exhaustive] pub enum agent_access_provider::OpaqueTokenSigner
-pub agent_access_provider::OpaqueTokenSigner::ProcessLocal(alloc::sync::Arc<[u8; 32]>)
-pub agent_access_provider::OpaqueTokenSigner::Stable(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>)
-impl agent_access_provider::OpaqueTokenSigner
-pub fn agent_access_provider::OpaqueTokenSigner::is_durable(&self) -> bool
-pub fn agent_access_provider::OpaqueTokenSigner::new(core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> Self
-pub fn agent_access_provider::OpaqueTokenSigner::sign(&self, &[u8], &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::sign_durable(&self, &[u8], &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::verify(&self, &[u8], &[u8], &str) -> core::result::Result<bool, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::verify_durable(&self, &[u8], &[u8], &str) -> core::result::Result<bool, agent_access_provider::SigningError>
-impl core::clone::Clone for agent_access_provider::OpaqueTokenSigner
-pub fn agent_access_provider::OpaqueTokenSigner::clone(&self) -> agent_access_provider::OpaqueTokenSigner
-impl core::marker::Freeze for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Send for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Sync for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Unpin for agent_access_provider::OpaqueTokenSigner
-impl core::marker::UnsafeUnpin for agent_access_provider::OpaqueTokenSigner
-impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OpaqueTokenSigner
-impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::OpaqueTokenSigner
 pub enum agent_access_provider::ProviderFailureStatus
 pub agent_access_provider::ProviderFailureStatus::BadGateway
 pub agent_access_provider::ProviderFailureStatus::BadRequest
@@ -3868,7 +3849,6 @@ enum agent_access_provider::OAuthDialectError: non-exhaustive
 enum agent_access_provider::OAuthRotation: non-exhaustive
 enum agent_access_provider::OAuthScopeMode: non-exhaustive
 enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
-enum agent_access_provider::OpaqueTokenSigner: non-exhaustive
 enum agent_access_provider::ProviderFailureStatus: exhaustive
 enum agent_access_provider::ProviderResultStreamSource: exhaustive
 enum agent_access_provider::ProviderStateError: non-exhaustive

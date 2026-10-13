@@ -1,8 +1,9 @@
-//! Confluence list and search continuations: bindings, lifetimes, bounds,
-//! and search pages end to end.
+//! Confluence continuation families: bindings, lifetimes, bounds, draft
+//! handle ownership at scope resolution and after admission, and search
+//! continuations end to end.
 use super::*;
 use agent_access_provider::test_support::{
-    InvocationBuilder, basic_credential, bearer_credential, test_signing_key,
+    InvocationBuilder, ScopeRequestFixture, basic_credential, bearer_credential, test_signing_key,
 };
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -87,16 +88,39 @@ fn comment_list() -> ConfluenceCommentListBinding {
     }
 }
 
-/// The three list families, sealed and opened through the provider's
+fn draft_handle(content_type: ConfluenceDraftContentType) -> ConfluenceDraftHandle {
+    let id = match content_type {
+        ConfluenceDraftContentType::Page => "123456",
+        ConfluenceDraftContentType::Blog => "7777",
+    };
+    ConfluenceDraftHandle {
+        content_type,
+        content_id: id.to_string(),
+        space: "ENG".to_string(),
+        space_id: "98765".to_string(),
+        origin: ConfluenceDraftOrigin::New,
+        parent_page_id: (content_type == ConfluenceDraftContentType::Page)
+            .then(|| "55555".to_string()),
+        base_version: None,
+    }
+}
+
+/// The four list families, sealed and opened through the provider's
 /// methods for one fixed resource each.
 #[derive(Debug, Clone, Copy)]
 enum List {
     Attachment,
     BlogAttachment,
     Comment,
+    DraftAttachment,
 }
 
-const LISTS: [List; 3] = [List::Attachment, List::BlogAttachment, List::Comment];
+const LISTS: [List; 4] = [
+    List::Attachment,
+    List::BlogAttachment,
+    List::Comment,
+    List::DraftAttachment,
+];
 
 impl List {
     fn action(self) -> &'static str {
@@ -104,6 +128,7 @@ impl List {
             Self::Attachment => "attachment.list",
             Self::BlogAttachment => "blog.attachment.list",
             Self::Comment => "page.footer_comment.list",
+            Self::DraftAttachment => "page.draft.attachment.list",
         }
     }
 
@@ -137,6 +162,12 @@ impl List {
                 &comment_list(),
                 self.position(),
             ),
+            Self::DraftAttachment => continuations.seal_draft_attachment_page(
+                context,
+                credential,
+                &draft_handle(ConfluenceDraftContentType::Page),
+                self.position(),
+            ),
         }
     }
 
@@ -158,6 +189,12 @@ impl List {
             Self::Comment => {
                 continuations.open_comment_page(context, credential, &comment_list(), token)
             }
+            Self::DraftAttachment => continuations.open_draft_attachment_page(
+                context,
+                credential,
+                &draft_handle(ConfluenceDraftContentType::Page),
+                token,
+            ),
         }
     }
 
@@ -198,7 +235,7 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
             "{list:?}"
         );
 
-        let changed_requests = vec![
+        let mut changed_requests = vec![
             InvocationBuilder::from(request.clone())
                 .execution_context("external")
                 .build(),
@@ -208,13 +245,21 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
             InvocationBuilder::from(request.clone())
                 .action("page.inline_comment.list")
                 .build(),
-            InvocationBuilder::from(request.clone())
-                .identity(identity("agent-two"))
-                .build(),
-            InvocationBuilder::from(request.clone())
-                .identity(InvocationIdentity::new("agent-one".to_string(), false))
-                .build(),
         ];
+        if !matches!(list, List::DraftAttachment) {
+            // Service-mode draft attachment listings are shared like their
+            // handle; every other list belongs to its caller.
+            changed_requests.push(
+                InvocationBuilder::from(request.clone())
+                    .identity(identity("agent-two"))
+                    .build(),
+            );
+            changed_requests.push(
+                InvocationBuilder::from(request.clone())
+                    .identity(InvocationIdentity::new("agent-one".to_string(), false))
+                    .build(),
+            );
+        }
         for changed in changed_requests {
             assert_list_rejection(
                 list.open(&continuations, &changed, &credential, &token),
@@ -258,6 +303,7 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
                 (List::Attachment, List::Attachment)
                     | (List::BlogAttachment, List::BlogAttachment)
                     | (List::Comment, List::Comment)
+                    | (List::DraftAttachment, List::DraftAttachment)
             ) {
                 assert_list_rejection(
                     other_list.open(&continuations, &request, &credential, &token),
@@ -265,6 +311,40 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn draft_attachment_listings_are_shared_in_service_mode_and_owned_per_user() {
+    let continuations = signers(Some(test_signing_key(5)));
+    let credential = credential();
+    let list = List::DraftAttachment;
+    let request = invocation(list.action());
+    let token = list.seal(&continuations, &request, &credential).unwrap();
+    let other_service = InvocationBuilder::from(request.clone())
+        .identity(identity("agent-two"))
+        .build();
+    assert_eq!(
+        list.open(&continuations, &other_service, &credential, &token)
+            .unwrap(),
+        list.position()
+    );
+    let per_user = InvocationBuilder::from(request.clone())
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    let owned = list.seal(&continuations, &per_user, &credential).unwrap();
+    assert_eq!(
+        list.open(&continuations, &per_user, &credential, &owned)
+            .unwrap(),
+        list.position()
+    );
+    for other in [
+        InvocationBuilder::from(per_user.clone())
+            .identity(identity("agent-two"))
+            .build(),
+        request,
+    ] {
+        assert_list_rejection(list.open(&continuations, &other, &credential, &owned), list);
     }
 }
 
@@ -590,6 +670,232 @@ fn search_continuations_expire_after_fifteen_minutes_without_skew() {
         open(issued - Duration::from_secs(1)),
         Err(ContinuationError::Invalid)
     );
+}
+
+fn scope_fixture(
+    action: &str,
+    principal: &str,
+    context: &str,
+    inputs: Value,
+) -> ScopeRequestFixture {
+    ScopeRequestFixture::new("confluence", action, inputs)
+        .execution_context(context)
+        .identity(identity(principal))
+}
+
+fn assert_invalid_handle<T: std::fmt::Debug>(result: Result<T, ProviderError>) {
+    let error = result.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::InvalidDraftHandle);
+    assert_eq!(error.decision(), Decision::Deny);
+}
+
+#[test]
+fn draft_handles_resolve_scope_only_for_possible_owners() {
+    let continuations = signers(Some(test_signing_key(7)));
+    let handle = draft_handle(ConfluenceDraftContentType::Page);
+    let service = invocation("page.draft.create");
+    let per_user = InvocationBuilder::from(service.clone())
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    let service_token = continuations
+        .seal_draft_handle(service.context(), &handle)
+        .unwrap();
+    let per_user_token = continuations
+        .seal_draft_handle(per_user.context(), &handle)
+        .unwrap();
+    let open = |continuations: &ConfluenceContinuations,
+                principal: &str,
+                context: &str,
+                content_id: &str,
+                token: &str| {
+        let fixture = scope_fixture("page.draft.view", principal, context, json!({}));
+        continuations.open_draft_handle_for_scope(
+            &fixture.request(),
+            ConfluenceDraftContentType::Page,
+            content_id,
+            token,
+        )
+    };
+    // Service-mode handles resolve for any principal; per-user handles only
+    // for their owner.
+    for principal in ["agent-one", "agent-two"] {
+        assert_eq!(
+            open(
+                &continuations,
+                principal,
+                "internal",
+                "123456",
+                &service_token
+            )
+            .unwrap(),
+            handle
+        );
+    }
+    assert_eq!(
+        open(
+            &continuations,
+            "agent-one",
+            "internal",
+            "123456",
+            &per_user_token
+        )
+        .unwrap(),
+        handle
+    );
+    assert_invalid_handle(open(
+        &continuations,
+        "agent-two",
+        "internal",
+        "123456",
+        &per_user_token,
+    ));
+    // Another execution context, content or tenant.
+    assert_invalid_handle(open(
+        &continuations,
+        "agent-one",
+        "external",
+        "123456",
+        &service_token,
+    ));
+    assert_invalid_handle(open(
+        &continuations,
+        "agent-one",
+        "internal",
+        "654321",
+        &service_token,
+    ));
+    let mut other_tenant = config();
+    other_tenant.tenant_host = "other.atlassian.net".to_string();
+    let other_tenant = ConfluenceContinuations::new(
+        &other_tenant,
+        &ProviderLimits::default(),
+        Some(test_signing_key(7)),
+    );
+    assert_invalid_handle(open(
+        &other_tenant,
+        "agent-one",
+        "internal",
+        "123456",
+        &service_token,
+    ));
+    // A gateway route change keeps the tenant, so durable handles survive it.
+    let mut gateway = config();
+    gateway
+        .allowed_upstream_hosts
+        .push("https://api.atlassian.com/ex/confluence/**".to_string());
+    let gateway = ConfluenceContinuations::new(
+        &gateway,
+        &ProviderLimits::default(),
+        Some(test_signing_key(7)),
+    );
+    assert_eq!(
+        open(&gateway, "agent-one", "internal", "123456", &service_token).unwrap(),
+        handle
+    );
+    // Without the durable key, scope resolution fails explicitly.
+    let error = open(
+        &signers(None),
+        "agent-one",
+        "internal",
+        "123456",
+        &service_token,
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(
+        error.message,
+        "Confluence draft actions require broker_tokens.hash_key_ref"
+    );
+}
+
+#[test]
+fn draft_handles_bind_content_type_and_validate_their_facts() {
+    let continuations = signers(Some(test_signing_key(7)));
+    let request = invocation("blog.draft.create");
+    let blog = draft_handle(ConfluenceDraftContentType::Blog);
+    let token = continuations
+        .seal_draft_handle(request.context(), &blog)
+        .unwrap();
+    assert_eq!(
+        continuations
+            .open_draft_handle(
+                request.context(),
+                ConfluenceDraftContentType::Blog,
+                "7777",
+                &token
+            )
+            .unwrap(),
+        blog
+    );
+    assert_invalid_handle(continuations.open_draft_handle(
+        request.context(),
+        ConfluenceDraftContentType::Page,
+        "7777",
+        &token,
+    ));
+    // Facts that a broker never mints are rejected even when authentic.
+    let mut staged_without_version = draft_handle(ConfluenceDraftContentType::Page);
+    staged_without_version.origin = ConfluenceDraftOrigin::Staged;
+    let mut blog_with_parent = blog.clone();
+    blog_with_parent.parent_page_id = Some("55555".to_string());
+    let mut new_with_version = draft_handle(ConfluenceDraftContentType::Page);
+    new_with_version.base_version = Some(3);
+    for invalid in [staged_without_version, blog_with_parent, new_with_version] {
+        let token = continuations
+            .seal_draft_handle(request.context(), &invalid)
+            .unwrap();
+        assert_invalid_handle(continuations.open_draft_handle(
+            request.context(),
+            invalid.content_type,
+            &invalid.content_id,
+            &token,
+        ));
+    }
+    let mut staged = draft_handle(ConfluenceDraftContentType::Page);
+    staged.origin = ConfluenceDraftOrigin::Staged;
+    staged.base_version = Some(4);
+    let token = continuations
+        .seal_draft_handle(request.context(), &staged)
+        .unwrap();
+    assert_eq!(
+        continuations
+            .open_draft_handle(
+                request.context(),
+                ConfluenceDraftContentType::Page,
+                "123456",
+                &token
+            )
+            .unwrap(),
+        staged
+    );
+}
+
+#[tokio::test]
+async fn provider_resolves_draft_scopes_from_handles_for_possible_owners() {
+    let provider = ConfluenceProvider::with_backend_and_signing_key(
+        config(),
+        ProviderLimits::default(),
+        Arc::new(SearchBackend::default()),
+        test_signing_key(7),
+    );
+    let handle = draft_handle(ConfluenceDraftContentType::Page);
+    let per_user = InvocationBuilder::from(invocation("page.draft.create"))
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    let token = provider
+        .continuations
+        .seal_draft_handle(per_user.context(), &handle)
+        .unwrap();
+    let inputs = json!({ "pageId": "123456", "draftHandle": token, "bodyFormat": "storage" });
+    let owner = scope_fixture("page.draft.view", "agent-one", "internal", inputs.clone());
+    let resolution = provider.resolve_scopes(owner.request()).await.unwrap();
+    assert_eq!(
+        resolution.scopes().get("space"),
+        Some(&vec!["ENG".to_string()])
+    );
+    let other = scope_fixture("page.draft.view", "agent-two", "internal", inputs);
+    assert_invalid_handle(provider.resolve_scopes(other.request()).await);
 }
 
 /// Records the upstream cursor of every search and returns `next` cursors

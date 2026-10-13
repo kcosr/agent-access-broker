@@ -7,9 +7,11 @@ use crate::host::{
 use crate::{
     BuildContext, ClientProfile, CorrelationContext, CredentialView, DelegatedBindingId,
     EgressDeclaration, EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity,
-    OpaqueTokenSigner, Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest,
-    ServiceDescriptor, ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
+    Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor,
+    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
 };
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -259,7 +261,7 @@ pub fn test_signing_key(byte: u8) -> Arc<dyn StableSigningKey> {
 
     impl StableSigningKey for FixedKey {
         fn hmac_base64url(&self, context: &[u8], payload: &[u8]) -> Result<String, SigningError> {
-            OpaqueTokenSigner::ProcessLocal(Arc::new(self.0)).sign(context, payload)
+            Ok(URL_SAFE_NO_PAD.encode(crate::signing::local_hmac(&self.0, context, payload)))
         }
     }
 

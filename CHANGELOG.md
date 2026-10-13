@@ -236,6 +236,11 @@ All notable changes to this project are documented in this file.
   `BrokerBuildStatus` is now `agent_access_broker_host::BrokerBuildStatus`; and
   read selected kinds, resource types, route specifications and configured
   service descriptors from `BrokerComposition`.
+- The provider SDK no longer exports `OpaqueTokenSigner`. Seal handles and
+  cursors with a `ContinuationFamily` and `ContinuationSigner`; a
+  `ContinuationLifetime::Durable` family replaces `sign_durable` and
+  `verify_durable`. `StableSigningKey` and `host::service_signing_key` remain
+  the host's signing-key port.
 
 ### Added
 

@@ -158,9 +158,12 @@ authorization:
   and effective parent in their common space, then verifies hierarchy and
   sibling position by readback.
 - Confluence draft actions resolve policy scope from a broker-signed draft handle
-  after draft creation or staging. Per-user handles bind the caller principal;
-  service-mode handles do not bind a principal so policy-approved service-mode
-  draft handoff remains possible.
+  after draft creation or staging. Handles are bound to the execution context,
+  tenant, and content. Per-user handles belong to the caller principal;
+  service-mode handles belong to no principal so policy-approved service-mode
+  draft handoff remains possible. Scope resolution accepts a handle only for a
+  caller who could own it, and the handle is checked again against the admitted
+  credential mode and principal.
 - The broker first checks that the caller has at least one grant for the
   requested service/action, reducing the chance that lookup behavior becomes a
   discovery oracle.

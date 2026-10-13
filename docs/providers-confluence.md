@@ -279,14 +279,30 @@ Confluence credential for both pre-authorization metadata lookup and any
 provider-side execution-time confirmation.
 
 Confluence draft grants require `[broker_tokens].hash_key_ref` to resolve to a
-valid 32-byte base64url signing key. Draft handles are stable HMAC tokens with no
-TTL, signed under that key scoped to the `confluence` service, so no other
-backend's tokens verify as Confluence handles. They bind service, content type, content ID, space key, space ID, tenant
-host, origin (`new` or `staged`), credential mode, and page-draft parent
-placement. Per-user handles also bind the caller principal; service-mode handles
-intentionally do not bind a principal so a service-mode draft can be handed off
-within policy. Page draft view, update, publish, verify, discard, and attachment
-operations re-read the draft and reject placement drift from the bound parent.
+valid 32-byte base64url signing key. A `draftHandle` (prefix
+`aab_confluence_draft_v3_`) is a durable broker continuation with no expiry,
+signed only with that key scoped to the `confluence` service, so it survives
+reloads and restarts and no other backend's tokens verify as Confluence handles.
+Without the key, minting or presenting a handle fails explicitly with
+`upstream_protocol_failed` ("Confluence draft actions require
+broker_tokens.hash_key_ref").
+
+A handle carries the draft's space key, space ID, origin (`new` or `staged`),
+staged base version, and page-draft parent placement. It is bound to the
+`confluence` service, the execution context it was issued in, the tenant host,
+and the content type and ID the action names; any draft action of that content
+accepts it. Its owner travels inside it as a keyed commitment: a handle minted
+in per-user mode belongs to that principal in per-user mode, while a service-mode
+handle intentionally belongs to no principal, so a service-mode draft can be
+handed off to any principal admitted in service mode within policy. Before
+policy, scope resolution verifies the handle, accepts it only when the caller
+could own it, and authorizes its space; after admission the handle is opened
+again and must match the admitted credential mode and principal. Any other
+context, tenant, content, owner, key, or handle version is rejected with
+`invalid_draft_handle`. Handles from earlier versions are not accepted; create
+or stage the draft again. Page draft view, update, publish, verify, discard, and
+attachment operations re-read the draft and reject placement drift from the
+bound parent.
 
 `basic_api_token` credentials use the tenant bases
 (`https://<tenant_host>/wiki/rest/api/` and, for blog metadata/writes/listing,
@@ -891,11 +907,11 @@ rejected with `input_invalid`; every page is authorized again. Confluence
 positions are bounded only by `limits.max_upstream_response_bytes`, as for
 search.
 
-Draft attachment list pagination tokens use the same 15-minute continuation
-model but bind the signed draft handle facts, the draft action, content type,
-space, parent-page placement, credential mode, optional per-user principal, and
-upstream `next_position`. They are valid only for the same draft handle and
-command.
+Draft attachment list pagination tokens use the same continuation model but bind
+the draft handle facts (content type and ID, space key and ID, origin, base
+version, and parent-page placement) instead of the page. They follow the
+handle's ownership: a service-mode listing may be continued by any principal
+admitted in service mode, while a per-user listing belongs to its principal.
 
 ## `verify`
 
