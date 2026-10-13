@@ -1021,6 +1021,31 @@ impl core::marker::Unpin for agent_access_provider::LookupRequirement
 impl core::marker::UnsafeUnpin for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LookupRequirement
+#[non_exhaustive] pub enum agent_access_provider::MutationStatus
+pub agent_access_provider::MutationStatus::AppliedUnverified
+pub agent_access_provider::MutationStatus::NotApplied
+pub agent_access_provider::MutationStatus::Unknown
+impl agent_access_provider::MutationStatus
+pub const fn agent_access_provider::MutationStatus::as_str(self) -> &'static str
+pub const fn agent_access_provider::MutationStatus::retry_safe(self) -> bool
+impl core::clone::Clone for agent_access_provider::MutationStatus
+pub fn agent_access_provider::MutationStatus::clone(&self) -> agent_access_provider::MutationStatus
+impl core::cmp::Eq for agent_access_provider::MutationStatus
+impl core::cmp::PartialEq for agent_access_provider::MutationStatus
+pub fn agent_access_provider::MutationStatus::eq(&self, &agent_access_provider::MutationStatus) -> bool
+impl core::fmt::Debug for agent_access_provider::MutationStatus
+pub fn agent_access_provider::MutationStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::MutationStatus
+pub fn agent_access_provider::MutationStatus::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for agent_access_provider::MutationStatus
+impl core::marker::StructuralPartialEq for agent_access_provider::MutationStatus
+impl core::marker::Freeze for agent_access_provider::MutationStatus
+impl core::marker::Send for agent_access_provider::MutationStatus
+impl core::marker::Sync for agent_access_provider::MutationStatus
+impl core::marker::Unpin for agent_access_provider::MutationStatus
+impl core::marker::UnsafeUnpin for agent_access_provider::MutationStatus
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::MutationStatus
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MutationStatus
 #[non_exhaustive] pub enum agent_access_provider::OAuthClientAuth
 pub agent_access_provider::OAuthClientAuth::ClientSecretBasic
 pub agent_access_provider::OAuthClientAuth::ClientSecretPost
@@ -2420,6 +2445,31 @@ impl core::marker::Unpin for agent_access_provider::MultipartUploadSpec
 impl core::marker::UnsafeUnpin for agent_access_provider::MultipartUploadSpec
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::MultipartUploadSpec
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MultipartUploadSpec
+pub struct agent_access_provider::MutationReceipt
+impl agent_access_provider::MutationReceipt
+pub fn agent_access_provider::MutationReceipt::applied_unverified(impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
+pub const fn agent_access_provider::MutationReceipt::not_applied() -> Self
+pub fn agent_access_provider::MutationReceipt::retry_safe(&self) -> bool
+pub fn agent_access_provider::MutationReceipt::safe_locators(&self) -> core::option::Option<&serde_json::value::Value>
+pub fn agent_access_provider::MutationReceipt::status(&self) -> agent_access_provider::MutationStatus
+pub const fn agent_access_provider::MutationReceipt::unknown() -> Self
+pub fn agent_access_provider::MutationReceipt::verification_stage(&self) -> core::option::Option<&str>
+pub fn agent_access_provider::MutationReceipt::write_into(&self, &mut serde_json::value::Value)
+impl core::clone::Clone for agent_access_provider::MutationReceipt
+pub fn agent_access_provider::MutationReceipt::clone(&self) -> agent_access_provider::MutationReceipt
+impl core::cmp::Eq for agent_access_provider::MutationReceipt
+impl core::cmp::PartialEq for agent_access_provider::MutationReceipt
+pub fn agent_access_provider::MutationReceipt::eq(&self, &agent_access_provider::MutationReceipt) -> bool
+impl core::fmt::Debug for agent_access_provider::MutationReceipt
+pub fn agent_access_provider::MutationReceipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::MutationReceipt
+impl core::marker::Freeze for agent_access_provider::MutationReceipt
+impl core::marker::Send for agent_access_provider::MutationReceipt
+impl core::marker::Sync for agent_access_provider::MutationReceipt
+impl core::marker::Unpin for agent_access_provider::MutationReceipt
+impl core::marker::UnsafeUnpin for agent_access_provider::MutationReceipt
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::MutationReceipt
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MutationReceipt
 #[non_exhaustive] pub struct agent_access_provider::NamespaceSelectorDescriptor
 impl agent_access_provider::NamespaceSelectorDescriptor
 pub const fn agent_access_provider::NamespaceSelectorDescriptor::example(&self) -> &'static str
@@ -2747,6 +2797,8 @@ pub fn agent_access_provider::ProviderError::partially_applied_before_throttling
 pub fn agent_access_provider::ProviderError::unverified_after_throttling(self, &str, &str, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderError::unverified_if_throttled(self, &str, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderError::with_upstream_rate_limit(self, &str, core::option::Option<agent_access_provider::UpstreamRetryAfter>) -> Self
+impl agent_access_provider::ProviderError
+pub fn agent_access_provider::ProviderError::with_mutation_receipt(self, agent_access_provider::MutationReceipt) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderError
 pub fn agent_access_provider::ProviderError::clone(&self) -> agent_access_provider::ProviderError
 impl core::cmp::Eq for agent_access_provider::ProviderError
@@ -3797,6 +3849,7 @@ enum agent_access_provider::HookPhase: non-exhaustive
 enum agent_access_provider::InvocationAuthority: non-exhaustive
 enum agent_access_provider::IssuedRefreshToken: exhaustive
 enum agent_access_provider::LookupRequirement: non-exhaustive
+enum agent_access_provider::MutationStatus: non-exhaustive
 enum agent_access_provider::OAuthClientAuth: non-exhaustive
 enum agent_access_provider::OAuthDialectError: non-exhaustive
 enum agent_access_provider::OAuthRotation: non-exhaustive
@@ -3858,6 +3911,7 @@ struct agent_access_provider::InvocationIdentity: named fields, non-exhaustive
 struct agent_access_provider::InvocationScope: named fields, private fields
 struct agent_access_provider::ModuleMetadata: named fields, private fields, non-exhaustive
 struct agent_access_provider::MultipartUploadSpec: named fields, non-exhaustive
+struct agent_access_provider::MutationReceipt: named fields, private fields
 struct agent_access_provider::NamespaceSelectorDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::NamespaceSelectorMetadata: named fields, non-exhaustive
 struct agent_access_provider::OAuthAdapter: tuple fields, private fields
