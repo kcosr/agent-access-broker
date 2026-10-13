@@ -10,6 +10,8 @@ impl agent_access_broker_host::test_support::AuditStoreView
 pub fn agent_access_broker_host::test_support::AuditStoreView::kind(&self) -> &'static str
 pub fn agent_access_broker_host::test_support::AuditStoreView::path(&self) -> &std::path::Path
 pub fn agent_access_broker_host::test_support::AuditStoreView::records(&self) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agent_access_broker_host::test_support::AuditStoreView::require_action(&self, &str, &str) -> alloc::vec::Vec<serde_json::value::Value>
+pub fn agent_access_broker_host::test_support::AuditStoreView::require_request(&self, &str, &str, &str) -> alloc::vec::Vec<serde_json::value::Value>
 pub fn agent_access_broker_host::test_support::AuditStoreView::text(&self) -> alloc::string::String
 impl core::clone::Clone for agent_access_broker_host::test_support::AuditStoreView
 pub fn agent_access_broker_host::test_support::AuditStoreView::clone(&self) -> agent_access_broker_host::test_support::AuditStoreView
