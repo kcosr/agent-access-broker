@@ -1,6 +1,10 @@
-use crate::{ConfigError, EgressProxyConfig, HostError, load_secret_ref_value};
+//! Egress proxy selection: the process proxy environment captured at startup,
+//! configured service and global proxies, `NO_PROXY` matching, and proxy
+//! credential resolution. Secret-bearing values stay inside this module; the
+//! rest of the host sees sanitized [`EgressRoute`]s.
+use crate::{ConfigError, HostConfigError, load_secret_ref_value};
+use agent_access_provider::{EgressProxyConfig, EgressProxySource, EgressRoute};
 use percent_encoding::percent_decode_str;
-use serde_json::{Value, json};
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -67,14 +71,16 @@ impl fmt::Debug for EgressProxyEnvironment {
     }
 }
 
+/// Ordinary egress route selection for one runtime generation: the captured
+/// proxy environment and the configured global proxy.
 #[derive(Clone)]
-pub struct EgressProxyRuntimeConfig {
+pub(crate) struct EgressProxyResolver {
     environment: Arc<EgressProxyEnvironment>,
     global_proxy: Option<EgressProxyConfig>,
 }
 
-impl EgressProxyRuntimeConfig {
-    pub fn new(
+impl EgressProxyResolver {
+    pub(crate) fn new(
         environment: Arc<EgressProxyEnvironment>,
         global_proxy: Option<EgressProxyConfig>,
     ) -> Self {
@@ -84,99 +90,85 @@ impl EgressProxyRuntimeConfig {
         }
     }
 
-    pub fn direct() -> Self {
-        Self {
-            environment: Arc::new(EgressProxyEnvironment::empty()),
-            global_proxy: None,
-        }
+    pub(crate) fn environment(&self) -> &Arc<EgressProxyEnvironment> {
+        &self.environment
     }
 
-    pub fn resolve(
+    /// `NO_PROXY`, then the environment proxy for the scheme, then the
+    /// service proxy, then the global proxy, and otherwise direct.
+    pub(crate) fn resolve(
         &self,
         label: &str,
         upstream_base: &Url,
         service_proxy: Option<&EgressProxyConfig>,
-    ) -> Result<EgressProxySelection, HostError> {
+    ) -> Result<EgressProxySelection, HostConfigError> {
         if self.environment.no_proxy.matches(upstream_base) {
             return Ok(EgressProxySelection::direct());
         }
         if let Some(proxy) = self.environment.proxy_for_scheme(upstream_base.scheme()) {
             return Ok(EgressProxySelection::proxied(
-                EgressProxyMode::Environment,
+                EgressProxySource::Environment,
                 proxy,
             ));
         }
         if let Some(config) = service_proxy {
             return ProxyTarget::from_application_config(label, config)
-                .map(|target| EgressProxySelection::proxied(EgressProxyMode::Service, target));
+                .map(|target| EgressProxySelection::proxied(EgressProxySource::Service, target));
         }
         if let Some(config) = &self.global_proxy {
             return ProxyTarget::from_application_config("network.egress_proxy", config)
-                .map(|target| EgressProxySelection::proxied(EgressProxyMode::Global, target));
+                .map(|target| EgressProxySelection::proxied(EgressProxySource::Global, target));
         }
         Ok(EgressProxySelection::direct())
     }
 }
 
-pub fn preflight_egress_proxy(
+/// Resolves a configured proxy, including its credential references, without
+/// using it, so startup rejects a proxy that a higher-precedence route hides.
+pub(crate) fn preflight_egress_proxy(
     label: &str,
     config: Option<&EgressProxyConfig>,
-) -> Result<(), HostError> {
+) -> Result<(), HostConfigError> {
     if let Some(config) = config {
         let _ = ProxyTarget::from_application_config(label, config)?;
     }
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EgressProxyMode {
-    Direct,
-    Environment,
-    Service,
-    Global,
-}
-
-impl EgressProxyMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Direct => "direct",
-            Self::Environment => "environment",
-            Self::Service => "service",
-            Self::Global => "global",
-        }
-    }
-}
-
+/// A selected route, holding the proxy's resolved credentials.
 #[derive(Clone, PartialEq, Eq)]
-pub struct EgressProxySelection {
-    mode: EgressProxyMode,
-    proxy: Option<ProxyTarget>,
+pub(crate) struct EgressProxySelection {
+    proxy: Option<(EgressProxySource, ProxyTarget)>,
 }
 
 impl EgressProxySelection {
-    pub fn direct() -> Self {
+    pub(crate) fn direct() -> Self {
+        Self { proxy: None }
+    }
+
+    fn proxied(source: EgressProxySource, proxy: ProxyTarget) -> Self {
         Self {
-            mode: EgressProxyMode::Direct,
-            proxy: None,
+            proxy: Some((source, proxy)),
         }
     }
 
-    fn proxied(mode: EgressProxyMode, proxy: ProxyTarget) -> Self {
-        Self {
-            mode,
-            proxy: Some(proxy),
-        }
-    }
-
-    pub fn audit_value(&self) -> Value {
+    /// The sanitized route: the mode and the proxy origin, never credentials.
+    pub(crate) fn route(&self) -> EgressRoute {
         match &self.proxy {
-            Some(proxy) => json!({
-                "mode": self.mode.as_str(),
-                "proxy": proxy.sanitized_origin(),
-            }),
-            None => json!({
-                "mode": self.mode.as_str(),
-            }),
+            Some((source, proxy)) => EgressRoute::proxied(*source, &proxy.url),
+            None => EgressRoute::direct(),
+        }
+    }
+
+    /// Replaces reqwest's own environment proxies with this selection.
+    pub(crate) fn apply(
+        &self,
+        builder: reqwest::ClientBuilder,
+    ) -> Result<reqwest::ClientBuilder, HostConfigError> {
+        let builder = builder.no_proxy();
+        match &self.proxy {
+            Some((_, proxy)) => Ok(builder.proxy(proxy.reqwest_proxy()?)),
+            None => Ok(builder),
         }
     }
 }
@@ -185,8 +177,15 @@ impl fmt::Debug for EgressProxySelection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EgressProxySelection")
-            .field("mode", &self.mode)
-            .field("proxy", &self.proxy)
+            .field("route", &self.route())
+            .field(
+                "credentials",
+                &self
+                    .proxy
+                    .as_ref()
+                    .and_then(|(_, proxy)| proxy.credentials.as_ref())
+                    .map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -198,7 +197,10 @@ struct ProxyTarget {
 }
 
 impl ProxyTarget {
-    fn from_application_config(label: &str, config: &EgressProxyConfig) -> Result<Self, HostError> {
+    fn from_application_config(
+        label: &str,
+        config: &EgressProxyConfig,
+    ) -> Result<Self, HostConfigError> {
         let mut target = parse_proxy_url(
             &format!("{label}.url"),
             &config.url,
@@ -231,14 +233,12 @@ impl ProxyTarget {
         )
     }
 
-    fn reqwest_proxy(&self) -> Result<reqwest::Proxy, HostError> {
+    fn reqwest_proxy(&self) -> Result<reqwest::Proxy, HostConfigError> {
         let mut proxy = reqwest::Proxy::all(self.url.as_str()).map_err(|_| {
-            HostError::Config(ConfigError::Invalid {
-                errors: vec![format!(
-                    "egress proxy {} could not be applied",
-                    self.sanitized_origin()
-                )],
-            })
+            HostConfigError::invalid(format!(
+                "egress proxy {} could not be applied",
+                self.sanitized_origin()
+            ))
         })?;
         if let Some(credentials) = &self.credentials {
             proxy = proxy.basic_auth(&credentials.username, &credentials.password);
@@ -278,23 +278,12 @@ impl fmt::Debug for ProxyCredentials {
     }
 }
 
-pub fn apply_reqwest_proxy(
-    builder: reqwest::ClientBuilder,
-    selection: &EgressProxySelection,
-) -> Result<reqwest::ClientBuilder, HostError> {
-    let builder = builder.no_proxy();
-    match &selection.proxy {
-        Some(proxy) => Ok(builder.proxy(proxy.reqwest_proxy()?)),
-        None => Ok(builder),
-    }
-}
-
-fn load_nonempty_proxy_secret(label: &str, reference: &str) -> Result<String, HostError> {
+fn load_nonempty_proxy_secret(label: &str, reference: &str) -> Result<String, HostConfigError> {
     let value = load_secret_ref_value(label, reference)?;
     if value.is_empty() {
-        return Err(HostError::Config(ConfigError::Invalid {
-            errors: vec![format!("{label} must resolve to a non-empty secret")],
-        }));
+        return Err(HostConfigError::invalid(format!(
+            "{label} must resolve to a non-empty secret"
+        )));
     }
     Ok(value)
 }
@@ -837,18 +826,19 @@ mod tests {
             },
         )
         .unwrap();
-        let selection = EgressProxySelection::proxied(EgressProxyMode::Service, target);
+        let selection = EgressProxySelection::proxied(EgressProxySource::Service, target);
+        assert!(!format!("{selection:?}").contains("proxy-password"));
         let root_certificate =
             reqwest::Certificate::from_pem(TLS_PROXY_ROOT_PEM.as_bytes()).unwrap();
-        let client = apply_reqwest_proxy(
-            reqwest::Client::builder()
-                .add_root_certificate(root_certificate)
-                .resolve("foobar.com", proxy.addr),
-            &selection,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
+        let client = selection
+            .apply(
+                reqwest::Client::builder()
+                    .add_root_certificate(root_certificate)
+                    .resolve("foobar.com", proxy.addr),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         let response = client
             .get("http://upstream.example.test/resource")

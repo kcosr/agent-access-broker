@@ -10,32 +10,14 @@ use axum::{
 use std::sync::Mutex;
 use tokio::task::JoinHandle;
 
-struct Host {
-    limits: ProviderLimits,
-    egress: EgressProxyRuntimeConfig,
-    tls: PreparedOutboundTls,
-}
-impl Host {
-    fn new() -> Self {
-        Self {
-            limits: ProviderLimits {
-                max_upstream_response_bytes: 256 * 1024,
-                request_timeout_ms: 500,
-                ..Default::default()
-            },
-            egress: EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None),
-            tls: test_support::test_outbound_tls(),
-        }
-    }
-    fn context(&self) -> BuildContext<'_> {
-        BuildContext {
-            limits: &self.limits,
-            egress: &self.egress,
-            outbound_tls: &self.tls,
-            attribution: Default::default(),
-            stable_signing_key: None,
-        }
-    }
+/// The build host imported OpenAPI tests share: a short request timeout and
+/// a 256 KiB response cap.
+fn test_host() -> test_support::TestHost {
+    test_support::TestHost::with_limits(ProviderLimits {
+        max_upstream_response_bytes: 256 * 1024,
+        request_timeout_ms: 500,
+        ..Default::default()
+    })
 }
 #[derive(Clone)]
 struct StateData {
@@ -202,7 +184,7 @@ async fn public_discovery_returns_picker_without_credentials_or_executable_opera
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let mut definition = fixture.definition();
     definition.connection_settings.remove("securityScheme");
-    let host = Host::new();
+    let host = test_host();
     let result = OpenApiAdapter
         .discover(
             &definition,
@@ -233,7 +215,7 @@ async fn private_document_token_is_separate_from_selected_execution_token() {
     definition
         .connection_settings
         .insert("definitionAuthHeader".into(), "X-Definition-Key".into());
-    let host = Host::new();
+    let host = test_host();
     let discovery = OpenApiAdapter
         .discover(
             &definition,
@@ -352,7 +334,7 @@ fn self_contained_refs_preserve_literals_and_enforce_constraints() {
 async fn execution_serializes_separate_locations_and_never_refetches_definition() {
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let def = fixture.definition();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[action(&def)], None, &host.context())
         .unwrap();
@@ -377,7 +359,7 @@ async fn execution_serializes_separate_locations_and_never_refetches_definition(
 async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let def = fixture.definition();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[action(&def)], None, &host.context())
         .unwrap();
@@ -411,7 +393,7 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
         )
         .await;
         let def = fixture.definition();
-        let host = Host::new();
+        let host = test_host();
         let provider = OpenApiAdapter
             .build(&def, &[action(&def)], None, &host.context())
             .unwrap();
@@ -434,7 +416,7 @@ async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {
     ] {
         let fixture = Fixture::new(document(), 200, body, delay).await;
         let def = fixture.definition();
-        let host = Host::new();
+        let host = test_host();
         let provider = OpenApiAdapter
             .build(&def, &[action(&def)], None, &host.context())
             .unwrap();
@@ -490,7 +472,7 @@ async fn no_content_operations_omit_empty_accept_and_return_null_body() {
     doc["paths"]["/items/{id}"]["post"]["responses"] = json!({"204":{"description":"Updated"}});
     let mut accepted = discovered(doc, &def).definition;
     accepted.action = "item.update".into();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[accepted], None, &host.context())
         .unwrap();
@@ -511,7 +493,7 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
     let fixture = Fixture::new(document(), 200, json!({"value":"ok"}), Duration::ZERO).await;
     let mut def = fixture.definition();
     def.connection_settings.remove("definitionUrl");
-    let host = Host::new();
+    let host = test_host();
     let error = OpenApiAdapter
         .discover(
             &def,

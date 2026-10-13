@@ -68,38 +68,21 @@ pub struct JiraProvider {
 }
 
 impl JiraProvider {
-    pub fn new(
+    pub(crate) fn new(
         config: JiraProviderConfig,
-        limits: ProviderLimits,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            ProviderAttributionConfig::default(),
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress(
-        config: JiraProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        attribution: ProviderAttributionConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        let backend = Arc::new(HttpJiraBackend::new_with_egress(
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
+        let limits = host.limits().clone();
+        let backend = Arc::new(HttpJiraBackend::new(
             config.clone(),
             limits.clone(),
-            egress_proxy,
-            outbound_tls,
+            host.clients(),
         )?);
         Ok(Self {
             config,
             limits,
             backend,
-            attribution,
+            attribution: host.attribution().clone(),
         })
     }
 

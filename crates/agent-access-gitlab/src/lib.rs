@@ -191,50 +191,15 @@ enum DraftPublicationScope {
 }
 
 impl GitlabProvider {
-    pub fn new(
+    pub(crate) fn new(
         config: GitlabProviderConfig,
-        limits: ProviderLimits,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            ProviderAttributionConfig::default(),
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress(
-        config: GitlabProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        attribution: ProviderAttributionConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress_and_signing_key(
-            config,
-            limits,
-            egress_proxy,
-            None,
-            attribution,
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress_and_signing_key(
-        config: GitlabProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        stable_signing_key: Option<Arc<dyn StableSigningKey>>,
-        attribution: ProviderAttributionConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        let backend = Arc::new(HttpGitlabBackend::new_with_egress(
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
+        let limits = host.limits().clone();
+        let backend = Arc::new(HttpGitlabBackend::new(
             config.clone(),
             limits.clone(),
-            egress_proxy,
-            outbound_tls,
+            host.clients(),
         )?);
         let config_fingerprint = gitlab_config_fingerprint(&config);
         Ok(Self {
@@ -242,8 +207,8 @@ impl GitlabProvider {
             config_fingerprint,
             limits,
             backend,
-            pagination_signer: OpaqueTokenSigner::new(stable_signing_key),
-            attribution,
+            pagination_signer: OpaqueTokenSigner::new(host.stable_signing_key().cloned()),
+            attribution: host.attribution().clone(),
         })
     }
 

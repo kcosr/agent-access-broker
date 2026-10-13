@@ -21,13 +21,14 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+use crate::network::{ClientCaller, EgressProxyEnvironment, HostNetwork};
 use crate::{BackendRegistry, CredentialKeyRing, ManagedStore, ManagedStoreError};
+use crate::{OutboundTlsConfig, PreparedOutboundTls};
 use agent_access_provider::{
-    AuthorizationRequest, CodeExchange, EgressProxyRuntimeConfig, InvocationScope,
-    IssuedRefreshToken, OAuthCallbackIssuer, OAuthClient, OAuthDialect, OAuthDialectError,
-    OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget,
-    OutboundTlsConfig, PreparedOutboundTls, ProviderLimits, RefreshReplay, TokenGrant,
-    UPSTREAM_RETRY_AFTER_MAX_SECONDS, UpstreamNetwork,
+    AuthorizationRequest, CodeExchange, InvocationScope, IssuedRefreshToken, OAuthCallbackIssuer,
+    OAuthClient, OAuthDialect, OAuthDialectError, OAuthHttp, OAuthPermissionProfile,
+    OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget, ProviderLimits, RefreshReplay,
+    TokenGrant, UPSTREAM_RETRY_AFTER_MAX_SECONDS,
 };
 
 const MAX_FLOWS: usize = 1;
@@ -614,22 +615,26 @@ impl OAuthManager {
             ring,
             config,
             &BackendRegistry::empty(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &tls,
-            },
+            &HostNetwork::new(
+                ProviderLimits::default(),
+                tls,
+                Arc::new(EgressProxyEnvironment::empty()),
+                None,
+            ),
         )
     }
     /// Preparation has no database side effects. Call activate only when publishing a validated runtime.
-    pub fn new_with_host(
+    /// Every registration's clients come from `network` in the host OAuth
+    /// category.
+    pub(crate) fn new_with_host(
         store: ManagedStore,
         ring: CredentialKeyRing,
         config: OAuthConfig,
         dialects: &BackendRegistry,
-        network: UpstreamNetwork<'_>,
+        network: &HostNetwork,
     ) -> Result<Self, OAuthError> {
         config.validate()?;
+        let clients = network.client_factory(ClientCaller::HostOAuth);
         let mut registrations = BTreeMap::new();
         for (id, registration) in &config.registrations {
             let dialect = dialects
@@ -651,11 +656,8 @@ impl OAuthManager {
             {
                 String::new()
             } else {
-                agent_access_provider::load_secret_ref_value(
-                    "OAuth application",
-                    &registration.client_secret_ref,
-                )
-                .map_err(|_| OAuthError::ApplicationCredential)?
+                crate::load_secret_ref_value("OAuth application", &registration.client_secret_ref)
+                    .map_err(|_| OAuthError::ApplicationCredential)?
             };
             if registration.client_auth != agent_access_provider::OAuthClientAuth::None
                 && !bounded(&secret, 16384)
@@ -669,7 +671,7 @@ impl OAuthManager {
                 "oauth",
                 &base,
                 &dialect.upstream_allowlist(registration),
-                network,
+                &clients,
             )
             .map_err(|_| OAuthError::Configuration)?;
             registrations.insert(
@@ -2104,13 +2106,19 @@ mod tests {
             &BackendRegistry::empty()
                 .with_oauth_dialects([&DEFAULT_SCOPE_DIALECT])
                 .unwrap(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap(),
-            },
+            &direct_network(),
         )
         .unwrap()
+    }
+
+    /// Direct routes and system trust, as `OAuthManager::new` uses.
+    fn direct_network() -> HostNetwork {
+        HostNetwork::new(
+            ProviderLimits::default(),
+            PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap(),
+            Arc::new(EgressProxyEnvironment::empty()),
+            None,
+        )
     }
 
     #[test]
@@ -3963,17 +3971,12 @@ mod tests {
                     .get_mut("stub")
                     .unwrap();
                 r.config.base_url = url;
-                let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
                 r.http = OAuthHttp::build(
                     "drop-test",
                     "oauth",
                     &Url::parse(&r.config.base_url).unwrap(),
                     &r.dialect.upstream_allowlist(&r.config),
-                    UpstreamNetwork {
-                        limits: &ProviderLimits::default(),
-                        egress: &EgressProxyRuntimeConfig::direct(),
-                        outbound_tls: &tls,
-                    },
+                    &direct_network().client_factory(ClientCaller::HostOAuth),
                 )
                 .unwrap();
                 Some(tokio::spawn(async move {

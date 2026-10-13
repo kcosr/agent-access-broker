@@ -1,11 +1,11 @@
 //! Development-only typed resource adapter for the independent OAuth test server.
+use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ActionDescriptor, ClientProfile, CredentialDescriptor, DelegatedAccess,
-    EgressProxyRuntimeConfig, HostError, OAuthRegistrationConfig, Provider, ProviderError,
-    ProviderInvocation, ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes,
+    ActionDescriptor, ClientProfile, CredentialDescriptor, DelegatedAccess, EgressDeclaration,
+    OAuthRegistrationConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderLimits, ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes,
     ResourceType, ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, UpstreamNetwork, complete_upstream_trace,
-    take_upstream_trace,
+    UpstreamClient, UpstreamClientSpec, complete_upstream_trace, take_upstream_trace,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -87,36 +87,32 @@ pub(crate) struct OAuthRecordsProvider {
 impl OAuthRecordsProvider {
     pub(crate) fn new(
         registration: &OAuthRegistrationConfig,
-        network: UpstreamNetwork<'_>,
-    ) -> Result<Self, HostError> {
+        clients: &dyn UpstreamClientFactory,
+        limits: &ProviderLimits,
+    ) -> Result<Self, ProviderBuildError> {
         let base = url::Url::parse(&format!("{}/", registration.base_url.trim_end_matches('/')))
-            .map_err(|_| HostError::invalid("oauth.registrations base_url is invalid"))?;
+            .map_err(|_| ProviderBuildError::invalid("oauth.registrations base_url is invalid"))?;
         // Like the registration's authorization server, a loopback records
         // API is reached directly.
-        let direct = EgressProxyRuntimeConfig::direct();
-        let network = if agent_access_provider::is_literal_loopback(&base) {
-            UpstreamNetwork {
-                egress: &direct,
-                ..network
-            }
-        } else {
-            network
-        };
         let client = UpstreamClient::build(
             UpstreamClientSpec {
                 label: "credentials.per_user.oauth_stub",
                 provider: "oauth_stub",
                 base: &base,
-                egress_proxy: None,
+                egress: if agent_access_provider::is_literal_loopback(&base) {
+                    EgressDeclaration::LiteralLoopback
+                } else {
+                    EgressDeclaration::Ordinary(None)
+                },
                 allowed_upstream_hosts: &[format!("{base}**")],
                 profile: ClientProfile::Request,
                 status_reasons: &[],
             },
-            network,
+            clients,
         )?;
         Ok(Self {
             client,
-            max_bytes: network.limits.max_upstream_response_bytes.min(1024 * 1024),
+            max_bytes: limits.max_upstream_response_bytes.min(1024 * 1024),
         })
     }
 

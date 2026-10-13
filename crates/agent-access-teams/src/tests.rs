@@ -322,29 +322,53 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
     assert_eq!(errors.len(), 2);
 }
 
+#[test]
+fn build_creates_one_single_attempt_client_per_configured_origin() {
+    let second = "https://second.environment.api.powerplatform.com";
+    let host = agent_access_provider::test_support::TestHost::default();
+    TeamsConfig {
+        allowed_upstream_hosts: vec![format!("{ORIGIN}/**"), format!("{second}/**")],
+        egress_proxy: None,
+    }
+    .build(&host.context())
+    .unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| {
+            (
+                client.base.to_string(),
+                client.profile,
+                client.literal_loopback,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        built,
+        [
+            (format!("{ORIGIN}/"), ClientProfile::SingleAttempt, false),
+            (format!("{second}/"), ClientProfile::SingleAttempt, false),
+        ]
+    );
+}
+
 async fn transport(server: &MockServer) -> HttpTransport {
     let base = Url::parse(&format!("{}/", server.uri())).unwrap();
     let limits = ProviderLimits {
         request_timeout_ms: 200,
         ..ProviderLimits::default()
     };
-    let egress = EgressProxyRuntimeConfig::direct();
-    let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
     let client = UpstreamClient::build(
         UpstreamClientSpec {
             label: "teams.test",
             provider: "teams",
             base: &base,
-            egress_proxy: None,
+            egress: EgressDeclaration::Ordinary(None),
             allowed_upstream_hosts: &[format!("{}/**", server.uri())],
             profile: ClientProfile::SingleAttempt,
             status_reasons: &[],
         },
-        UpstreamNetwork {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls: &tls,
-        },
+        &agent_access_provider::test_support::TestHost::with_limits(limits),
     )
     .unwrap();
     HttpTransport {

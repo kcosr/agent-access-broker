@@ -720,14 +720,8 @@ pub(super) fn build_providers(
     catalog: &ImportedCatalog,
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
-    egress_environment: &Arc<EgressProxyEnvironment>,
-    outbound_tls: &agent_access_provider::PreparedOutboundTls,
+    network: &HostNetwork,
 ) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
-    let egress = EgressProxyRuntimeConfig::new(
-        egress_environment.clone(),
-        config.network.egress_proxy.clone(),
-    );
-    let limits = ProviderLimits::from(&config.limits);
     let mut providers = BTreeMap::new();
     for record in &catalog.services {
         let definition = &record.definition;
@@ -783,13 +777,15 @@ pub(super) fn build_providers(
             .filter(|action| action.status == ImportedActionStatus::Enabled)
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
-        let host = BuildContext {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls,
-            attribution: ProviderAttributionConfig::default(),
-            stable_signing_key: None,
-        };
+        let clients = network.client_factory(ClientCaller::ImportAdapter {
+            kind: adapter.kind(),
+        });
+        let host = agent_access_provider::host::build_context(
+            network.limits(),
+            &clients,
+            ProviderAttributionConfig::default(),
+            None,
+        );
         if actions.iter().any(|action| {
             adapter.validate_action(action).is_err() || adapter.scoped_mcp_name(action).is_err()
         }) {
@@ -980,18 +976,15 @@ impl BrokerRuntime {
                 .scoped_mcp_name(action)
                 .map_err(ManagedStoreError::InputInvalid)?;
         }
-        let limits = ProviderLimits::from(&self.config.limits);
-        let egress = EgressProxyRuntimeConfig::new(
-            self.egress_proxy_environment.clone(),
-            self.config.network.egress_proxy.clone(),
+        let clients = self.network.client_factory(ClientCaller::ImportAdapter {
+            kind: adapter.kind(),
+        });
+        let host = agent_access_provider::host::build_context(
+            self.network.limits(),
+            &clients,
+            ProviderAttributionConfig::default(),
+            None,
         );
-        let host = BuildContext {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls: &self.outbound_tls,
-            attribution: ProviderAttributionConfig::default(),
-            stable_signing_key: None,
-        };
         let provider = adapter
             .build(definition, &actions, transport, &host)
             .map_err(|_| {

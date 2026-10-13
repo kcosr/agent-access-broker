@@ -62,13 +62,14 @@ impl ImportedAdapter for McpAdapter {
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError> {
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         let mut compiled = BTreeMap::new();
         for action in actions {
-            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
-            let value = CompiledAction::new(action).map_err(HostError::invalid)?;
+            self.scoped_mcp_name(action)
+                .map_err(ProviderBuildError::invalid)?;
+            let value = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
             if compiled.insert(action.action.clone(), value).is_some() {
-                return Err(HostError::invalid("duplicate imported action"));
+                return Err(ProviderBuildError::invalid("duplicate imported action"));
             }
         }
         Ok(Arc::new(McpProvider {
@@ -76,7 +77,7 @@ impl ImportedAdapter for McpAdapter {
             definition: definition.clone(),
             actions: compiled,
             transport_credential,
-            timeout: Duration::from_millis(host.limits.request_timeout_ms),
+            timeout: Duration::from_millis(host.limits().request_timeout_ms),
         }))
     }
 
@@ -131,32 +132,34 @@ impl ImportedAdapter for McpAdapter {
 fn make_wire(
     definition: &ImportedServiceDefinition,
     host: &BuildContext<'_>,
-) -> Result<WireClient, HostError> {
+) -> Result<WireClient, ProviderBuildError> {
     McpAdapter
         .validate_definition(definition)
-        .map_err(HostError::invalid)?;
+        .map_err(ProviderBuildError::invalid)?;
     if definition.adapter_kind != "mcp_http" {
-        return Err(HostError::invalid("incorrect imported adapter kind"));
+        return Err(ProviderBuildError::invalid(
+            "incorrect imported adapter kind",
+        ));
     }
     let endpoint = Url::parse(&definition.endpoint)
-        .map_err(|_| HostError::invalid("invalid imported endpoint"))?;
+        .map_err(|_| ProviderBuildError::invalid("invalid imported endpoint"))?;
     let client = UpstreamClient::build(
         UpstreamClientSpec {
             label: "imports.mcp_http",
             provider: "mcp_http",
             base: &endpoint,
-            egress_proxy: None,
+            egress: EgressDeclaration::Ordinary(None),
             allowed_upstream_hosts: std::slice::from_ref(&definition.endpoint),
             profile: ClientProfile::SingleAttempt,
             status_reasons: &[],
         },
-        host.network(),
+        host.clients(),
     )?;
     Ok(WireClient {
         client: Arc::new(client),
         endpoint,
         service: definition.service.clone(),
-        max_bytes: host.limits.max_upstream_response_bytes,
+        max_bytes: host.limits().max_upstream_response_bytes,
     })
 }
 

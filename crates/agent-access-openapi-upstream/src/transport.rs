@@ -296,18 +296,18 @@ pub(crate) fn client(
     endpoint: &Url,
     allowed: &[String],
     host: &BuildContext<'_>,
-) -> Result<Arc<UpstreamClient>, HostError> {
+) -> Result<Arc<UpstreamClient>, ProviderBuildError> {
     Ok(Arc::new(UpstreamClient::build(
         UpstreamClientSpec {
             label: "imports.openapi_http",
             provider: "openapi_http",
             base: endpoint,
-            egress_proxy: None,
+            egress: EgressDeclaration::Ordinary(None),
             allowed_upstream_hosts: allowed,
             profile: ClientProfile::SingleAttempt,
             status_reasons: &[],
         },
-        host.network(),
+        host.clients(),
     )?))
 }
 pub(crate) fn auth(

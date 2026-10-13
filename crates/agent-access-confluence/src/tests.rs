@@ -4466,11 +4466,39 @@ async fn blog_view_rejects_non_current_execution_response() {
     assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
 }
 
+#[test]
+fn build_creates_request_and_stream_clients_for_each_api_base() {
+    let cloud_id = "00000000-0000-0000-0000-000000000000";
+    let mut config = confluence_config();
+    config.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/**"
+    ));
+    let host = agent_access_provider::test_support::TestHost::default();
+    config.build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.confluence.egress_proxy".to_string();
+    let tenant = "https://example.atlassian.net/wiki/rest/api/".to_string();
+    let gateway = format!("https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/");
+    assert_eq!(
+        built,
+        [
+            (label.clone(), tenant.clone(), ClientProfile::Request),
+            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Request),
+            (label, gateway, ClientProfile::Stream),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn http_backend_rejects_unallowlisted_confluence_api_url_before_request() {
     let mut config = confluence_config();
     config.allowed_upstream_hosts = vec!["https://other.example/wiki/rest/api/**".to_string()];
-    let backend = HttpConfluenceBackend::new(config, ProviderLimits::default());
+    let backend = HttpConfluenceBackend::for_tests(config, ProviderLimits::default());
     let error = backend
         .page_metadata("123456", &credential())
         .await
@@ -7597,13 +7625,11 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse("https://example.atlassian.net/wiki/rest/api/").unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let audit = backend.egress_proxy_for_test(&credential());
     assert_eq!(audit["mode"], json!("service"));
@@ -7628,13 +7654,11 @@ async fn http_backend_routes_page_requests_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/wiki/rest/api/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend.page("123456", &credential()).await.unwrap();
 
@@ -7667,13 +7691,11 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/wiki/rest/api/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend
         .attachment_content("123456", "att123", &credential())

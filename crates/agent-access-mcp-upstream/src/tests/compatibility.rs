@@ -182,7 +182,7 @@ impl CompatFixture {
             .filter(|r| r.method() == method)
             .count()
     }
-    fn provider(&self, host: &Host) -> Arc<dyn Provider> {
+    fn provider(&self, host: &test_support::TestHost) -> Arc<dyn Provider> {
         McpAdapter
             .build(
                 &definition(&self.endpoint),
@@ -193,7 +193,7 @@ impl CompatFixture {
             .unwrap()
     }
     async fn invoke(&self) -> Result<ProviderResult, ProviderError> {
-        self.provider(&Host::new())
+        self.provider(&test_host())
             .invoke(invocation(
                 json!({"region":"private-tool-input"}),
                 "private-static-token",
@@ -206,7 +206,7 @@ impl CompatFixture {
                 &definition(&self.endpoint),
                 &ImportedDiscoveryAuthentication::Static(credential("private-discovery-token")),
                 None,
-                &Host::new().context(),
+                &test_host().context(),
             )
             .await
     }
@@ -375,7 +375,7 @@ async fn legacy_json_and_sse_discovery_verification_and_invocation_share_the_lif
                     .unwrap()
                     .contains("private-")
             );
-            let provider = fixture.provider(&Host::new());
+            let provider = fixture.provider(&test_host());
             let verification = provider
                 .verify_execution_credential(
                     &credential("private-verification-token"),
@@ -819,7 +819,7 @@ async fn cleanup_deadline_keeps_the_known_success_and_all_candidates_share_one_b
     plan.probe = plan.probe.header("mcp-session-id", PROBE_SESSION);
     plan.cleanup.delay = Duration::from_secs(5);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 250;
     let started = Instant::now();
     let result = fixture
@@ -843,7 +843,7 @@ async fn cleanup_deadline_keeps_the_known_success_and_all_candidates_share_one_b
     plan.probe = plan.probe.header("mcp-session-id", PROBE_SESSION);
     plan.cleanup.delay = Duration::from_millis(1_500);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 5_000;
     let started = Instant::now();
     fixture
@@ -893,7 +893,7 @@ async fn legacy_call_errors_have_one_dispatch_and_no_session_recovery() {
     let mut plan = Plan::default();
     plan.call.delay = Duration::from_secs(1);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 100;
     let error = fixture
         .provider(&host)
@@ -934,7 +934,7 @@ async fn legacy_server_requests_and_closed_priming_streams_fail_without_resumpti
 async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
     for permitted_requests in 0..=4 {
         let fixture = CompatFixture::new(Plan::default()).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -971,7 +971,7 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
         ..Plan::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &oauth_definition(&fixture.endpoint),
@@ -1011,7 +1011,7 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
             _ => unreachable!(),
         }
         let fixture = CompatFixture::new(plan).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -1070,7 +1070,7 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
         assert_eq!(fixture.methods(), ["server/discover", "initialize"]);
     }
     let fixture = CompatFixture::new(Plan::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &oauth_definition(&fixture.endpoint),
@@ -1096,7 +1096,7 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
         ..Plan::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let mut def = definition(&fixture.endpoint);
     def.execution_bindings
         .push(ImportedCredentialBinding::token(
@@ -1281,7 +1281,7 @@ async fn pinned_sdk_previous_only_servers_support_sessions_and_sessionless_json_
             let server = tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             });
-            let host = Host::new();
+            let host = test_host();
             let discovery = McpAdapter
                 .discover(
                     &definition(&endpoint),
@@ -1381,7 +1381,7 @@ async fn pinned_sdk_both_versions_prefers_current_without_legacy_state() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    let host = Host::new();
+    let host = test_host();
     let discovery = McpAdapter
         .discover(
             &definition(&endpoint),
@@ -1473,7 +1473,7 @@ async fn startup_and_notification_bodies_retain_response_budgets() {
             _ => unreachable!(),
         }
         let fixture = CompatFixture::new(plan).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.max_upstream_response_bytes = 1500;
         let error = fixture
             .provider(&host)
@@ -1488,7 +1488,7 @@ async fn startup_and_notification_bodies_retain_response_budgets() {
     let mut plan = Plan::default();
     plan.probe.delay = Duration::from_secs(1);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 100;
     let error = fixture
         .provider(&host)
@@ -1520,7 +1520,7 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
                 &oauth_definition(&fixture.endpoint),
                 &ImportedDiscoveryAuthentication::Delegated(request.delegated_credential.unwrap()),
                 None,
-                &Host::new().context(),
+                &test_host().context(),
             )
             .await;
         if permitted_requests == 4 {
@@ -1589,7 +1589,7 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
                     &oauth_definition(&fixture.endpoint),
                     &[action()],
                     None,
-                    &Host::new().context(),
+                    &test_host().context(),
                 )
                 .unwrap();
             let error = provider.invoke(request).await.unwrap_err();

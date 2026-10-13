@@ -7,6 +7,8 @@ use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
+#[cfg(test)]
+mod client_category_tests;
 mod discovery;
 mod import_control;
 mod imports;
@@ -27,6 +29,9 @@ mod resource_access;
 mod resource_management;
 use crate::fs_permissions;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
+use crate::network::{
+    ClientCaller, EgressProxyEnvironment, HostNetwork, PreparedOutboundTls, preflight_egress_proxy,
+};
 use crate::{
     AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig, BrokerTokenClass,
     BrokerTokenHasher, BrowserCsrfKey, CredentialConfig, CredentialKeyRing,
@@ -42,12 +47,12 @@ use crate::{
     credential_mode_available, is_safe_identifier, is_safe_principal,
     normalized_policy_grant_validation_issues, validate_broker_config,
 };
+use crate::{ConfigError, HostConfigError, load_secret_ref_value};
 use agent_access_provider::*;
 use agent_access_provider::{
-    ActionDescriptor, ConfigError, CredentialDescriptor, Decision, EgressProxyEnvironment,
-    EgressProxyRuntimeConfig, LookupRequirement, ReasonCode, ResourceScopes, ResourceSelector,
-    ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry, ServiceDescriptor, ServiceSurface,
-    apply_reqwest_proxy,
+    ActionDescriptor, CredentialDescriptor, Decision, LookupRequirement, ReasonCode,
+    ResourceScopes, ResourceSelector, ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry,
+    ServiceDescriptor, ServiceSurface,
 };
 use arc_swap::ArcSwap;
 use bytes::Bytes;
@@ -124,12 +129,29 @@ pub enum RuntimeError {
     MicrosoftOidc(#[from] MicrosoftOidcRuntimeConfigError),
 }
 
-impl From<HostError> for RuntimeError {
-    fn from(error: HostError) -> Self {
+impl From<HostConfigError> for RuntimeError {
+    fn from(error: HostConfigError) -> Self {
         match error {
-            HostError::Config(error) => Self::Config(error),
-            HostError::MissingEnv { label, name } => Self::MissingEnv { label, name },
-            HostError::SecretFile { label, source } => Self::SecretFile { label, source },
+            HostConfigError::Config(error) => Self::Config(error),
+            HostConfigError::MissingEnv { label, name } => Self::MissingEnv { label, name },
+            HostConfigError::SecretFile { label, source } => Self::SecretFile { label, source },
+        }
+    }
+}
+
+/// A provider build failure keeps the host's own cause when the host's
+/// network construction failed, and otherwise reports the provider's safe
+/// configuration diagnostics.
+impl From<ProviderBuildError> for RuntimeError {
+    fn from(error: ProviderBuildError) -> Self {
+        let (mut errors, cause) = error.into_parts();
+        match cause.map(|cause| cause.downcast::<HostConfigError>()) {
+            Some(Ok(cause)) => (*cause).into(),
+            Some(Err(cause)) => {
+                errors.push(cause.to_string());
+                Self::Config(ConfigError::Invalid { errors })
+            }
+            None => Self::Config(ConfigError::Invalid { errors }),
         }
     }
 }
@@ -1486,8 +1508,9 @@ pub struct BrokerRuntime {
     local_password_hasher: Option<LocalPasswordHasher>,
     browser_csrf_key: Option<BrowserCsrfKey>,
     microsoft_oidc: Option<MicrosoftOidcRuntimeConfig>,
-    egress_proxy_environment: Arc<EgressProxyEnvironment>,
-    outbound_tls: agent_access_provider::PreparedOutboundTls,
+    /// This generation's outbound network: limits, TLS trust and egress
+    /// proxy selection over the proxy environment captured at startup.
+    network: HostNetwork,
     audit: AuditSink,
     audit_registry: Arc<AuditRuntimeRegistry>,
     /// The effective node ID; see [`crate::resolve_node_id`].
@@ -1613,7 +1636,7 @@ impl BrokerRuntime {
         Self::new_with_identity_reuse(
             config,
             Some(previous),
-            Arc::clone(&previous.egress_proxy_environment),
+            Arc::clone(previous.network.environment()),
             Arc::clone(&previous.audit_registry),
         )
     }
@@ -1639,10 +1662,10 @@ impl BrokerRuntime {
     ) -> Result<Self, RuntimeError> {
         validate_broker_config(&config)?;
         preflight_configured_egress_proxies(&config)?;
-        let outbound_tls =
-            agent_access_provider::PreparedOutboundTls::load(&config.network.outbound_tls)?;
-        let egress_proxy = EgressProxyRuntimeConfig::new(
-            Arc::clone(&egress_proxy_environment),
+        let network = HostNetwork::new(
+            ProviderLimits::from(&config.limits),
+            PreparedOutboundTls::load(&config.network.outbound_tls)?,
+            egress_proxy_environment,
             config.network.egress_proxy.clone(),
         );
         let broker_token_hasher = config
@@ -1651,32 +1674,33 @@ impl BrokerRuntime {
             .map(BrokerTokenHasher::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
-        let limits = ProviderLimits::from(&config.limits);
         let stable_signing_key = broker_token_hasher
             .clone()
             .map(|hasher| Arc::new(hasher) as Arc<dyn StableSigningKey>);
         let mut providers = Vec::new();
-        for backend in config.providers.iter() {
+        for (registration, backend) in config.providers.registered() {
             let descriptor = backend.descriptor();
-            let host = BuildContext {
-                limits: &limits,
-                egress: &egress_proxy,
-                outbound_tls: &outbound_tls,
-                attribution: config.attribution.for_service(&descriptor),
-                stable_signing_key: stable_signing_key.clone().map(|key| {
+            // The registration selected by the configuration's table name,
+            // not anything the backend reports, decides its client category.
+            let clients =
+                network.client_factory(ClientCaller::native(registration, &config.deployment));
+            let host = agent_access_provider::host::build_context(
+                network.limits(),
+                &clients,
+                config.attribution.for_service(&descriptor),
+                stable_signing_key.clone().map(|key| {
                     agent_access_provider::service_signing_key(key, &descriptor.service)
                 }),
-            };
+            );
             providers.push(ServiceProvider::new(descriptor, backend.build(&host)?));
         }
         Self::with_providers_and_identity_reuse(
             config,
             providers,
             previous,
-            egress_proxy_environment,
+            network,
             broker_token_hasher,
             audit_registry,
-            outbound_tls,
         )
     }
 
@@ -1688,23 +1712,25 @@ impl BrokerRuntime {
     ) -> Result<Self, RuntimeError> {
         let providers = providers.into_iter().map(Into::into).collect::<Vec<_>>();
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
-        let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
+        let network = HostNetwork::new(
+            ProviderLimits::from(&config.limits),
+            PreparedOutboundTls::load(&config.network.outbound_tls)?,
+            Arc::new(EgressProxyEnvironment::from_process_env()?),
+            config.network.egress_proxy.clone(),
+        );
         let broker_token_hasher = config
             .broker_tokens
             .as_ref()
             .map(BrokerTokenHasher::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
-        let outbound_tls =
-            agent_access_provider::PreparedOutboundTls::load(&config.network.outbound_tls)?;
         Self::with_providers_and_identity_reuse(
             config,
             providers,
             None,
-            environment,
+            network,
             broker_token_hasher,
             Arc::new(AuditRuntimeRegistry::new()),
-            outbound_tls,
         )
     }
 
@@ -1712,10 +1738,9 @@ impl BrokerRuntime {
         mut config: BrokerConfig,
         providers: Vec<ServiceProvider>,
         previous: Option<&Self>,
-        egress_proxy_environment: Arc<EgressProxyEnvironment>,
+        network: HostNetwork,
         broker_token_hasher: Option<BrokerTokenHasher>,
         audit_registry: Arc<AuditRuntimeRegistry>,
-        outbound_tls: agent_access_provider::PreparedOutboundTls,
     ) -> Result<Self, RuntimeError> {
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
         validate_broker_config(&config)?;
@@ -1753,21 +1778,13 @@ impl BrokerRuntime {
                 .ok_or_else(|| RuntimeError::ManagedStore {
                     message: "OAuth requires credential encryption".into(),
                 })?;
-            let egress = EgressProxyRuntimeConfig::new(
-                Arc::clone(&egress_proxy_environment),
-                config.network.egress_proxy.clone(),
-            );
             Some(
                 crate::OAuthManager::new_with_host(
                     store,
                     ring,
                     config.oauth.clone(),
                     config.providers.registry(),
-                    UpstreamNetwork {
-                        limits: &ProviderLimits::from(&config.limits),
-                        egress: &egress,
-                        outbound_tls: &outbound_tls,
-                    },
+                    &network,
                 )
                 .map_err(|error| RuntimeError::ManagedStore {
                     message: error.to_string(),
@@ -1787,17 +1804,17 @@ impl BrokerRuntime {
                 .ok_or_else(|| RuntimeError::ManagedStore {
                     message: "OAuth registration is missing".into(),
                 })?;
-            let egress = EgressProxyRuntimeConfig::new(
-                Arc::clone(&egress_proxy_environment),
-                config.network.egress_proxy.clone(),
-            );
+            // The development records fixture shares the stub dialect's
+            // loopback server; only an enabled deployment grants it the direct
+            // loopback route.
+            let clients = network.client_factory(ClientCaller::Native {
+                kind: "oauth_stub",
+                development: crate::network::development_fixtures_enabled(&config.deployment),
+            });
             let provider = crate::oauth_records::OAuthRecordsProvider::new(
                 registration,
-                UpstreamNetwork {
-                    limits: &ProviderLimits::from(&config.limits),
-                    egress: &egress,
-                    outbound_tls: &outbound_tls,
-                },
+                &clients,
+                network.limits(),
             )
             .map_err(|error| RuntimeError::ManagedStore {
                 message: error.to_string(),
@@ -1881,8 +1898,7 @@ impl BrokerRuntime {
             &imported_catalog,
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
-            &egress_proxy_environment,
-            &outbound_tls,
+            &network,
         )?;
         for (service, provider) in imported_providers {
             provider_map.insert(
@@ -1946,8 +1962,7 @@ impl BrokerRuntime {
             local_password_hasher,
             browser_csrf_key,
             microsoft_oidc,
-            egress_proxy_environment,
-            outbound_tls,
+            network,
             audit_registry,
             node_id,
             config_generation: None,
@@ -2502,8 +2517,8 @@ impl BrokerRuntime {
         self.browser_csrf_key.as_ref()
     }
 
-    pub fn outbound_tls(&self) -> &agent_access_provider::PreparedOutboundTls {
-        &self.outbound_tls
+    pub fn outbound_tls(&self) -> &PreparedOutboundTls {
+        self.network.outbound_tls()
     }
 
     pub fn microsoft_oidc(&self) -> Option<&MicrosoftOidcRuntimeConfig> {
@@ -3907,29 +3922,12 @@ impl BrokerRuntime {
                 )],
             })
         })?;
-        let egress_proxy = EgressProxyRuntimeConfig::new(
-            self.egress_proxy_environment.clone(),
-            self.config.network.egress_proxy.clone(),
-        );
-        let proxy_selection = egress_proxy.resolve(
+        let (client, route) = self.network.gateway_client(
             &format!("gateways.{service}.egress_proxy"),
             &upstream_base,
             gateway.egress_proxy.as_ref(),
         )?;
-        let client = apply_reqwest_proxy(
-            self.outbound_tls
-                .apply(reqwest::Client::builder())
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_millis(self.config.limits.request_timeout_ms)),
-            &proxy_selection,
-        )?
-        .build()
-        .map_err(|error| {
-            RuntimeError::Config(ConfigError::Invalid {
-                errors: vec![format!("gateway HTTP client: {error}")],
-            })
-        })?;
-        Ok((client, proxy_selection.audit_value()))
+        Ok((client, route.audit_value()))
     }
 
     pub async fn verify_execution_credential(

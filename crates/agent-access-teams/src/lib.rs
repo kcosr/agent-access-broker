@@ -173,12 +173,8 @@ impl BackendConfig for TeamsConfig {
             .map(|p| vec![("providers.teams.egress_proxy".into(), p)])
             .unwrap_or_default()
     }
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        let origins = self.origins().map_err(|error| {
-            HostError::Config(ConfigError::Invalid {
-                errors: vec![error],
-            })
-        })?;
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let origins = self.origins().map_err(ProviderBuildError::invalid)?;
         let mut clients = BTreeMap::new();
         for base in origins {
             let client = UpstreamClient::build(
@@ -186,19 +182,19 @@ impl BackendConfig for TeamsConfig {
                     label: "providers.teams",
                     provider: "teams",
                     base: &base,
-                    egress_proxy: self.egress_proxy.as_ref(),
+                    egress: EgressDeclaration::Ordinary(self.egress_proxy.as_ref()),
                     allowed_upstream_hosts: &self.allowed_upstream_hosts,
                     profile: ClientProfile::SingleAttempt,
                     status_reasons: &[],
                 },
-                host.network(),
+                host.clients(),
             )?;
             clients.insert(base.origin().ascii_serialization(), client);
         }
         Ok(Arc::new(TeamsProvider {
             transport: Arc::new(HttpTransport { clients }),
             allowed_upstream_hosts: self.allowed_upstream_hosts.clone(),
-            max_bytes: host.limits.max_http_body_bytes.min(MAX_BODY_BYTES),
+            max_bytes: host.limits().max_http_body_bytes.min(MAX_BODY_BYTES),
         }))
     }
 }

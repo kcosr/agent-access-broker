@@ -1,14 +1,15 @@
 //! Outbound HTTP to an upstream service under the broker's common rules:
-//! outbound TLS trust, the selected egress proxy, no automatic redirects,
-//! allowlisted destinations, correlation headers and credentials only toward
-//! the service's own origin, and one trace event per upstream request.
+//! clients the host constructs (outbound TLS trust, the selected egress route,
+//! the requested time profile and no automatic redirects), allowlisted
+//! destinations, correlation headers and credentials only toward the
+//! service's own origin, and one trace event per upstream request.
 //!
 //! Backends own their protocol (URLs, authentication scheme, status and body
 //! handling); they build clients and send requests through this module.
+use crate::host::{ClientTransportSpec, UpstreamClientFactory};
 use crate::{
-    ConfigError, EgressProxyConfig, EgressProxyRuntimeConfig, EgressProxySelection, HostError,
-    PreparedOutboundTls, ProviderLimits, ReasonCode, UpstreamTrace,
-    apply_current_correlation_headers, apply_reqwest_proxy, current_provider_action,
+    EgressDeclaration, EgressRoute, ProviderBuildError, ReasonCode, UpstreamTrace,
+    apply_current_correlation_headers, current_provider_action,
     emit_upstream_request_completed_for, same_origin, url_allowed_by_patterns,
 };
 use futures_util::TryStreamExt;
@@ -20,8 +21,9 @@ use thiserror::Error;
 use tokio::sync::watch;
 use url::Url;
 
-/// How a client bounds time and retries. Every profile applies the broker's outbound TLS
-/// trust and egress proxy and never follows redirects on its own.
+/// How a client bounds time and retries. Every profile uses the broker's
+/// outbound TLS trust and the host's egress route, and never follows redirects
+/// on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientProfile {
     /// Each request must complete within `ProviderLimits::request_timeout_ms`.
@@ -43,29 +45,22 @@ pub enum ClientProfile {
 
 /// What a backend declares about one upstream client.
 pub struct UpstreamClientSpec<'a> {
-    /// Configuration path naming the client in errors and proxy resolution,
-    /// such as `providers.jira`.
+    /// Configuration path naming the client in diagnostics, such as
+    /// `providers.jira.egress_proxy`.
     pub label: &'a str,
     /// The `provider` recorded on trace events.
     pub provider: &'static str,
     /// The service's base URL. Its origin is the only one that receives
     /// correlation headers and credentials.
     pub base: &'a Url,
-    pub egress_proxy: Option<&'a EgressProxyConfig>,
+    /// The route the client needs; the host selects and may deny it.
+    pub egress: EgressDeclaration<'a>,
     /// URL patterns every request, including each redirect hop, must match.
     pub allowed_upstream_hosts: &'a [String],
     pub profile: ClientProfile,
     /// Reason codes a trace records for these statuses when the caller
     /// classifies the response with none, such as 409 for a version conflict.
     pub status_reasons: &'static [(u16, ReasonCode)],
-}
-
-/// The host's network settings a client is built from.
-#[derive(Clone, Copy)]
-pub struct UpstreamNetwork<'a> {
-    pub limits: &'a ProviderLimits,
-    pub egress: &'a EgressProxyRuntimeConfig,
-    pub outbound_tls: &'a PreparedOutboundTls,
 }
 
 /// Why an upstream request produced no usable response.
@@ -141,7 +136,7 @@ pub struct RedirectRules<'a> {
 #[derive(Clone)]
 pub struct UpstreamClient {
     client: reqwest::Client,
-    egress_proxy: EgressProxySelection,
+    route: EgressRoute,
     provider: &'static str,
     base: Url,
     allowed_upstream_hosts: Arc<[String]>,
@@ -154,44 +149,31 @@ impl std::fmt::Debug for UpstreamClient {
             .debug_struct("UpstreamClient")
             .field("provider", &self.provider)
             .field("base", &self.base.as_str())
-            .field("egress_proxy", &self.egress_proxy)
+            .field("route", &self.route)
             .finish_non_exhaustive()
     }
 }
 
 impl UpstreamClient {
+    /// Builds a client through the host's factory, which applies the
+    /// profile, TLS trust and route.
     pub fn build(
         spec: UpstreamClientSpec<'_>,
-        network: UpstreamNetwork<'_>,
-    ) -> Result<Self, HostError> {
-        let egress_proxy = network
-            .egress
-            .resolve(spec.label, spec.base, spec.egress_proxy)?;
-        let timeout = Duration::from_millis(network.limits.request_timeout_ms);
-        let builder = network
-            .outbound_tls
-            .apply(reqwest::Client::builder())
-            .redirect(reqwest::redirect::Policy::none());
-        let builder = match spec.profile {
-            ClientProfile::Request => builder.timeout(timeout),
-            ClientProfile::SingleAttempt => builder.timeout(timeout).retry(reqwest::retry::never()),
-            ClientProfile::Stream => builder,
-            ClientProfile::Upload => builder.connect_timeout(timeout),
-            ClientProfile::Bounded { total, connect } => builder
-                .timeout(total)
-                .connect_timeout(connect)
-                .retry(reqwest::retry::never()),
-        };
-        let client = apply_reqwest_proxy(builder, &egress_proxy)?
-            .build()
-            .map_err(|error| {
-                HostError::Config(ConfigError::Invalid {
-                    errors: vec![format!("{} HTTP client: {error}", spec.label)],
-                })
-            })?;
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
+        let (client, route) = clients
+            .build_client(&ClientTransportSpec::new(
+                spec.label,
+                spec.provider,
+                spec.base,
+                spec.egress,
+                spec.profile,
+            ))
+            .map_err(|error| ProviderBuildError::client(spec.label, error))?
+            .into_parts();
         Ok(Self {
             client,
-            egress_proxy,
+            route,
             provider: spec.provider,
             base: spec.base.clone(),
             allowed_upstream_hosts: spec.allowed_upstream_hosts.into(),
@@ -203,9 +185,9 @@ impl UpstreamClient {
         &self.base
     }
 
-    /// The egress proxy route, for audit.
-    pub fn egress_proxy(&self) -> &EgressProxySelection {
-        &self.egress_proxy
+    /// The route the host selected, for audit.
+    pub fn egress_route(&self) -> &EgressRoute {
+        &self.route
     }
 
     /// Starts a request. Requests to the service's own origin carry the
@@ -396,10 +378,6 @@ impl UpstreamClient {
     }
 
     fn trace(&self, call: UpstreamCall<'_>, origin: String, method: &str) -> TraceEvent {
-        let egress_proxy_mode = self.egress_proxy.audit_value()["mode"]
-            .as_str()
-            .unwrap_or("direct")
-            .to_string();
         let (service, action) = current_provider_action().unwrap_or_default();
         TraceEvent {
             status_reasons: self.status_reasons,
@@ -412,7 +390,7 @@ impl UpstreamClient {
             method: method.to_string(),
             status: None,
             attempt: call.attempt,
-            egress_proxy_mode,
+            egress_proxy_mode: self.route.mode(),
             started: Instant::now(),
         }
     }
@@ -465,7 +443,7 @@ struct TraceEvent {
     method: String,
     status: Option<u16>,
     attempt: u32,
-    egress_proxy_mode: String,
+    egress_proxy_mode: &'static str,
     started: Instant,
 }
 
@@ -486,7 +464,7 @@ impl TraceEvent {
             status: self.status,
             duration_ms: self.started.elapsed().as_millis() as u64,
             attempt: self.attempt,
-            egress_proxy_mode: &self.egress_proxy_mode,
+            egress_proxy_mode: self.egress_proxy_mode,
             reason_code,
             path_template: None,
         };
@@ -586,16 +564,12 @@ mod tests {
                 label: "providers.example",
                 provider: "example",
                 base: &Url::parse(base).unwrap(),
-                egress_proxy: None,
+                egress: EgressDeclaration::Ordinary(None),
                 allowed_upstream_hosts: allowed,
                 profile,
                 status_reasons: &[(409, ReasonCode::VersionConflict)],
             },
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &crate::test_support::test_outbound_tls(),
-            },
+            &crate::test_support::TestHost::default(),
         )
         .unwrap()
     }

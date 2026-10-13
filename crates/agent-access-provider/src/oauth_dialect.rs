@@ -4,9 +4,10 @@
 //! the authorization URL, token requests, identity and target discovery, and
 //! how failures classify. Dialects register with the broker binary, so an
 //! authorization server family can live outside core.
+use crate::host::UpstreamClientFactory;
 use crate::{
-    ClientProfile, HostError, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    UpstreamNetwork, complete_upstream_trace,
+    ClientProfile, EgressDeclaration, ProviderBuildError, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, complete_upstream_trace,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -385,23 +386,23 @@ pub struct OAuthHttp {
 }
 
 impl OAuthHttp {
-    /// Builds one client per approved destination origin, each routed on its
-    /// own. A literal IPv4/IPv6 loopback origin connects directly; every other
-    /// origin, including `localhost`, follows the host's proxy selection, so a
-    /// loopback issuer never exempts another destination. Plain HTTP is
-    /// accepted only for literal loopback origins.
+    /// Builds one client per approved destination origin through the host's
+    /// OAuth client factory, each routed on its own. A literal IPv4/IPv6
+    /// loopback origin asks for the direct loopback route; every other origin,
+    /// including `localhost`, takes the host's ordinary route, so a loopback
+    /// issuer never exempts another destination. Plain HTTP is accepted only
+    /// for literal loopback origins.
     pub fn build(
         label: &str,
         provider: &'static str,
         base: &Url,
         allowed_upstream_hosts: &[String],
-        network: UpstreamNetwork<'_>,
-    ) -> Result<Self, HostError> {
-        let direct = crate::EgressProxyRuntimeConfig::direct();
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let build = |base: &Url| {
             let loopback = crate::is_literal_loopback(base);
             if base.scheme() != "https" && !(loopback && base.scheme() == "http") {
-                return Err(HostError::invalid(
+                return Err(ProviderBuildError::invalid(
                     "OAuth destinations require HTTPS; plain HTTP is limited to literal loopback IP addresses",
                 ));
             }
@@ -410,7 +411,11 @@ impl OAuthHttp {
                     label,
                     provider,
                     base,
-                    egress_proxy: None,
+                    egress: if loopback {
+                        EgressDeclaration::LiteralLoopback
+                    } else {
+                        EgressDeclaration::Ordinary(None)
+                    },
                     allowed_upstream_hosts,
                     profile: ClientProfile::Bounded {
                         total: OAUTH_REQUEST_TIMEOUT,
@@ -418,26 +423,20 @@ impl OAuthHttp {
                     },
                     status_reasons: &[],
                 },
-                if loopback {
-                    UpstreamNetwork {
-                        egress: &direct,
-                        ..network
-                    }
-                } else {
-                    network
-                },
+                clients,
             )
         };
         let client = build(base)?;
         let mut destinations = BTreeMap::new();
         for pattern in allowed_upstream_hosts {
-            let endpoint = Url::parse(pattern)
-                .map_err(|_| HostError::invalid("OAuth allowlist requires URL destinations"))?;
+            let endpoint = Url::parse(pattern).map_err(|_| {
+                ProviderBuildError::invalid("OAuth allowlist requires URL destinations")
+            })?;
             if endpoint.host_str().is_none_or(|host| host.contains('*'))
                 || !endpoint.username().is_empty()
                 || endpoint.password().is_some()
             {
-                return Err(HostError::invalid(
+                return Err(ProviderBuildError::invalid(
                     "OAuth allowlist requires fixed HTTP(S) destination origins",
                 ));
             }
@@ -533,9 +532,7 @@ impl OAuthResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EgressProxyEnvironment, EgressProxyRuntimeConfig, ProviderLimits, test_support};
-    use std::sync::Arc;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    use crate::test_support;
 
     #[test]
     fn permission_profiles_preserve_explicit_serialization_and_reject_null_scopes() {
@@ -569,137 +566,64 @@ mod tests {
         );
     }
 
-    fn proxied_egress(proxy: &MockServer) -> EgressProxyRuntimeConfig {
-        let proxy = proxy.uri();
-        let environment = EgressProxyEnvironment::from_lookup(move |key| {
-            Ok(match key {
-                "HTTP_PROXY" | "HTTPS_PROXY" => Some(proxy.clone()),
-                "NO_PROXY" => Some("issuer.internal".into()),
-                _ => None,
-            })
-        })
-        .unwrap();
-        EgressProxyRuntimeConfig::new(Arc::new(environment), None)
-    }
-
-    fn build(
-        base: &str,
-        allowlist: &[String],
-        egress: &EgressProxyRuntimeConfig,
-    ) -> Result<OAuthHttp, HostError> {
+    fn build(base: &str, allowlist: &[String]) -> Result<OAuthHttp, ProviderBuildError> {
         OAuthHttp::build(
             "oauth.test",
             "oauth",
             &Url::parse(base).unwrap(),
             allowlist,
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress,
-                outbound_tls: &test_support::test_outbound_tls(),
-            },
+            &test_support::TestHost::default(),
         )
     }
 
-    #[tokio::test]
-    async fn oauth_routes_each_destination_origin_independently() {
-        let proxy = MockServer::start().await;
-        let loopback = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})))
-            .expect(2)
-            .mount(&loopback)
-            .await;
-        let egress = proxied_egress(&proxy);
-        let token = format!("{}/token", loopback.uri());
+    #[test]
+    fn oauth_requests_the_loopback_route_only_for_literal_loopback_origins() {
+        let host = test_support::TestHost::default();
         let urls = [
-            "https://issuer.internal/metadata".to_owned(),
-            "https://resource.external/metadata".to_owned(),
+            "https://issuer.example/metadata".to_owned(),
             "https://localhost:9/token".to_owned(),
             "https://127.0.0.2:9443/token".to_owned(),
             "http://[::1]:8787/token".to_owned(),
-            token.clone(),
         ];
-        // Neither a loopback issuer nor a proxied one decides another
-        // destination's route.
-        for base in [
-            "https://issuer.internal/",
-            "https://localhost/",
-            "http://127.0.0.1:8787/",
-            "http://[::1]:8787/",
-        ] {
-            let http = build(base, &urls, &egress).unwrap();
-            let route = |origin: &str| http.destinations[origin].egress_proxy().audit_value();
-            assert_eq!(route("https://issuer.internal")["mode"], "direct");
-            assert_eq!(route("https://127.0.0.2:9443")["mode"], "direct");
-            assert_eq!(route("http://[::1]:8787")["mode"], "direct");
-            assert_eq!(route(&loopback.uri())["mode"], "direct");
-            for proxied in ["https://resource.external", "https://localhost:9"] {
-                assert_eq!(route(proxied)["mode"], "environment", "{base} {proxied}");
-                assert_eq!(route(proxied)["proxy"], proxy.uri(), "{base} {proxied}");
-            }
-            let expected = if base == "https://localhost/" {
-                serde_json::json!({"mode":"environment","proxy":proxy.uri()})
-            } else {
-                serde_json::json!({"mode":"direct"})
-            };
-            assert_eq!(http.client.egress_proxy().audit_value(), expected, "{base}");
-        }
-
-        // The literal loopback destination is reached directly, although the
-        // environment names a proxy for both schemes.
-        let http = build("https://localhost/", &urls, &egress).unwrap();
-        let response = http
-            .send(
-                http.request(Method::POST, Url::parse(&token).unwrap())
-                    .form(&[("code", "synthetic-code")]),
-                "oauth.token",
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        let http = build("http://127.0.0.1:8787/", &urls, &egress).unwrap();
+        OAuthHttp::build(
+            "oauth.test",
+            "oauth",
+            &Url::parse("http://127.0.0.1:8787/").unwrap(),
+            &urls,
+            &host,
+        )
+        .unwrap();
+        let requested = host
+            .built_clients()
+            .into_iter()
+            .map(|client| {
+                (
+                    client.base.origin().ascii_serialization(),
+                    client.literal_loopback,
+                    client.profile,
+                )
+            })
+            .collect::<Vec<_>>();
+        let profile = ClientProfile::Bounded {
+            total: OAUTH_REQUEST_TIMEOUT,
+            connect: OAUTH_CONNECT_TIMEOUT,
+        };
         assert_eq!(
-            http.send(
-                http.request(Method::POST, Url::parse(&token).unwrap()),
-                "oauth.token"
-            )
-            .await
-            .unwrap()
-            .status(),
-            200
+            requested,
+            [
+                ("http://127.0.0.1:8787".to_owned(), true, profile),
+                ("https://issuer.example".to_owned(), false, profile),
+                ("https://localhost:9".to_owned(), false, profile),
+                ("https://127.0.0.2:9443".to_owned(), true, profile),
+                ("http://[::1]:8787".to_owned(), true, profile),
+            ]
         );
-        // `https://localhost` is tunneled through the proxy, never resolved
-        // and connected to directly.
-        assert!(
-            http.send(
-                http.request(Method::POST, Url::parse(&urls[2]).unwrap()),
-                "oauth.token"
-            )
-            .await
-            .is_err()
-        );
-        let tunneled = proxy.received_requests().await.unwrap();
-        assert_eq!(tunneled.len(), 1);
-        assert_eq!(tunneled[0].method.as_str(), "CONNECT");
-        assert_eq!(tunneled[0].headers["host"], "localhost:9");
-        assert!(matches!(
-            http.send(
-                http.request(
-                    Method::GET,
-                    Url::parse("https://not-approved.invalid/token").unwrap()
-                ),
-                "oauth.token"
-            )
-            .await,
-            Err(OAuthDialectError::NotSent)
-        ));
     }
 
     #[test]
     fn oauth_plain_http_requires_a_literal_loopback_address() {
-        let egress = EgressProxyRuntimeConfig::direct();
         for base in ["http://127.0.0.1:8787/", "http://[::1]:8787/"] {
-            build(base, &[format!("{base}token")], &egress).unwrap();
+            build(base, &[format!("{base}token")]).unwrap();
         }
         for insecure in [
             "http://localhost:8787/",
@@ -709,7 +633,7 @@ mod tests {
         ] {
             // Rejected as the base and as any allowlisted destination, even
             // beside an approved loopback issuer.
-            assert!(build(insecure, &[], &egress).is_err(), "{insecure}");
+            assert!(build(insecure, &[]).is_err(), "{insecure}");
             assert!(
                 build(
                     "http://127.0.0.1:8787/",
@@ -717,7 +641,6 @@ mod tests {
                         "http://127.0.0.1:8787/token".into(),
                         format!("{insecure}token")
                     ],
-                    &egress,
                 )
                 .is_err(),
                 "{insecure}"
@@ -730,7 +653,7 @@ mod tests {
             "token.example/token",
         ] {
             assert!(
-                build("https://issuer.example/", &[invalid.into()], &egress).is_err(),
+                build("https://issuer.example/", &[invalid.into()]).is_err(),
                 "{invalid}"
             );
         }

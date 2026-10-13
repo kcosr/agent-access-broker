@@ -83,55 +83,22 @@ pub struct ConfluenceProvider {
 }
 
 impl ConfluenceProvider {
-    pub fn new(
+    pub(crate) fn new(
         config: ConfluenceProviderConfig,
-        limits: ProviderLimits,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress(
-        config: ConfluenceProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress_and_signing_key(
-            config,
-            limits,
-            egress_proxy,
-            None,
-            ProviderAttributionConfig::default(),
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress_and_signing_key(
-        config: ConfluenceProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        stable_signing_key: Option<Arc<dyn StableSigningKey>>,
-        attribution: ProviderAttributionConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        let backend = Arc::new(HttpConfluenceBackend::new_with_egress(
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
+        let limits = host.limits().clone();
+        let backend = Arc::new(HttpConfluenceBackend::new(
             config.clone(),
             limits.clone(),
-            egress_proxy,
-            outbound_tls,
+            host.clients(),
         )?);
         Ok(Self {
             config,
             limits,
             backend,
-            pagination_signer: ConfluenceTokenSigner::new(stable_signing_key),
-            attribution,
+            pagination_signer: ConfluenceTokenSigner::new(host.stable_signing_key().cloned()),
+            attribution: host.attribution().clone(),
         })
     }
 

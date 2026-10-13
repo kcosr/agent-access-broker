@@ -17,6 +17,7 @@ mod principal_service_limits;
 mod resource_attributes;
 mod resources;
 use crate::fs_permissions;
+use crate::load_secret_ref_value;
 #[cfg(test)]
 use crate::sqlite_support::ValidatedLedger;
 use crate::sqlite_support::{self, SqliteAdmissionError, SqliteMigration, SqliteStoreLabel};
@@ -31,7 +32,6 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use agent_access_provider::{
     ExecutionCredential, ReasonCode, ResourceSelector, ResourceType, is_service_name,
-    load_secret_ref_value,
 };
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};

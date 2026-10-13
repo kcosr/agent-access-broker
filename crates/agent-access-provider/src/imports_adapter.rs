@@ -1,7 +1,7 @@
 //! Protocol-specific implementation seam for managed imported services.
 use crate::{
-    BuildContext, DelegatedCredential, ExecutionCredential, HostError, ImportedActionDefinition,
-    ImportedServiceDefinition, Provider, ProviderError,
+    BuildContext, DelegatedCredential, ExecutionCredential, ImportedActionDefinition,
+    ImportedServiceDefinition, Provider, ProviderBuildError, ProviderError,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -74,13 +74,14 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// scoped MCP profile. Must succeed for every action accepted by validation.
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String>;
     /// Construction compiles accepted schemas and host transports without network I/O.
+    /// The host builds an adapter's clients in the ordinary routing category.
     fn build(
         &self,
         definition: &ImportedServiceDefinition,
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError>;
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError>;
     /// The host resolves/authorizes both identities and gates the endpoint before calling.
     async fn discover(
         &self,

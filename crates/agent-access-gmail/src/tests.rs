@@ -50,16 +50,24 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     }
 }
 fn provider(server: &MockServer) -> GmailProvider {
-    let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
+    let host = agent_access_provider::test_support::TestHost::default();
     GmailProvider::new(
         Url::parse(&format!("{}/gmail/v1/users/me/", server.uri())).unwrap(),
-        UpstreamNetwork {
-            limits: &ProviderLimits::default(),
-            egress: &EgressProxyRuntimeConfig::direct(),
-            outbound_tls: &tls,
-        },
+        &host,
+        &host.limits,
     )
     .unwrap()
+}
+
+#[test]
+fn build_uses_one_request_client_for_the_gmail_api() {
+    let host = agent_access_provider::test_support::TestHost::default();
+    GmailConfig {}.build(&host.context()).unwrap();
+    let built = host.built_clients();
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].base.as_str(), API);
+    assert_eq!(built[0].profile, ClientProfile::Request);
+    assert!(!built[0].literal_loopback);
 }
 fn message() -> Value {
     json!({"id":"a123","threadId":"b456","labelIds":["INBOX"],"snippet":"private snippet","payload":{"mimeType":"text/plain","headers":[{"name":"Subject","value":"private subject"}],"body":{"data":URL_SAFE_NO_PAD.encode("private body")}}})

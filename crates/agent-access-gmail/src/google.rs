@@ -377,17 +377,12 @@ mod tests {
     async fn token_wire_is_form_encoded_and_error_classification_preserves_recovery() {
         let server = MockServer::start().await;
         let base = Url::parse(&server.uri()).unwrap();
-        let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
         let http = OAuthHttp::build(
             "test",
             "google",
             &base,
             &[format!("{}/**", server.uri())],
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &tls,
-            },
+            &agent_access_provider::test_support::TestHost::default(),
         )
         .unwrap();
         let c = config();

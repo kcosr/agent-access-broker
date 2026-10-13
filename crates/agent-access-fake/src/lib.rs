@@ -2,9 +2,10 @@
 //! `fake_project` resources, used by smoke tests and local fixtures.
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, CredentialDescriptor,
-    EgressProxyConfig, HostError, Provider, ProviderError, ProviderInvocation, ProviderResult,
-    ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType, ResourceTypeDescriptor,
-    ServiceDescriptor, ServiceProvider, ServiceSurface, ValidationContext, parse_backend_config,
+    EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
+    ResourceTypeDescriptor, ServiceDescriptor, ServiceProvider, ServiceSurface, ValidationContext,
+    parse_backend_config,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -175,7 +176,7 @@ impl BackendConfig for FakeProviderConfig {
         Vec::new()
     }
 
-    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(FakeProvider))
     }
 }

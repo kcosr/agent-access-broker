@@ -103,18 +103,24 @@ also includes a same-origin browser portal frontend:
   the shared `upstream_rate_limited` error, and the applied-unverified
   `mutation_verification_failed` for throttling after an applied write), the
   OAuth dialect contract (`oauth_dialect.rs`), delegated credentials
-  (`delegated.rs`), and the host services backends use: upstream HTTP clients (`upstream.rs`), the
-  egress-proxy resolver (`egress_proxy.rs`), outbound TLS trust, upstream
-  allowlists, correlation headers, upstream trace events (`trace.rs`), and
-  opaque token signing (`signing.rs`).
+  (`delegated.rs`), and the host services backends use: upstream HTTP clients
+  (`upstream.rs`), egress declarations and sanitized routes
+  (`egress_config.rs`), upstream allowlists, correlation headers, upstream
+  trace events (`trace.rs`), and opaque token signing (`signing.rs`). Its
+  public `host` module (`host.rs`) is the construction interface the host
+  implements: the build context and the upstream client factory port. The SDK
+  resolves no secret references, loads no TLS files and reads no process
+  environment.
 - **`agent-access-core`** — the library: the request runtime
   (`runtime.rs`), the audit writer and its storage backends
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries
   (`audit_query.rs`), the backend registry (`backends.rs`), the managed
-  credential store (`managed_store.rs`), config parsing and validation, and the
-  response envelope types (`lib.rs`). It contains no backend and does not
-  re-export the backend contract; the host, the binary, and the CLI depend on
-  `agent-access-provider` directly.
+  credential store (`managed_store.rs`), config parsing and validation, host
+  secret-reference resolution (`config_error.rs`), host network construction
+  (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
+  upstream client factories), and the response envelope types (`lib.rs`). It
+  contains no backend and does not re-export the backend contract; the host,
+  the binary, and the CLI depend on `agent-access-provider` directly.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.
@@ -216,19 +222,30 @@ A parsed table is a `BackendConfig`: it validates itself against a narrow view
 of the rest of the configuration (deployment environment, broker limits, and
 the credential kinds configured for its service), derives its service
 descriptor, lists its egress proxies for startup preflight, and builds its
-provider from host services (limits, egress selection, outbound TLS,
+provider from a `BuildContext`: limits, the host's upstream client factory,
 attribution, and the optional stable signing key, scoped to the backend's
-service so one backend's tokens never verify for another). Configuration parsing,
-validation, and provider construction never name a backend kind; development
-fixtures additionally require `deployment.enable_fake_service`.
+service so one backend's tokens never verify for another. Building is
+synchronous and offline: it prepares clients and capabilities but never
+contacts an upstream, verifies a credential or refreshes OAuth. A failure is a
+`ProviderBuildError` carrying safe configuration diagnostics; when the host's
+own network construction failed, the host keeps its cause, such as a missing
+proxy credential reference. Configuration parsing, validation, and provider
+construction never name a backend kind; development fixtures additionally
+require `deployment.enable_fake_service`.
 
-Backends reach their upstream through `UpstreamClient`s built from those host
-services, which apply the rules every backend shares. Each client uses the
-broker's outbound TLS trust and the backend's resolved egress proxy, never
+Backends reach their upstream through `UpstreamClient`s built through that
+factory, which apply the rules every backend shares. A backend declares each
+client's label, base URL, egress declaration (ordinary routing with its
+configured service proxy, or the literal-loopback request described under
+[Egress proxy model](#egress-proxy-model)) and profile; core constructs the
+client with the generation's outbound TLS trust and selected route, never
 follows redirects on its own, and bounds time by profile: a whole-request
-timeout for ordinary requests, none for streamed downloads (the backend bounds
-each chunk), and a connect timeout for uploads, whose bodies fail after the
-streaming idle timeout without progress. Every request, including each hop of
+timeout for ordinary requests (with automatic retries disabled for
+single-attempt and explicitly bounded clients), none for streamed downloads
+(the backend bounds each chunk), and a connect timeout for uploads, whose
+bodies fail after the streaming idle timeout without progress. Backends see
+only the sanitized route (mode and proxy origin) for audit, never proxy
+credentials. Every request, including each hop of
 a redirect chain followed with `get_following_redirects`, must match the
 backend's `allowed_upstream_hosts`. Credentials go only to the service's own
 origin; redirect hops to other origins carry correlation headers only when the
@@ -253,7 +270,7 @@ only host change. The crate supplies:
   published metadata.
 - **Typed configuration**: a strict `[providers.<kind>]` struct implementing
   `BackendConfig` (validation messages under `providers.<kind>`, egress proxies
-  for preflight, and provider construction from host services).
+  for preflight, and offline provider construction from a `BuildContext`).
 - **A service descriptor**: actions with input schemas, resource scopes,
   credential modes and lookups, explicit read-only classification,
   raw-download or multipart-upload I/O,
@@ -1726,6 +1743,22 @@ streaming, Git HTTP gateways, and the
 `api.atlassian.com` gateway.
 The audit `egressProxy` value records the mode plus a sanitized origin.
 
+Core owns route selection. Every client a provider, import adapter or the OAuth
+manager uses comes from a client factory that core constructs for one caller
+category and runtime generation: the host's OAuth manager, a particular native
+registration together with its development-only marker, or an import adapter.
+A client's label or provider identity never changes its category. A client
+declares either ordinary routing (the precedence above, with its configured
+service proxy) or a request for a direct route to a literal IPv4/IPv6 loopback
+base URL. Core grants that request only to OAuth clients and to development-only
+native registrations the deployment enables (`deployment.enable_fake_service`
+outside production), and only for a literal loopback IP address; it fails the
+client's construction otherwise. Production native providers and shipped import
+adapters therefore use ordinary proxy and `NO_PROXY` selection even for loopback
+destinations, and host names such as `localhost` never receive the exception.
+Startup preflights every configured proxy, including credential references,
+even when a captured environment proxy would take precedence.
+
 ## Outbound TLS trust
 
 `network.outbound_tls` selects `system` (the default), `custom`, or
@@ -1876,10 +1909,11 @@ with the binary through the backend registry, like backends; the host registers
 the development-only `stub` dialect, and this binary links `google` and
 `mcp_oauth`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
-connect), the registration's allowlist, and upstream traces. Egress proxy
-resolution is independent for each approved destination origin; only literal
-loopback IP destinations connect directly, without affecting other hosts. Host
-names, including `localhost`, never receive that exception. The manager
+connect), the registration's allowlist, and upstream traces. The manager
+builds them through its host OAuth client factory, one client per approved
+destination origin, so egress proxy resolution is independent for each origin;
+only literal loopback IP destinations connect directly, without affecting other
+hosts. Host names, including `localhost`, never receive that exception. The manager
 validates every grant's bounds, scopes and targets regardless of dialect.
 
 The Gmail backend is a separately linked provider crate. Its Google OAuth dialect

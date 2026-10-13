@@ -1,5 +1,6 @@
 //! The Jira backend seam, its wire types, and the HTTP implementation.
 use super::*;
+use agent_access_provider::host::UpstreamClientFactory;
 
 #[cfg(test)]
 #[path = "backend_issue_types_tests.rs"]
@@ -8,7 +9,7 @@ mod issue_types_tests;
 #[async_trait]
 pub trait JiraBackend: Send + Sync {
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        EgressProxySelection::direct().audit_value()
+        EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
@@ -694,46 +695,32 @@ pub(crate) struct HttpJiraBackend {
 
 impl HttpJiraBackend {
     #[cfg(test)]
-    pub(crate) fn new(config: JiraProviderConfig, limits: ProviderLimits) -> Self {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
-        )
-        .expect("Jira HTTP client configuration is valid")
+    pub(crate) fn for_tests(config: JiraProviderConfig, limits: ProviderLimits) -> Self {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host).expect("Jira HTTP client configuration is valid")
     }
 
-    pub(crate) fn new_with_egress(
+    pub(crate) fn new(
         config: JiraProviderConfig,
         limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let tenant_base = Url::parse(&format!("https://{}/rest/api/3/", config.tenant_host))
             .map_err(|error| {
-                HostError::Config(crate::ConfigError::Invalid {
-                    errors: vec![format!("providers.jira.tenant_host is invalid: {error}")],
-                })
+                ProviderBuildError::invalid(format!(
+                    "providers.jira.tenant_host is invalid: {error}"
+                ))
             })?;
-        let network = UpstreamNetwork {
-            limits: &limits,
-            egress: egress_proxy,
-            outbound_tls,
-        };
         let tenant_clients =
-            JiraHttpClients::new("providers.jira.egress_proxy", tenant_base, network, &config)?;
+            JiraHttpClients::new("providers.jira.egress_proxy", tenant_base, clients, &config)?;
         let gateway_clients = if config.cloud_id.is_some()
             && agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts)
         {
             Some(JiraHttpClients::new(
                 "providers.jira.egress_proxy",
-                jira_gateway_api_base(&config).map_err(|error| {
-                    HostError::Config(crate::ConfigError::Invalid {
-                        errors: vec![error.to_string()],
-                    })
-                })?,
-                network,
+                jira_gateway_api_base(&config)
+                    .map_err(|error| ProviderBuildError::invalid(error.to_string()))?,
+                clients,
                 &config,
             )?)
         } else {
@@ -763,44 +750,28 @@ impl HttpJiraBackend {
         }
     }
 
+    /// Clients for one API base from the test host, routed through the
+    /// configuration's service proxy when it sets one.
     #[cfg(test)]
     pub(crate) fn new_with_api_base(
         config: JiraProviderConfig,
         limits: ProviderLimits,
         api_base_override: Url,
     ) -> Self {
-        Self::new_with_api_base_and_egress(
-            config,
-            limits,
-            api_base_override,
-            &EgressProxyRuntimeConfig::direct(),
-        )
-        .expect("Jira HTTP client configuration is valid")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_api_base_and_egress(
-        config: JiraProviderConfig,
-        limits: ProviderLimits,
-        api_base_override: Url,
-        egress_proxy: &EgressProxyRuntimeConfig,
-    ) -> Result<Self, HostError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
         let clients = JiraHttpClients::new(
             "providers.jira.egress_proxy",
             api_base_override,
-            UpstreamNetwork {
-                limits: &limits,
-                egress: egress_proxy,
-                outbound_tls: &agent_access_provider::test_support::test_outbound_tls(),
-            },
+            &host,
             &config,
-        )?;
-        Ok(Self {
+        )
+        .expect("Jira HTTP client configuration is valid");
+        Self {
             tenant_clients: clients.clone(),
             gateway_clients: Some(clients),
             config,
             limits,
-        })
+        }
     }
 
     pub(crate) fn api_base(
@@ -822,21 +793,21 @@ impl JiraHttpClients {
     pub(crate) fn new(
         label: &str,
         api_base: Url,
-        network: UpstreamNetwork<'_>,
+        clients: &dyn UpstreamClientFactory,
         config: &JiraProviderConfig,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
         let client = |profile| {
             UpstreamClient::build(
                 UpstreamClientSpec {
                     label,
                     provider: "jira",
                     base: &api_base,
-                    egress_proxy: config.egress_proxy.as_ref(),
+                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
                     allowed_upstream_hosts: &config.allowed_upstream_hosts,
                     profile,
                     status_reasons: &[],
                 },
-                network,
+                clients,
             )
         };
         Ok(Self {
@@ -875,7 +846,7 @@ impl HttpJiraBackend {
         self.client_for(credential)
             .unwrap()
             .client
-            .egress_proxy()
+            .egress_route()
             .audit_value()
     }
 }
@@ -900,8 +871,8 @@ impl HttpJiraBackend {
 impl JiraBackend for HttpJiraBackend {
     fn egress_proxy_audit(&self, credential: &ExecutionCredential) -> Value {
         self.client_for(credential)
-            .map(|clients| clients.client.egress_proxy().audit_value())
-            .unwrap_or_else(|_| EgressProxySelection::direct().audit_value())
+            .map(|clients| clients.client.egress_route().audit_value())
+            .unwrap_or_else(|_| EgressRoute::direct().audit_value())
     }
 
     async fn issue_types(

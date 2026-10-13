@@ -652,7 +652,7 @@ impl CloudbeesCiProvider {
             input,
             result,
             &reply,
-            controller.download_client.egress_proxy(),
+            controller.download_client.egress_route(),
         ))
     }
 }
@@ -1165,13 +1165,7 @@ mod tests {
             egress_proxy: None,
             allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
         };
-        let ci = CloudbeesCiProvider::new_with_egress(
-            config,
-            ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
-        )
-        .unwrap();
+        let ci = CloudbeesCiProvider::for_tests(config, ProviderLimits::default()).unwrap();
         assert_eq!(read(&ci, inputs("tail")).await.unwrap()["text"], "ab🙂éZ");
         serve.await.unwrap();
     }
@@ -1191,7 +1185,7 @@ mod tests {
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100\r\nConnection: close\r\n\r\nx").await.unwrap();
                 std::future::pending::<()>().await;
             });
-            let ci = CloudbeesCiProvider::new_with_egress(
+            let ci = CloudbeesCiProvider::for_tests(
                 CloudbeesCiProviderConfig {
                     max_log_scan_bytes: default_scan_limit(),
                     controllers: BTreeMap::from([(
@@ -1209,8 +1203,6 @@ mod tests {
                     streaming_idle_timeout_ms: idle,
                     ..ProviderLimits::default()
                 },
-                &EgressProxyRuntimeConfig::direct(),
-                &agent_access_provider::test_support::test_outbound_tls(),
             )
             .unwrap();
             let error = read(&ci, inputs("tail")).await.unwrap_err();
@@ -1314,7 +1306,7 @@ mod tests {
             let mut byte = [0];
             socket.read(&mut byte).await.unwrap_or(0)
         });
-        let ci = CloudbeesCiProvider::new_with_egress(
+        let ci = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -1328,8 +1320,6 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
             },
             ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap();
         let task = tokio::spawn(async move { read(&ci, inputs("tail")).await });

@@ -1,10 +1,16 @@
 //! Helpers for backend and host tests. Fixtures are embedded from
 //! `test_support/fixtures/`; nothing is read from the filesystem.
-use crate::{
-    OpaqueTokenSigner, PreparedOutboundTls, Provider, ServiceDescriptor, ServiceProvider,
-    SigningError, StableSigningKey,
+use crate::host::{
+    ClientTransportSpec, TransportClient, UpstreamClientFactory, UpstreamClientFactoryError,
 };
-use std::sync::Arc;
+use crate::{
+    BuildContext, ClientProfile, EgressDeclaration, EgressProxySource, EgressRoute,
+    OpaqueTokenSigner, Provider, ProviderAttributionConfig, ProviderLimits, ServiceDescriptor,
+    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
+};
+use rustls::pki_types::{CertificateDer, pem::PemObject};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use url::Url;
 
 mod trace_capture;
 
@@ -28,13 +34,169 @@ impl<P: DescribedProvider> From<Arc<P>> for ServiceProvider {
 /// A self-signed CA certificate for PEM parsing tests.
 pub const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBgDCCASegAwIBAgIUPHDUu9WL36yvTmFeNFZVe/qhClcwCgYIKoZIzj0EAwIw\nHTEbMBkGA1UEAwwSUnVzdGxzIFJvYnVzdCBSb290MCAXDTc1MDEwMTAwMDAwMFoY\nDzQwOTYwMTAxMDAwMDAwWjAdMRswGQYDVQQDDBJSdXN0bHMgUm9idXN0IFJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASW/VkDFs5iGDQvH8jaXYT4jMx66jo+\n5CWKyMt4OlTDdBfKfnmQ9LYeK/PsYfJ8wVizuSlPzXi9je8SnyYejGP3o0MwQTAP\nBgNVHQ8BAf8EBQMDB4QAMB0GA1UdDgQWBBRqY/oMENJbNo7y39iL6GW3tDs0rzAP\nBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQCIEUbrmSUjANju9nNpFop\nPAl9Wh8tBxI5IY+BPh466+aUAiA1/9+prypt6s3Doo0GDsnoFGJi1UBivUg1qdik\ncy4eNw==\n-----END CERTIFICATE-----\n";
 
-/// Outbound TLS trust that accepts only this package's embedded test CA
-/// (`test_support/fixtures/outbound-tls-ca.pem`).
-pub fn test_outbound_tls() -> PreparedOutboundTls {
-    PreparedOutboundTls::custom_from_pem(
-        include_bytes!("test_support/fixtures/outbound-tls-ca.pem").as_slice(),
-    )
-    .expect("test CA is valid")
+/// The host side of provider construction for tests: limits, attribution, an
+/// optional stable signing key, and a deterministic, offline
+/// [`UpstreamClientFactory`] with no host dependency.
+///
+/// Its clients trust only this package's embedded test CA
+/// (`test_support/fixtures/outbound-tls-ca.pem`), apply the requested profile
+/// against [`Self::limits`] at construction time, and never follow redirects.
+/// Routing is fixed and environment-independent: an ordinary client with a
+/// configured service proxy uses that proxy (credential references are
+/// rejected, because nothing here resolves secrets); every other ordinary
+/// client connects directly; a literal-loopback request is granted for a
+/// literal loopback IP base and rejected otherwise. Every client built is
+/// recorded in [`Self::built_clients`].
+pub struct TestHost {
+    pub limits: ProviderLimits,
+    pub attribution: ProviderAttributionConfig,
+    pub stable_signing_key: Option<Arc<dyn StableSigningKey>>,
+    built: Mutex<Vec<BuiltClient>>,
+}
+
+/// One client a [`TestHost`] built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltClient {
+    pub label: String,
+    pub provider: &'static str,
+    pub base: Url,
+    pub profile: ClientProfile,
+    /// Whether the client asked for the direct literal-loopback route.
+    pub literal_loopback: bool,
+    pub route: EgressRoute,
+}
+
+impl Default for TestHost {
+    fn default() -> Self {
+        Self::with_limits(ProviderLimits::default())
+    }
+}
+
+impl TestHost {
+    pub fn with_limits(limits: ProviderLimits) -> Self {
+        Self {
+            limits,
+            attribution: ProviderAttributionConfig::default(),
+            stable_signing_key: None,
+            built: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The build context a backend receives, lending this host's settings
+    /// and client factory.
+    pub fn context(&self) -> BuildContext<'_> {
+        crate::host::build_context(
+            &self.limits,
+            self,
+            self.attribution.clone(),
+            self.stable_signing_key.clone(),
+        )
+    }
+
+    /// The clients built so far, in construction order.
+    pub fn built_clients(&self) -> Vec<BuiltClient> {
+        self.built
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl std::fmt::Debug for TestHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TestHost")
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl UpstreamClientFactory for TestHost {
+    fn build_client(
+        &self,
+        spec: &ClientTransportSpec<'_>,
+    ) -> Result<TransportClient, UpstreamClientFactoryError> {
+        let label = spec.label();
+        let (route, proxy) = match spec.egress() {
+            EgressDeclaration::Ordinary(None) => (EgressRoute::direct(), None),
+            EgressDeclaration::Ordinary(Some(config)) => {
+                if config.username_ref.is_some() || config.password_ref.is_some() {
+                    return Err(UpstreamClientFactoryError::new(format!(
+                        "{label}: the test host does not resolve proxy credentials"
+                    )));
+                }
+                let url = Url::parse(&config.url).map_err(|_| {
+                    UpstreamClientFactoryError::new(format!("{label}.url must be a valid URL"))
+                })?;
+                let proxy = reqwest::Proxy::all(url.as_str()).map_err(|_| {
+                    UpstreamClientFactoryError::new(format!("{label}.url could not be applied"))
+                })?;
+                (
+                    EgressRoute::proxied(EgressProxySource::Service, &url),
+                    Some(proxy),
+                )
+            }
+            EgressDeclaration::LiteralLoopback if is_literal_loopback(spec.base()) => {
+                (EgressRoute::direct(), None)
+            }
+            EgressDeclaration::LiteralLoopback => {
+                return Err(UpstreamClientFactoryError::new(format!(
+                    "{label}: the direct loopback route needs a literal loopback IP address"
+                )));
+            }
+        };
+        let builder = crate::host::configure_client_profile(
+            reqwest::Client::builder()
+                .use_preconfigured_tls(rustls::ClientConfig::clone(test_tls()))
+                .no_proxy(),
+            spec.profile(),
+            &self.limits,
+        );
+        let builder = match proxy {
+            Some(proxy) => builder.proxy(proxy),
+            None => builder,
+        };
+        let client = builder.build().map_err(|error| {
+            UpstreamClientFactoryError::new(format!("{label} HTTP client: {error}"))
+        })?;
+        self.built
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(BuiltClient {
+                label: label.to_owned(),
+                provider: spec.provider(),
+                base: spec.base().clone(),
+                profile: spec.profile(),
+                literal_loopback: matches!(spec.egress(), EgressDeclaration::LiteralLoopback),
+                route: route.clone(),
+            });
+        Ok(TransportClient::new(client, route))
+    }
+}
+
+/// TLS that trusts only the embedded test CA, with HTTP/1.1 ALPN like the
+/// host's prepared trust.
+fn test_tls() -> &'static Arc<rustls::ClientConfig> {
+    static TLS: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    TLS.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        for certificate in CertificateDer::pem_slice_iter(include_bytes!(
+            "test_support/fixtures/outbound-tls-ca.pem"
+        )) {
+            roots
+                .add(certificate.expect("test CA is valid PEM"))
+                .expect("test CA is a valid trust anchor");
+        }
+        let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("default TLS versions are supported")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Arc::new(tls)
+    })
 }
 
 /// A stable signing key of `byte` repeated, for handles and cursors that

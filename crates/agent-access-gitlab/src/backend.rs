@@ -16,7 +16,7 @@ pub trait GitlabBackend: Send + Sync {
     }
 
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        EgressProxySelection::direct().audit_value()
+        EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
@@ -2104,34 +2104,38 @@ pub(crate) struct HttpGitlabBackend {
 }
 
 impl HttpGitlabBackend {
-    pub(crate) fn new_with_egress(
+    /// A backend whose clients come from a test host with `limits`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         config: GitlabProviderConfig,
         limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host)
+    }
+
+    pub(crate) fn new(
+        config: GitlabProviderConfig,
+        limits: ProviderLimits,
+        clients: &dyn agent_access_provider::host::UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let api_base = normalized_api_base(&config.api_base_url).map_err(|error| {
-            HostError::Config(crate::ConfigError::Invalid {
-                errors: vec![format!("providers.gitlab.api_base_url is invalid: {error}")],
-            })
+            ProviderBuildError::invalid(format!(
+                "providers.gitlab.api_base_url is invalid: {error}"
+            ))
         })?;
-        let network = UpstreamNetwork {
-            limits: &limits,
-            egress: egress_proxy,
-            outbound_tls,
-        };
         let client = |profile| {
             UpstreamClient::build(
                 UpstreamClientSpec {
                     label: "providers.gitlab.egress_proxy",
                     provider: "gitlab",
                     base: &api_base,
-                    egress_proxy: config.egress_proxy.as_ref(),
+                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
                     allowed_upstream_hosts: &config.allowed_upstream_hosts,
                     profile,
                     status_reasons: &[],
                 },
-                network,
+                clients,
             )
         };
         let upload_client = client(ClientProfile::Upload)?;
@@ -2448,7 +2452,7 @@ impl GitlabBackend for HttpGitlabBackend {
     }
 
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        self.client.egress_proxy().audit_value()
+        self.client.egress_route().audit_value()
     }
 
     async fn current_user(

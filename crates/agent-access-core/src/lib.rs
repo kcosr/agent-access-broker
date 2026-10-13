@@ -1,12 +1,11 @@
 use agent_access_provider::{
-    BackendConfig, ConfigError, CredentialDescriptor, DEFAULT_MAX_HTTP_BODY_BYTES,
+    BackendConfig, CredentialDescriptor, DEFAULT_MAX_HTTP_BODY_BYTES,
     DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES, DEFAULT_REQUEST_TIMEOUT_MS,
-    DEFAULT_STREAMING_IDLE_TIMEOUT_MS, Decision, EgressProxyConfig, OAuthScopeMode,
-    OutboundTlsConfig, PreparedOutboundTls, ProviderLimits, ReadContentFormat, ReasonCode,
-    ResourceScopes, ResourceSelector, ResourceTypeRegistry, ResponseFormat, ServiceCredentialKinds,
-    ServiceDescriptor, ValidationContext, default_download_max_bytes, is_action_name, is_env_name,
-    is_loopback_or_localhost, is_secret_ref, is_service_name, parse_strict_certificate_pem_bundle,
-    validate_egress_proxy_config, validate_upstream_allowlist,
+    DEFAULT_STREAMING_IDLE_TIMEOUT_MS, Decision, EgressProxyConfig, OAuthScopeMode, ProviderLimits,
+    ReadContentFormat, ReasonCode, ResourceScopes, ResourceSelector, ResourceTypeRegistry,
+    ResponseFormat, ServiceCredentialKinds, ServiceDescriptor, ValidationContext,
+    default_download_max_bytes, is_action_name, is_env_name, is_loopback_or_localhost,
+    is_secret_ref, is_service_name, validate_egress_proxy_config, validate_upstream_allowlist,
 };
 use attribution::validate_attribution_config;
 use regex::Regex;
@@ -24,6 +23,7 @@ mod api;
 mod attribution;
 mod audit_query;
 mod backends;
+mod config_error;
 mod fs_permissions;
 mod import_names;
 mod imports_config;
@@ -32,6 +32,7 @@ mod managed_store;
 pub mod mcp;
 mod mcp_config;
 pub mod microsoft_oidc;
+mod network;
 mod node_identity;
 pub mod oauth;
 mod oauth_records;
@@ -46,11 +47,16 @@ pub use api::*;
 pub use attribution::AttributionConfig;
 pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
+pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
 pub use import_names::*;
 pub use imports_config::*;
 pub use invocation_limits::*;
 pub use managed_store::*;
 pub use mcp_config::*;
+pub use network::{
+    OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls,
+    parse_strict_certificate_pem_bundle,
+};
 pub use node_identity::*;
 pub use oauth::*;
 pub use resource_policy::*;

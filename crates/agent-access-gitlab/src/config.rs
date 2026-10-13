@@ -276,14 +276,7 @@ impl BackendConfig for GitlabProviderConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        Ok(Arc::new(GitlabProvider::new_with_egress_and_signing_key(
-            self.clone(),
-            host.limits.clone(),
-            host.egress,
-            host.stable_signing_key.clone(),
-            host.attribution.clone(),
-            host.outbound_tls,
-        )?))
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        Ok(Arc::new(GitlabProvider::new(self.clone(), host)?))
     }
 }

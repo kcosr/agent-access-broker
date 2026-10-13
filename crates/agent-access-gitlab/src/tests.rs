@@ -25,17 +25,33 @@ fn http_backend_for_base(uri: &str) -> HttpGitlabBackend {
     let mut config = config();
     config.api_base_url = format!("{uri}/api/v4");
     config.allowed_upstream_hosts = vec![format!("{uri}/api/v4/**")];
-    HttpGitlabBackend::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap()
+    HttpGitlabBackend::for_tests(config, ProviderLimits::default()).unwrap()
 }
 
 fn http_backend(server: &MockServer) -> HttpGitlabBackend {
     http_backend_for_base(&server.uri())
+}
+
+#[test]
+fn build_creates_upload_and_request_clients_for_the_api_base() {
+    let host = agent_access_provider::test_support::TestHost::default();
+    config().build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.gitlab.egress_proxy".to_string();
+    let base = normalized_api_base(&config().api_base_url)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        built,
+        [
+            (label.clone(), base.clone(), ClientProfile::Upload),
+            (label, base, ClientProfile::Request),
+        ]
+    );
 }
 
 fn upload_fixture() -> (Value, BrokerBodyPart) {
@@ -191,15 +207,13 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     let mut config = config();
     config.api_base_url = format!("{}/api/v4", server.uri());
     config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
-    let backend = HttpGitlabBackend::new_with_egress(
+    let backend = HttpGitlabBackend::for_tests(
         config.clone(),
         ProviderLimits {
             request_timeout_ms: 10,
             streaming_idle_timeout_ms: 1000,
             ..ProviderLimits::default()
         },
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
     )
     .unwrap();
     assert!(
@@ -208,15 +222,13 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
             .await
             .is_ok()
     );
-    let backend = HttpGitlabBackend::new_with_egress(
+    let backend = HttpGitlabBackend::for_tests(
         config,
         ProviderLimits {
             request_timeout_ms: 1000,
             streaming_idle_timeout_ms: 5,
             ..ProviderLimits::default()
         },
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
     )
     .unwrap();
     assert!(matches!(
@@ -241,14 +253,12 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
         let mut config = config();
         config.api_base_url = format!("{}/api/v4", server.uri());
         config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
-        let backend = HttpGitlabBackend::new_with_egress(
+        let backend = HttpGitlabBackend::for_tests(
             config,
             ProviderLimits {
                 streaming_idle_timeout_ms: idle_ms,
                 ..ProviderLimits::default()
             },
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -2432,8 +2442,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
     provider_config.content.max_body_bytes = 8;
     let provider = GitlabProvider::new(
         provider_config,
-        ProviderLimits::default(),
-        &agent_access_provider::test_support::test_outbound_tls(),
+        &agent_access_provider::test_support::TestHost::default().context(),
     )
     .expect("test provider");
     let sentinel = "SOURCE_SENTINEL_TOO_LONG";
@@ -2741,14 +2750,9 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
         &gitlab_descriptor(&config),
         &[String::from("issue.note.add")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let attributed_body = format!(
         "note before attribution\n\n<!-- agent-access-attribution:start -->\n\n---\n\n_Added via Agent Access Broker. Request ID: {broker_request_id}_\n\n<!-- agent-access-attribution:end -->"
@@ -2836,14 +2840,9 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
         &gitlab_descriptor(&config),
         &[String::from("issue.create")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let attributed_description = format!(
         "description before attribution\n\n<!-- agent-access-attribution:start -->\n\n---\n\n_Added via Agent Access Broker. Request ID: {broker_request_id}_\n\n<!-- agent-access-attribution:end -->"
@@ -2928,14 +2927,9 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
         &gitlab_descriptor(&config),
         &[String::from("issue.update")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     Mock::given(method("GET"))
         .and(path("/api/v4/projects/sip%2Fservice"))
@@ -3017,14 +3011,9 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
         &gitlab_descriptor(&config),
         &[String::from("issue.note.add")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     let error = provider
         .invoke(ProviderInvocation {

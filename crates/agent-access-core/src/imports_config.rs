@@ -92,9 +92,9 @@ mod tests {
     use super::*;
     use crate::{BackendRegistry, ProvidersConfig, parse_broker_config_raw};
     use agent_access_provider::{
-        BuildContext, ExecutionCredential, HostError, ImportedActionDefinition, ImportedAdapter,
+        BuildContext, ExecutionCredential, ImportedActionDefinition, ImportedAdapter,
         ImportedDiscovery, ImportedDiscoveryAuthentication, ImportedServiceDefinition, Provider,
-        ProviderError,
+        ProviderBuildError, ProviderError,
     };
     use std::sync::Arc;
 
@@ -133,7 +133,7 @@ mod tests {
             _: &[ImportedActionDefinition],
             _: Option<ExecutionCredential>,
             _: &BuildContext<'_>,
-        ) -> Result<Arc<dyn Provider>, HostError> {
+        ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
             unreachable!("configuration validation never builds providers")
         }
         async fn discover(

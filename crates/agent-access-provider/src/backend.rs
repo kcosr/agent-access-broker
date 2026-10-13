@@ -1,9 +1,9 @@
 //! Backend registration: how the broker parses, validates, describes, and
 //! builds a backend from its `[providers.<kind>]` table.
+use crate::host::UpstreamClientFactory;
 use crate::{
-    EgressProxyConfig, EgressProxyRuntimeConfig, HostError, PreparedOutboundTls, Provider,
-    ProviderAttributionConfig, ProviderLimits, ResourceTypeDescriptor, ServiceDescriptor,
-    StableSigningKey,
+    EgressProxyConfig, Provider, ProviderAttributionConfig, ProviderBuildError, ProviderLimits,
+    ResourceTypeDescriptor, ServiceDescriptor, StableSigningKey,
 };
 use serde::de::DeserializeOwned;
 use std::any::Any;
@@ -66,8 +66,10 @@ pub trait BackendConfig: Any + Debug + Send + Sync {
     /// at startup even when an environment proxy takes precedence.
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)>;
 
-    /// Builds the provider for one runtime generation.
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError>;
+    /// Builds the provider for one runtime generation. Building is
+    /// synchronous and offline: it may prepare clients and capabilities, but
+    /// never contacts an upstream, verifies a credential or refreshes OAuth.
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError>;
 }
 
 /// The parts of the broker configuration a backend validates against.
@@ -95,26 +97,37 @@ pub struct ServiceCredentialKinds<'a> {
     pub per_user: Option<&'a str>,
 }
 
-/// Host services a backend uses to build its provider.
+/// Host services a backend builds its provider from for one runtime
+/// generation. Only the host constructs it, through
+/// [`crate::host::build_context`]; provider tests use `test_support::TestHost`.
 #[derive(Clone)]
 pub struct BuildContext<'a> {
-    pub limits: &'a ProviderLimits,
-    pub egress: &'a EgressProxyRuntimeConfig,
-    pub outbound_tls: &'a PreparedOutboundTls,
-    /// Attribution footers the configuration enables for this service.
-    pub attribution: ProviderAttributionConfig,
-    /// Stable key for handles and cursors that must outlive a runtime
-    /// generation; absent when the broker has no stable key configured.
-    pub stable_signing_key: Option<Arc<dyn StableSigningKey>>,
+    pub(crate) limits: &'a ProviderLimits,
+    pub(crate) clients: &'a dyn UpstreamClientFactory,
+    pub(crate) attribution: ProviderAttributionConfig,
+    pub(crate) stable_signing_key: Option<Arc<dyn StableSigningKey>>,
 }
 
-impl BuildContext<'_> {
-    /// The network settings upstream clients are built from.
-    pub fn network(&self) -> crate::UpstreamNetwork<'_> {
-        crate::UpstreamNetwork {
-            limits: self.limits,
-            egress: self.egress,
-            outbound_tls: self.outbound_tls,
-        }
+impl<'a> BuildContext<'a> {
+    pub fn limits(&self) -> &'a ProviderLimits {
+        self.limits
+    }
+
+    /// Builds the generation's upstream clients; pass it to
+    /// [`crate::UpstreamClient::build`]. The host decides each client's route.
+    pub fn clients(&self) -> &'a dyn UpstreamClientFactory {
+        self.clients
+    }
+
+    /// Attribution footers the configuration enables for this service.
+    pub fn attribution(&self) -> &ProviderAttributionConfig {
+        &self.attribution
+    }
+
+    /// Stable key, scoped to this service, for handles and cursors that must
+    /// outlive a runtime generation; absent when the broker has no stable key
+    /// configured.
+    pub fn stable_signing_key(&self) -> Option<&Arc<dyn StableSigningKey>> {
+        self.stable_signing_key.as_ref()
     }
 }

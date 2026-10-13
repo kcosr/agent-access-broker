@@ -59,14 +59,16 @@ impl ImportedAdapter for ConformanceImportAdapter {
         actions: &[ImportedActionDefinition],
         transport: Option<ExecutionCredential>,
         _host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError> {
-        definition.validate().map_err(HostError::invalid)?;
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        definition.validate().map_err(ProviderBuildError::invalid)?;
         for action in actions {
             action
                 .validate(&definition.service)
-                .map_err(HostError::invalid)?;
-            self.validate_action(action).map_err(HostError::invalid)?;
-            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
+                .map_err(ProviderBuildError::invalid)?;
+            self.validate_action(action)
+                .map_err(ProviderBuildError::invalid)?;
+            self.scoped_mcp_name(action)
+                .map_err(ProviderBuildError::invalid)?;
         }
         let transport_authority = if definition.transport_auth {
             Some(
@@ -77,7 +79,7 @@ impl ImportedAdapter for ConformanceImportAdapter {
                     Some("import-transport-initial") => "initial",
                     Some("import-transport-rotated") => "rotated",
                     _ => {
-                        return Err(HostError::invalid(
+                        return Err(ProviderBuildError::invalid(
                             "conformance transport credential is unavailable",
                         ));
                     }

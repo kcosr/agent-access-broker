@@ -121,11 +121,7 @@ impl Fixture {
             "mcp_oauth",
             &Url::parse(&base).unwrap(),
             &McpOAuthDialect.upstream_allowlist(&config),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &test_support::test_outbound_tls(),
-            },
+            &test_support::TestHost::default(),
         )
         .unwrap();
         Self {

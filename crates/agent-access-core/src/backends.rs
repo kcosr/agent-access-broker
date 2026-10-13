@@ -376,6 +376,18 @@ impl ProvidersConfig {
         self.backends.is_empty()
     }
 
+    /// Configured backends with the registration their table selected, in
+    /// registration order. Validation rejects kinds the registry does not
+    /// know, so these are every backend a validated configuration builds.
+    pub(crate) fn registered(
+        &self,
+    ) -> impl Iterator<Item = (&'static BackendRegistration, &dyn BackendConfig)> + '_ {
+        self.registry.registrations().filter_map(|registration| {
+            self.get_kind(registration.kind)
+                .map(|config| (registration, config))
+        })
+    }
+
     /// Configured backends in registration order; kinds the registry does
     /// not know (only possible for programmatic configurations, and
     /// rejected by validation) come last.

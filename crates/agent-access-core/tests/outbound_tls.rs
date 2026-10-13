@@ -1,11 +1,10 @@
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_core::{
     BackendRegistry, BrokerConfig, BrokerRuntime, ExecutionContext, GatewayConfig,
-    GovernedOperationContext, IdentityContext, InvokeRequest, OperationContext, SourceContext,
+    GovernedOperationContext, IdentityContext, InvokeRequest, OperationContext, OutboundTlsConfig,
+    OutboundTlsTrustMode, PreparedOutboundTls, SourceContext,
 };
-use agent_access_provider::{
-    OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls, ProviderResultStreamSource,
-};
+use agent_access_provider::ProviderResultStreamSource;
 use futures_util::StreamExt;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde_json::json;

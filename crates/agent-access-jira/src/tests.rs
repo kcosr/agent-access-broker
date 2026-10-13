@@ -7216,7 +7216,7 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     config.allowed_upstream_hosts.push(format!(
         "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
     ));
-    let backend = HttpJiraBackend::new(config, ProviderLimits::default());
+    let backend = HttpJiraBackend::for_tests(config, ProviderLimits::default());
 
     assert_eq!(
         backend.api_base(&test_credential()).unwrap().as_str(),
@@ -7232,6 +7232,35 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
             .unwrap()
             .as_str(),
         "https://api.atlassian.com/ex/jira/11111111-1111-1111-1111-111111111111/rest/api/3/"
+    );
+}
+
+#[test]
+fn build_creates_request_and_stream_clients_for_each_api_base() {
+    let cloud_id = "11111111-1111-1111-1111-111111111111";
+    let mut config = jira_config();
+    config.cloud_id = Some(cloud_id.to_string());
+    config.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
+    ));
+    let host = agent_access_provider::test_support::TestHost::default();
+    config.build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.jira.egress_proxy".to_string();
+    let tenant = "https://example.atlassian.net/rest/api/3/".to_string();
+    let gateway = format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/");
+    assert_eq!(
+        built,
+        [
+            (label.clone(), tenant.clone(), ClientProfile::Request),
+            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Request),
+            (label, gateway, ClientProfile::Stream),
+        ]
     );
 }
 
@@ -8413,13 +8442,11 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse("https://example.atlassian.net/rest/api/3/").unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let audit = backend.egress_proxy_for_test(&test_credential());
     assert_eq!(audit["mode"], json!("service"));
@@ -8483,13 +8510,11 @@ async fn http_backend_routes_issue_requests_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend.issue("PROJ-1", &test_credential()).await.unwrap();
 
@@ -8519,13 +8544,11 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend
         .attachment_content("10055", &test_credential())

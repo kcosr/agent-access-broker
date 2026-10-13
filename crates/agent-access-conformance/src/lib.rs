@@ -13,14 +13,15 @@ use agent_access_provider::presentation::{
 };
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BrokerBodyPart, BrokerBodyPartSpec,
-    BuildContext, ClientProfile, CredentialDescriptor, EgressProxyConfig, HostError,
-    NamespaceSelectorDescriptor, Provider, ProviderError, ProviderInvocation, ProviderResult,
-    ProviderResultStream, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
-    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
-    complete_upstream_trace, file_upload_body, parse_backend_config, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    BuildContext, ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig,
+    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode,
+    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
+    ResourceSelector, ResourceType, ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
+    attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -205,7 +206,7 @@ impl BackendConfig for ConformanceConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         ConformanceProvider::build(self, host).map(|provider| Arc::new(provider) as _)
     }
 }
@@ -463,21 +464,24 @@ fn status_error(status: reqwest::StatusCode) -> ProviderError {
 }
 
 impl ConformanceProvider {
-    fn build(config: &ConformanceConfig, host: &BuildContext<'_>) -> Result<Self, HostError> {
+    fn build(
+        config: &ConformanceConfig,
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
         let base = Url::parse(&format!("{}/", config.base_url.trim_end_matches('/')))
-            .map_err(|_| HostError::invalid(format!("{LABEL}.base_url is invalid")))?;
+            .map_err(|_| ProviderBuildError::invalid(format!("{LABEL}.base_url is invalid")))?;
         let client = |profile| {
             UpstreamClient::build(
                 UpstreamClientSpec {
                     label: LABEL,
                     provider: SERVICE,
                     base: &base,
-                    egress_proxy: config.egress_proxy.as_ref(),
+                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
                     allowed_upstream_hosts: &config.allowed_upstream_hosts,
                     profile,
                     status_reasons: &[],
                 },
-                host.network(),
+                host.clients(),
             )
         };
         Ok(Self {
@@ -487,9 +491,9 @@ impl ConformanceProvider {
             pings: client(ClientProfile::SingleAttempt)?,
             endpoints: config.endpoints,
             shelves: config.shelves.clone(),
-            max_response_bytes: host.limits.max_upstream_response_bytes,
-            max_download_bytes: host.limits.max_download_bytes,
-            idle_timeout: Duration::from_millis(host.limits.streaming_idle_timeout_ms),
+            max_response_bytes: host.limits().max_upstream_response_bytes,
+            max_download_bytes: host.limits().max_download_bytes,
+            idle_timeout: Duration::from_millis(host.limits().streaming_idle_timeout_ms),
             max_upload_bytes: config.max_upload_bytes,
         })
     }
@@ -958,10 +962,10 @@ impl Provider for ConformanceProvider {
 mod tests {
     use super::*;
     use agent_access_provider::presentation::response_capabilities;
-    use agent_access_provider::test_support::{install_trace_capture, test_outbound_tls};
+    use agent_access_provider::test_support::{TestHost, install_trace_capture};
     use agent_access_provider::{
-        ActionIo, CorrelationContext, EgressProxyRuntimeConfig, ExecutionCredential,
-        InvocationIdentity, ProviderLimits, with_provider_context,
+        ActionIo, CorrelationContext, ExecutionCredential, InvocationIdentity, ProviderLimits,
+        with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
@@ -979,17 +983,40 @@ mod tests {
     }
 
     fn provider(base_url: &str, limits: ProviderLimits) -> ConformanceProvider {
-        ConformanceProvider::build(
-            &config(base_url),
-            &BuildContext {
-                limits: &limits,
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &test_outbound_tls(),
-                attribution: Default::default(),
-                stable_signing_key: None,
-            },
-        )
-        .unwrap()
+        ConformanceProvider::build(&config(base_url), &TestHost::with_limits(limits).context())
+            .unwrap()
+    }
+
+    #[test]
+    fn build_declares_each_transfer_profile_with_the_configured_proxy() {
+        let host = TestHost::default();
+        let mut config = config("https://conformance.example.test");
+        config.egress_proxy = Some(EgressProxyConfig {
+            url: "http://conformance-proxy.example:3128".into(),
+            username_ref: None,
+            password_ref: None,
+        });
+        ConformanceProvider::build(&config, &host.context()).unwrap();
+        let built = host.built_clients();
+        assert_eq!(
+            built
+                .iter()
+                .map(|client| client.profile)
+                .collect::<Vec<_>>(),
+            [
+                ClientProfile::Request,
+                ClientProfile::Stream,
+                ClientProfile::Upload,
+                ClientProfile::SingleAttempt,
+            ]
+        );
+        for client in built {
+            assert_eq!(client.label, LABEL);
+            assert_eq!(
+                client.route.audit_value(),
+                json!({"mode": "service", "proxy": "http://conformance-proxy.example:3128"})
+            );
+        }
     }
 
     fn invocation(

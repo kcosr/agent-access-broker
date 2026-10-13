@@ -1,10 +1,11 @@
 //! The Confluence backend seam, its wire types, request bodies, and the HTTP implementation.
 use super::*;
+use agent_access_provider::host::UpstreamClientFactory;
 
 #[async_trait]
 pub trait ConfluenceBackend: Send + Sync {
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        EgressProxySelection::direct().audit_value()
+        EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
@@ -959,39 +960,26 @@ pub(crate) struct HttpConfluenceBackend {
 
 impl HttpConfluenceBackend {
     #[cfg(test)]
-    pub(crate) fn new(config: ConfluenceProviderConfig, limits: ProviderLimits) -> Self {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
-        )
-        .expect("Confluence HTTP client configuration is valid")
+    pub(crate) fn for_tests(config: ConfluenceProviderConfig, limits: ProviderLimits) -> Self {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host).expect("Confluence HTTP client configuration is valid")
     }
 
-    pub(crate) fn new_with_egress(
+    pub(crate) fn new(
         config: ConfluenceProviderConfig,
         limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let tenant_base = Url::parse(&format!("https://{}/wiki/rest/api/", config.tenant_host))
             .map_err(|error| {
-                HostError::Config(crate::ConfigError::Invalid {
-                    errors: vec![format!(
-                        "providers.confluence.tenant_host is invalid: {error}"
-                    )],
-                })
+                ProviderBuildError::invalid(format!(
+                    "providers.confluence.tenant_host is invalid: {error}"
+                ))
             })?;
-        let network = UpstreamNetwork {
-            limits: &limits,
-            egress: egress_proxy,
-            outbound_tls,
-        };
         let tenant_clients = ConfluenceHttpClients::new(
             "providers.confluence.egress_proxy",
             tenant_base,
-            network,
+            clients,
             &config,
         )?;
         let gateway_clients = if config.cloud_id.is_some()
@@ -999,12 +987,9 @@ impl HttpConfluenceBackend {
         {
             Some(ConfluenceHttpClients::new(
                 "providers.confluence.egress_proxy",
-                confluence_gateway_api_base(&config).map_err(|error| {
-                    HostError::Config(crate::ConfigError::Invalid {
-                        errors: vec![error.to_string()],
-                    })
-                })?,
-                network,
+                confluence_gateway_api_base(&config)
+                    .map_err(|error| ProviderBuildError::invalid(error.to_string()))?,
+                clients,
                 &config,
             )?)
         } else {
@@ -1034,44 +1019,28 @@ impl HttpConfluenceBackend {
         }
     }
 
+    /// Clients for one API base from the test host, routed through the
+    /// configuration's service proxy when it sets one.
     #[cfg(test)]
     pub(crate) fn new_with_api_base(
         config: ConfluenceProviderConfig,
         limits: ProviderLimits,
         api_base_override: Url,
     ) -> Self {
-        Self::new_with_api_base_and_egress(
-            config,
-            limits,
-            api_base_override,
-            &EgressProxyRuntimeConfig::direct(),
-        )
-        .expect("Confluence HTTP client configuration is valid")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_api_base_and_egress(
-        config: ConfluenceProviderConfig,
-        limits: ProviderLimits,
-        api_base_override: Url,
-        egress_proxy: &EgressProxyRuntimeConfig,
-    ) -> Result<Self, HostError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
         let clients = ConfluenceHttpClients::new(
             "providers.confluence.egress_proxy",
             api_base_override,
-            UpstreamNetwork {
-                limits: &limits,
-                egress: egress_proxy,
-                outbound_tls: &agent_access_provider::test_support::test_outbound_tls(),
-            },
+            &host,
             &config,
-        )?;
-        Ok(Self {
+        )
+        .expect("Confluence HTTP client configuration is valid");
+        Self {
             tenant_clients: clients.clone(),
             gateway_clients: Some(clients),
             config,
             limits,
-        })
+        }
     }
 
     pub(crate) fn api_base(
@@ -1116,21 +1085,21 @@ impl ConfluenceHttpClients {
     pub(crate) fn new(
         label: &str,
         api_base: Url,
-        network: UpstreamNetwork<'_>,
+        clients: &dyn UpstreamClientFactory,
         config: &ConfluenceProviderConfig,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
         let client = |profile| {
             UpstreamClient::build(
                 UpstreamClientSpec {
                     label,
                     provider: "confluence",
                     base: &api_base,
-                    egress_proxy: config.egress_proxy.as_ref(),
+                    egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
                     allowed_upstream_hosts: &config.allowed_upstream_hosts,
                     profile,
                     status_reasons: &[(409, ReasonCode::VersionConflict)],
                 },
-                network,
+                clients,
             )
         };
         Ok(Self {
@@ -1171,7 +1140,7 @@ impl HttpConfluenceBackend {
         self.client_for(credential)
             .unwrap()
             .client
-            .egress_proxy()
+            .egress_route()
             .audit_value()
     }
 }
@@ -1196,8 +1165,8 @@ impl HttpConfluenceBackend {
 impl ConfluenceBackend for HttpConfluenceBackend {
     fn egress_proxy_audit(&self, credential: &ExecutionCredential) -> Value {
         self.client_for(credential)
-            .map(|clients| clients.client.egress_proxy().audit_value())
-            .unwrap_or_else(|_| EgressProxySelection::direct().audit_value())
+            .map(|clients| clients.client.egress_route().audit_value())
+            .unwrap_or_else(|_| EgressRoute::direct().audit_value())
     }
 
     async fn current_user(

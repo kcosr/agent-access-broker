@@ -18,32 +18,14 @@ use tokio::task::JoinHandle;
 
 mod compatibility;
 
-struct Host {
-    limits: ProviderLimits,
-    egress: EgressProxyRuntimeConfig,
-    tls: PreparedOutboundTls,
-}
-impl Host {
-    fn new() -> Self {
-        Self {
-            limits: ProviderLimits {
-                max_upstream_response_bytes: 256 * 1024,
-                request_timeout_ms: 1_000,
-                ..Default::default()
-            },
-            egress: EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None),
-            tls: test_support::test_outbound_tls(),
-        }
-    }
-    fn context(&self) -> BuildContext<'_> {
-        BuildContext {
-            limits: &self.limits,
-            egress: &self.egress,
-            outbound_tls: &self.tls,
-            attribution: Default::default(),
-            stable_signing_key: None,
-        }
-    }
+/// The build host imported MCP tests share: a short request timeout and a
+/// 256 KiB response cap.
+fn test_host() -> test_support::TestHost {
+    test_support::TestHost::with_limits(ProviderLimits {
+        max_upstream_response_bytes: 256 * 1024,
+        request_timeout_ms: 1_000,
+        ..Default::default()
+    })
 }
 
 fn definition(endpoint: &str) -> ImportedServiceDefinition {
@@ -256,7 +238,7 @@ async fn discovers_every_page_retains_unsupported_rows_and_requires_reviewed_rea
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let discovered = McpAdapter
         .discover(
             &definition(&fixture.endpoint),
@@ -294,7 +276,7 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -347,7 +329,7 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &definition(&fixture.endpoint),
@@ -369,7 +351,7 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
 #[tokio::test]
 async fn input_and_credential_rejections_dispatch_nothing() {
     let fixture = Fixture::new(Default::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -401,7 +383,7 @@ async fn input_and_credential_rejections_dispatch_nothing() {
 #[tokio::test]
 async fn independent_credentials_and_transport_auth_are_never_reused() {
     let fixture = Fixture::new(Default::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let mut def = definition(&fixture.endpoint);
     def.transport_auth = true;
     def.execution_bindings[0].delivery = ImportedCredentialDelivery::RawHeader {
@@ -454,7 +436,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &definition(&fixture.endpoint),
@@ -485,7 +467,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
         },
     ] {
         let fixture = Fixture::new(state).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.request_timeout_ms = 100;
         let provider = McpAdapter
             .build(
@@ -529,7 +511,7 @@ async fn duplicate_tools_repeated_cursors_and_malformed_metadata_fail_discovery(
         },
     ] {
         let fixture = Fixture::new(state).await;
-        let host = Host::new();
+        let host = test_host();
         assert!(
             McpAdapter
                 .discover(
@@ -550,7 +532,7 @@ async fn duplicate_tools_repeated_cursors_and_malformed_metadata_fail_discovery(
 async fn bounded_json_and_sse_results_include_discarded_bytes() {
     for sse in [false, true] {
         let fixture=Fixture::new(FixtureState{result:json!({"content":[{"type":"text","text":"x".repeat(4000)}],"structuredContent":null}),sse,..Default::default()}).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.max_upstream_response_bytes = 1500;
         let provider = McpAdapter
             .build(
@@ -577,7 +559,7 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -710,7 +692,7 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
             .await
             .unwrap();
     });
-    let host = Host::new();
+    let host = test_host();
     let def = definition(&endpoint);
     let discovery = McpAdapter
         .discover(
@@ -861,7 +843,7 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         if revoke_after_first_page {
             lease.reject_after.store(2, Ordering::SeqCst);
@@ -904,7 +886,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -950,7 +932,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
 async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dispatch() {
     for failure in ["resource", "audience", "revoked", "fallback"] {
         let fixture = Fixture::new(Default::default()).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),

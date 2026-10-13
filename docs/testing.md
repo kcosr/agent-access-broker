@@ -122,8 +122,15 @@ intended to run through that parent; do not invoke it with `--include-ignored`.
 Run the harness with `cargo test -p agent-access-core --test outbound_tls`.
 
 Provider and Broker unit tests share the `test-support` feature of
-`agent-access-provider`. Its `test_outbound_tls()` trusts a disposable test CA
-embedded in that package. Tests that assert `tracing` events call
+`agent-access-provider`. Its `TestHost` lends a provider build context with a
+deterministic, offline upstream client factory: clients trust only a disposable
+test CA embedded in that package, never read proxy environment variables, use a
+configured service proxy only when it has no credential references, and record
+each requested label, base URL, profile and route in `built_clients()`. Core's
+own network tests cover proxy precedence, credential resolution and the
+literal-loopback caller categories against the real host factory.
+
+Tests that assert `tracing` events call
 `install_trace_capture()`, which installs one capturing dispatcher as the test
 binary's global default, then start a capture and run the observed work through
 `TraceCapture::run` or `in_scope`. A capture records only the events inside its

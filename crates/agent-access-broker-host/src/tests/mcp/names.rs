@@ -1,7 +1,7 @@
 //! Naming omissions leave the real HTTP MCP session and unaffected tools usable.
 use super::*;
 use agent_access_provider::{
-    BackendConfig, BuildContext, EgressProxyConfig, HostError, ValidationContext,
+    BackendConfig, BuildContext, EgressProxyConfig, ProviderBuildError, ValidationContext,
 };
 
 #[derive(Clone, Debug)]
@@ -44,7 +44,7 @@ impl BackendConfig for NamingBackend {
         Vec::new()
     }
 
-    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(self.clone()))
     }
 }

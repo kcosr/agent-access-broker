@@ -1505,11 +1505,18 @@ the same rules:
 - An `http` (non-`https`) proxy URL with either credential ref is rejected.
 
 The runtime resolution precedence (`NO_PROXY` -> environment proxy -> service
-scope -> global -> direct) is described in `docs/design.md`. Delegated OAuth
-requests have no service scope. Each approved OAuth destination origin uses the
-global resolution independently, except that a literal IPv4 or IPv6 loopback
-address, such as `127.0.0.1` or `[::1]`, connects directly. Host names,
-including `localhost`, always use the global resolution.
+scope -> global -> direct) is described in `docs/design.md`. The Broker selects
+every upstream route itself; providers and import adapters only declare their
+configured service proxy. Startup resolves every configured proxy, including its
+credential references, even when an environment proxy would take precedence.
+Delegated OAuth requests have no service scope. Each approved OAuth destination
+origin uses the global resolution independently, except that a literal IPv4 or
+IPv6 loopback address, such as `127.0.0.1` or `[::1]`, connects directly. Host
+names, including `localhost`, always use the global resolution. Only OAuth
+destinations and enabled development fixtures (`deployment.enable_fake_service`
+outside production) receive that direct loopback route; production providers
+and imported services route loopback destinations through the ordinary
+resolution, so use `NO_PROXY` to reach them directly.
 
 ## `[limits]`
 

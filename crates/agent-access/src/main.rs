@@ -7,14 +7,14 @@ mod output;
 use agent_access_core::ExitPolicy;
 use agent_access_core::{
     API_CATALOG_VERSION, AgentTokenServiceRestriction, ApiActionSpec, ApiCatalog, CliConfig,
-    CliTlsConfig, CredentialInputField, CredentialInputSchema, HttpRouteSpec, InvokeRequest,
-    ResourceSelection, RouteAccess, SEND_SCHEMA_VERSION, cli_exit_code_for_http_status,
-    expand_current_user_home, generic_send_schema, load_cli_config, load_cli_tls_certificates,
-    split_service_action, validate_cli_config, validate_cli_config_file,
+    CliTlsConfig, ConfigError, CredentialInputField, CredentialInputSchema, HttpRouteSpec,
+    InvokeRequest, ResourceSelection, RouteAccess, SEND_SCHEMA_VERSION,
+    cli_exit_code_for_http_status, expand_current_user_home, generic_send_schema, load_cli_config,
+    load_cli_tls_certificates, split_service_action, validate_cli_config, validate_cli_config_file,
 };
 use agent_access_provider::{
-    ActionIo, ConfigError, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
-    ReadContentFormat, ResponseFormat, ResponseOptions, is_loopback_or_localhost, is_service_name,
+    ActionIo, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ReadContentFormat,
+    ResponseFormat, ResponseOptions, is_loopback_or_localhost, is_service_name,
 };
 use anyhow::{Context, Result};
 use base64::Engine;

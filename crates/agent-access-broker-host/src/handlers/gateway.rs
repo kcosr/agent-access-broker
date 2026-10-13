@@ -4780,8 +4780,8 @@ mod tests {
             hash_key_ref: format!("file:{}", hash_key.display()),
             ..Default::default()
         });
-        config.network.outbound_tls = agent_access_provider::OutboundTlsConfig {
-            trust: agent_access_provider::OutboundTlsTrustMode::Custom,
+        config.network.outbound_tls = agent_access_core::OutboundTlsConfig {
+            trust: agent_access_core::OutboundTlsTrustMode::Custom,
             ca_certificate: Some(fixture.join("ca-a.pem")),
         };
         config.policy.grants[0].subjects = vec!["user:gateway-user".into()];

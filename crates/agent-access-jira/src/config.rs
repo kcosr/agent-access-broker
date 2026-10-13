@@ -308,13 +308,7 @@ impl BackendConfig for JiraProviderConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        Ok(Arc::new(JiraProvider::new_with_egress(
-            self.clone(),
-            host.limits.clone(),
-            host.egress,
-            host.attribution.clone(),
-            host.outbound_tls,
-        )?))
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        Ok(Arc::new(JiraProvider::new(self.clone(), host)?))
     }
 }

@@ -1004,25 +1004,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn operation(endpoint: &str, timeout: Duration) -> Operation {
-        use agent_access_provider::{
-            BuildContext, EgressProxyEnvironment, EgressProxyRuntimeConfig,
-            ImportedServiceDefinition, ProviderLimits, test_support,
-        };
+        use agent_access_provider::{ImportedServiceDefinition, test_support};
         let definition: ImportedServiceDefinition = serde_json::from_value(json!({"service":"race","displayName":"Race","adapterKind":"mcp_http","endpoint":endpoint,"executionBindings":[{"ownerMode":"service","mechanism":"static_token","delivery":{"kind":"bearer"},"status":"configured"}],"discovery":{"kind":"execution"}})).unwrap();
-        let limits = ProviderLimits::default();
-        let egress = EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None);
-        let tls = test_support::test_outbound_tls();
-        let wire = crate::make_wire(
-            &definition,
-            &BuildContext {
-                limits: &limits,
-                egress: &egress,
-                outbound_tls: &tls,
-                attribution: Default::default(),
-                stable_signing_key: None,
-            },
-        )
-        .unwrap();
+        let wire =
+            crate::make_wire(&definition, &test_support::TestHost::default().context()).unwrap();
         Operation::new(wire, HeaderMap::new(), None, None, timeout)
     }
 

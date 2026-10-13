@@ -2,10 +2,12 @@
 //!
 //! A backend describes its services with a [`ServiceDescriptor`], serves
 //! invocations through the [`Provider`] trait, and reaches upstream systems
-//! through the host services defined here: egress proxy selection, outbound
-//! TLS trust, upstream allowlists, correlation headers, trace events, and
-//! stable token signing. The broker owns identity, policy, credentials,
-//! audit, and limits; backends see only the narrow views in this crate.
+//! through the host services defined here: upstream clients the host
+//! constructs (TLS trust and egress routing stay inside the host), upstream
+//! allowlists, correlation headers, trace events, and stable token signing.
+//! The broker owns identity, policy, credentials, audit, limits and network
+//! construction; backends see only the narrow views in this crate. The
+//! [`host`] module is the construction interface the broker host implements.
 
 mod attribution;
 mod backend;
@@ -15,16 +17,15 @@ mod correlation;
 mod delegated;
 mod descriptor;
 mod egress_config;
-mod egress_proxy;
 mod error;
 mod finalization;
+pub mod host;
 mod identifiers;
 mod import_schema;
 mod imports;
 mod imports_adapter;
 mod invocation;
 mod oauth_dialect;
-mod outbound_tls;
 pub mod presentation;
 mod provider;
 mod reason;
@@ -47,7 +48,6 @@ pub use correlation::*;
 pub use delegated::*;
 pub use descriptor::*;
 pub use egress_config::*;
-pub use egress_proxy::*;
 pub use error::*;
 pub use finalization::*;
 pub use identifiers::*;
@@ -56,7 +56,6 @@ pub use imports::*;
 pub use imports_adapter::*;
 pub use invocation::*;
 pub use oauth_dialect::*;
-pub use outbound_tls::*;
 pub use presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, PresentationBudget,
     ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderContext, RenderError,

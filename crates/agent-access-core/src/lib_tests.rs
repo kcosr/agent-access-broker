@@ -3,11 +3,18 @@ use agent_access_cloudbees_ci::*;
 use agent_access_fake::*;
 use agent_access_provider::{
     ActionDescriptor, ActionIo, BackendRegistration, GIT_REPOSITORY_RESOURCE, LookupRequirement,
-    OutboundTlsTrustMode, ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
+    ResourceType, ScopedMcpNameSource, ServiceSurface, parse_backend_config,
 };
 use base64::Engine as _;
 
-pub(crate) use agent_access_provider::test_support::{TEST_CERT_PEM, test_outbound_tls};
+pub(crate) use agent_access_provider::test_support::TEST_CERT_PEM;
+
+/// Outbound TLS trust in only the core fixture CA
+/// (`tests/fixtures/outbound-tls/ca-a.pem`).
+pub(crate) fn test_outbound_tls() -> PreparedOutboundTls {
+    PreparedOutboundTls::custom_from_pem(include_bytes!("../tests/fixtures/outbound-tls/ca-a.pem"))
+        .expect("test CA is valid")
+}
 
 /// Every backend core defines, as the broker binary registers them.
 pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {

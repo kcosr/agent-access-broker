@@ -202,11 +202,18 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-provider`: the backend contract: service descriptors,
   resource types, the `Provider` trait and its invocation/result/error types,
   reason codes, the OAuth dialect and delegated-credential contracts, and the
-  host services backends use (upstream HTTP clients, egress proxy, outbound
-  TLS, upstream allowlists, correlation, upstream trace events, token signing).
+  host services backends use (upstream HTTP clients built through the host's
+  client factory, egress declarations and sanitized routes, upstream
+  allowlists, correlation, upstream trace events, token signing). Its `host`
+  module is the construction interface core implements (`BuildContext`,
+  `UpstreamClientFactory`); it resolves no secrets, loads no TLS files and
+  reads no process environment.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
-  runtime; contains no backend. Crates that use backend-contract items import
-  them from `agent_access_provider` directly, not through core.
+  runtime, host secret-reference resolution, and host network construction
+  (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
+  upstream client factories); contains no backend. Crates that use
+  backend-contract items import them from `agent_access_provider` directly,
+  not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP

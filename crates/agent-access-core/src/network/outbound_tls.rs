@@ -1,3 +1,6 @@
+//! Outbound TLS trust: the configured root sources, loaded once per runtime
+//! generation into an immutable Rustls configuration every Broker-owned HTTPS
+//! client shares.
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -123,9 +126,9 @@ impl PreparedOutboundTls {
         Self::from_roots(roots)
     }
 
-    /// Custom trust in exactly the certificates of a PEM bundle, for test
-    /// fixtures embedded in the test support module.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Custom trust in exactly the certificates of a PEM bundle, for
+    /// embedded test fixtures.
+    #[cfg(test)]
     pub(crate) fn custom_from_pem(bundle: &[u8]) -> Result<Self, ConfigError> {
         let mut roots = rustls::RootCertStore::empty();
         add_custom_roots(&mut roots, bundle)?;
@@ -321,7 +324,7 @@ mod tests {
         let mut result = rustls_native_certs::CertificateResult::default();
         result.certs.push(
             rustls::pki_types::CertificateDer::from_pem_slice(
-                crate::test_support::TEST_CERT_PEM.as_bytes(),
+                agent_access_provider::test_support::TEST_CERT_PEM.as_bytes(),
             )
             .unwrap(),
         );
@@ -333,7 +336,7 @@ mod tests {
         trust: OutboundTlsTrustMode,
     ) -> OutboundTlsConfig {
         let path = directory.path().join("roots.pem");
-        std::fs::write(&path, crate::test_support::TEST_CERT_PEM).unwrap();
+        std::fs::write(&path, agent_access_provider::test_support::TEST_CERT_PEM).unwrap();
         OutboundTlsConfig {
             trust,
             ca_certificate: Some(path),
@@ -455,7 +458,7 @@ mod tests {
             String::new(),
             "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n".into(),
             "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n".into(),
-            format!("{}junk", crate::test_support::TEST_CERT_PEM),
+            format!("{}junk", agent_access_provider::test_support::TEST_CERT_PEM),
             " ".repeat(MAX_CA_BUNDLE_BYTES as usize + 1),
         ] {
             std::fs::write(path, contents).unwrap();

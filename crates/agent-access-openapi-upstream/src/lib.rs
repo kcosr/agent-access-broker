@@ -79,23 +79,24 @@ impl ImportedAdapter for OpenApiAdapter {
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError> {
-        let settings = Settings::parse(definition).map_err(HostError::invalid)?;
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let settings = Settings::parse(definition).map_err(ProviderBuildError::invalid)?;
         if transport_credential.is_some() {
-            return Err(HostError::invalid(
+            return Err(ProviderBuildError::invalid(
                 "OpenAPI imports do not use transport credentials",
             ));
         }
         let mut compiled = BTreeMap::new();
         for action in actions {
-            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
-            let action = CompiledAction::new(action).map_err(HostError::invalid)?;
+            self.scoped_mcp_name(action)
+                .map_err(ProviderBuildError::invalid)?;
+            let action = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
             if settings.scheme.as_deref() != Some(action.plan.security.scheme.as_str())
                 || definition.execution_bindings.iter().any(|binding| {
                     action.plan.security.delivery().ok().as_ref() != Some(&binding.delivery)
                 })
             {
-                return Err(HostError::invalid(
+                return Err(ProviderBuildError::invalid(
                     "accepted operation security no longer matches service credentials",
                 ));
             }
@@ -103,18 +104,19 @@ impl ImportedAdapter for OpenApiAdapter {
                 .insert(action.definition.action.clone(), action)
                 .is_some()
             {
-                return Err(HostError::invalid("duplicate action name"));
+                return Err(ProviderBuildError::invalid("duplicate action name"));
             }
         }
-        let endpoint = config::endpoint(&definition.endpoint).map_err(HostError::invalid)?;
+        let endpoint =
+            config::endpoint(&definition.endpoint).map_err(ProviderBuildError::invalid)?;
         let allowed = [format!("{}/**", endpoint.as_str().trim_end_matches('/'))];
         Ok(Arc::new(OpenApiProvider {
             client: client(&endpoint, &allowed, host)?,
             endpoint,
             definition: definition.clone(),
             actions: compiled,
-            max_bytes: host.limits.max_upstream_response_bytes as usize,
-            timeout: Duration::from_millis(host.limits.request_timeout_ms),
+            max_bytes: host.limits().max_upstream_response_bytes as usize,
+            timeout: Duration::from_millis(host.limits().request_timeout_ms),
         }))
     }
     async fn discover(
@@ -150,7 +152,7 @@ impl ImportedAdapter for OpenApiAdapter {
                     "OpenAPI document destination is invalid",
                 )
             })?;
-        let limit = MAX_DOCUMENT_BYTES.min(host.limits.max_upstream_response_bytes as usize);
+        let limit = MAX_DOCUMENT_BYTES.min(host.limits().max_upstream_response_bytes as usize);
         let operation = async {
             let mut response = client
                 .send(

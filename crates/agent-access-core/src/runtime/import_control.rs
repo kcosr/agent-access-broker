@@ -143,18 +143,15 @@ impl BrokerRuntime {
             .registry()
             .imported_adapter(&record.definition.adapter_kind)
             .ok_or_else(import_control_unavailable)?;
-        let limits = ProviderLimits::from(&self.config.limits);
-        let egress = EgressProxyRuntimeConfig::new(
-            self.egress_proxy_environment.clone(),
-            self.config.network.egress_proxy.clone(),
+        let clients = self.network.client_factory(ClientCaller::ImportAdapter {
+            kind: adapter.kind(),
+        });
+        let host = agent_access_provider::host::build_context(
+            self.network.limits(),
+            &clients,
+            ProviderAttributionConfig::default(),
+            None,
         );
-        let host = BuildContext {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls: &self.outbound_tls,
-            attribution: ProviderAttributionConfig::default(),
-            stable_signing_key: None,
-        };
         let mut discovery = adapter
             .discover(&record.definition, &execution, transport, &host)
             .await?;

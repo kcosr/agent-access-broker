@@ -12,6 +12,24 @@ All notable changes to this project are documented in this file.
   `https://localhost` and every other host name now follow the global egress
   proxy resolution instead of connecting directly. Each approved OAuth
   destination origin is routed independently.
+- The provider SDK (`agent-access-provider`) no longer exports host network
+  plumbing. `PreparedOutboundTls`, `OutboundTlsConfig`, `OutboundTlsTrustMode`,
+  `parse_strict_certificate_pem_bundle`, `EgressProxyEnvironment`,
+  `EgressProxyRuntimeConfig`, `EgressProxySelection`, `EgressProxyMode`,
+  `apply_reqwest_proxy`, `preflight_egress_proxy`, `load_secret_ref_value`,
+  `ConfigError` and `UpstreamNetwork` are removed; the TLS, configuration-error
+  and secret-reference items now live in `agent-access-core`. Backends build
+  clients with `UpstreamClient::build(spec, host.clients())`, where the new
+  `host` module's `UpstreamClientFactory` is implemented by the Broker host,
+  `UpstreamClientSpec::egress` takes an `EgressDeclaration`, and
+  `UpstreamClient::egress_route` returns a sanitized `EgressRoute`.
+  `BuildContext` has private fields with accessors and is constructed by
+  `host::build_context`; provider tests use `test_support::TestHost`, which
+  replaces `test_support::test_outbound_tls`.
+- `HostError` is replaced by `ProviderBuildError` in `BackendConfig::build`,
+  `ImportedAdapter::build` and `OAuthHttp::build`. It carries safe
+  configuration diagnostics; host network failures keep their cause for the
+  Broker's own diagnostics.
 
 ### Added
 

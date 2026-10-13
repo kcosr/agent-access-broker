@@ -821,7 +821,7 @@ mod tests {
             base_url: base.into(),
             web_base_url: web.map(str::to_owned),
         };
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([
@@ -855,8 +855,6 @@ mod tests {
                 ],
             },
             ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
     }

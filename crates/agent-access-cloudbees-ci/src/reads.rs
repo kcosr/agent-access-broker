@@ -375,7 +375,7 @@ impl CloudbeesCiProvider {
             input,
             value,
             &reply,
-            controller.client.egress_proxy(),
+            controller.client.egress_route(),
         ))
     }
 
@@ -488,7 +488,7 @@ impl CloudbeesCiProvider {
             json!({"controller":input.controller,"job":input.job,"buildNumber":input.build_number,
                 "fileName":filename,"contentType":content_type,"size":size}),
             &reply,
-            controller.download_client.egress_proxy(),
+            controller.download_client.egress_route(),
         );
         let cap = self.download_limit;
         let idle = self.download_idle_timeout;
@@ -849,7 +849,7 @@ mod tests {
                     socket.write_all(b"4\r\nbody\r\n0\r\n\r\n").await.unwrap();
                 }
             });
-            let ci = CloudbeesCiProvider::new_with_egress(
+            let ci = CloudbeesCiProvider::for_tests(
                 CloudbeesCiProviderConfig {
                     max_log_scan_bytes: logs::default_scan_limit(),
                     controllers: BTreeMap::from([(
@@ -867,8 +867,6 @@ mod tests {
                     streaming_idle_timeout_ms: 100,
                     ..ProviderLimits::default()
                 },
-                &EgressProxyRuntimeConfig::direct(),
-                &agent_access_provider::test_support::test_outbound_tls(),
             )
             .unwrap();
             let result = ci

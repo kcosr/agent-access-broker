@@ -3,13 +3,13 @@
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, EgressProxyConfig, EgressProxyRuntimeConfig, EgressProxySelection,
-    ExecutionCredential, HostError, Provider, ProviderError, ProviderInvocation, ProviderLimits,
+    CredentialDescriptor, EgressDeclaration, EgressProxyConfig, EgressRoute, ExecutionCredential,
+    Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
     ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
     ResourceScopeCapabilities, ResourceScopes, ResourceType, ServiceDescriptor, ServiceSurface,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamNetwork,
-    UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
-    is_service_name, parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamRetryAfter,
+    ValidationContext, complete_upstream_trace, current_provider_action, is_service_name,
+    parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
     validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
@@ -60,12 +60,22 @@ struct Reply {
 }
 
 impl CloudbeesCiProvider {
-    pub(crate) fn new_with_egress(
+    /// A provider whose clients come from a test host with `limits`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         config: CloudbeesCiProviderConfig,
         limits: ProviderLimits,
-        egress: &EgressProxyRuntimeConfig,
-        outbound_tls: &agent_access_provider::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host)
+    }
+
+    /// One request client and one download client per controller.
+    pub(crate) fn new(
+        config: CloudbeesCiProviderConfig,
+        limits: ProviderLimits,
+        clients: &dyn agent_access_provider::host::UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let log_fingerprint = logs::fingerprint(&config, &limits);
         let log_scan_limit = config.max_log_scan_bytes;
         let mut controllers = BTreeMap::new();
@@ -78,11 +88,6 @@ impl CloudbeesCiProvider {
                 .transpose()
                 .expect("validated web URL")
                 .unwrap_or_else(|| base.clone());
-            let network = UpstreamNetwork {
-                limits: &limits,
-                egress,
-                outbound_tls,
-            };
             let label = format!("providers.cloudbees_ci.controllers.{alias}");
             let client = |profile| {
                 UpstreamClient::build(
@@ -90,12 +95,12 @@ impl CloudbeesCiProvider {
                         label: &label,
                         provider: "cloudbees_ci",
                         base: &base,
-                        egress_proxy: config.egress_proxy.as_ref(),
+                        egress: EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
                         allowed_upstream_hosts: &config.allowed_upstream_hosts,
                         profile,
                         status_reasons: &[],
                     },
-                    network,
+                    clients,
                 )
             };
             let download_client = client(ClientProfile::Stream)?;
@@ -546,7 +551,7 @@ impl CloudbeesCiProvider {
         input: &JobInput<'_>,
         value: Value,
         reply: &Reply,
-        proxy: &EgressProxySelection,
+        proxy: &EgressRoute,
     ) -> ProviderResult {
         let queue_id = input
             .queue_id
@@ -900,7 +905,7 @@ impl CloudbeesCiProvider {
                 input,
                 value,
                 &reply,
-                controller.client.egress_proxy(),
+                controller.client.egress_route(),
             );
             let mut stream = ProviderResultStream::from_stream(content_type, byte_stream);
             if let Some(size) = size {
@@ -1183,7 +1188,7 @@ impl CloudbeesCiProvider {
             input,
             value,
             &reply,
-            controller.client.egress_proxy(),
+            controller.client.egress_route(),
         ))
     }
 }
@@ -1400,15 +1405,11 @@ impl BackendConfig for CloudbeesCiProviderConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        let mut provider = CloudbeesCiProvider::new_with_egress(
-            self.clone(),
-            host.limits.clone(),
-            host.egress,
-            host.outbound_tls,
-        )?;
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let mut provider =
+            CloudbeesCiProvider::new(self.clone(), host.limits().clone(), host.clients())?;
         provider.log_signer =
-            agent_access_provider::OpaqueTokenSigner::new(host.stable_signing_key.clone());
+            agent_access_provider::OpaqueTokenSigner::new(host.stable_signing_key().cloned());
         Ok(Arc::new(provider))
     }
 }
@@ -1461,7 +1462,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     pub(super) fn provider(server: &MockServer) -> CloudbeesCiProvider {
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -1475,10 +1476,61 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{}/team-ci/**", server.uri())],
             },
             ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn build_creates_stream_and_request_clients_per_controller() {
+        let host = agent_access_provider::test_support::TestHost::default();
+        let controller = |base: &str| crate::CloudbeesCiControllerConfig {
+            base_url: base.into(),
+            web_base_url: None,
+        };
+        CloudbeesCiProviderConfig {
+            max_log_scan_bytes: logs::default_scan_limit(),
+            controllers: BTreeMap::from([
+                ("alpha".into(), controller("https://alpha.example/ci/")),
+                ("beta".into(), controller("https://beta.example/")),
+            ]),
+            egress_proxy: None,
+            allowed_upstream_hosts: vec![
+                "https://alpha.example/ci/**".into(),
+                "https://beta.example/**".into(),
+            ],
+        }
+        .build(&host.context())
+        .unwrap();
+        let built = host
+            .built_clients()
+            .into_iter()
+            .map(|client| (client.label, client.base.to_string(), client.profile))
+            .collect::<Vec<_>>();
+        let (alpha, beta) = (
+            "providers.cloudbees_ci.controllers.alpha".to_string(),
+            "providers.cloudbees_ci.controllers.beta".to_string(),
+        );
+        assert_eq!(
+            built,
+            [
+                (
+                    alpha.clone(),
+                    "https://alpha.example/ci/".into(),
+                    ClientProfile::Stream
+                ),
+                (
+                    alpha,
+                    "https://alpha.example/ci/".into(),
+                    ClientProfile::Request
+                ),
+                (
+                    beta.clone(),
+                    "https://beta.example/".into(),
+                    ClientProfile::Stream
+                ),
+                (beta, "https://beta.example/".into(), ClientProfile::Request),
+            ]
+        );
     }
 
     pub(super) fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
@@ -1715,7 +1767,7 @@ mod tests {
             request_timeout_ms: 5_000,
             ..ProviderLimits::default()
         };
-        let provider = CloudbeesCiProvider::new_with_egress(
+        let provider = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -1729,8 +1781,6 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
             },
             limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap();
         let request = tokio::spawn(async move {
@@ -2443,7 +2493,7 @@ mod tests {
     }
 
     fn provider_with_limits(origin: &str, limits: ProviderLimits) -> CloudbeesCiProvider {
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -2457,8 +2507,6 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
             },
             limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
     }

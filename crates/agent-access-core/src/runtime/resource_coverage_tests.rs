@@ -93,7 +93,7 @@ impl BackendConfig for FixtureConfig {
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]
     }
-    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(self.clone()))
     }
 }

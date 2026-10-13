@@ -44,10 +44,11 @@ impl BackendConfig for GmailConfig {
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]
     }
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(GmailProvider::new(
             Url::parse(API).unwrap(),
-            host.network(),
+            host.clients(),
+            host.limits(),
         )?))
     }
 }
@@ -136,21 +137,25 @@ struct RequestBudget {
     last_status: Option<u16>,
 }
 impl GmailProvider {
-    fn new(base: Url, network: UpstreamNetwork<'_>) -> Result<Self, HostError> {
+    fn new(
+        base: Url,
+        clients: &dyn host::UpstreamClientFactory,
+        limits: &ProviderLimits,
+    ) -> Result<Self, ProviderBuildError> {
         Ok(Self {
             client: UpstreamClient::build(
                 UpstreamClientSpec {
                     label: "providers.gmail",
                     provider: "gmail",
                     base: &base,
-                    egress_proxy: None,
+                    egress: EgressDeclaration::Ordinary(None),
                     allowed_upstream_hosts: &[format!("{base}**")],
                     profile: ClientProfile::Request,
                     status_reasons: &[],
                 },
-                network,
+                clients,
             )?,
-            max_bytes: network.limits.max_upstream_response_bytes.min(MAX_BYTES),
+            max_bytes: limits.max_upstream_response_bytes.min(MAX_BYTES),
         })
     }
     async fn request(
@@ -562,14 +567,11 @@ pub mod test_support {
         google::test_dialect(base)
     }
     pub fn provider(base: &str) -> ServiceProvider {
-        let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
+        let host = agent_access_provider::test_support::TestHost::default();
         let provider = GmailProvider::new(
             Url::parse(&format!("{base}/gmail/v1/users/me/")).unwrap(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &tls,
-            },
+            &host,
+            &host.limits,
         )
         .unwrap();
         ServiceProvider::new(descriptor(), Arc::new(provider))

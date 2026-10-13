@@ -1,77 +1,67 @@
-use std::fs;
-use thiserror::Error;
+use crate::host::UpstreamClientFactoryError;
+use std::error::Error;
+use std::fmt;
 
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("failed to read {path}: {source}")]
-    Read {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to parse {path}: {source}")]
-    Parse {
-        path: String,
-        #[source]
-        source: toml::de::Error,
-    },
-    #[error("configuration validation failed")]
-    Invalid { errors: Vec<String> },
+/// Why a provider could not be built for a runtime generation.
+///
+/// Its diagnostics are safe configuration messages: they name configuration
+/// fields, such as `providers.<kind>.base_url`, and never contain secret
+/// values. When the host's own network construction failed, the host's cause
+/// travels with it as the error source, so the host keeps its diagnostics.
+pub struct ProviderBuildError {
+    diagnostics: Vec<String>,
+    host_cause: Option<Box<dyn Error + Send + Sync>>,
 }
 
-impl ConfigError {
-    pub fn errors(&self) -> &[String] {
-        match self {
-            Self::Invalid { errors } => errors,
-            _ => &[],
+impl ProviderBuildError {
+    /// A configuration problem found while building, described without
+    /// secrets.
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            diagnostics: vec![message.into()],
+            host_cause: None,
         }
     }
-}
 
-/// Failure preparing a host service or constructing a backend from its
-/// configuration.
-#[derive(Debug, Error)]
-pub enum HostError {
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    #[error("{label} references missing environment variable {name}")]
-    MissingEnv { label: String, name: String },
-    #[error("failed to read secret reference for {label}: {source}")]
-    SecretFile {
-        label: String,
-        #[source]
-        source: std::io::Error,
-    },
-}
+    /// The host could not construct the client labeled `label`.
+    pub(crate) fn client(label: &str, error: UpstreamClientFactoryError) -> Self {
+        Self {
+            diagnostics: vec![format!("{label} HTTP client could not be constructed")],
+            host_cause: Some(error.into_cause()),
+        }
+    }
 
-impl HostError {
-    /// A configuration problem found while building a host service or
-    /// backend.
-    pub fn invalid(message: impl Into<String>) -> Self {
-        Self::Config(ConfigError::Invalid {
-            errors: vec![message.into()],
-        })
+    pub fn diagnostics(&self) -> &[String] {
+        &self.diagnostics
+    }
+
+    /// The diagnostics and, when the host's network construction failed, the
+    /// host's own cause.
+    pub fn into_parts(self) -> (Vec<String>, Option<Box<dyn Error + Send + Sync>>) {
+        (self.diagnostics, self.host_cause)
     }
 }
 
-pub fn load_secret_ref_value(label: &str, reference: &str) -> Result<String, HostError> {
-    if let Some(name) = reference.strip_prefix("env:") {
-        return std::env::var(name)
-            .map(|value| value.trim().to_string())
-            .map_err(|_| HostError::MissingEnv {
-                label: label.to_string(),
-                name: name.to_string(),
-            });
+impl fmt::Debug for ProviderBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderBuildError")
+            .field("diagnostics", &self.diagnostics)
+            .field("host_cause", &self.host_cause)
+            .finish()
     }
-    if let Some(path) = reference.strip_prefix("file:") {
-        return fs::read_to_string(path)
-            .map(|value| value.trim().to_string())
-            .map_err(|source| HostError::SecretFile {
-                label: label.to_string(),
-                source,
-            });
+}
+
+impl fmt::Display for ProviderBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.diagnostics.join("; "))
     }
-    Err(HostError::Config(ConfigError::Invalid {
-        errors: vec![format!("{label} must use env:NAME or file:/absolute/path")],
-    }))
+}
+
+impl Error for ProviderBuildError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.host_cause
+            .as_deref()
+            .map(|cause| cause as &(dyn Error + 'static))
+    }
 }
