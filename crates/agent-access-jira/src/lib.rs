@@ -1210,7 +1210,7 @@ impl JiraProvider {
                     partial.key.as_deref(),
                 )));
             }
-            Err(error) => return Err(jira_backend_error(error)),
+            Err(error) => return Err(jira_write_error(error)),
         };
         let created = create_response.value;
         let mut upstream_duration_ms = create_response.duration_ms;
@@ -1434,7 +1434,7 @@ impl JiraProvider {
                     &parent,
                 )));
             }
-            Err(error) => return Err(jira_backend_error(error)),
+            Err(error) => return Err(jira_write_error(error)),
         };
         let created = create_response.value;
         upstream_duration_ms += create_response.duration_ms;
@@ -1712,7 +1712,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         let readback_response = self
             .backend
             .issue(&metadata.key, credential)
@@ -1798,7 +1798,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         upstream_duration_ms += update_response.duration_ms;
 
         let readback_response = match self.backend.issue_parent(&issue.key, credential).await {
@@ -1934,7 +1934,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         upstream_duration_ms += create_response.duration_ms;
 
         let readback_response = match self.backend.issue_links(&blocking.key, credential).await {
@@ -2304,7 +2304,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         validate_returned_comment_id(&response.value.id, None)?;
         validate_returned_comment_parent_id(&response.value, None)?;
         validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
@@ -2397,7 +2397,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         upstream_duration_ms += response.duration_ms;
         validate_returned_comment_id(&response.value.id, None)?;
         validate_returned_comment_parent_id(&response.value, Some(&effective_parent_comment_id))?;
@@ -2483,7 +2483,7 @@ impl JiraProvider {
                 credential,
             )
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         upstream_duration_ms += response.duration_ms;
         validate_returned_comment_id(&response.value.id, Some(&inputs.comment_id))?;
         validate_returned_comment_body(&response.value, self.config.content.max_body_bytes)?;
@@ -2532,7 +2532,7 @@ impl JiraProvider {
             .backend
             .delete_comment(&metadata.key, &inputs.comment_id, credential)
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         let result = json!({
             "operation": "comment.delete",
             "issue": issue_metadata_result(&metadata, &self.config),
@@ -2702,7 +2702,7 @@ impl JiraProvider {
             .backend
             .set_comment_property(&inputs.comment_id, property_key, value, credential)
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         let result = json!({
             "operation": "comment.property.set",
             "issue": issue_metadata_result(&metadata, &self.config),
@@ -2760,7 +2760,7 @@ impl JiraProvider {
             .backend
             .delete_comment_property(&inputs.comment_id, property_key, credential)
             .await
-            .map_err(jira_backend_error)?;
+            .map_err(jira_write_error)?;
         let result = json!({
             "operation": "comment.property.delete",
             "issue": issue_metadata_result(&metadata, &self.config),
@@ -2824,6 +2824,8 @@ impl JiraProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Jira throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -2850,6 +2852,7 @@ impl JiraProvider {
                     if let JiraBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, JiraBackendError::NotSent { .. });
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -2882,6 +2885,11 @@ impl JiraProvider {
                 ProviderError::error(ReasonCode::UpstreamFailed, "Jira attachment upload failed");
             if let Some(retry_after) = rate_limited {
                 error = error.interrupted_by_upstream_rate_limit("jira", retry_after);
+            }
+            if stopped_unsent {
+                // The first upload never reached Jira and the rest were
+                // skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
             }
             return Err(error.with_audit(json!({
                 "provider": "jira",
@@ -5705,6 +5713,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The failure of an action's own write. A request the SDK proved never
+/// reached Jira also reports `not_applied`; call it only for the action's
+/// first write, never after another write applied.
+fn jira_write_error(error: JiraBackendError) -> ProviderError {
+    let not_sent = matches!(error, JiraBackendError::NotSent { .. });
+    let failure = jira_backend_error(error);
+    if not_sent {
+        failure.with_mutation_receipt(MutationReceipt::not_applied())
+    } else {
+        failure
+    }
+}
+
 fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
     match error {
         JiraBackendError::Unauthorized => "unauthorized",
@@ -5719,8 +5740,12 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
                 "input_invalid"
             }
         }
-        JiraBackendError::Transport(_) => "upstream_connection_failed",
-        JiraBackendError::Timeout => "upstream_timeout",
+        JiraBackendError::NotSent { timed_out: false } | JiraBackendError::Transport(_) => {
+            "upstream_connection_failed"
+        }
+        JiraBackendError::NotSent { timed_out: true } | JiraBackendError::Timeout => {
+            "upstream_timeout"
+        }
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",

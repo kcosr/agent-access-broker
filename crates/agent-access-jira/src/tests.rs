@@ -6414,6 +6414,102 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     );
 }
 
+#[tokio::test]
+async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
+    let not_applied = json!({"mutationStatus": "not_applied", "retrySafe": true});
+    // Only the SDK's not-sent proof becomes `NotSent`, which keeps the
+    // reason and message a timeout or transport failure reports.
+    for (timed_out, reason, message) in [
+        (
+            false,
+            ReasonCode::UpstreamConnectionFailed,
+            "Jira request failed",
+        ),
+        (true, ReasonCode::UpstreamTimeout, "Jira request timed out"),
+    ] {
+        let error = jira_upstream_error(UpstreamError::NotSent {
+            timed_out,
+            detail: "connection refused".to_string(),
+        });
+        assert_eq!(error, JiraBackendError::NotSent { timed_out });
+        assert_eq!(jira_backend_reason_code(&error), reason);
+        assert_eq!(sanitized_backend_reason(&error), reason.as_str());
+        let write = jira_write_error(error.clone());
+        assert_eq!(write.decision(), crate::Decision::Error);
+        assert_eq!(write.reason_code(), reason);
+        assert_eq!(write.message, message);
+        assert_eq!(write.result.as_deref(), Some(&not_applied));
+        // Reads carry no mutation receipt.
+        let read = jira_backend_error(error);
+        assert_eq!(read.reason_code(), reason);
+        assert_eq!(read.message, message);
+        assert!(read.result.is_none());
+    }
+    // Failures that may have reached Jira are never reported as unsent.
+    assert_eq!(
+        jira_upstream_error(UpstreamError::Timeout),
+        JiraBackendError::Timeout
+    );
+    assert_eq!(
+        jira_upstream_error(UpstreamError::Transport("reset".to_string())),
+        JiraBackendError::Transport("reset".to_string())
+    );
+    for error in [
+        JiraBackendError::Timeout,
+        JiraBackendError::Transport("reset".to_string()),
+    ] {
+        assert!(jira_write_error(error).result.is_none());
+    }
+
+    // An action's unsent write reports the receipt.
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".to_string(), visible_issue());
+    *backend.issue_update_error.lock().unwrap() =
+        Some(JiraBackendError::NotSent { timed_out: false });
+    let error =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
+            .invoke(per_user_invocation(
+                "issue.update",
+                json!({"issue": "PROJ-1", "summary": "unsent summary"}),
+                vec![],
+            ))
+            .await
+            .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert_eq!(error.result.as_deref(), Some(&not_applied));
+
+    // An attachment batch whose first upload was unsent applied nothing; one
+    // that stopped after an applied upload is partial, never `not_applied`.
+    let unsent_after = |successes| {
+        let mut backend = StubJiraBackend::default();
+        backend.issues.insert("PROJ-1".to_string(), visible_issue());
+        *backend.fail_upload_after_successes.lock().unwrap() = Some(successes);
+        *backend.upload_error.lock().unwrap() = Some(JiraBackendError::NotSent { timed_out: true });
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
+    };
+    let error = unsent_after(0)
+        .invoke(attachment_add_invocation(&["first", "second"]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+    assert_eq!(error.message, "Jira attachment upload failed");
+    assert_eq!(error.result.as_deref(), Some(&not_applied));
+    assert_eq!(
+        error.audit.as_ref().unwrap()["attachments"][0]["reason"],
+        "upstream_timeout"
+    );
+    let error = unsent_after(1)
+        .invoke(attachment_add_invocation(&["first", "second"]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+    let result = error.result.as_deref().unwrap();
+    assert_eq!(result["status"], "partial");
+    assert_eq!(result["failures"][0]["reason"], "upstream_timeout");
+    assert!(result.get("mutationStatus").is_none(), "{result}");
+    assert!(result.get("retrySafe").is_none(), "{result}");
+}
+
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {

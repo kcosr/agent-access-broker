@@ -598,6 +598,11 @@ pub enum JiraBackendError {
         message: String,
         body_malformed: bool,
     },
+    /// The SDK proved the request never reached Jira: it could not be built,
+    /// or no connection was established (`timed_out` for a connect timeout).
+    /// It reports the same reason as `Timeout` or `Transport`.
+    #[error("Jira request was not sent")]
+    NotSent { timed_out: bool },
     #[error("Jira transport failed: {0}")]
     Transport(String),
     #[error("Jira request timed out")]
@@ -645,10 +650,10 @@ pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
             format!("Jira rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        JiraBackendError::Transport(_message) => {
+        JiraBackendError::NotSent { timed_out: false } | JiraBackendError::Transport(_) => {
             ProviderError::error(ReasonCode::UpstreamConnectionFailed, "Jira request failed")
         }
-        JiraBackendError::Timeout => {
+        JiraBackendError::NotSent { timed_out: true } | JiraBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "Jira request timed out")
         }
         JiraBackendError::ResponseTooLarge => ProviderError::error(
@@ -678,8 +683,12 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
                 ReasonCode::InputInvalid
             }
         }
-        JiraBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
-        JiraBackendError::Timeout => ReasonCode::UpstreamTimeout,
+        JiraBackendError::NotSent { timed_out: false } | JiraBackendError::Transport(_) => {
+            ReasonCode::UpstreamConnectionFailed
+        }
+        JiraBackendError::NotSent { timed_out: true } | JiraBackendError::Timeout => {
+            ReasonCode::UpstreamTimeout
+        }
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
         | JiraBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
@@ -1826,16 +1835,11 @@ pub(crate) async fn send_jira_request(
 
 pub(crate) fn jira_upstream_error(error: UpstreamError) -> JiraBackendError {
     match error {
-        // A request that never reached the upstream fails as it always has:
-        // connect timeouts as timeouts, everything else as transport errors.
-        UpstreamError::Timeout
-        | UpstreamError::NotSent {
-            timed_out: true, ..
-        } => JiraBackendError::Timeout,
-        UpstreamError::Transport(message)
-        | UpstreamError::NotSent {
-            detail: message, ..
-        } => JiraBackendError::Transport(message),
+        // Only the SDK's own not-sent classification proves Jira never
+        // received the request; every other failure may have reached it.
+        UpstreamError::NotSent { timed_out, .. } => JiraBackendError::NotSent { timed_out },
+        UpstreamError::Timeout => JiraBackendError::Timeout,
+        UpstreamError::Transport(message) => JiraBackendError::Transport(message),
         UpstreamError::NotAllowed => {
             JiraBackendError::Protocol("Jira upstream URL is not allowlisted".to_string())
         }

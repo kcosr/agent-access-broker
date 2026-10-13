@@ -249,6 +249,18 @@ verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
 IDs and keys. It carries no retry wait: inspect those issues instead of repeating
 the mutation.
 
+A Jira write action sends its mutation request after its reads. When the Broker
+proves that request never reached Jira, because no connection was established
+(including a connect timeout) or the request could not be built, the action
+fails with its ordinary `upstream_connection_failed` (`Jira request failed`) or
+`upstream_timeout` (`Jira request timed out`) and a result of
+`mutationStatus: "not_applied"`, `retrySafe: true`: nothing was applied, and
+the action can be repeated. This covers every write action, and an
+`attachment.add` batch whose first upload was never sent. A read that was never
+sent, a later upload after earlier files were created, and a failure after the
+request may have been sent carry no such receipt; inspect the issue before
+repeating those writes.
+
 ## Read response formats
 
 Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
@@ -1026,6 +1038,9 @@ waiting and repeating the batch would upload them again, so the reason code is
 `retrySafe: false`, `verificationStage: "attachment_upload"`, and
 `safeLocators` with the issue and created attachment IDs, with no retry wait.
 Upload only the failed and skipped files, later, instead of the whole batch.
+When the first upload was proven never sent, nothing was created: the
+`upstream_failed` error carries `mutationStatus: "not_applied"` and
+`retrySafe: true`, and the whole batch can be repeated.
 
 ```mermaid
 stateDiagram-v2

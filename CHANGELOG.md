@@ -508,6 +508,13 @@ All notable changes to this project are documented in this file.
   drops the `mutation outcome may be unknown, inspect before retrying` suffix
   (`Gmail request failed`). Mutations that may have reached Gmail keep the
   suffix and carry no result.
+- Jira write actions (`issue.create`, `issue.child.create`, `issue.update`,
+  `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`,
+  `comment.update`, `comment.delete`, `comment.property.set`,
+  `comment.property.delete`, and `attachment.add` when its first upload was not
+  sent) whose request the Broker proves was never sent now add
+  `mutationStatus: "not_applied"`, `retrySafe: true` to their unchanged error,
+  which previously carried no result.
 
 ### Fixed
 
