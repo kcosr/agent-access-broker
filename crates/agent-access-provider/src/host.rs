@@ -243,6 +243,9 @@ pub fn configure_client_profile(
 /// The host's inputs for one scope-resolution request: validated inputs, the
 /// host-selected execution context, minimal identity, correlation and the
 /// lookup credential the host selected, if any.
+///
+/// Intentionally exhaustive: the host supplies every input, so a new one
+/// fails to compile until the host provides it.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopeRequestParts<'a> {
     pub service: &'a str,
@@ -289,6 +292,9 @@ pub fn bearer_credential(token: String) -> ExecutionCredential {
 
 /// The host's admission decision for one operation: the admitted context, the
 /// validated inputs and the execution and lookup material it selected.
+///
+/// Intentionally exhaustive: the host supplies every input, so a new one
+/// fails to compile until the host provides it.
 #[derive(Debug)]
 pub struct AdmittedRequestParts {
     pub service: String,

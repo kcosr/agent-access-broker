@@ -7862,13 +7862,13 @@ impl Provider for BodyPartCorrelationCaptureProvider {
             )
         );
         Ok(BodyAdmission::new(
-            vec![BrokerBodyPartSpec {
-                name: "attachment".to_string(),
-                file_name: "upload.bin".to_string(),
-                content_type: "application/octet-stream".to_string(),
-                size: 7,
-                sha256: "sha256".to_string(),
-            }],
+            vec![BrokerBodyPartSpec::new(
+                "attachment".to_string(),
+                "upload.bin".to_string(),
+                "application/octet-stream".to_string(),
+                7,
+                "sha256".to_string(),
+            )],
             StateDisposition::Keep,
         ))
     }

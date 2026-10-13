@@ -5065,12 +5065,14 @@ fn validate_attachment_metadata_inputs(
 fn attachment_body_part_specs(inputs: &[AttachmentInput]) -> Vec<BrokerBodyPartSpec> {
     inputs
         .iter()
-        .map(|input| BrokerBodyPartSpec {
-            name: input.field.clone(),
-            file_name: input.filename.clone(),
-            content_type: input.content_type.clone(),
-            size: input.size,
-            sha256: input.sha256.clone(),
+        .map(|input| {
+            BrokerBodyPartSpec::new(
+                input.field.clone(),
+                input.filename.clone(),
+                input.content_type.clone(),
+                input.size,
+                input.sha256.clone(),
+            )
         })
         .collect()
 }

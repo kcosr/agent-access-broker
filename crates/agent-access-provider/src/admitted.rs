@@ -334,12 +334,12 @@ mod tests {
             AuthorityMismatch::NotSearch
         );
 
-        let search = SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
+        let search = SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
                 excluded_values: vec!["SECRET".to_string()],
             },
-        };
+        );
         let searching = InvocationBuilder::new("svc", "search")
             .search(search.clone())
             .build();

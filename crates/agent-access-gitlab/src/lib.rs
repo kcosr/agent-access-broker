@@ -7495,13 +7495,13 @@ fn parse_project_upload_inputs(
     let locator = parse_project_locator(&Value::Object(locator), config)?;
     Ok((
         locator,
-        BrokerBodyPartSpec {
-            name: metadata.field,
-            file_name: metadata.filename,
-            content_type: metadata.content_type,
-            size: metadata.size,
-            sha256: metadata.sha256,
-        },
+        BrokerBodyPartSpec::new(
+            metadata.field,
+            metadata.filename,
+            metadata.content_type,
+            metadata.size,
+            metadata.sha256,
+        ),
     ))
 }
 

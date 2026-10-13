@@ -100,13 +100,13 @@ impl Provider for StateProvider {
             Admission::Clear => StateDisposition::Clear,
         };
         Ok(BodyAdmission::new(
-            vec![BrokerBodyPartSpec {
-                name: "attachment".to_string(),
-                file_name: "upload.bin".to_string(),
-                content_type: "application/octet-stream".to_string(),
-                size: 7,
-                sha256: "sha256".to_string(),
-            }],
+            vec![BrokerBodyPartSpec::new(
+                "attachment".to_string(),
+                "upload.bin".to_string(),
+                "application/octet-stream".to_string(),
+                7,
+                "sha256".to_string(),
+            )],
             state,
         ))
     }
@@ -266,12 +266,12 @@ mod admitted_authority {
     #[test]
     fn search_actions_receive_the_complete_boundary() {
         let search = action().scope("project").search_contained();
-        let boundary = SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
+        let boundary = SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
                 excluded_values: vec!["SECRET".to_string()],
             },
-        };
+        );
         // The envelope summary is lossy; the provider's authority is not.
         let authority =
             admitted_authority(&search, &scopes(&["*"]), Some(boundary.clone())).unwrap();

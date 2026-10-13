@@ -706,10 +706,7 @@ mod tests {
 
     fn invocation() -> ProviderInvocation {
         InvocationBuilder::new("svc", "item.list")
-            .identity(InvocationIdentity {
-                principal: "alice".to_string(),
-                authenticated: true,
-            })
+            .identity(InvocationIdentity::new("alice".to_string(), true))
             .build()
     }
 
@@ -750,10 +747,7 @@ mod tests {
                 .principal("mallory")
                 .build(),
             InvocationBuilder::from(request.clone())
-                .identity(InvocationIdentity {
-                    principal: "alice".to_string(),
-                    authenticated: false,
-                })
+                .identity(InvocationIdentity::new("alice".to_string(), false))
                 .build(),
             InvocationBuilder::from(request.clone())
                 .credential_mode(CredentialMode::PerUser)

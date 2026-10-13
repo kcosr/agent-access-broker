@@ -13,6 +13,7 @@ pub const BROKER_REQUEST_ID_HEADER: &str = "X-Agent-Access-Broker-Request-Id";
 
 /// The request IDs of one invocation, which upstream requests to the
 /// service's own origin carry.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CorrelationContext {
     pub agent_request_id: String,

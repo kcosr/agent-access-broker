@@ -401,10 +401,7 @@ impl SearchAuthorizationPlan {
     /// all-except boundary. The credential mode travels in the admitted
     /// context, not here.
     pub fn authorization(&self) -> SearchAuthorization {
-        SearchAuthorization {
-            scope_type: self.scope_type.clone(),
-            scope: self.scope.clone(),
-        }
+        SearchAuthorization::new(self.scope_type.clone(), self.scope.clone())
     }
 
     /// The envelope and audit `resourceScopes` summary of the boundary:
@@ -4724,10 +4721,8 @@ impl BrokerRuntime {
                 audit_search_authorization = Some(search_authorization);
                 (scopes, policy, None, Some(provider_search_authorization))
             } else {
-                let scope_identity = InvocationIdentity {
-                    principal: identity.principal.clone(),
-                    authenticated: identity.authenticated,
-                };
+                let scope_identity =
+                    InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
                 let scope_resolution = match with_provider_context(
                     correlation.clone(),
                     service.clone(),
@@ -4970,10 +4965,10 @@ impl BrokerRuntime {
                 service: service.clone(),
                 action: action.clone(),
                 execution_context: execution_context.as_str().to_owned(),
-                identity: InvocationIdentity {
-                    principal: identity.principal.clone(),
-                    authenticated: identity.authenticated,
-                },
+                identity: InvocationIdentity::new(
+                    identity.principal.clone(),
+                    identity.authenticated,
+                ),
                 correlation: correlation.clone(),
                 credential_mode,
                 authority,

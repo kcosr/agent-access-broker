@@ -63,10 +63,7 @@ fn action() -> ImportedActionDefinition {
 fn invocation(inputs: Value, token: &str) -> ProviderInvocation {
     InvocationBuilder::new("example", "item.update")
         .inputs(inputs)
-        .identity(InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        })
+        .identity(InvocationIdentity::new("alice", true))
         .credential(credential(token))
         .build()
 }

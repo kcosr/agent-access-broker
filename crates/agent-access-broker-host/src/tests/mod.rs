@@ -16028,8 +16028,8 @@ impl Provider for TestMultipartProvider {
             let specs = attachments
                 .iter()
                 .map(|attachment| {
-                    Ok(BrokerBodyPartSpec {
-                        name: attachment
+                    Ok(BrokerBodyPartSpec::new(
+                        attachment
                             .get("field")
                             .and_then(Value::as_str)
                             .ok_or_else(|| {
@@ -16039,7 +16039,7 @@ impl Provider for TestMultipartProvider {
                                 )
                             })?
                             .to_string(),
-                        file_name: attachment
+                        attachment
                             .get("filename")
                             .and_then(Value::as_str)
                             .ok_or_else(|| {
@@ -16049,7 +16049,7 @@ impl Provider for TestMultipartProvider {
                                 )
                             })?
                             .to_string(),
-                        content_type: attachment
+                        attachment
                             .get("contentType")
                             .and_then(Value::as_str)
                             .ok_or_else(|| {
@@ -16059,7 +16059,7 @@ impl Provider for TestMultipartProvider {
                                 )
                             })?
                             .to_string(),
-                        size: attachment
+                        attachment
                             .get("size")
                             .and_then(Value::as_u64)
                             .ok_or_else(|| {
@@ -16068,7 +16068,7 @@ impl Provider for TestMultipartProvider {
                                     "attachment size is required",
                                 )
                             })?,
-                        sha256: attachment
+                        attachment
                             .get("sha256")
                             .and_then(Value::as_str)
                             .ok_or_else(|| {
@@ -16078,7 +16078,7 @@ impl Provider for TestMultipartProvider {
                                 )
                             })?
                             .to_string(),
-                    })
+                    ))
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?;
             Ok(BodyAdmission::new(specs, StateDisposition::Keep))

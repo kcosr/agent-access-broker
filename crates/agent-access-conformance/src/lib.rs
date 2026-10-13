@@ -915,12 +915,14 @@ impl Provider for ConformanceProvider {
         let part_specs = inputs
             .attachments
             .into_iter()
-            .map(|attachment| BrokerBodyPartSpec {
-                name: attachment.field,
-                file_name: attachment.filename,
-                content_type: attachment.content_type,
-                size: attachment.size,
-                sha256: attachment.sha256,
+            .map(|attachment| {
+                BrokerBodyPartSpec::new(
+                    attachment.field,
+                    attachment.filename,
+                    attachment.content_type,
+                    attachment.size,
+                    attachment.sha256,
+                )
             })
             .collect();
         Ok(BodyAdmission::new(part_specs, StateDisposition::Keep))
@@ -1289,13 +1291,12 @@ mod tests {
             ProviderLimits::default().with_streaming_idle_timeout_ms(200),
         );
         let content = b"payload";
-        let part = BrokerBodyPart {
-            name: "file".into(),
-            file_name: Some("notes.txt".into()),
-            content_type: Some("text/plain".into()),
-            bytes: content.to_vec(),
-            temp_file: None,
-        };
+        let part = BrokerBodyPart::in_memory(
+            "file",
+            Some("notes.txt".into()),
+            Some("text/plain".into()),
+            content.to_vec(),
+        );
         let inputs = json!({"item": "shelf/item", "attachments": [{
             "field": "file", "filename": "notes.txt", "contentType": "text/plain",
             "size": content.len(), "sha256": part.sha256_hex()

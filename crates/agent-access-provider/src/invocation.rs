@@ -5,6 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// One multipart body part the host admitted for an invocation. The host
+/// spools each part to a file ([`crate::host::spooled_body_part`]); provider
+/// tests may build in-memory parts with `in_memory` under the
+/// `test-support` feature.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerBodyPart {
     pub name: String,
@@ -47,6 +52,23 @@ impl Drop for BrokerBodyPartFile {
 }
 
 impl BrokerBodyPart {
+    /// A part whose content is `bytes` in memory.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn in_memory(
+        name: impl Into<String>,
+        file_name: Option<String>,
+        content_type: Option<String>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            file_name,
+            content_type,
+            bytes,
+            temp_file: None,
+        }
+    }
+
     /// The host spools parts with [`crate::host::spooled_body_part`].
     pub(crate) fn from_temp_file(
         name: String,
@@ -95,6 +117,9 @@ impl BrokerBodyPart {
     }
 }
 
+/// The metadata an action declares for one body part it expects: its form
+/// field, file name, content type, size and SHA-256 digest.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerBodyPartSpec {
     pub name: String,
@@ -104,8 +129,29 @@ pub struct BrokerBodyPartSpec {
     pub sha256: String,
 }
 
+impl BrokerBodyPartSpec {
+    /// The part in form field `name`, carrying `file_name` as
+    /// `content_type`, `size` bytes long with the hex `sha256` digest.
+    pub fn new(
+        name: impl Into<String>,
+        file_name: impl Into<String>,
+        content_type: impl Into<String>,
+        size: u64,
+        sha256: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            file_name: file_name.into(),
+            content_type: content_type.into(),
+            size,
+            sha256: sha256.into(),
+        }
+    }
+}
+
 /// The caller an invocation runs for. Backends see only the principal and
 /// whether it authenticated, never the broker's full identity context.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvocationIdentity {
     pub principal: String,
@@ -113,6 +159,13 @@ pub struct InvocationIdentity {
 }
 
 impl InvocationIdentity {
+    pub fn new(principal: impl Into<String>, authenticated: bool) -> Self {
+        Self {
+            principal: principal.into(),
+            authenticated,
+        }
+    }
+
     pub fn anonymous() -> Self {
         Self {
             principal: "anonymous".to_string(),
@@ -125,10 +178,20 @@ impl InvocationIdentity {
 /// provider must constrain its upstream query and check every result against
 /// this scope. Its credential mode is the admitted context's; there is no
 /// second copy.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchAuthorization {
     pub scope_type: String,
     pub scope: SearchAuthorizationScope,
+}
+
+impl SearchAuthorization {
+    pub fn new(scope_type: impl Into<String>, scope: SearchAuthorizationScope) -> Self {
+        Self {
+            scope_type: scope_type.into(),
+            scope,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

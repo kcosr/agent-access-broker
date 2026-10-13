@@ -2220,12 +2220,12 @@ fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
         blog.cql
             .contains("space NOT IN (\"IN\", PRIVATE) AND type = blogpost")
     );
-    let authorization = SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::AllExcept {
+    let authorization = SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-    };
+    );
     assert!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()])).is_err()
     );
@@ -2257,12 +2257,12 @@ async fn all_except_confluence_search_checks_returned_containment() {
             json!({"query":{"type":"cql","value":"title ~ \"runbook\""},"maxResults":1}),
         );
         request = InvocationBuilder::from(request)
-            .search(SearchAuthorization {
-                scope_type: "space".to_string(),
-                scope: SearchAuthorizationScope::AllExcept {
+            .search(SearchAuthorization::new(
+                "space".to_string(),
+                SearchAuthorizationScope::AllExcept {
                     excluded_values: vec!["PRIVATE".to_string()],
                 },
-            })
+            ))
             .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
@@ -3016,13 +3016,12 @@ fn confluence_attachment_upload_validation_rejects_limit_and_integrity_mismatche
         size: 4,
         sha256: sha256_hex(b"data"),
     };
-    let part = BrokerBodyPart {
-        name: "file".to_string(),
-        file_name: Some("diagram.txt".to_string()),
-        content_type: Some("text/plain".to_string()),
-        bytes: b"data".to_vec(),
-        temp_file: None,
-    };
+    let part = BrokerBodyPart::in_memory(
+        "file".to_string(),
+        Some("diagram.txt".to_string()),
+        Some("text/plain".to_string()),
+        b"data".to_vec(),
+    );
     assert!(
         prepare_attachment_uploads(
             std::slice::from_ref(&input),
@@ -7762,12 +7761,12 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
 }
 
 fn confluence_search_preflight<const N: usize>(spaces: [&str; N]) -> SearchAuthorization {
-    SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+    SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::Finite {
             values: spaces.into_iter().map(ToString::to_string).collect(),
         },
-    }
+    )
 }
 
 #[test]
@@ -7902,10 +7901,7 @@ async fn stream_bytes(stream: ProviderResultStream) -> Vec<u8> {
 }
 
 fn identity(principal: &str) -> crate::InvocationIdentity {
-    crate::InvocationIdentity {
-        principal: principal.to_string(),
-        authenticated: true,
-    }
+    crate::InvocationIdentity::new(principal.to_string(), true)
 }
 
 fn confluence_attribution_provider(
@@ -8351,12 +8347,13 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
                     names
                         .iter()
                         .enumerate()
-                        .map(|(index, name)| BrokerBodyPart {
-                            name: format!("file{index}"),
-                            file_name: Some(format!("{name}.txt")),
-                            content_type: Some("text/plain".to_string()),
-                            bytes: name.as_bytes().to_vec(),
-                            temp_file: None,
+                        .map(|(index, name)| {
+                            BrokerBodyPart::in_memory(
+                                format!("file{index}"),
+                                Some(format!("{name}.txt")),
+                                Some("text/plain".to_string()),
+                                name.as_bytes().to_vec(),
+                            )
                         })
                         .collect(),
                 )
@@ -8868,12 +8865,13 @@ fn draft_attachment_add_invocation(
             names
                 .iter()
                 .enumerate()
-                .map(|(index, name)| BrokerBodyPart {
-                    name: format!("file{index}"),
-                    file_name: Some(format!("{name}.txt")),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: name.as_bytes().to_vec(),
-                    temp_file: None,
+                .map(|(index, name)| {
+                    BrokerBodyPart::in_memory(
+                        format!("file{index}"),
+                        Some(format!("{name}.txt")),
+                        Some("text/plain".to_string()),
+                        name.as_bytes().to_vec(),
+                    )
                 })
                 .collect(),
         )
@@ -9115,12 +9113,12 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
 #[test]
 fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     let inputs = parse_search_inputs(&json!({"query": {"type": "cql", "value": ""}})).unwrap();
-    let authorization = SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+    let authorization = SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::Finite {
             values: vec!["ENG".to_string(), "OPS".to_string()],
         },
-    };
+    );
     let scope =
         effective_search_scope(&authorization, &requested_spaces(&inputs).unwrap()).unwrap();
     let query =

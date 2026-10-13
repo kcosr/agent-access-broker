@@ -4057,12 +4057,12 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
 #[test]
 fn scope_only_jql_requires_positive_bound_for_all_project_access() {
     for excluded in [BTreeSet::new(), set(["PRIVATE"])] {
-        let authorization = SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
+        let authorization = SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
                 excluded_values: excluded.iter().cloned().collect(),
             },
-        };
+        );
         for value in ["", "ORDER BY updated DESC"] {
             let inputs =
                 parse_search_inputs(&json!({"query": {"type": "jql", "value": value}})).unwrap();
@@ -4407,12 +4407,12 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         narrowed.response_scope,
         EffectiveSearchScope::Finite(set(["PROJ"]))
     );
-    let authorization = SearchAuthorization {
-        scope_type: "project".to_string(),
-        scope: SearchAuthorizationScope::AllExcept {
+    let authorization = SearchAuthorization::new(
+        "project".to_string(),
+        SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-    };
+    );
     assert!(effective_search_scope(&authorization, &set(["PRIVATE"])).is_err());
     assert_eq!(
         effective_search_scope(&authorization, &set(["NEW"])).unwrap(),
@@ -4450,12 +4450,12 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
             vec![],
         );
         request = InvocationBuilder::from(request)
-            .search(SearchAuthorization {
-                scope_type: "project".to_string(),
-                scope: SearchAuthorizationScope::AllExcept {
+            .search(SearchAuthorization::new(
+                "project".to_string(),
+                SearchAuthorizationScope::AllExcept {
                     excluded_values: vec!["PRIVATE".to_string()],
                 },
-            })
+            ))
             .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{project}/{key}: {result:?}");
@@ -4561,12 +4561,12 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             vec![],
         );
         request = InvocationBuilder::from(request)
-            .search(SearchAuthorization {
-                scope_type: "project".to_string(),
-                scope: SearchAuthorizationScope::AllExcept {
+            .search(SearchAuthorization::new(
+                "project".to_string(),
+                SearchAuthorizationScope::AllExcept {
                     excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
                 },
-            })
+            ))
             .build();
         let error = provider.invoke(request).await.unwrap_err();
         assert_eq!(error.decision(), Decision::Deny);
@@ -4794,13 +4794,12 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
                     "sha256": sha256_hex(&upload)
                 }]
             }),
-            vec![BrokerBodyPart {
-                name: "file0".to_string(),
-                file_name: Some("evidence.txt".to_string()),
-                content_type: Some("text/plain".to_string()),
-                bytes: upload,
-                temp_file: None,
-            }],
+            vec![BrokerBodyPart::in_memory(
+                "file0".to_string(),
+                Some("evidence.txt".to_string()),
+                Some("text/plain".to_string()),
+                upload,
+            )],
         ))
         .await
         .unwrap();
@@ -6103,27 +6102,24 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
                 .body_parts(vec![
-                    BrokerBodyPart {
-                        name: "file0".to_string(),
-                        file_name: Some("first.txt".to_string()),
-                        content_type: Some("text/plain".to_string()),
-                        bytes: first,
-                        temp_file: None,
-                    },
-                    BrokerBodyPart {
-                        name: "file1".to_string(),
-                        file_name: Some("second.txt".to_string()),
-                        content_type: Some("text/plain".to_string()),
-                        bytes: second,
-                        temp_file: None,
-                    },
-                    BrokerBodyPart {
-                        name: "file2".to_string(),
-                        file_name: Some("third.txt".to_string()),
-                        content_type: Some("text/plain".to_string()),
-                        bytes: third,
-                        temp_file: None,
-                    },
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("first.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        first,
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file1".to_string(),
+                        Some("second.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        second,
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file2".to_string(),
+                        Some("third.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        third,
+                    ),
                 ])
                 .build(),
         )
@@ -6175,13 +6171,12 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
                 )]))
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
-                .body_parts(vec![BrokerBodyPart {
-                    name: "file0".to_string(),
-                    file_name: Some("bad.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: bad,
-                    temp_file: None,
-                }])
+                .body_parts(vec![BrokerBodyPart::in_memory(
+                    "file0".to_string(),
+                    Some("bad.txt".to_string()),
+                    Some("text/plain".to_string()),
+                    bad,
+                )])
                 .build(),
         )
         .await
@@ -6234,20 +6229,18 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
                 .body_parts(vec![
-                    BrokerBodyPart {
-                        name: "file0".to_string(),
-                        file_name: Some("duplicate.txt".to_string()),
-                        content_type: Some("text/plain".to_string()),
-                        bytes: duplicate.clone(),
-                        temp_file: None,
-                    },
-                    BrokerBodyPart {
-                        name: "file0".to_string(),
-                        file_name: Some("duplicate.txt".to_string()),
-                        content_type: Some("text/plain".to_string()),
-                        bytes: duplicate,
-                        temp_file: None,
-                    },
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("duplicate.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        duplicate.clone(),
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("duplicate.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        duplicate,
+                    ),
                 ])
                 .build(),
         )
@@ -6285,13 +6278,12 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
                 )]))
                 .credential(test_credential())
                 .lookup_credential(test_lookup_credential())
-                .body_parts(vec![BrokerBodyPart {
-                    name: "file0".to_string(),
-                    file_name: Some("failure.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
+                .body_parts(vec![BrokerBodyPart::in_memory(
+                    "file0".to_string(),
+                    Some("failure.txt".to_string()),
+                    Some("text/plain".to_string()),
                     bytes,
-                    temp_file: None,
-                }])
+                )])
                 .build(),
         )
         .await
@@ -6321,12 +6313,13 @@ fn attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
     let body_parts = names
         .iter()
         .enumerate()
-        .map(|(index, name)| BrokerBodyPart {
-            name: format!("file{index}"),
-            file_name: Some(format!("{name}.txt")),
-            content_type: Some("text/plain".to_string()),
-            bytes: name.as_bytes().to_vec(),
-            temp_file: None,
+        .map(|(index, name)| {
+            BrokerBodyPart::in_memory(
+                format!("file{index}"),
+                Some(format!("{name}.txt")),
+                Some("text/plain".to_string()),
+                name.as_bytes().to_vec(),
+            )
         })
         .collect();
     InvocationBuilder::new("jira", "attachment.add")
@@ -8537,12 +8530,12 @@ fn test_lookup_credential() -> ExecutionCredential {
 }
 
 fn search_preflight<const N: usize>(projects: [&str; N]) -> SearchAuthorization {
-    SearchAuthorization {
-        scope_type: "project".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+    SearchAuthorization::new(
+        "project".to_string(),
+        SearchAuthorizationScope::Finite {
             values: projects.into_iter().map(ToString::to_string).collect(),
         },
-    }
+    )
 }
 
 fn per_user_invocation(
@@ -8552,10 +8545,10 @@ fn per_user_invocation(
 ) -> ProviderInvocation {
     let builder = InvocationBuilder::new("jira", action)
         .inputs(inputs)
-        .identity(crate::InvocationIdentity {
-            principal: "agent-one".to_string(),
-            authenticated: true,
-        })
+        .identity(crate::InvocationIdentity::new(
+            "agent-one".to_string(),
+            true,
+        ))
         .body_parts(body_parts)
         .resources(BTreeMap::from([(
             "project".to_string(),

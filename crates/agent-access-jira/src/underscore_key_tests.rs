@@ -117,12 +117,12 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let request = InvocationBuilder::from(search_request(vec![], Some("next-page-fixture")))
-        .search(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::Finite {
+        .search(SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::Finite {
                 values: vec!["PROJ".to_string()],
             },
-        })
+        ))
         .build();
     let error = provider.invoke(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -152,12 +152,12 @@ fn search_request(excluded: Vec<String>, token: Option<&str>) -> ProviderInvocat
         inputs["nextPageToken"] = json!(token);
     }
     InvocationBuilder::from(per_user_invocation("search", inputs, vec![]))
-        .search(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
+        .search(SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
                 excluded_values: excluded,
             },
-        })
+        ))
         .build()
 }
 

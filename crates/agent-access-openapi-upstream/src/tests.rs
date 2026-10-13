@@ -136,10 +136,7 @@ fn credential(token: &str) -> ExecutionCredential {
 fn invocation(inputs: Value) -> ProviderInvocation {
     InvocationBuilder::new("example", "item.update")
         .inputs(inputs)
-        .identity(InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        })
+        .identity(InvocationIdentity::new("alice", true))
         .credential(credential("api-secret"))
         .build()
 }

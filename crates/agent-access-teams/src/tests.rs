@@ -49,10 +49,7 @@ impl NotificationTransport for ThrottledTransport {
 fn admitted_invocation() -> ProviderInvocation {
     InvocationBuilder::new("teams", ACTION)
         .inputs(simple())
-        .identity(InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        })
+        .identity(InvocationIdentity::new("alice", true))
         .correlation(Default::default())
         .resources(BTreeMap::from([(
             "destination".into(),
@@ -111,10 +108,7 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     };
     let mut invocation = InvocationBuilder::new("teams", ACTION)
         .inputs(simple())
-        .identity(InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        })
+        .identity(InvocationIdentity::new("alice", true))
         .correlation(Default::default())
         .resources(BTreeMap::from([(
             "destination".into(),

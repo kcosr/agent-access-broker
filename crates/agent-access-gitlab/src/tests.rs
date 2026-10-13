@@ -87,13 +87,12 @@ fn build_creates_upload_and_request_clients_for_the_api_base() {
 }
 
 fn upload_fixture() -> (Value, BrokerBodyPart) {
-    let part = BrokerBodyPart {
-        name: "session".to_string(),
-        file_name: Some("session.html".to_string()),
-        content_type: Some("text/html".to_string()),
-        bytes: b"<html>private session</html>".to_vec(),
-        temp_file: None,
-    };
+    let part = BrokerBodyPart::in_memory(
+        "session".to_string(),
+        Some("session.html".to_string()),
+        Some("text/html".to_string()),
+        b"<html>private session</html>".to_vec(),
+    );
     let inputs = json!({"project": "sip/service", "attachments": [{
         "field": "session", "filename": "session.html", "contentType": "text/html",
         "size": part.size(), "sha256": part.sha256_hex(),
@@ -722,10 +721,7 @@ fn test_credential() -> ExecutionCredential {
 fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
     InvocationBuilder::new("gitlab", action)
         .inputs(inputs)
-        .identity(crate::InvocationIdentity {
-            principal: "agent-1".to_string(),
-            authenticated: true,
-        })
+        .identity(crate::InvocationIdentity::new("agent-1".to_string(), true))
         .resources(repository_scopes_from_path("sip/service"))
         .credential(test_credential())
         .lookup_credential(test_credential())
