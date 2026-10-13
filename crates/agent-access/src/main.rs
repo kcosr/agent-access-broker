@@ -10136,10 +10136,7 @@ async fn run_send_command(
                     inputs,
                     files,
                     response_mode,
-                    response_options: ResponseOptions {
-                        read_content_format,
-                        response_format,
-                    },
+                    response_options: ResponseOptions::new(read_content_format, response_format),
                     output,
                     metadata_output,
                 },
@@ -15665,14 +15662,14 @@ fn resolve_response_options(
         }
     }
 
-    Ok(ResponseOptions {
-        read_content_format: if selected_output == ResponseFormat::Markdown {
+    Ok(ResponseOptions::new(
+        if selected_output == ResponseFormat::Markdown {
             ReadContentFormat::Native
         } else {
             selected_read
         },
-        response_format: selected_output,
-    })
+        selected_output,
+    ))
 }
 
 /// Response options for one invoke and the catalog's `renderedBody` owners

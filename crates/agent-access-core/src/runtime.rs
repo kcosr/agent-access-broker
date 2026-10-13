@@ -588,10 +588,10 @@ impl InvokeRequest {
     }
 
     fn response_options(&self) -> agent_access_provider::presentation::ResponseOptions {
-        agent_access_provider::presentation::ResponseOptions {
-            read_content_format: self.read_content_format,
-            response_format: self.response_format,
-        }
+        agent_access_provider::presentation::ResponseOptions::new(
+            self.read_content_format,
+            self.response_format,
+        )
     }
 }
 

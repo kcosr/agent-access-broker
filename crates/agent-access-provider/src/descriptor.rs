@@ -782,10 +782,7 @@ mod tests {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
         unscoped_lookup.resource_scope = None;
         let presented_download = action("item.download").raw_download().presentation(Some(
-            crate::presentation::ActionPresentation {
-                embedded_bodies: &[],
-                whole: None,
-            },
+            crate::presentation::ActionPresentation::new(&[], None),
         ));
         let malformed_pointer = action("item.token").sensitive_output("/result/~2");
         assert_eq!(

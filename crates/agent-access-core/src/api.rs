@@ -289,7 +289,7 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
     for body in action
         .presentation
         .iter()
-        .flat_map(|presentation| presentation.embedded_bodies)
+        .flat_map(|presentation| presentation.embedded_bodies())
     {
         let pointer = format!("/result{}", body.owner_pointer());
         if !rendered_body_owners.contains(&pointer) {

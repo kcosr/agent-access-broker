@@ -40,11 +40,23 @@ impl ReadContentFormat {
     }
 }
 
+/// The companion a codec renders for one embedded body, serialized as the
+/// owner's `renderedBody`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedBody {
     pub format: ReadContentFormat,
     pub value: String,
+}
+
+impl RenderedBody {
+    pub fn new(format: ReadContentFormat, value: impl Into<String>) -> Self {
+        Self {
+            format,
+            value: value.into(),
+        }
+    }
 }
 
 /// Shared defensive accounting for every rich-content field rendered by one request.
@@ -118,6 +130,9 @@ impl ResponseFormat {
     }
 }
 
+/// The presentation a caller requests for one invocation. The default is
+/// native read content as JSON.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseOptions {
@@ -127,6 +142,21 @@ pub struct ResponseOptions {
     pub response_format: ResponseFormat,
 }
 
+impl ResponseOptions {
+    pub const fn new(
+        read_content_format: ReadContentFormat,
+        response_format: ResponseFormat,
+    ) -> Self {
+        Self {
+            read_content_format,
+            response_format,
+        }
+    }
+}
+
+/// The presentation formats an action supports, as discovery projects them;
+/// `None` means the action supports none beyond the default.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponseCapabilities {
     pub read_content_formats: Option<&'static [&'static str]>,
@@ -134,6 +164,16 @@ pub struct ResponseCapabilities {
 }
 
 impl ResponseCapabilities {
+    pub const fn new(
+        read_content_formats: Option<&'static [&'static str]>,
+        response_formats: Option<&'static [&'static str]>,
+    ) -> Self {
+        Self {
+            read_content_formats,
+            response_formats,
+        }
+    }
+
     pub fn supports_read_content(self) -> bool {
         self.read_content_formats.is_some()
     }
@@ -160,20 +200,58 @@ pub enum RenderBudgetExhausted {
 
 /// How a backend presents one action's JSON result: embedded upstream
 /// bodies that `readContentFormat` normalizes, and an optional whole-result
-/// Markdown renderer for `responseFormat = "markdown"`.
+/// Markdown renderer for `responseFormat = "markdown"`. Declare it as a
+/// `const` or `static` with the `const` constructor.
+///
+/// ```
+/// use agent_access_provider::presentation::{
+///     ActionPresentation, RenderContext, RenderError,
+/// };
+/// use agent_access_provider::deps::serde_json::Value;
+///
+/// fn heading(result: &Value, context: &mut RenderContext) -> Result<(), RenderError> {
+///     context.out.push("# ")?;
+///     context.out.push_heading_text(result["title"].as_str().unwrap_or_default())
+/// }
+///
+/// const PRESENTATION: ActionPresentation = ActionPresentation::new(&[], Some(&heading));
+/// assert!(PRESENTATION.embedded_bodies().is_empty());
+/// assert!(PRESENTATION.capabilities().supports_markdown_response());
+/// ```
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct ActionPresentation {
-    pub embedded_bodies: &'static [EmbeddedBody],
-    pub whole: Option<&'static dyn WholeResultRenderer>,
+    embedded_bodies: &'static [EmbeddedBody],
+    whole: Option<&'static dyn WholeResultRenderer>,
 }
 
 impl ActionPresentation {
-    pub fn capabilities(&self) -> ResponseCapabilities {
-        ResponseCapabilities {
-            read_content_formats: (!self.embedded_bodies.is_empty())
-                .then_some(READ_CONTENT_FORMATS),
-            response_formats: self.whole.is_some().then_some(RESPONSE_FORMATS),
+    /// Normalizes `embedded_bodies` for `readContentFormat` and, with a
+    /// `whole` renderer, renders the whole result for
+    /// `responseFormat = "markdown"`.
+    pub const fn new(
+        embedded_bodies: &'static [EmbeddedBody],
+        whole: Option<&'static dyn WholeResultRenderer>,
+    ) -> Self {
+        Self {
+            embedded_bodies,
+            whole,
         }
+    }
+
+    pub const fn embedded_bodies(&self) -> &'static [EmbeddedBody] {
+        self.embedded_bodies
+    }
+
+    pub const fn whole(&self) -> Option<&'static dyn WholeResultRenderer> {
+        self.whole
+    }
+
+    pub fn capabilities(&self) -> ResponseCapabilities {
+        ResponseCapabilities::new(
+            (!self.embedded_bodies.is_empty()).then_some(READ_CONTENT_FORMATS),
+            self.whole.is_some().then_some(RESPONSE_FORMATS),
+        )
     }
 }
 
@@ -201,14 +279,32 @@ impl PartialEq for ActionPresentation {
 }
 
 /// An upstream body embedded in the result: where its owner objects are,
-/// and how to render the native body each owner carries.
+/// and how to render the native body each owner carries. Declared in a
+/// presentation's `const` body list.
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct EmbeddedBody {
-    pub owner_path: &'static [BodyPathSegment],
-    pub codec: &'static dyn EmbeddedBodyCodec,
+    owner_path: &'static [BodyPathSegment],
+    codec: &'static dyn EmbeddedBodyCodec,
 }
 
 impl EmbeddedBody {
+    /// Owners at `owner_path` carry a native body `codec` renders.
+    pub const fn new(
+        owner_path: &'static [BodyPathSegment],
+        codec: &'static dyn EmbeddedBodyCodec,
+    ) -> Self {
+        Self { owner_path, codec }
+    }
+
+    pub const fn owner_path(&self) -> &'static [BodyPathSegment] {
+        self.owner_path
+    }
+
+    pub const fn codec(&self) -> &'static dyn EmbeddedBodyCodec {
+        self.codec
+    }
+
     /// Where the owners are, as a JSON pointer into the provider result in
     /// which a `*` segment matches every element of an array.
     pub fn owner_pointer(&self) -> String {
@@ -274,7 +370,8 @@ where
     }
 }
 
-/// Output and limits for one whole-result render.
+/// Output and limits for one whole-result render. Only the host creates it.
+#[non_exhaustive]
 pub struct RenderContext {
     pub out: MarkdownWriter,
     /// Largest embedded upstream body the service renders.
@@ -286,10 +383,7 @@ pub struct RenderContext {
 pub fn response_capabilities(presentation: Option<&ActionPresentation>) -> ResponseCapabilities {
     presentation
         .map(ActionPresentation::capabilities)
-        .unwrap_or(ResponseCapabilities {
-            read_content_formats: None,
-            response_formats: None,
-        })
+        .unwrap_or(ResponseCapabilities::new(None, None))
 }
 
 /// Rejects response options the action cannot honor.
@@ -844,10 +938,7 @@ mod tests {
             if format == ReadContentFormat::Native {
                 return Ok(None);
             }
-            Ok(Some(RenderedBody {
-                format,
-                value: text.to_uppercase(),
-            }))
+            Ok(Some(RenderedBody::new(format, text.to_uppercase())))
         }
     }
 
@@ -859,38 +950,26 @@ mod tests {
         context.out.push("\n\n\n")
     }
 
-    const BODIES: &[EmbeddedBody] = &[EmbeddedBody {
-        owner_path: &[BodyPathSegment::Field("items"), BodyPathSegment::Each],
-        codec: &ShoutCodec,
-    }];
-    const EMBEDDED: ActionPresentation = ActionPresentation {
-        embedded_bodies: BODIES,
-        whole: None,
-    };
-    const WHOLE: ActionPresentation = ActionPresentation {
-        embedded_bodies: &[],
-        whole: Some(&heading),
-    };
+    const BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
+        &[BodyPathSegment::Field("items"), BodyPathSegment::Each],
+        &ShoutCodec,
+    )];
+    const EMBEDDED: ActionPresentation = ActionPresentation::new(BODIES, None);
+    const WHOLE: ActionPresentation = ActionPresentation::new(&[], Some(&heading));
 
     fn options(read: ReadContentFormat, response: ResponseFormat) -> ResponseOptions {
-        ResponseOptions {
-            read_content_format: read,
-            response_format: response,
-        }
+        ResponseOptions::new(read, response)
     }
 
     #[test]
     fn owner_pointers_escape_fields_and_mark_array_elements() {
         assert_eq!(BODIES[0].owner_pointer(), "/items/*");
-        let root = EmbeddedBody {
-            owner_path: &[],
-            codec: &ShoutCodec,
-        };
+        let root = EmbeddedBody::new(&[], &ShoutCodec);
         assert_eq!(root.owner_pointer(), "");
-        let escaped = EmbeddedBody {
-            owner_path: &[BodyPathSegment::Field("a/b~c"), BodyPathSegment::Each],
-            codec: &ShoutCodec,
-        };
+        let escaped = EmbeddedBody::new(
+            &[BodyPathSegment::Field("a/b~c"), BodyPathSegment::Each],
+            &ShoutCodec,
+        );
         assert_eq!(escaped.owner_pointer(), "/a~1b~0c/*");
     }
 
@@ -898,17 +977,11 @@ mod tests {
     fn capabilities_follow_the_declared_presentation() {
         assert_eq!(
             response_capabilities(Some(&EMBEDDED)),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: None,
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), None)
         );
         assert_eq!(
             response_capabilities(Some(&WHOLE)),
-            ResponseCapabilities {
-                read_content_formats: None,
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(None, Some(RESPONSE_FORMATS))
         );
         let none = response_capabilities(None);
         assert!(!none.supports_read_content() && !none.supports_markdown_response());

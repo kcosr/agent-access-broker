@@ -33,25 +33,19 @@ struct ResultDescriptor {
 
 const NO_BODIES: &[EmbeddedBody] = &[];
 
-const CONFLUENCE_ROOT_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[],
-    codec: &ConfluenceBodyMap,
-}];
+const CONFLUENCE_ROOT_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(&[], &ConfluenceBodyMap)];
 
-const CONFLUENCE_BLOG_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[],
-    codec: &ConfluenceBlogStorage,
-}];
+const CONFLUENCE_BLOG_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(&[], &ConfluenceBlogStorage)];
 
-const CONFLUENCE_COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("comment")],
-    codec: &ConfluenceBodyMap,
-}];
+const CONFLUENCE_COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("comment")],
+    &ConfluenceBodyMap,
+)];
 
-const CONFLUENCE_COMMENT_BODIES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("comments"), BodyPathSegment::Each],
-    codec: &ConfluenceBodyMap,
-}];
+const CONFLUENCE_COMMENT_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("comments"), BodyPathSegment::Each],
+    &ConfluenceBodyMap,
+)];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
     ResultDescriptor {
@@ -242,12 +236,14 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
 
 /// The presentation of `action`'s results, if it has one.
 pub(super) fn presentation(action: &str) -> Option<ActionPresentation> {
-    descriptor(action).map(|descriptor| ActionPresentation {
-        embedded_bodies: descriptor.embedded_bodies,
-        whole: descriptor
-            .whole
-            .as_ref()
-            .map(|whole| whole as &'static dyn WholeResultRenderer),
+    descriptor(action).map(|descriptor| {
+        ActionPresentation::new(
+            descriptor.embedded_bodies,
+            descriptor
+                .whole
+                .as_ref()
+                .map(|whole| whole as &'static dyn WholeResultRenderer),
+        )
     })
 }
 
@@ -294,6 +290,7 @@ impl WholeResultRenderer for WholeRenderer {
             out,
             max_body_bytes,
             budget,
+            ..
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
@@ -979,24 +976,15 @@ mod tests {
         );
         assert_eq!(
             response_capabilities("page.footer_comment.view"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), Some(RESPONSE_FORMATS))
         );
         assert_eq!(
             response_capabilities("page.footer_comment.add"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: None,
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), None)
         );
         assert_eq!(
             response_capabilities("page.footer_comment.delete"),
-            ResponseCapabilities {
-                read_content_formats: None,
-                response_formats: None,
-            }
+            ResponseCapabilities::new(None, None)
         );
     }
 
@@ -1014,10 +1002,7 @@ mod tests {
         present_provider_result(
             "page.view",
             &mut page,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1041,10 +1026,7 @@ mod tests {
         present_provider_result(
             "page.footer_comment.list",
             &mut comments,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1056,10 +1038,7 @@ mod tests {
         present_provider_result(
             "blog.view",
             &mut blog,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1081,10 +1060,7 @@ mod tests {
         present_provider_result(
             "page.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1105,10 +1081,7 @@ mod tests {
             let error = present_provider_result(
                 "page.view",
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Markdown,
-                    response_format: ResponseFormat::Json,
-                },
+                ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
                 4096,
                 16384,
             )
@@ -1123,10 +1096,7 @@ mod tests {
         present_provider_result(
             "page.view",
             &mut empty,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1155,10 +1125,7 @@ mod tests {
         let error = present_provider_result(
             "page.view",
             &mut collision,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -1599,10 +1566,7 @@ mod tests {
             present_provider_result(
                 descriptor.action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -1638,10 +1602,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -1657,10 +1618,7 @@ mod tests {
         present_provider_result(
             "page.view",
             &mut page,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1692,10 +1650,7 @@ mod tests {
         present_provider_result(
             "verify",
             &mut mismatch,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )

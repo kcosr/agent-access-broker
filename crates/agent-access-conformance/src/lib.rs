@@ -301,13 +301,13 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     }
 }
 
-const ITEM_PRESENTATION: ActionPresentation = ActionPresentation {
-    embedded_bodies: &[EmbeddedBody {
-        owner_path: &[BodyPathSegment::Field("item")],
-        codec: &PlainBody,
-    }],
-    whole: Some(&render_item),
-};
+const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(
+    &[EmbeddedBody::new(
+        &[BodyPathSegment::Field("item")],
+        &PlainBody,
+    )],
+    Some(&render_item),
+);
 
 /// An item's `body` is plain text: Markdown escapes it, text keeps it.
 struct PlainBody;
@@ -340,7 +340,7 @@ impl EmbeddedBodyCodec for PlainBody {
                 out.finish()
             }
         };
-        Ok(Some(RenderedBody { format, value }))
+        Ok(Some(RenderedBody::new(format, value)))
     }
 }
 
