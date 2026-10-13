@@ -820,7 +820,9 @@ fn page_token_failure(error: ContinuationError) -> ProviderError {
 Each family declares an explicit payload cap of at most 64 KiB.
 `max_token_bytes()` is the exact encoded size of a token carrying the largest
 payload, so the action schema can bound the token input by it. An oversized
-payload or token is an error; nothing is ever truncated.
+payload or token is an error; nothing is ever truncated. A family that relays
+an upstream token of undocumented size derives its cap from the response limit
+instead; see [relayed upstream cursors](#relayed-upstream-cursors).
 
 ### Errors
 
@@ -828,6 +830,37 @@ payload or token is an error; nothing is ever truncated.
 reuse (invalid, tampered, rebound, obsolete version, expired or too large) from a
 Broker-side failure. Report rejections as a caller error such as `input_invalid`
 with `decision = deny`, and a missing signing key as `cursor_signing_unavailable`.
+
+### Relayed upstream cursors
+
+When an upstream service issues its own page token, the provider seals that
+token instead of passing it through. `ContinuationSigner::seal_relayed(&binding,
+upstream_query, upstream_token)` seals the token as text, and `open_relayed`
+returns it. With `Some(upstream_query)`, the token also carries a keyed
+commitment to the upstream query that the provider composed for the page under
+the current authorization. When a later grant change recomposes that query,
+opening fails with `ContinuationError::UpstreamQueryChanged`, and the upstream
+token is never sent with a different query. Relayed tokens open only as relayed
+tokens with the same commitment choice. The commitment
+(`UPSTREAM_QUERY_COMMITMENT_BYTES`) counts toward the payload cap.
+
+An upstream that documents no maximum token size gets no invented cap. The
+response limit already bounds the response the upstream token arrives in and the
+result the continuation leaves in. Declare the family's expiry and prefix, then
+size it with
+`family.with_max_payload_bytes(family.max_payload_bytes_within(response_limit))`.
+The continuation then always fits the result it is returned in.
+
+A family whose tokens must be read during scope resolution, before the host
+admits a credential mode, declares `.opened_during_scope_resolution()`. Scope
+resolution binds the token with `family.bind_scope(&request, configuration)` and
+opens it with `ContinuationSigner::open_during_scope_resolution`. That binding
+covers only what scope resolution knows: the service, the action (unless
+shared), the execution context, the configuration and the provider's fields. The
+token's owner travels inside it as a keyed ownership commitment. Scope
+resolution accepts the token only when the current principal could own it, and
+after admission the provider opens it again with `open`, which checks the
+admitted credential mode and principal.
 
 ### Low-level signing
 

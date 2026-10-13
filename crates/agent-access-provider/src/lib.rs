@@ -221,8 +221,9 @@ pub use config::{
     validate_upstream_allowlist, validate_upstream_base_url,
 };
 pub use continuation::{
-    ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
-    ContinuationOwner, ContinuationSigner,
+    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFamily,
+    ContinuationLifetime, ContinuationOwner, ContinuationSigner, ContinuationStage,
+    ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
 };
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,

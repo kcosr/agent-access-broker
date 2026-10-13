@@ -408,6 +408,23 @@ bound: the host authorizes every continuation under current policy and the
 provider re-applies its containment and result checks. Each provider's
 documentation states its families' bindings and lifetimes.
 
+A family that relays an upstream service's own page token seals it as text,
+optionally with a keyed commitment to the upstream query the provider composed
+under current authorization; when a grant change recomposes that query, the
+token is rejected as belonging to a different query instead of being sent
+upstream with the new one. Such a family may size its tokens from the
+provider's response limit instead of a declared cap, since the upstream token
+arrives in a bounded upstream response and the continuation leaves in a
+bounded result.
+
+A family whose tokens are read during scope resolution, before the host admits
+a credential mode, binds only what scope resolution knows: service, action or
+handle scope, execution context, configuration and the provider's fields. Its
+owner travels in the token as a keyed ownership commitment: scope resolution
+accepts the token only when the current principal could own it, and the
+provider opens it again after admission, when the commitment must match the
+admitted credential mode and principal.
+
 ### Assembly identity
 
 The executable supplies an `AssemblyIdentity` with its composition to
