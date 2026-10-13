@@ -1,22 +1,39 @@
 //! Google consent and Gmail through the real managed broker/router.
 use super::*;
-use crate::backend_registry;
-// The shared fixture still routes requests to its own runtime.
-use crate::build_router;
+use crate::test_support::{FixtureDir, RunningBroker};
+use crate::{AssemblyIdentity, BrokerComposition};
 use wiremock::{
     Mock, ResponseTemplate,
     matchers::{body_string_contains, method, path},
 };
 #[path = "../../tests/support/gmail.rs"]
 mod fixture;
-use fixture::{gmail_fixture, response_json};
+use fixture::{GmailFixture, body_json, gmail_fixture};
+
+/// The fixture broker's active runtime. Drop it before the broker stops.
+fn runtime(fixture: &GmailFixture) -> BrokerRuntime {
+    fixture.broker.reloadable_state().current().runtime.clone()
+}
+
+/// A test broker on `config`, in the stopped fixture's `directory`, serving
+/// Gmail against `server`.
+async fn restart(
+    config: &agent_access_core::BrokerConfig,
+    directory: &FixtureDir,
+    server: &wiremock::MockServer,
+) -> TestBroker {
+    TestBroker::start_with(with_provider_instances(
+        TestBroker::config_builder(config).in_directory(directory.clone()),
+        [agent_access_gmail::test_support::provider(&server.uri())],
+    ))
+    .await
+}
 
 #[tokio::test]
 async fn gmail_browser_connect_read_refresh_disconnect_and_denied_effects() {
     let fixture = gmail_fixture().await;
     fixture.connect("").await;
-    let status = fixture
-        .runtime
+    let status = runtime(&fixture)
         .oauth_manager()
         .unwrap()
         .status("alice", "google")
@@ -55,7 +72,7 @@ async fn gmail_browser_connect_read_refresh_disconnect_and_denied_effects() {
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response_json(response).await["result"]["remoteRevocation"],
+        body_json(response).await["result"]["remoteRevocation"],
         "not_requested"
     );
     assert!(
@@ -69,6 +86,7 @@ async fn gmail_browser_connect_read_refresh_disconnect_and_denied_effects() {
         fixture.server.received_requests().await.unwrap().len(),
         before
     );
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -94,6 +112,7 @@ async fn gmail_refresh_reuses_material_without_requiring_a_replacement_token() {
     let requests = fixture.server.received_requests().await.unwrap();
     assert!(requests.iter().any(|r| r.url.path().ends_with("/profile")
         && r.headers.get("authorization").unwrap() == "Bearer google-access-2"));
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -107,7 +126,7 @@ async fn gmail_callback_validates_optional_issuer_and_rejects_duplicates_before_
             Some(json!({"service":"gmail","intent":"connect"})),
         )
         .await;
-    let start = response_json(response).await;
+    let start = body_json(response).await;
     let url = url::Url::parse(start["result"]["authorizationUrl"].as_str().unwrap()).unwrap();
     assert_eq!(url.host_str(), Some("accounts.google.com"));
     let pairs: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
@@ -132,6 +151,7 @@ async fn gmail_callback_validates_optional_issuer_and_rejects_duplicates_before_
         assert!(r.status().is_client_error() || r.status().is_server_error());
     }
     assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -139,36 +159,42 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
     use agent_access_core::{BrokerTokenClass, BrokerTokenIssueRequest};
     let f = gmail_fixture().await;
     f.connect("").await;
-    let store = f.runtime.managed_store().unwrap();
-    store
-        .create_principal(PrincipalWriteRequest {
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "bob".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
-        .unwrap();
-    let token = store
-        .issue_broker_token(
-            f.runtime.broker_token_hasher().unwrap(),
-            BrokerTokenIssueRequest {
+    let (config, token) = {
+        let runtime = runtime(&f);
+        let store = runtime.managed_store().unwrap();
+        store
+            .create_principal(PrincipalWriteRequest {
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
                 principal_id: "bob".into(),
-                name: "bob-test".into(),
-                token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts":["default"]}),
-                expires_at: None,
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
                 created_by: "test".into(),
-            },
-        )
-        .unwrap()
-        .token;
+            })
+            .unwrap();
+        let token = store
+            .issue_broker_token(
+                runtime.broker_token_hasher().unwrap(),
+                BrokerTokenIssueRequest {
+                    principal_id: "bob".into(),
+                    name: "bob-test".into(),
+                    token_class: BrokerTokenClass::AgentInvoke,
+                    scopes: json!({"allowedExecutionContexts":["default"]}),
+                    expires_at: None,
+                    created_by: "test".into(),
+                },
+            )
+            .unwrap()
+            .token;
+        (runtime.config().clone(), token)
+    };
     let before = f.server.received_requests().await.unwrap().len();
+    // Each configuration restarts on the connected fixture's state.
+    let (directory, server) = f.stop().await;
     for with_grant in [false, true] {
-        let mut config = f.runtime.config().clone();
+        let mut config = config.clone();
         if with_grant {
             let mut grant = config
                 .policy
@@ -180,11 +206,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
             grant.subjects = vec!["user:bob".into()];
             config.policy.grants.push(grant);
         }
-        let broker = TestBroker::start_with_providers(
-            &config,
-            [agent_access_gmail::test_support::provider(&f.server.uri())],
-        )
-        .await;
+        let broker = restart(&config, &directory, &server).await;
         let response = authed_json_request(
             broker.app(),
             Method::POST,
@@ -200,7 +222,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
             "{}",
             response_json(response).await
         );
-        assert_eq!(f.server.received_requests().await.unwrap().len(), before);
+        assert_eq!(server.received_requests().await.unwrap().len(), before);
         broker.stop().await;
     }
 }
@@ -242,7 +264,7 @@ async fn gmail_partial_consent_missing_refresh_and_callback_replay_fail_closed()
                 Some(json!({"service":"gmail","intent":"connect"})),
             )
             .await;
-        let start = response_json(start).await;
+        let start = body_json(start).await;
         let url = url::Url::parse(start["result"]["authorizationUrl"].as_str().unwrap()).unwrap();
         let state = url
             .query_pairs()
@@ -260,7 +282,7 @@ async fn gmail_partial_consent_missing_refresh_and_callback_replay_fail_closed()
         assert!(replay.status().is_client_error());
         assert_eq!(f.server.received_requests().await.unwrap().len(), count);
         assert!(
-            f.runtime
+            runtime(&f)
                 .oauth_manager()
                 .unwrap()
                 .status("alice", "google")
@@ -269,6 +291,7 @@ async fn gmail_partial_consent_missing_refresh_and_callback_replay_fail_closed()
                 .is_none()
         );
     }
+    f.stop().await;
 }
 
 #[tokio::test]
@@ -281,9 +304,9 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
         response.status(),
         StatusCode::OK,
         "{}",
-        response_json(response).await
+        body_json(response).await
     );
-    let options = response_json(response).await;
+    let options = body_json(response).await;
     let services = options["result"]["services"].as_array().unwrap();
     let gmail = services.iter().find(|s| s["service"] == "gmail").unwrap();
     assert_eq!(gmail["actions"].as_array().unwrap().len(), 11);
@@ -304,8 +327,8 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
         source: None,
     };
     let caveats=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"]}}})).unwrap();
-    let preview = f
-        .runtime
+    let runtime = runtime(&f);
+    let preview = runtime
         .preview_agent_token_access(&identity, &caveats)
         .unwrap();
     assert_eq!(preview.access.len(), 1);
@@ -313,12 +336,14 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
     assert!(preview.access[0].resource_type.is_none());
     let restricted=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}}})).unwrap();
     assert!(
-        f.runtime
+        runtime
             .preview_agent_token_access(&identity, &restricted)
             .unwrap()
             .access
             .is_empty()
     );
+    drop(runtime);
+    f.stop().await;
 }
 
 #[tokio::test]
@@ -368,6 +393,7 @@ async fn gmail_mutations_recover_one_401_and_never_attempt_a_third_post() {
                 .count(),
             1
         );
+        f.stop().await;
     }
 }
 
@@ -379,8 +405,9 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
         resource_ids: vec![],
         resource_group_ids: vec!["empty".into()],
     };
+    let runtime = runtime(&f);
     assert!(
-        f.runtime
+        runtime
             .preview_policy_resources(
                 "gmail",
                 &["message.trash".into()],
@@ -389,7 +416,8 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
             )
             .is_err()
     );
-    let mut config = f.runtime.config().clone();
+    let mut config = runtime.config().clone();
+    drop(runtime);
     config
         .policy
         .resource_groups
@@ -408,11 +436,10 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
     config.policy.authority = "managed".into();
     config.policy.grants.clear();
     config.policy.resource_groups.clear();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        [agent_access_gmail::test_support::provider(&f.server.uri())],
-    )
-    .unwrap();
+    // The managed-policy broker restarts on the fixture's state.
+    let (directory, server) = f.stop().await;
+    let broker = restart(&config, &directory, &server).await;
+    let runtime = broker.runtime();
     runtime
         .create_managed_resource_group(agent_access_core::CreateResourceGroupRequest {
             id: Some("empty".into()),
@@ -441,4 +468,6 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
         format!("{error:?}").contains("resource_selection_unsupported"),
         "{error:?}"
     );
+    drop(runtime);
+    broker.stop().await;
 }

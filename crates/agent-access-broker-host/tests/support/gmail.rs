@@ -1,197 +1,211 @@
 //! Shared managed Google/Gmail wire fixture for broker and real CLI tests.
-use super::{backend_registry, broker_build_status, build_router};
-use agent_access_core::*;
-use agent_access_provider::{
-    OAuthAdapter, OAuthPermissionProfile, OAuthRegistrationConfig, REQUEST_ID_HEADER,
+//!
+//! The fixture starts an isolated broker whose composition selects the Gmail
+//! native and the Google OAuth dialect pointed at a wiremock server, and
+//! serves the Gmail provider against that server through the fixture control.
+//! Requests reach the broker over its loopback listener. Each includer names
+//! its test support types through its own module.
+use super::{
+    AssemblyIdentity, BrokerComposition, FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
-use axum::{
-    Router,
-    body::Body,
-    extract::ConnectInfo,
-    http::{Method, Request, StatusCode, header::CONTENT_TYPE},
+use agent_access_core::{
+    BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
+    LocalPasswordHasher, LocalPasswordWriteRequest, ManagedStore, ManagedStoreConfig,
+    ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole, PrincipalWriteRequest,
 };
+use agent_access_provider::REQUEST_ID_HEADER;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest::{Method, StatusCode, header::CONTENT_TYPE};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
-use tower::ServiceExt;
+use std::fmt::Display;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
-pub(crate) async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
-        .await
-        .unwrap();
+/// The JSON body of `response`, or `null` when it is empty.
+pub(crate) async fn body_json(response: reqwest::Response) -> Value {
+    let bytes = response.bytes().await.unwrap();
     if bytes.is_empty() {
         Value::Null
     } else {
         serde_json::from_slice(&bytes).unwrap()
     }
 }
-const SOURCE: &str = "127.0.0.1:43200";
+
+/// The host and origin browser requests name: the configured public origin.
+const HOST: &str = "127.0.0.1";
+const ORIGIN: &str = "http://127.0.0.1";
 
 pub(crate) struct GmailFixture {
-    pub(crate) _dir: tempfile::TempDir,
-    pub(crate) runtime: BrokerRuntime,
-    pub(crate) app: Router,
+    pub(crate) broker: RunningBroker,
     pub(crate) server: MockServer,
+    client: reqwest::Client,
     cookie: String,
     csrf: String,
     pub(crate) agent_token: String,
 }
 
-pub(crate) async fn gmail_fixture() -> GmailFixture {
-    let dir = tempfile::TempDir::new().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let write = |name: &str, contents: String| {
-        let path = dir.path().join(name);
-        std::fs::write(&path, contents).unwrap();
-        path
-    };
-    let hash_key = write("hash-key", URL_SAFE_NO_PAD.encode([21_u8; 32]));
-    let csrf_key = write("csrf-key", URL_SAFE_NO_PAD.encode([22_u8; 32]));
-    let pepper = write("pepper", URL_SAFE_NO_PAD.encode([23_u8; 32]));
-    let encryption_key = write("encryption-key", URL_SAFE_NO_PAD.encode([24_u8; 32]));
-    let client_secret = write("client-secret", "stub-client-secret".into());
-    let server = MockServer::start().await;
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
+}
 
-    let mut config = parse_broker_config_raw(
-        "gmail-fixture",
+/// Managed identity and store with management, browser login, the
+/// development Google registration and alice's per-user Gmail grant for every
+/// action, under TOML policy. The broker's public origin, redirect URI and
+/// HTTP MCP URL name `127.0.0.1` without a port; requests send that host.
+fn gmail_document(directory: &FixtureDir) -> String {
+    let secret_ref =
+        |name: &str| toml_string(format_args!("file:{}", directory.join(name).display()));
+    let actions: Vec<_> = agent_access_gmail::descriptor()
+        .actions
+        .iter()
+        .map(|action| action.action.clone())
+        .collect();
+    format!(
         r#"
 [deployment]
 enable_fake_service = true
+
 [identity]
 mode = "required"
 authority = "managed"
+
+[[identity.sources]]
+name = "broker"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+[managed_store]
+type = "sqlite"
+path = {store}
+require_registered_principal_for_invocation = false
+auto_migrate = true
+
+[management]
+enabled = true
+
+[broker_tokens]
+hash_key_ref = {hash_key}
+default_user_manage_ttl = "8h"
+max_self_issued_agent_invoke_ttl = "30d"
+
+[credential_encryption]
+active_key = "k1"
+
+[[credential_encryption.keys]]
+id = "k1"
+provider = "file"
+path = {encryption_key}
+
+[browser_auth]
+enabled = true
+public_origin = "http://127.0.0.1"
+session_cookie_name = "aab_session"
+csrf_header = "X-Agent-Access-CSRF"
+csrf_key_ref = {csrf_key}
+session_ttl = "8h"
+allowed_return_paths = ["/ui"]
+
+[browser_auth.local_password]
+enabled = true
+pepper_ref = {pepper}
+min_password_length = 8
+max_failed_attempts = 3
+lockout_ttl = "15m"
+
+[oauth.registrations.google]
+adapter = "google"
+base_url = "https://accounts.google.com"
+redirect_uri = "http://127.0.0.1/v1/oauth/callback/google"
+client_id = "broker"
+client_secret_ref = {client_secret}
+rotation = "preserve_old"
+allow_insecure_loopback = true
+
+[oauth.registrations.google.permission_profiles.read]
+scope_mode = "explicit"
+scopes = ["openid", {gmail_scope}]
+audience = {gmail_audience}
+target = "me"
+
+[credentials.per_user.gmail]
+type = "oauth"
+provider = "google"
+profile = "read"
+
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[[policy.grants]]
+subjects = ["user:alice"]
+service = "gmail"
+actions = {actions}
+credential_mode = "per_user"
+
+[mcp]
+enabled = true
+public_url = "http://127.0.0.1/mcp"
+
 [providers.gmail]
+
+[limits]
+upload_spool_dir = {spool}
 "#,
-        &Arc::new(backend_registry()),
+        store = toml_string(directory.join("store.sqlite").display()),
+        hash_key = secret_ref("hash-key"),
+        encryption_key = toml_string(directory.join("encryption-key").display()),
+        csrf_key = secret_ref("csrf-key"),
+        pepper = secret_ref("pepper"),
+        client_secret = secret_ref("client-secret"),
+        gmail_scope = toml_string(agent_access_gmail::GMAIL_SCOPE),
+        gmail_audience = toml_string(agent_access_gmail::GMAIL_AUDIENCE),
+        actions = serde_json::to_string(&actions).unwrap(),
+        spool = toml_string(directory.join("spool").display()),
+    )
+}
+
+pub(crate) async fn gmail_fixture() -> GmailFixture {
+    let server = MockServer::start().await;
+    // The Google dialect and the Gmail provider both reach the stub server.
+    let composition = BrokerComposition::builder()
+        .native(&agent_access_gmail::GMAIL_BACKEND)
+        .oauth(agent_access_gmail::test_support::dialect(&server.uri()))
+        .build()
+        .unwrap();
+    let application = IsolatedBroker::new(
+        composition,
+        AssemblyIdentity::new("example-assembly", "9.8.7"),
     )
     .unwrap();
-    config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
-    config.mcp.enabled = true;
-    config.mcp.public_url = Some("http://127.0.0.1/mcp".into());
-    config.identity.mode = "required".into();
-    config.identity.authority = "managed".into();
-    config.identity.sources = vec![IdentitySourceConfig {
-        name: "broker".into(),
-        kind: "broker_tokens".into(),
-        header: "Authorization".into(),
-        scheme: "Bearer".into(),
-        principals: vec![],
-    }];
-    config.managed_store = Some(ManagedStoreConfig {
-        kind: "sqlite".into(),
-        path: dir.path().join("store.sqlite").display().to_string(),
-        require_registered_principal_for_invocation: false,
-        auto_migrate: true,
-    });
-    config.management = ManagementConfig {
-        enabled: true,
-        ..ManagementConfig::default()
+    let directory = application.directory().clone();
+    let secret = |name: &str, contents: String| {
+        let path = directory.secret_file(name, contents).unwrap();
+        format!("file:{}", path.display())
     };
-    config.broker_tokens = Some(BrokerTokensConfig {
-        hash_key_ref: format!("file:{}", hash_key.display()),
-        default_user_manage_ttl: Some("8h".into()),
-        max_self_issued_agent_invoke_ttl: Some("30d".into()),
-        ..BrokerTokensConfig::default()
-    });
-    config.credential_encryption = Some(CredentialEncryptionConfig {
-        active_key: "k1".into(),
-        keys: vec![CredentialEncryptionKeyConfig {
-            id: "k1".into(),
-            provider: "file".into(),
-            env: None,
-            path: Some(encryption_key.display().to_string()),
-        }],
-    });
-    config.browser_auth = BrowserAuthConfig {
-        enabled: true,
-        public_origin: Some("http://127.0.0.1".into()),
-        session_cookie_name: "aab_session".into(),
-        csrf_header: "X-Agent-Access-CSRF".into(),
-        csrf_key_ref: Some(format!("file:{}", csrf_key.display())),
-        session_ttl: "8h".into(),
-        allowed_return_paths: vec!["/ui".into()],
-        local_password: LocalPasswordConfig {
-            enabled: true,
-            pepper_ref: Some(format!("file:{}", pepper.display())),
-            min_password_length: 8,
-            max_failed_attempts: 3,
-            lockout_ttl: "15m".into(),
-        },
-        oidc: Default::default(),
-    };
-    config.oauth.registrations.insert(
-        "google".into(),
-        OAuthRegistrationConfig {
-            adapter_settings: Default::default(),
-            adapter: OAuthAdapter::new("google"),
-            base_url: "https://accounts.google.com".into(),
-            redirect_uri: "http://127.0.0.1/v1/oauth/callback/google".into(),
-            client_id: "broker".into(),
-            client_secret_ref: format!("file:{}", client_secret.display()),
-            client_auth: Default::default(),
-            encoding: Default::default(),
-            rotation: agent_access_provider::OAuthRotation::PreserveOld,
-            allow_insecure_loopback: true,
-            permission_profiles: BTreeMap::from([(
-                "read".into(),
-                OAuthPermissionProfile {
-                    scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
-                    scopes: Some(vec![
-                        "openid".into(),
-                        agent_access_gmail::GMAIL_SCOPE.into(),
-                    ]),
-                    audience: agent_access_gmail::GMAIL_AUDIENCE.into(),
-                    target: "me".into(),
-                },
-            )]),
-        },
-    );
-    config.credentials.per_user.insert(
-        "gmail".into(),
-        CredentialConfig {
-            kind: "oauth".into(),
-            provider: Some("google".into()),
-            profile: Some("read".into()),
-            username_ref: None,
-            token_ref: None,
-            path: None,
-            read_only: None,
-            credential_name: None,
-        },
-    );
-    config.policy.grants.push(PolicyGrantConfig {
-        subjects: vec!["user:alice".into()],
-        service: "gmail".into(),
-        actions: agent_access_gmail::descriptor()
-            .actions
-            .iter()
-            .map(|a| a.action.clone())
-            .collect(),
-        resources: ResourceSelection::default(),
-        execution_contexts: None,
-        credential_mode: "per_user".into(),
-        priority: None,
-    });
+    let hash_key = secret("hash-key", URL_SAFE_NO_PAD.encode([21_u8; 32]));
+    secret("csrf-key", URL_SAFE_NO_PAD.encode([22_u8; 32]));
+    let pepper = secret("pepper", URL_SAFE_NO_PAD.encode([23_u8; 32]));
+    secret("encryption-key", URL_SAFE_NO_PAD.encode([24_u8; 32]));
+    secret("client-secret", "stub-client-secret".into());
 
+    // Seed the managed store before the broker opens and locks it.
     let store = ManagedStore::open(
-        config.managed_store.as_ref().unwrap(),
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: directory.join("store.sqlite").display().to_string(),
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        },
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
-            role: agent_access_core::PrincipalRole::User,
+            role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".into(),
             kind: "user".into(),
@@ -202,16 +216,16 @@ default_decision = "deny"
         })
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+        .patch_principal_access(PrincipalAccessPatchRequest {
             principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
+            role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
             actor: ("test").into(),
         })
         .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
-            role: agent_access_core::PrincipalRole::User,
+            role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
             kind: "user".into(),
@@ -221,21 +235,9 @@ default_decision = "deny"
             created_by: "test".into(),
         })
         .unwrap();
-    let registry =
-        agent_access_core::BackendRegistry::new(config.providers.registry().registrations())
-            .unwrap()
-            .with_oauth_dialects([agent_access_gmail::test_support::dialect(&server.uri())])
-            .unwrap();
-    config.providers = agent_access_core::ProvidersConfig::new(Arc::new(registry))
-        .with(agent_access_gmail::GmailConfig::default());
-    let runtime = BrokerRuntime::with_providers(
-        config,
-        [agent_access_gmail::test_support::provider(&server.uri())],
-    )
-    .unwrap();
     store
         .enable_local_password(
-            runtime.local_password_hasher().unwrap(),
+            &LocalPasswordHasher::load("browser_auth.local_password.pepper_ref", &pepper).unwrap(),
             LocalPasswordWriteRequest {
                 principal_id: "alice".into(),
                 password: "alice-password".into(),
@@ -245,9 +247,14 @@ default_decision = "deny"
             },
         )
         .unwrap();
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: hash_key,
+        ..BrokerTokensConfig::default()
+    })
+    .unwrap();
     let agent_token = store
         .issue_broker_token(
-            runtime.broker_token_hasher().unwrap(),
+            &hasher,
             BrokerTokenIssueRequest {
                 principal_id: "alice".into(),
                 name: "oauth agent".into(),
@@ -259,23 +266,31 @@ default_decision = "deny"
         )
         .unwrap()
         .token;
-    let app = build_router(runtime.clone(), broker_build_status());
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/v1/auth/local/login")
-                .extension(ConnectInfo(SOURCE.parse::<SocketAddr>().unwrap()))
-                .header(REQUEST_ID_HEADER, "oauth-fixture-login")
-                .header("Host", "127.0.0.1")
-                .header("Origin", "http://127.0.0.1")
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    r#"{"principalId":"alice","password":"alice-password"}"#,
-                ))
-                .unwrap(),
+    drop(store);
+
+    let broker = application
+        .config_document(gmail_document(&directory))
+        .provider_fixture(
+            "gmail",
+            ProviderFixture::instance(agent_access_gmail::test_support::provider(&server.uri())),
         )
+        .start()
+        .await
+        .unwrap();
+    // Responses are observed as sent: redirects are never followed.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .unwrap();
+    let login = client
+        .post(format!("{}/v1/auth/local/login", broker.public_url()))
+        .header(REQUEST_ID_HEADER, "oauth-fixture-login")
+        .header("Host", HOST)
+        .header("Origin", ORIGIN)
+        .header(CONTENT_TYPE, "application/json")
+        .body(r#"{"principalId":"alice","password":"alice-password"}"#)
+        .send()
         .await
         .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
@@ -286,15 +301,14 @@ default_decision = "deny"
         .next()
         .unwrap()
         .to_string();
-    let csrf = response_json(login).await["result"]["csrfToken"]
+    let csrf = body_json(login).await["result"]["csrfToken"]
         .as_str()
         .unwrap()
         .to_string();
     GmailFixture {
-        _dir: dir,
-        runtime,
-        app,
+        broker,
         server,
+        client,
         cookie,
         csrf,
         agent_token,
@@ -308,28 +322,22 @@ impl GmailFixture {
         uri: &str,
         request_id: &str,
         body: Option<Value>,
-    ) -> axum::response::Response {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .extension(ConnectInfo(SOURCE.parse::<SocketAddr>().unwrap()))
+    ) -> reqwest::Response {
+        let mut request = self
+            .client
+            .request(method, format!("{}{uri}", self.broker.public_url()))
             .header("Cookie", &self.cookie)
             .header("X-Agent-Access-CSRF", &self.csrf)
-            .header("Host", "127.0.0.1")
-            .header("Origin", "http://127.0.0.1")
+            .header("Host", HOST)
+            .header("Origin", ORIGIN)
             .header(CONTENT_TYPE, "application/json");
         if !request_id.is_empty() {
             request = request.header(REQUEST_ID_HEADER, request_id);
         }
-        self.app
-            .clone()
-            .oneshot(
-                request
-                    .body(body.map_or_else(Body::empty, |value| Body::from(value.to_string())))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
+        if let Some(value) = body {
+            request = request.body(value.to_string());
+        }
+        request.send().await.unwrap()
     }
 
     /// Connects alice's account through the browser consent flow, completing
@@ -370,7 +378,7 @@ impl GmailFixture {
             )
             .await;
         let status = connect.status();
-        let connect = response_json(connect).await;
+        let connect = body_json(connect).await;
         assert_eq!(status, StatusCode::OK, "{connect}");
         let authorization_url =
             url::Url::parse(connect["result"]["authorizationUrl"].as_str().unwrap()).unwrap();
@@ -403,38 +411,43 @@ impl GmailFixture {
             callback.headers()["content-type"],
             "text/html; charset=utf-8"
         );
-        let body = axum::body::to_bytes(callback.into_body(), 16_384)
-            .await
-            .unwrap();
+        let body = callback.bytes().await.unwrap();
+        assert!(body.len() <= 16_384);
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("<h1>Authorized</h1>"));
         for secret in [state.as_str(), "one-use-code", "untrusted-callback-scope"] {
             assert!(!html.contains(secret));
         }
     }
+
+    pub(crate) async fn invoke(&self, action: &str, inputs: Value) -> (StatusCode, Value) {
+        let response = self
+            .client
+            .post(format!(
+                "{}/v1/invoke/gmail/{action}",
+                self.broker.public_url()
+            ))
+            .header(REQUEST_ID_HEADER, "gmail-invoke")
+            .header(CONTENT_TYPE, "application/json")
+            .header("Authorization", format!("Bearer {}", self.agent_token))
+            .body(json!({"inputs":inputs}).to_string())
+            .send()
+            .await
+            .unwrap();
+        (response.status(), body_json(response).await)
+    }
+
+    /// Shuts the broker down and waits for it to release its state, returning
+    /// its fixture directory and the Google stub for a broker restarted on
+    /// them.
+    pub(crate) async fn stop(self) -> (FixtureDir, MockServer) {
+        let directory = self.broker.directory().clone();
+        self.broker.shutdown();
+        self.broker.join().await.unwrap();
+        (directory, self.server)
+    }
 }
 
 fn token(number: u32, expires_in: u64) -> Value {
     json!({"access_token":format!("google-access-{number}"),"refresh_token":"google-reusable-refresh","token_type":"Bearer","expires_in":expires_in,"scope":format!("openid {}",agent_access_gmail::GMAIL_SCOPE)})
-}
-impl GmailFixture {
-    pub(crate) async fn invoke(&self, action: &str, inputs: Value) -> (StatusCode, Value) {
-        let response = self
-            .app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/v1/invoke/gmail/{action}"))
-                    .extension(ConnectInfo(SOURCE.parse::<SocketAddr>().unwrap()))
-                    .header(REQUEST_ID_HEADER, "gmail-invoke")
-                    .header(CONTENT_TYPE, "application/json")
-                    .header("Authorization", format!("Bearer {}", self.agent_token))
-                    .body(Body::from(json!({"inputs":inputs}).to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        (response.status(), response_json(response).await)
-    }
 }
