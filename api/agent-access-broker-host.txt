@@ -163,8 +163,6 @@ pub fn agent_access_broker_host::ReloadableState::close_operation_admission(&sel
 pub fn agent_access_broker_host::ReloadableState::node_id(&self) -> alloc::string::String
 pub async fn agent_access_broker_host::ReloadableState::shutdown_audit(&self, core::time::Duration) -> core::result::Result<(), agent_access_core::runtime::RuntimeError>
 pub async fn agent_access_broker_host::ReloadableState::shutdown_operations(&self, core::time::Duration) -> usize
-impl agent_access_broker_host::ReloadableState
-pub async fn agent_access_broker_host::ReloadableState::reload_from_signal(&self)
 impl !core::marker::Freeze for agent_access_broker_host::ReloadableState
 impl core::marker::Send for agent_access_broker_host::ReloadableState
 impl core::marker::Sync for agent_access_broker_host::ReloadableState

@@ -11,6 +11,7 @@ them with `scripts/public-api.mjs` and review the diff.
 | `agent-access-provider.txt` | The provider SDK with its default features. |
 | `agent-access-provider.test-support.txt` | The SDK with its `test-support` feature. |
 | `agent-access-broker-host.txt` | The Broker host with its default features. |
+| `agent-access-broker-host.test-support.txt` | The host with its `test-support` feature: isolated broker applications for acceptance tests. |
 | `agent-access-broker.txt` | The assembly library: `composition()` and everything else it exports. |
 | `<native or adapter crate>.txt` | The crate's reviewed selection entry points only. |
 
