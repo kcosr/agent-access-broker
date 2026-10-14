@@ -1816,7 +1816,7 @@ listener, format, authentication model, and cardinality policy.
 
 ## Operational limits
 
-`LimitsConfig` defaults:
+`LimitsConfig` defaults; `upload_spool_dir` is required and has none:
 
 | Limit | Default |
 | --- | --- |
@@ -1831,7 +1831,7 @@ listener, format, authentication model, and cardinality policy.
 | `request_timeout_ms` | 30000 |
 | `request_body_timeout_ms` | 300000 (five-minute receive deadline) |
 | `streaming_idle_timeout_ms` | 30000 |
-| `upload_spool_dir` | `<cwd>/target/agent-access-upload-spool` |
+| `upload_spool_dir` | none (required) |
 | `upload_spool_max_bytes` | 2147483648 (2 GiB = `max_http_body_bytes` × 4) |
 
 **Service invocation limits.** Each principal's use of each backend service

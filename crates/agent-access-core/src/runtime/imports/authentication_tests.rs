@@ -111,7 +111,7 @@ fn config() -> BrokerConfig {
         .unwrap();
     let mut config = crate::parse_broker_config_raw(
         "import-authentication.toml",
-        "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n",
+        "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n[limits]\nupload_spool_dir = \"upload-spool\"\n",
         &Arc::new(BackendRegistry::empty()),
     )
     .unwrap();

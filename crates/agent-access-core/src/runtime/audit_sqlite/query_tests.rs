@@ -2,7 +2,7 @@
 //! writer: filters, visibility tiers, search, ordering and paging, request
 //! timelines, query plans, and the reader pool's lifecycle.
 
-use super::super::tests::{TEST_NODE_ID, temp_path, test_audit_record};
+use super::super::tests::{TEST_NODE_ID, temp_path, test_audit_record, test_limits};
 use super::super::{
     AuditOpenMode, AuditRecord, AuditRuntimeRegistry, AuditSink, AuditStoreInfo,
     IdentitySourceAudit, MatchedGrantAudit,
@@ -14,7 +14,7 @@ use super::tests::test_controls;
 use crate::{
     AuditConfig, AuditEventFilters, AuditEventsQuery, AuditListRoute, AuditPosition,
     AuditQueryError, AuditQueryLimits, AuditStoreType, AuditVisibility, BrokerTokenClass,
-    LimitsConfig, parse_audit_list_query,
+    parse_audit_list_query,
 };
 use agent_access_provider::{Decision, ReasonCode};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
@@ -50,7 +50,7 @@ impl Fixture {
                 AuditStoreType::Sqlite,
                 path.display().to_string(),
             )),
-            &LimitsConfig::default(),
+            &test_limits(),
             Arc::new(AuditRuntimeRegistry::new()),
             TEST_NODE_ID,
             AuditOpenMode::Startup,
@@ -931,7 +931,7 @@ async fn jsonl_stores_do_not_answer_queries() {
             AuditStoreType::Jsonl,
             path.display().to_string(),
         )),
-        &LimitsConfig::default(),
+        &test_limits(),
         Arc::new(AuditRuntimeRegistry::new()),
         TEST_NODE_ID,
         AuditOpenMode::Startup,

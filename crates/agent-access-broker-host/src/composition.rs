@@ -264,6 +264,9 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
 
     fn selection() -> BrokerCompositionBuilder {

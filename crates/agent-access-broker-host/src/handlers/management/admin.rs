@@ -3711,6 +3711,9 @@ default_decision = "deny"
 
 [broker_tokens]
 hash_key_ref = "env:TOKEN_HASH_KEY"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
             &std::sync::Arc::new(crate::backend_registry()),
         )

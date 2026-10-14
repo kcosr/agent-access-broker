@@ -2321,6 +2321,9 @@ default_agent_invoke_ttl = "8h"
 max_self_issued_agent_invoke_ttl = "1d"
 self_agent_invoke_ttl_options = ["8h", "1d"]
 admin_agent_invoke_ttl_options = ["8h", "2d", "never"]
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
             &std::sync::Arc::new(crate::backend_registry()),
         )
@@ -2425,6 +2428,9 @@ admin_groups = ["broker-admins"]
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
             &std::sync::Arc::new(crate::backend_registry()),
         )
@@ -2607,6 +2613,9 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
             &std::sync::Arc::new(crate::backend_registry()),
         )

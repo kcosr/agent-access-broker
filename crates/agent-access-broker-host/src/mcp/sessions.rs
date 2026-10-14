@@ -407,7 +407,7 @@ mod tests {
                 used: Instant::now(),
             },
         );
-        let mut config = agent_access_core::parse_broker_config_raw("session-test", "[identity]\nmode=\"anonymous\"\nauthority=\"toml\"\n[policy]\nauthority=\"toml\"\ndefault_decision=\"deny\"\n", &std::sync::Arc::new(crate::backend_registry()))
+        let mut config = agent_access_core::parse_broker_config_raw("session-test", "[identity]\nmode=\"anonymous\"\nauthority=\"toml\"\n[policy]\nauthority=\"toml\"\ndefault_decision=\"deny\"\n[limits]\nupload_spool_dir=\"upload-spool\"\n", &std::sync::Arc::new(crate::backend_registry()))
         .unwrap();
         config.mcp.enabled = true;
         sessions.reap_config(1, &config).await;

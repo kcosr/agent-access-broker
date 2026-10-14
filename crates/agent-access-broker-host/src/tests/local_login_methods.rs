@@ -104,7 +104,7 @@ fn link_microsoft(fixture: &BrowserRateFixture) -> String {
 
 #[tokio::test]
 async fn local_password_admin_requires_explicit_enrollment_and_audits_previous_state() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
@@ -212,7 +212,7 @@ async fn local_password_admin_requires_explicit_enrollment_and_audits_previous_s
 
 #[tokio::test]
 async fn hybrid_password_change_preserves_microsoft_session_and_revokes_only_local_sessions() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let oidc_cookie = link_microsoft(&fixture);
     let local_before = session(&fixture, &fixture.cookie).await;
     let oidc_before = session(&fixture, &oidc_cookie).await;
@@ -324,7 +324,7 @@ async fn hybrid_password_change_preserves_microsoft_session_and_revokes_only_loc
 #[tokio::test]
 async fn password_change_sanitizes_store_failures_without_losing_validation_messages() {
     for malformed_hash in [true, false] {
-        let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+        let fixture = browser_rate_fixture(test_limits()).await;
         let conn = rusqlite::Connection::open(&fixture.store_path).unwrap();
         if malformed_hash {
             conn.execute(
@@ -386,7 +386,7 @@ async fn password_change_sanitizes_store_failures_without_losing_validation_mess
                 .unwrap()
         );
     }
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let response = browser(
         &fixture,
         Method::POST,
@@ -410,7 +410,7 @@ async fn password_change_sanitizes_store_failures_without_losing_validation_mess
 #[tokio::test]
 async fn local_password_enable_keeps_committed_success_if_completion_audit_fails() {
     for failing_phase in ["preflight", "success"] {
-        let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+        let fixture = browser_rate_fixture(test_limits()).await;
         let snapshot = fixture.state.current();
         let store = snapshot.runtime.managed_store().unwrap();
         store
@@ -486,7 +486,7 @@ async fn local_password_enable_keeps_committed_success_if_completion_audit_fails
 #[tokio::test]
 async fn password_change_requires_preflight_and_preserves_committed_success() {
     for failing_phase in ["preflight", "success"] {
-        let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+        let fixture = browser_rate_fixture(test_limits()).await;
         let conn = rusqlite::Connection::open(&fixture.audit_path).unwrap();
         conn.execute_batch(&format!(
             "CREATE TRIGGER fail_auth_audit BEFORE INSERT ON audit_events WHEN json_extract(NEW.record_json, '$.providerAudit.auth.phase') = '{failing_phase}' AND NEW.action = 'auth.local.password.change' BEGIN SELECT RAISE(ABORT, 'private-auth-audit-failure'); END;"
@@ -572,7 +572,7 @@ async fn password_change_requires_preflight_and_preserves_committed_success() {
 #[tokio::test]
 async fn logout_reports_failed_session_lookup_and_allows_retry_after_recovery() {
     for fail_schema_read in [false, true] {
-        let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+        let fixture = browser_rate_fixture(test_limits()).await;
         let conn = rusqlite::Connection::open(&fixture.store_path).unwrap();
         let (fail, recover) = if fail_schema_read {
             (
@@ -642,7 +642,7 @@ async fn logout_reports_failed_session_lookup_and_allows_retry_after_recovery() 
 
 #[tokio::test]
 async fn logout_reports_failed_revocation_and_keeps_session_cookie() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let conn = rusqlite::Connection::open(&fixture.store_path).unwrap();
     conn.execute_batch(
         "CREATE TRIGGER fail_session_revoke BEFORE UPDATE OF revoked_at ON broker_tokens WHEN NEW.revoked_at IS NOT NULL AND OLD.token_id IN (SELECT token_id FROM browser_sessions) BEGIN SELECT RAISE(ABORT, 'private-session-revoke-failure'); END;",
@@ -702,7 +702,7 @@ async fn logout_reports_failed_revocation_and_keeps_session_cookie() {
 #[tokio::test]
 async fn logout_requires_preflight_and_preserves_committed_success() {
     for failing_phase in ["preflight", "success"] {
-        let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+        let fixture = browser_rate_fixture(test_limits()).await;
         let conn = rusqlite::Connection::open(&fixture.audit_path).unwrap();
         conn.execute_batch(&format!(
             "CREATE TRIGGER fail_logout_audit BEFORE INSERT ON audit_events WHEN json_extract(NEW.record_json, '$.providerAudit.auth.phase') = '{failing_phase}' AND NEW.action = 'auth.logout' BEGIN SELECT RAISE(ABORT, 'private-logout-audit-failure'); END;"
@@ -753,7 +753,7 @@ async fn logout_requires_preflight_and_preserves_committed_success() {
 
 #[tokio::test]
 async fn auth_session_and_errors_are_not_cacheable() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     for cookie in [&fixture.cookie, "", "aab_session=invalid"] {
         let response = browser(
             &fixture,
@@ -799,7 +799,7 @@ async fn auth_session_and_errors_are_not_cacheable() {
 
 #[tokio::test]
 async fn local_login_reports_infrastructure_failure_without_exposing_store_details() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let conn = rusqlite::Connection::open(&fixture.store_path).unwrap();
     let before: i64 = conn
         .query_row("SELECT count(*) FROM browser_sessions", [], |row| {
@@ -840,7 +840,7 @@ async fn local_login_reports_infrastructure_failure_without_exposing_store_detai
 
 #[tokio::test]
 async fn browser_session_cookie_security_uses_the_parsed_origin_scheme() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     for (origin, secure) in [
         ("http://localhost", false),
         ("https://localhost", true),
@@ -871,7 +871,7 @@ async fn browser_session_cookie_security_uses_the_parsed_origin_scheme() {
 
 #[tokio::test]
 async fn local_password_capacity_rejects_login_without_blocking_token_management() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     let first = store.try_admit_local_password_request().unwrap();

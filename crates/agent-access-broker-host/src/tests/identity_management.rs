@@ -424,7 +424,7 @@ async fn identity_management_audit_preflight_failure_prevents_mutation() {
 
 #[tokio::test]
 async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     fixture
         .state
         .current()

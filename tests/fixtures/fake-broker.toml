@@ -30,6 +30,9 @@ actions = ["echo"]
 resources = { resource_ids = ["fake-test"] }
 credential_mode = "service"
 
+[limits]
+upload_spool_dir = "target/fake-broker-upload-spool"
+
 [audit]
 type = "jsonl"
 path = "target/fake-broker-audit/audit.jsonl"

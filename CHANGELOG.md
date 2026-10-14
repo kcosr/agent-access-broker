@@ -252,6 +252,24 @@ All notable changes to this project are documented in this file.
   A provider that needs credentials on another origin builds a client whose
   base is that origin, and marks custom credential headers sensitive. The
   shipped providers already met this rule.
+- `[limits].upload_spool_dir` is now required. It previously defaulted to
+  `<working directory>/target/agent-access-upload-spool`, which under a service
+  manager such as systemd is `/target/agent-access-upload-spool`, and the Broker
+  creates and state-locks that directory at startup. A configuration without the
+  setting, including one without a `[limits]` table, now fails `config validate`
+  and startup with ``missing field `upload_spool_dir` ``. Before upgrading, add
+  it to every Broker configuration, pointing at a dedicated broker-owned
+  directory, for example:
+
+  ```toml
+  [limits]
+  upload_spool_dir = "/var/lib/agent-access-broker/spool"
+  ```
+
+  To keep using the previous location, set it explicitly. Relative paths still
+  resolve against the working directory. `LimitsConfig` no longer implements
+  `Default`; construct it with `LimitsConfig::new(upload_spool_dir)`, which
+  applies the built-in default for every other limit.
 
 ### Added
 

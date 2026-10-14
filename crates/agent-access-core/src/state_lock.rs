@@ -1131,10 +1131,7 @@ mod tests {
             providers: ProvidersConfig::new(crate::tests::test_backend_registry())
                 .with(agent_access_fake::FakeProviderConfig::default()),
             gateways: BTreeMap::new(),
-            limits: LimitsConfig {
-                upload_spool_dir: spool_dir.display().to_string(),
-                ..LimitsConfig::default()
-            },
+            limits: LimitsConfig::new(spool_dir.display().to_string()),
             audit: audit_path
                 .map(|path| AuditConfig::new(AuditStoreType::Jsonl, path.display().to_string())),
         }

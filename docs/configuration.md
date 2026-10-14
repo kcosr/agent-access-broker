@@ -27,9 +27,9 @@ Sections fall into three categories:
 
 | Category | Sections | Behavior when absent |
 | --- | --- | --- |
-| Mandatory | `identity`, `policy` | parse error |
+| Mandatory | `identity`, `policy`, `limits` | parse error; an omitted `[limits]` is reported as its missing `upload_spool_dir` |
 | Optional | `execution_context`, `managed_store`, `credential_encryption`, `broker_tokens`, `audit` | feature-specific behavior described below; audit is disabled without `[audit]` |
-| Defaulted | `deployment`, `network`, `credentials`, `imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution`, `limits` | filled with built-in defaults |
+| Defaulted | `deployment`, `network`, `credentials`, `imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
 
 ### Conditional requirements
 
@@ -1560,7 +1560,7 @@ max_upstream_response_bytes = 536870912   # 512 MiB
 request_timeout_ms = 30000
 request_body_timeout_ms = 300000          # five-minute total inbound body deadline
 streaming_idle_timeout_ms = 30000
-upload_spool_dir = "<cwd>/target/agent-access-upload-spool"
+upload_spool_dir = "/var/lib/agent-access-broker/spool"   # required; no default
 upload_spool_max_bytes = 2147483648       # 2 GiB (= max_http_body_bytes * 4)
 
 [limits.invocations]
@@ -1723,9 +1723,16 @@ identity lookup itself. Local login retains rate checks before password hashing.
 Global and per-principal concurrency safeguards apply to every caller,
 including verified browser sessions; they reject with `concurrency_limited`.
 
-The values above are the built-in defaults. All numeric limits must be non-zero
-and `upload_spool_dir` must be non-empty. `upload_spool_max_bytes` defaults to
-`max_http_body_bytes * 4`.
+`upload_spool_dir` is required and has no default, so `[limits]` is a required
+table. A configuration that omits the setting, or the whole table, fails to
+parse in `config validate` and at startup with
+``missing field `upload_spool_dir` ``. Use a dedicated broker-owned directory on
+disk-backed storage, such as `/var/lib/agent-access-broker/spool` in
+production. A relative path resolves against the broker's working directory.
+
+The other values above are the built-in defaults. All numeric limits must be
+non-zero and `upload_spool_dir` must be non-empty. `upload_spool_max_bytes`
+defaults to `max_http_body_bytes * 4`.
 
 `upload_spool_dir` participates in runtime state-lock admission even when no
 current provider action is uploading at startup. The broker creates or validates

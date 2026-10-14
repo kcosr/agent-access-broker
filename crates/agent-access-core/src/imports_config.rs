@@ -164,7 +164,7 @@ mod tests {
             .unwrap();
         let mut config = parse_broker_config_raw(
             "imports.toml",
-            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n",
+            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n[limits]\nupload_spool_dir = \"upload-spool\"\n",
             &Arc::new(BackendRegistry::empty()),
         )
         .unwrap();

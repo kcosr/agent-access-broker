@@ -343,7 +343,7 @@ fn jsonl_audit_config(path: impl Into<String>) -> crate::AuditConfig {
 fn test_audit_sink(config: crate::AuditConfig) -> AuditSink {
     AuditSink::new(
         Some(&config),
-        &crate::LimitsConfig::default(),
+        &test_limits(),
         Arc::new(AuditRuntimeRegistry::new()),
         TEST_NODE_ID,
         AuditOpenMode::Startup,
@@ -361,7 +361,7 @@ fn test_audit_runtime_parts(
     let registry = Arc::new(AuditRuntimeRegistry::new());
     let sink = AuditSink::new(
         config.as_ref(),
-        &crate::LimitsConfig::default(),
+        &test_limits(),
         Arc::clone(&registry),
         TEST_NODE_ID,
         AuditOpenMode::Startup,
@@ -1080,7 +1080,7 @@ async fn terminal_reservations_do_not_consume_normal_audit_capacity() {
         let (config, path) = audit_config_for(kind, "terminal-capacity-normal");
         let limits = crate::LimitsConfig {
             max_concurrent_requests: 1,
-            ..crate::LimitsConfig::default()
+            ..test_limits()
         };
         let sink = test_audit_sink_with_limits(
             crate::AuditConfig {
@@ -1109,7 +1109,7 @@ async fn terminal_audit_queued_before_shutdown_is_drained() {
     for kind in AUDIT_STORE_TYPES {
         let (config, path) = audit_config_for(kind, "terminal-before-shutdown");
         let sink = test_audit_sink(crate::AuditConfig {
-            terminal_queue_capacity: Some(crate::LimitsConfig::default().max_concurrent_requests),
+            terminal_queue_capacity: Some(test_limits().max_concurrent_requests),
             ..config
         });
         let permit = sink.reserve_terminal().await.unwrap();
@@ -1136,7 +1136,7 @@ async fn terminal_audit_after_shutdown_is_rejected_not_silently_accepted() {
     for kind in AUDIT_STORE_TYPES {
         let (config, path) = audit_config_for(kind, "terminal-after-shutdown");
         let sink = test_audit_sink(crate::AuditConfig {
-            terminal_queue_capacity: Some(crate::LimitsConfig::default().max_concurrent_requests),
+            terminal_queue_capacity: Some(test_limits().max_concurrent_requests),
             ..config
         });
         let permit = sink.reserve_terminal().await.unwrap();
@@ -1180,7 +1180,7 @@ async fn terminal_audit_prunes_retained_files() {
     filetime::set_file_mtime(&old_rotated, old_mtime).unwrap();
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 1,
-        terminal_queue_capacity: Some(crate::LimitsConfig::default().max_concurrent_requests),
+        terminal_queue_capacity: Some(test_limits().max_concurrent_requests),
         ..jsonl_audit_config(audit_path.display().to_string())
     });
     let permit = sink.reserve_terminal().await.unwrap();
@@ -1303,7 +1303,7 @@ async fn writer_stamps_every_record_with_a_fresh_uuid_v7_and_the_node_id() {
     for kind in AUDIT_STORE_TYPES {
         let (config, path) = audit_config_for(kind, "stamped");
         let sink = test_audit_sink(crate::AuditConfig {
-            terminal_queue_capacity: Some(crate::LimitsConfig::default().max_concurrent_requests),
+            terminal_queue_capacity: Some(test_limits().max_concurrent_requests),
             ..config
         });
         let record = test_audit_record();
@@ -8103,10 +8103,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         providers: crate::ProvidersConfig::new(crate::tests::test_backend_registry())
             .with(agent_access_fake::FakeProviderConfig::default()),
         gateways: BTreeMap::new(),
-        limits: crate::LimitsConfig {
-            upload_spool_dir: test_temp_dir().join("spool").display().to_string(),
-            ..crate::LimitsConfig::default()
-        },
+        limits: test_limits(),
         audit: None,
     }
 }
@@ -8811,6 +8808,11 @@ pub(super) fn test_temp_dir() -> PathBuf {
 /// `name` in a fresh [`test_temp_dir`].
 pub(super) fn temp_path(name: &str) -> PathBuf {
     test_temp_dir().join(name)
+}
+
+/// The built-in limits with an upload spool in a fresh [`test_temp_dir`].
+pub(super) fn test_limits() -> crate::LimitsConfig {
+    crate::LimitsConfig::new(temp_path("upload-spool").display().to_string())
 }
 
 #[test]

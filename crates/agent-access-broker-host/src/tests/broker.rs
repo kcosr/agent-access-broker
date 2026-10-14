@@ -78,10 +78,9 @@ impl TestBroker {
     /// backends.
     pub(crate) fn config_builder(config: &BrokerConfig) -> IsolatedBroker {
         // Every broker locks its upload spool, so concurrent tests need their
-        // own; the default directory is shared by the whole test binary.
-        assert_ne!(
-            config.limits.upload_spool_dir,
-            agent_access_core::LimitsConfig::default().upload_spool_dir,
+        // own (see `test_limits`) rather than one under the working directory.
+        assert!(
+            std::path::Path::new(&config.limits.upload_spool_dir).starts_with(std::env::temp_dir()),
             "give the test broker a private limits.upload_spool_dir"
         );
         let registry: Arc<BackendRegistry> = Arc::clone(config.providers.registry());

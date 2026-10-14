@@ -1018,7 +1018,7 @@ async fn teams_policy_catalog_and_grants_need_no_separate_execution_credential()
 }
 
 async fn catalog_audit_fixture() -> BrowserRateFixture {
-    browser_rate_fixture_with(LimitsConfig::default(), |config| {
+    browser_rate_fixture_with(test_limits(), |config| {
         config.identity.sources[0].header = "Authorization".into();
         config.policy.authority = "managed".into();
         config.policy.grants.clear();

@@ -185,6 +185,9 @@ content.page_formats = ["atlas_doc_format", "storage"]
 api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"
 allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
             &std::sync::Arc::new(crate::backend_registry()),
         )
@@ -12222,10 +12225,7 @@ async fn browser_rate_fixture_with(
         oidc: Default::default(),
     };
 
-    config.limits = LimitsConfig {
-        upload_spool_dir: config.limits.upload_spool_dir.clone(),
-        ..limits
-    };
+    config.limits = limits;
     config.policy.grants[0].subjects = vec!["user:alice".to_string()];
     configure(&mut config);
     let store = agent_access_core::ManagedStore::open(
@@ -12447,7 +12447,7 @@ async fn browser_rate_isolation_covers_provisioning_discovery_specs_session_and_
         invocations: one_invocation_per_minute(),
         auth_requests_per_source_per_minute: 1,
         auth_requests_per_principal_per_minute: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // Login has already exhausted the independent authentication budgets.
@@ -12502,7 +12502,7 @@ async fn browser_rate_isolation_covers_provisioning_discovery_specs_session_and_
 async fn authenticated_discovery_and_management_do_not_spend_invocation_budgets() {
     let fixture = browser_rate_fixture(LimitsConfig {
         invocations: one_invocation_per_minute(),
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     for round in 0..5 {
@@ -12560,7 +12560,7 @@ async fn authenticated_discovery_and_management_do_not_spend_invocation_budgets(
 async fn browser_rate_isolation_rejects_spoofed_and_expired_cookies_under_auth_limits() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_source_per_minute: 3,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // A real management token in a cookie is not a verified browser session.
@@ -12614,7 +12614,7 @@ async fn browser_rate_isolation_keeps_global_and_principal_concurrency_protectio
     let fixture = browser_rate_fixture(LimitsConfig {
         max_concurrent_requests: 1,
         max_concurrent_requests_per_principal: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     let global = fixture.ingress.try_global_concurrency(1).unwrap();
@@ -12653,7 +12653,7 @@ async fn browser_rate_isolation_keeps_global_and_principal_concurrency_protectio
 async fn browser_rate_isolation_password_change_uses_auth_principal_budget() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_principal_per_minute: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // Successful login spent the authentication principal allowance, not the agent allowance.
@@ -12686,7 +12686,7 @@ async fn browser_rate_isolation_password_change_uses_auth_principal_budget() {
 
 #[tokio::test]
 async fn browser_rate_isolation_configured_token_header_takes_precedence_over_cookie() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     for (token, expected) in [
         ("invalid-token", StatusCode::UNAUTHORIZED),
         (fixture.agent_tokens[0].as_str(), StatusCode::OK),
@@ -14623,7 +14623,7 @@ fn concurrency_guards_fail_closed_at_configured_limits() {
     let limits = LimitsConfig {
         max_concurrent_requests: 1,
         max_concurrent_requests_per_principal: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     };
     let guards = Arc::new(IngressGuards::new());
 
@@ -16348,10 +16348,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
     let audit = (!audit_file.is_empty()).then(|| {
         agent_access_core::AuditConfig::new(audit_store_type_for(Path::new(audit_file)), audit_file)
     });
-    let limits = agent_access_core::LimitsConfig {
-        upload_spool_dir: temp_path("upload-spool").display().to_string(),
-        ..agent_access_core::LimitsConfig::default()
-    };
+    let limits = test_limits();
     let key_path = temp_path("identity-inventory-key");
     std::fs::write(
         &key_path,
@@ -18750,6 +18747,12 @@ pub(crate) fn test_temp_dir() -> PathBuf {
 /// `name` in a fresh [`test_temp_dir`].
 pub(crate) fn temp_path(name: &str) -> PathBuf {
     test_temp_dir().join(name)
+}
+
+/// The built-in limits with an upload spool in a fresh [`test_temp_dir`]:
+/// every broker locks its spool, so concurrent tests need their own.
+pub(crate) fn test_limits() -> LimitsConfig {
+    LimitsConfig::new(temp_path("upload-spool").display().to_string())
 }
 
 fn create_private_dir(dir: &Path) {

@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use std::os::unix::fs::PermissionsExt;
 
 const MALFORMED: &str = "[identity\nmode = \"anonymous\"\n";
-const INVALID: &str = r#"
+const MINIMAL: &str = r#"
 [deployment]
 environment = "development"
 
@@ -23,7 +23,8 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
-
+"#;
+const UNKNOWN_SERVICE_GRANT: &str = r#"
 [[policy.grants]]
 subjects = ["group:anonymous"]
 service = "no_such_service"
@@ -35,7 +36,14 @@ credential_mode = "service"
 fn configuration_errors_exit_three_from_every_command() {
     let temp = private_temp_dir();
     let malformed = write_config(temp.path(), "malformed.toml", MALFORMED);
-    let invalid = write_config(temp.path(), "invalid.toml", INVALID);
+    let invalid = write_config(
+        temp.path(),
+        "invalid.toml",
+        &format!(
+            "{MINIMAL}{UNKNOWN_SERVICE_GRANT}{}",
+            limits(&temp.path().join("spool"))
+        ),
+    );
     let missing = temp.path().join("missing.toml");
     for config in [&malformed, &invalid, &missing] {
         let validate = run(config, &["config", "validate"]);
@@ -54,30 +62,42 @@ fn configuration_errors_exit_three_from_every_command() {
 }
 
 #[test]
+fn an_omitted_upload_spool_dir_is_a_configuration_error_naming_it() {
+    let temp = private_temp_dir();
+    let without_table = write_config(temp.path(), "without-table.toml", MINIMAL);
+    let without_setting = write_config(
+        temp.path(),
+        "without-setting.toml",
+        &format!("{MINIMAL}\n[limits]\nmax_concurrent_requests = 5\n"),
+    );
+    for (config, expected) in [
+        (
+            &without_table,
+            "missing field `upload_spool_dir` in table `[limits]`",
+        ),
+        (&without_setting, "missing field `upload_spool_dir`"),
+    ] {
+        // Run where the removed default would have put the spool.
+        for args in [
+            &["config", "validate"][..],
+            &["serve", "--listen", "127.0.0.1:0"][..],
+        ] {
+            let output = run_in(temp.path(), config, args);
+            assert_eq!(output.status.code(), Some(3), "{}", describe(&output));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(expected), "{}", describe(&output));
+        }
+    }
+    assert!(!temp.path().join("target").exists());
+}
+
+#[test]
 fn other_startup_failures_exit_one() {
     let temp = private_temp_dir();
-    let spool = temp.path().join("spool");
     let config = write_config(
         temp.path(),
         "valid.toml",
-        &format!(
-            r#"
-[deployment]
-environment = "development"
-
-[identity]
-mode = "anonymous"
-authority = "toml"
-
-[policy]
-authority = "toml"
-default_decision = "deny"
-
-[limits]
-upload_spool_dir = "{}"
-"#,
-            spool.display()
-        ),
+        &format!("{MINIMAL}{}", limits(&temp.path().join("spool"))),
     );
 
     let timeout = run(
@@ -100,14 +120,33 @@ upload_spool_dir = "{}"
     assert_error_rendering(&bind);
 }
 
+/// A `[limits]` table spooling uploads in `spool`.
+fn limits(spool: &Path) -> String {
+    format!(
+        "\n[limits]\nupload_spool_dir = {:?}\n",
+        spool.display().to_string()
+    )
+}
+
 fn run(config: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_agent-access-broker"))
+    command(config, args).output().unwrap()
+}
+
+fn run_in(directory: &Path, config: &Path, args: &[&str]) -> Output {
+    command(config, args)
+        .current_dir(directory)
+        .output()
+        .unwrap()
+}
+
+fn command(config: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access-broker"));
+    command
         .arg("--config")
         .arg(config)
         .args(args)
-        .env_remove("RUST_LOG")
-        .output()
-        .unwrap()
+        .env_remove("RUST_LOG");
+    command
 }
 
 fn assert_error_rendering(output: &Output) {
