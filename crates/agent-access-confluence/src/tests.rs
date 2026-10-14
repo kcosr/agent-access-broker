@@ -8672,9 +8672,11 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
     );
 
     // An attachment batch whose first upload was never sent applied nothing.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let origin = format!("http://{}", closed.local_addr().unwrap());
-    drop(closed);
+    // Bound without a listener, the port refuses connections, and no other
+    // socket can take it meanwhile.
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let origin = format!("http://{}", reserved.local_addr().unwrap());
     let mut config = confluence_config();
     config.attachments.media_types = vec!["text/plain".to_string()];
     config.allowed_upstream_hosts = vec![format!("{origin}/wiki/rest/api/**")];

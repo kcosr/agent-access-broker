@@ -516,10 +516,11 @@ async fn http_posts_once_without_auth_and_discards_response_secrets() {
 
 #[tokio::test]
 async fn proven_unsent_requests_are_reported_apart_from_unknown_outcomes() {
-    // A closed port refuses the connection: nothing reached the Workflow.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let uri = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // A port bound without a listener refuses the connection, and no other
+    // socket can take it meanwhile: nothing reached the Workflow.
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let uri = format!("http://{}", reserved.local_addr().unwrap());
     let error = transport_for(&uri)
         .send(
             Url::parse(&format!("{uri}/signed?sig=SYNTHETIC_SECRET")).unwrap(),

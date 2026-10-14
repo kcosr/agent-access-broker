@@ -1297,9 +1297,11 @@ mod tests {
 
     #[tokio::test]
     async fn refused_connections_are_not_sent() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        // Bound without a listener, the port refuses connections, and no
+        // other socket can take it meanwhile.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let base = format!("http://{}", reserved.local_addr().unwrap());
         let client = client(&base, &[format!("{base}/**")], ClientProfile::Request);
         let error = client
             .send(
@@ -1618,10 +1620,12 @@ mod tests {
         let events = capture.take_upstream_requests();
         assert_eq!(events[0]["reasonCode"], "example_item_locked");
 
-        // A transport failure's classification is the client's own.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        // A transport failure's classification is the client's own. Bound
+        // without a listener, the port refuses connections, and no other
+        // socket can take it meanwhile.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let base = format!("http://{}", reserved.local_addr().unwrap());
         let unreachable =
             super::tests::client(&base, &[format!("{base}/**")], ClientProfile::Request);
         let _ = capture

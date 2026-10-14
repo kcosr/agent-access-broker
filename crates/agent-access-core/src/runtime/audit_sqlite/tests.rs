@@ -358,7 +358,9 @@ fn enqueue_required(sink: &AuditSink, record: AuditRecord) -> JoinHandle<Result<
 }
 
 /// Holds the per-path lock on another thread until the returned sender is
-/// dropped, so commands queued meanwhile are drained into batches.
+/// dropped, so commands queued meanwhile are drained into batches. Dropping
+/// the sender, also when the test unwinds, releases the lock; it is held for
+/// a minute at most.
 fn hold_writer_lock(sink: &AuditSink) -> std::sync::mpsc::Sender<()> {
     let lock = test_audit_sink_lock(sink);
     let (locked_tx, locked_rx) = std::sync::mpsc::channel();
@@ -366,14 +368,17 @@ fn hold_writer_lock(sink: &AuditSink) -> std::sync::mpsc::Sender<()> {
     std::thread::spawn(move || {
         let _guard = lock.lock().unwrap();
         locked_tx.send(()).unwrap();
-        let _ = release_rx.recv();
+        let _ = release_rx.recv_timeout(Duration::from_secs(60));
     });
     locked_rx.recv().unwrap();
     release_tx
 }
 
 /// Queues a probe that parks the writer on the held lock, so appends queued
-/// after it are drained together once the lock is released.
+/// after it are drained together once the lock is released. The handle
+/// yields the writer's result for the probe itself: `check_writable` also
+/// checks health after the writer answers, which can already include the
+/// failures of a batch released behind the probe.
 fn park_writer(
     sink: &AuditSink,
 ) -> (
@@ -382,8 +387,8 @@ fn park_writer(
 ) {
     let release = hold_writer_lock(sink);
     let probe = {
-        let sink = sink.clone();
-        start_now(async move { sink.check_writable().await })
+        let writer = Arc::clone(sink.writer.as_ref().unwrap());
+        start_now(async move { writer.probe_storage().await })
     };
     (release, probe)
 }

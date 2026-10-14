@@ -2952,9 +2952,11 @@ mod tests {
         assert!(send_failure(UpstreamError::Redirect, None).result.is_none());
         // A read that was never sent, including the trigger's own job read,
         // carries no mutation receipt.
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin = format!("http://{}", closed.local_addr().unwrap());
-        drop(closed);
+        // Bound without a listener, the port refuses connections, and no other
+        // socket can take it meanwhile.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let origin = format!("http://{}", reserved.local_addr().unwrap());
         for action in ["job.view", "build.trigger"] {
             let error = provider_with_limits(&origin, ProviderLimits::default())
                 .invoke(invocation(action, job_inputs(json!({}))))

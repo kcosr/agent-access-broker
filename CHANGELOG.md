@@ -597,6 +597,9 @@ All notable changes to this project are documented in this file.
   `https://hooks.example.com:9443/**`, are no longer rejected as duplicates.
   A pattern with an explicit default port, such as `:443` for `https`, is still
   a duplicate of the same pattern without it.
+- The `broker_listening` event reports the address each listener bound rather
+  than the requested one, so `serve --listen 127.0.0.1:0` names the port the
+  system assigned instead of port 0. Other addresses are reported as before.
 
 ### Removed
 

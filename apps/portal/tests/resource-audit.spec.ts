@@ -1,14 +1,14 @@
 // Real Broker + SQLite acceptance: no API routing or seeded audit records.
 import { expect, test, type Page, type Response } from "@playwright/test";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { promises as fs } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AuditRecord, CatalogMutation, ResourceGroupRecord, ResourceRecord } from "../src/types";
 import { brokerBinary, portalDist, repoRoot } from "./support/binaries";
+import { startBroker } from "./support/broker-process";
 
 let broker: ChildProcessWithoutNullStreams | undefined;
 let root = "";
@@ -24,18 +24,14 @@ const selector = "engineering/payments";
 test.beforeAll(async () => {
   await fs.access(path.join(portalDist, "index.html"));
   root = await fs.mkdtemp(path.join(os.tmpdir(), "aab-resource-audit-"));
-  const listener = createServer();
-  listener.listen(0, "127.0.0.1");
-  await once(listener, "listening");
-  const port = (listener.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  baseUrl = `http://127.0.0.1:${port}`;
   for (const [index, name] of ["encryption", "hash", "csrf", "pepper"].entries()) {
     await fs.writeFile(path.join(root, name), Buffer.alloc(32, index + 1).toString("base64url"));
   }
   await fs.writeFile(path.join(root, "git-token"), "synthetic-unused-git-token");
   const quoted = (relative: string) => JSON.stringify(path.join(root, relative));
-  await fs.writeFile(path.join(root, "broker.toml"), `
+  const configure = async (_port: number, url: string) => {
+    baseUrl = url;
+    await fs.writeFile(path.join(root, "broker.toml"), `
 [deployment]
 environment = "development"
 [identity]
@@ -103,18 +99,17 @@ upload_spool_dir = ${quoted("spool")}
 [limits.invocations]
 default = { requests = 1000, window = "1m" }
 `);
-  broker = spawn(brokerBinary, ["--config", path.join(root, "broker.toml"), "serve", "--listen", `127.0.0.1:${port}`], {
+    return path.join(root, "broker.toml");
+  };
+  ({ child: broker } = await startBroker({
+    binary: brokerBinary,
+    configure,
     cwd: repoRoot,
     env: { ...process.env, RUST_LOG: "agent_access_broker=warn,agent_access_core=warn" },
-  });
-  broker.stdout.on("data", chunk => logs.push(String(chunk)));
-  broker.stderr.on("data", chunk => logs.push(String(chunk)));
-  await expect.poll(async () => {
-    if (broker?.exitCode !== null) throw new Error(`Broker exited before readiness\n${logs.join("")}`);
-    try {
-      return (await fetch(`${baseUrl}/v1/healthz`, { headers: { "X-Agent-Access-Request-Id": randomUUID() } })).ok;
-    } catch { return false; }
-  }, { timeout: 60_000 }).toBe(true);
+    readinessHeaders: () => ({ "X-Agent-Access-Request-Id": randomUUID() }),
+    timeoutMs: 60_000,
+    onOutput: (text) => logs.push(text)
+  }));
 });
 
 test.afterEach(async ({}, testInfo) => {

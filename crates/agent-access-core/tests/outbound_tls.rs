@@ -264,8 +264,11 @@ credential_mode = "service"
 allowed_upstream_hosts = [{allowed:?}]
 [providers.cloudbees_ci.controllers.ci]
 base_url = {base:?}
+[limits]
+upload_spool_dir = {spool:?}
 "#,
             bundle = bundle.to_str().unwrap(),
+            spool = temp.join("spool").to_str().unwrap(),
             username = format!("file:{}", temp.join("username").display()),
             token = format!("file:{}", temp.join("token").display()),
             allowed = format!("{base}**"),

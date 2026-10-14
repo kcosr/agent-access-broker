@@ -2198,9 +2198,12 @@ pub(crate) mod tests {
             # The records API is never contacted by these lifecycle tests.
             [providers.oauth_stub]
             base_url = "http://127.0.0.1:9"
+            [limits]
+            upload_spool_dir = {:?}
             "#,
             directory.join("oauth.sqlite").display().to_string(),
-            key.display().to_string()
+            key.display().to_string(),
+            directory.join("spool").display().to_string()
         );
         let mut config = crate::parse_broker_config_raw(
             "oauth-runtime-fixture",
@@ -4116,6 +4119,10 @@ pub(crate) mod tests {
             if failure == "retry_after" {
                 assert!(matches!(error, OAuthError::RetryLater(1..=2)));
             }
+            // The first backoff lasts one or two seconds, which a loaded host
+            // can spend before the restarted manager acquires. Extend it so
+            // the restart is checked inside the cooldown.
+            let retry_not_before = hold_cooldown(&manager);
             let restarted = stub_manager(store, ring, config).unwrap();
             restarted.activate().unwrap();
             // The cooldown's cause survives a restart: only throttling reads
@@ -4140,7 +4147,7 @@ pub(crate) mod tests {
                     .unwrap()
                     .family
                     .retry_not_before,
-                c.family.retry_not_before
+                retry_not_before
             );
             release_cooldown(&restarted);
             server.reset().await;
@@ -4518,6 +4525,19 @@ pub(crate) mod tests {
         assert!(access_entry(grant("Bearer", 31_536_001), OAuthScopeMode::Explicit).is_err());
     }
 
+    /// Extends the connection's cooldown by an hour and returns its new end.
+    fn hold_cooldown(manager: &OAuthManager) -> i64 {
+        manager
+            .update("user", "stub", |_, current| {
+                let mut slot = current.unwrap();
+                let family = &mut slot.connection.as_mut().unwrap().family;
+                family.retry_not_before += 3_600_000;
+                let retry_not_before = family.retry_not_before;
+                Ok((slot, retry_not_before))
+            })
+            .unwrap()
+    }
+
     fn release_cooldown(manager: &OAuthManager) {
         manager
             .update("user", "stub", |_, current| {
@@ -4533,10 +4553,12 @@ pub(crate) mod tests {
         let (_dir, _store, _ring, mut manager, server) = fixture().await;
         connected(&manager, &server).await;
         expire(&manager);
-        // Point this test's private transport at a closed listener; exercise reqwest's real is_connect classification.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let unavailable = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        // Point this test's private transport at a port bound without a
+        // listener, which refuses connections and which no other socket can
+        // take meanwhile; exercise reqwest's real is_connect classification.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let unavailable = format!("http://{}", reserved.local_addr().unwrap());
         Arc::get_mut(&mut manager.inner)
             .unwrap()
             .registrations

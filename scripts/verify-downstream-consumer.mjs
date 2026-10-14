@@ -9,14 +9,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync,
   openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { createServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
 import { constants as osConstants, devNull, homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, qualificationOutputDirectory } from "./verify-release.mjs";
-import { cargoConfigInventory, inspectLocalToolchain, parseCargoTree } from "./verify-release-provenance.mjs";
+import { BROKER_LOG_FILTER, cargoConfigInventory, inspectLocalToolchain, parseCargoTree, publicListeningAddress } from "./verify-release-provenance.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
@@ -1110,17 +1109,6 @@ export function startSyntheticController() {
   });
 }
 
-function freeLoopbackPort() {
-  return new Promise((resolvePromise, reject) => {
-    const server = createNetServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close((error) => (error ? reject(error) : resolvePromise(port)));
-    });
-  });
-}
-
 async function runCaptured(supervisor, command, args, { env, cwd }) {
   const result = await supervisor.run(command, args, { env, cwd, stdout: "pipe", stderr: "pipe", timeoutMs: PROCESS_TIMEOUT_MS });
   if (result.error) throw result.error;
@@ -1128,15 +1116,29 @@ async function runCaptured(supervisor, command, args, { env, cwd }) {
     stdout: result.stdout.toString("utf8"), stderr: result.stderr.toString("utf8") };
 }
 
-async function waitForReady(supervisor, url, broker) {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
+async function brokerExitBeforeReadiness(broker) {
+  const exit = await broker.closed;
+  return new Error(`The assembled broker exited before readiness with ${exit.code ?? exit.signal ?? exit.error?.message}`);
+}
+
+// The address the broker started on port 0 reports in its broker_listening
+// event, which it logs once its public listener is bound.
+async function waitForListening(supervisor, logPath, broker, deadline) {
+  while (Date.now() < deadline) {
+    supervisor.assertRunning();
+    const address = publicListeningAddress(readFileSync(logPath, "utf8"));
+    if (address !== null) return address;
+    if (broker.finished) throw await brokerExitBeforeReadiness(broker);
+    await delay(100);
+  }
+  throw new Error("The assembled broker did not report its public listener");
+}
+
+async function waitForReady(supervisor, url, broker, deadline) {
   let last = "no response";
   while (Date.now() < deadline) {
     supervisor.assertRunning();
-    if (broker.finished) {
-      const exit = await broker.closed;
-      throw new Error(`The assembled broker exited before readiness with ${exit.code ?? exit.signal ?? exit.error?.message}`);
-    }
+    if (broker.finished) throw await brokerExitBeforeReadiness(broker);
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
@@ -1183,16 +1185,19 @@ export async function runProcessAcceptance({ supervisor, binary, cli, run, evide
     writeFileSync(join(output, "config-validate.log"), `${validated.stdout}${validated.stderr}`);
     check("config-validate", validated.code === 0, { exitCode: validated.code });
 
-    const port = await freeLoopbackPort();
-    const base = `http://127.0.0.1:${port}`;
-    const log = openSync(join(output, "broker.log"), "w", 0o600);
+    const logPath = join(output, "broker.log");
+    const log = openSync(logPath, "w", 0o600);
     try {
-      broker = supervisor.start(binary, ["--config", configPath, "serve", "--listen", `127.0.0.1:${port}`],
-        { env, cwd: run, stdio: ["ignore", log, log] });
+      // The address is read from the INFO broker_listening event, so the
+      // Broker's log filter cannot come from the caller's environment.
+      broker = supervisor.start(binary, ["--config", configPath, "serve", "--listen", "127.0.0.1:0"],
+        { env: { ...env, RUST_LOG: BROKER_LOG_FILTER }, cwd: run, stdio: ["ignore", log, log] });
     } finally {
       closeSync(log);
     }
-    await waitForReady(supervisor, `${base}/v1/readyz`, broker);
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    const base = `http://${await waitForListening(supervisor, logPath, broker, deadline)}`;
+    await waitForReady(supervisor, `${base}/v1/readyz`, broker, deadline);
     check("readyz", true);
     const health = await fetch(`${base}/v1/healthz`);
     check("healthz", health.ok, { status: health.status });

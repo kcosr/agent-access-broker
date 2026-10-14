@@ -450,8 +450,34 @@ pub(super) fn install_audit_writer_hook(
 
 fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {
     let (lock, condition) = &**gate;
-    *lock.lock().unwrap() = true;
+    *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
     condition.notify_all();
+}
+
+/// How long a writer test hook holds the writer at a gate. The hook runs
+/// while the writer holds the global hook mutex, so a test that fails
+/// before releasing its gate must not park the writer indefinitely.
+const GATE_HOLD_LIMIT: Duration = Duration::from_secs(30);
+
+/// Holds the calling writer until `gate` is released or
+/// [`GATE_HOLD_LIMIT`] passes.
+fn wait_at_gate(gate: &(Mutex<bool>, Condvar)) {
+    let (lock, condition) = gate;
+    let released = lock.lock().unwrap_or_else(|error| error.into_inner());
+    let _ = condition
+        .wait_timeout_while(released, GATE_HOLD_LIMIT, |released| !*released)
+        .unwrap_or_else(|error| error.into_inner());
+}
+
+/// Releases a gate when dropped, including when the test unwinds. Declared
+/// after the hook guard, it drops first, so the writer leaves the hook
+/// before the hook guard takes the hook mutex.
+struct GateRelease(Arc<(Mutex<bool>, Condvar)>);
+
+impl Drop for GateRelease {
+    fn drop(&mut self) {
+        release_gate(&self.0);
+    }
 }
 
 fn audit_records(path: &Path) -> Vec<Value> {
@@ -524,13 +550,10 @@ async fn durable_append_waits_for_sync_before_ack(durability: AuditDurability) {
             if let Some(sender) = hook_event_tx.lock().unwrap().take() {
                 let _ = sender.send(event);
             }
-            let (lock, condition) = &*hook_gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = condition.wait(released).unwrap();
-            }
+            wait_at_gate(&hook_gate);
         }
     });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         durability,
         ..jsonl_audit_config(audit_path.display().to_string())
@@ -624,13 +647,10 @@ async fn retention_prune_runs_after_triggering_append_ack() {
             if let Some(sender) = hook_event_tx.lock().unwrap().take() {
                 let _ = sender.send(event);
             }
-            let (lock, condition) = &*hook_gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = condition.wait(released).unwrap();
-            }
+            wait_at_gate(&hook_gate);
         }
     });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 1,
         ..jsonl_audit_config(audit_path.display().to_string())
@@ -793,6 +813,9 @@ fn audit_writer_health_tracks_failure_classes_independently() {
 #[derive(Default)]
 struct ScriptedAuditStorage {
     appends: std::collections::VecDeque<AuditStorageOutcome>,
+    /// Each batch's own health change, such as a recovery its commit
+    /// triggered; none once the script runs out.
+    batch_health: std::collections::VecDeque<AuditHealthChange>,
     probes: std::collections::VecDeque<AuditStorageOutcome>,
     appended_ids: Arc<Mutex<Vec<String>>>,
     probe_inputs: Arc<Mutex<Vec<AuditFailureSet>>>,
@@ -831,7 +854,7 @@ impl AuditStorage for ScriptedAuditStorage {
             .collect();
         AuditAppendOutcome {
             entries,
-            health: AuditHealthChange::default(),
+            health: self.batch_health.pop_front().unwrap_or_default(),
             maintenance_due: false,
         }
     }
@@ -910,6 +933,109 @@ async fn shared_writer_applies_backend_health_changes_without_overwriting_classe
 
     writer.shutdown_and_drain().await.unwrap();
     assert!(closed.load(Ordering::SeqCst));
+}
+
+/// Holds the audit writer where it reports a failed terminal append until
+/// `gate` is released or [`GATE_HOLD_LIMIT`] passes, and counts the reports.
+struct HoldTerminalAppendFailureReports {
+    gate: Arc<(Mutex<bool>, Condvar)>,
+    reports: Arc<AtomicUsize>,
+}
+
+impl<S> tracing_subscriber::Layer<S> for HoldTerminalAppendFailureReports
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: TracingLayerContext<'_, S>) {
+        let mut fields = BTreeMap::new();
+        event.record(&mut JsonVisitor(&mut fields));
+        if fields.get("event").and_then(Value::as_str) == Some("audit_terminal_append_failed") {
+            self.reports.fetch_add(1, Ordering::SeqCst);
+            wait_at_gate(&self.gate);
+        }
+    }
+}
+
+#[tokio::test]
+async fn shared_writer_records_batch_health_before_acknowledging_its_records() {
+    use AuditFailureClass::*;
+    use futures_util::FutureExt;
+    // The writer reports a batch's failed terminal append after it has
+    // acknowledged the batch's earlier records, and is held there while the
+    // test reads health after such an acknowledgement.
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let reports = Arc::new(AtomicUsize::new(0));
+    let _subscriber = tracing::subscriber::set_default(tracing_subscriber::registry().with(
+        HoldTerminalAppendFailureReports {
+            gate: Arc::clone(&gate),
+            reports: Arc::clone(&reports),
+        },
+    ));
+    let storage = ScriptedAuditStorage {
+        appends: [
+            scripted_outcome(Err(std::io::Error::other("database full")), &[Append], &[]),
+            // One batch: a required record commits and a terminal record
+            // fails without a health change of its own.
+            scripted_outcome(Ok(()), &[], &[]),
+            scripted_outcome(Err(std::io::Error::other("record too large")), &[], &[]),
+        ]
+        .into(),
+        // The second batch's commit triggers a successful recovery.
+        batch_health: [
+            AuditHealthChange::default(),
+            AuditHealthChange {
+                mark: AuditFailureSet::EMPTY,
+                clear: AuditFailureSet::of(&[Append]),
+            },
+        ]
+        .into(),
+        probes: [scripted_outcome(
+            Err(std::io::Error::other("recovery is not due")),
+            &[],
+            &[],
+        )]
+        .into(),
+        ..ScriptedAuditStorage::default()
+    };
+    let appended_ids = Arc::clone(&storage.appended_ids);
+    let lock = Arc::new(Mutex::new(()));
+    let writer = AuditWriterHandle::start(
+        AuditWriterConfig {
+            path_label: "scripted-batch-health".to_string(),
+            node_id: TEST_NODE_ID.to_string(),
+            queue_capacity: 4,
+            terminal_queue_capacity: 4,
+            enqueue_timeout: Duration::from_secs(1),
+            lock: Arc::clone(&lock),
+        },
+        Box::new(storage),
+    );
+    let _release = GateRelease(Arc::clone(&gate));
+
+    assert!(writer.append_required(test_audit_record()).await.is_err());
+    assert_eq!(writer.health.recorded(), AuditFailureSet::of(&[Append]));
+
+    // A probe parks the writer on the held lock, so the required and the
+    // terminal record queued behind it are written as one batch.
+    let terminal = writer.reserve_terminal().await.unwrap();
+    let held = lock.lock().unwrap();
+    let mut probe = Box::pin(tokio::task::unconstrained(writer.probe_storage()));
+    assert!((&mut probe).now_or_never().is_none());
+    let mut recovering = Box::pin(tokio::task::unconstrained(
+        writer.append_required(test_audit_record()),
+    ));
+    assert!((&mut recovering).now_or_never().is_none());
+    terminal.send(test_audit_record());
+    drop(held);
+    assert!(probe.await.is_err());
+
+    // The acknowledgement follows the recovery the batch's commit triggered.
+    recovering.await.unwrap();
+    assert_eq!(writer.health.recorded(), AuditFailureSet::EMPTY);
+    release_gate(&gate);
+    writer.shutdown_and_drain().await.unwrap();
+    assert_eq!(reports.load(Ordering::SeqCst), 1);
+    assert_eq!(appended_ids.lock().unwrap().len(), 3);
 }
 
 #[cfg(unix)]
@@ -1255,11 +1381,14 @@ fn runtime_exposes_its_audit_store_type_path_and_database_id() {
     );
 }
 
+/// A record stamped now. The timestamp always has nine fractional digits:
+/// `to_rfc3339` drops trailing zero groups, so records built at different
+/// instants would differ in serialized size.
 pub(super) fn test_audit_record() -> AuditRecord {
     AuditRecord {
         caller_id: None,
         search_authorization: None,
-        timestamp: Utc::now().to_rfc3339(),
+        timestamp: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false),
         agent_request_id: "agent-req-test".to_string(),
         broker_request_id: "broker-req-test".to_string(),
         config_generation: None,
@@ -1873,25 +2002,54 @@ async fn audit_sink_revalidates_parent_before_retention_prune() {
     let temp = TempDir::new().unwrap();
     let audit_dir = temp.path().join("audit");
     let audit_path = audit_dir.join("audit.jsonl");
+    // The first append makes a prune due, which the writer runs after the
+    // acknowledgement and only while no command is queued. Hold that prune at
+    // its start, before it validates the parent, so it runs exactly after the
+    // parent becomes unsafe.
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let hook_path = audit_path.display().to_string();
+    let hook_gate = Arc::clone(&gate);
+    let _hook = install_audit_writer_hook(move |event| {
+        if event.path == hook_path && event.kind == AuditWriterTestEventKind::Prune {
+            if let Some(sender) = started_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            wait_at_gate(&hook_gate);
+        }
+    });
+    let _release = GateRelease(Arc::clone(&gate));
     let sink = test_audit_sink(crate::AuditConfig {
         retention_days: 0,
         ..jsonl_audit_config(audit_path.display().to_string())
     });
     sink.append_required(test_audit_record()).await.unwrap();
-    // Append acknowledges before pruning; a queued probe waits for that first prune
-    // to finish before this test creates a retained file and changes permissions.
-    sink.check_writable().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), started_rx)
+        .await
+        .expect("the first append starts a retention prune")
+        .unwrap();
     let old_rotated = audit_dir.join(format!("audit.jsonl.20000101T000000Z.{}", Uuid::new_v4()));
     fs::write(&old_rotated, b"old").unwrap();
     let old_mtime =
         filetime::FileTime::from_unix_time(Utc::now().timestamp().saturating_sub(86_400), 0);
     filetime::set_file_mtime(&old_rotated, old_mtime).unwrap();
     fs::set_permissions(&audit_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    release_gate(&gate);
 
+    // The writer answers this append only after the held prune has finished.
     let error = sink.append_required(test_audit_record()).await.unwrap_err();
 
     assert!(matches!(error, RuntimeError::Audit { .. }));
     assert!(old_rotated.exists());
+    assert!(
+        sink.writer
+            .as_ref()
+            .unwrap()
+            .health
+            .recorded()
+            .contains(AuditFailureClass::Prune)
+    );
 }
 
 #[cfg(unix)]
@@ -7945,7 +8103,10 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         providers: crate::ProvidersConfig::new(crate::tests::test_backend_registry())
             .with(agent_access_fake::FakeProviderConfig::default()),
         gateways: BTreeMap::new(),
-        limits: crate::LimitsConfig::default(),
+        limits: crate::LimitsConfig {
+            upload_spool_dir: test_temp_dir().join("spool").display().to_string(),
+            ..crate::LimitsConfig::default()
+        },
         audit: None,
     }
 }
@@ -8611,13 +8772,45 @@ fn write_temp_secret(value: &str) -> PathBuf {
     path
 }
 
+thread_local! {
+    /// The calling test's temporary root; see [`test_temp_dir`].
+    static TEST_TEMP_ROOT: std::cell::OnceCell<TempDir> = const { std::cell::OnceCell::new() };
+}
+
+/// A fresh private directory for the calling test.
+///
+/// A test's directories share one root that is removed when the test's
+/// thread exits: libtest runs each test on its own thread and joins it, so
+/// helpers that build configurations need not return a guard. Call it on
+/// the test's own thread; a spawned thread's exit would remove the
+/// directory early.
+pub(super) fn test_temp_dir() -> PathBuf {
+    let thread = std::thread::current();
+    assert!(
+        thread
+            .name()
+            .is_some_and(|name| name != "main" && name != "tokio-runtime-worker"),
+        "test_temp_dir must run on the test's own thread, not {:?}",
+        thread.name()
+    );
+    TEST_TEMP_ROOT.with(|root| {
+        let root = root.get_or_init(|| {
+            tempfile::Builder::new()
+                .prefix("agent-access-core-test-")
+                .tempdir()
+                .unwrap()
+        });
+        let dir = root.path().join(Uuid::new_v4().to_string());
+        fs::create_dir(&dir).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    })
+}
+
+/// `name` in a fresh [`test_temp_dir`].
 pub(super) fn temp_path(name: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("agent-access-{}", Uuid::new_v4()));
-    fs::create_dir_all(&dir).unwrap();
-    #[cfg(unix)]
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-    dir.join(name)
+    test_temp_dir().join(name)
 }
 
 #[test]

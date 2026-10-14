@@ -2853,6 +2853,7 @@ mod tests {
     use super::*;
     use crate::router::build_gateway_router;
     use crate::state::ReloadableState;
+    use crate::tests::test_temp_dir;
     use agent_access_core::{
         AuditConfig, BrokerConfig, CredentialConfig, CredentialsConfig, DEFAULT_EXECUTION_CONTEXT,
         DeploymentConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, NetworkConfig,
@@ -4690,7 +4691,17 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let upstream_addr = listener.local_addr().unwrap();
+        // The accept deadline starts with the first Broker request, not
+        // during the store and runtime setup before it. The sender drops if
+        // the test fails first; the wait for it is bounded too.
+        let (request_started, request_start) = std::sync::mpsc::channel::<()>();
         let upstream = std::thread::spawn(move || {
+            if request_start
+                .recv_timeout(Duration::from_secs(300))
+                .is_err()
+            {
+                return;
+            }
             let deadline = Instant::now() + Duration::from_secs(10);
             let (stream, _) = loop {
                 match listener.accept() {
@@ -4819,6 +4830,9 @@ mod tests {
                 cached.clone()
             } else {
                 broker_calls += 1;
+                if index == 0 {
+                    request_started.send(()).unwrap();
+                }
                 let response = router
                     .clone()
                     .oneshot(
@@ -5906,19 +5920,5 @@ mod tests {
             agent_access_core::AuditStoreType::Jsonl,
             path,
         )
-    }
-
-    fn test_temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "agent-access-gateway-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        dir
     }
 }

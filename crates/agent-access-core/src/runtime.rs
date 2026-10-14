@@ -8857,8 +8857,9 @@ trait AuditStorage: Send {
 
 struct AuditAppendOutcome {
     entries: Vec<AuditStorageOutcome>,
-    /// Applied after the entries' changes, for example the result of a
-    /// recovery attempt the batch's commit triggered.
+    /// Applied after the entries' changes and before any entry is
+    /// acknowledged, for example the result of a recovery attempt the
+    /// batch's commit triggered.
     health: AuditHealthChange,
     /// A maintenance cycle is due; the writer runs its slices after
     /// acknowledging the batch, whenever no command is queued.
@@ -9084,6 +9085,13 @@ impl AuditWriterHandle {
     }
 
     async fn check_writable(&self) -> Result<(), RuntimeError> {
+        self.probe_storage().await?;
+        self.health.check()
+    }
+
+    /// Queues a storage probe and returns the writer's result for it alone.
+    /// Health checked afterwards can also reflect commands handled since.
+    async fn probe_storage(&self) -> Result<(), RuntimeError> {
         let permit = self.reserve_normal_capacity().await?;
         let (ack, done) = oneshot::channel();
         {
@@ -9110,8 +9118,7 @@ impl AuditWriterHandle {
             .map_err(|source| RuntimeError::Audit {
                 path: self.path_label(),
                 source,
-            })?;
-        self.health.check()
+            })
     }
 
     fn command_send_error(&self, error: mpsc::error::TrySendError<AuditCommand>) -> RuntimeError {
@@ -9713,8 +9720,10 @@ impl AuditWriterLoop {
         None
     }
 
-    /// Writes a drained batch, applies its health changes, and acknowledges
-    /// each record with its own result.
+    /// Writes a drained batch, applies its health changes, and then
+    /// acknowledges each record with its own result. As with a probe, no
+    /// record is acknowledged before every health change of its batch,
+    /// including a recovery its commit triggered, is recorded.
     fn append_batch(&mut self, batch: Vec<QueuedAppend>) {
         let AuditAppendOutcome {
             entries,
@@ -9733,29 +9742,35 @@ impl AuditWriterLoop {
             self.storage.append_batch(&entries, self.health.recorded())
         };
         let mut outcomes = entries.into_iter();
-        for append in batch {
-            let outcome = outcomes.next().unwrap_or_else(|| AuditStorageOutcome {
-                result: Err(std::io::Error::other(
-                    "audit storage reported no append outcome",
-                )),
-                health: AuditHealthChange {
-                    mark: AuditFailureSet::of(&[append.kind.failure_class()]),
-                    clear: AuditFailureSet::EMPTY,
-                },
-            });
-            self.health.apply(outcome.health);
+        let results = batch
+            .iter()
+            .map(|append| {
+                let outcome = outcomes.next().unwrap_or_else(|| AuditStorageOutcome {
+                    result: Err(std::io::Error::other(
+                        "audit storage reported no append outcome",
+                    )),
+                    health: AuditHealthChange {
+                        mark: AuditFailureSet::of(&[append.kind.failure_class()]),
+                        clear: AuditFailureSet::EMPTY,
+                    },
+                });
+                self.health.apply(outcome.health);
+                outcome.result
+            })
+            .collect::<Vec<_>>();
+        self.health.apply(health);
+        for (append, result) in batch.into_iter().zip(results) {
             match append.ack {
                 Some(ack) => {
-                    let _ = ack.send(outcome.result);
+                    let _ = ack.send(result);
                 }
                 None => {
-                    if let Err(error) = &outcome.result {
+                    if let Err(error) = &result {
                         log_terminal_append_failure(&self.config.path_label, &append.record, error);
                     }
                 }
             }
         }
-        self.health.apply(health);
         if maintenance_due && self.maintenance == MaintenanceState::Idle {
             self.maintenance = MaintenanceState::Pending;
         }

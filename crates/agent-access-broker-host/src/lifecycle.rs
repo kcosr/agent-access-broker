@@ -417,11 +417,14 @@ async fn run_service(
     let mut servers = Servers::new();
 
     let node_id = state.node_id();
+    // The bound address, which names the assigned port when `listen` asks
+    // for port 0.
+    let public_address = public_listener.local_addr()?;
     tracing::info!(
         event = "broker_listening",
         nodeId = node_id.as_str(),
         listener = "public",
-        address = %listen,
+        address = %public_address,
     );
     #[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
     let (public_app, mcp) = public_router(state.clone());
@@ -430,12 +433,12 @@ async fn run_service(
     servers.serve(public_listener, public_app, coordinator.clone());
     #[cfg(test)]
     let mut served_gateway_app = None;
-    if let Some((gateway_listen, gateway_listener)) = gateway_listener {
+    if let Some((gateway_address, gateway_listener)) = gateway_listener {
         tracing::info!(
             event = "broker_listening",
             nodeId = node_id.as_str(),
             listener = "gateway",
-            address = %gateway_listen,
+            address = %gateway_address,
         );
         let gateway_app = build_gateway_router(state.clone());
         #[cfg(test)]
@@ -480,10 +483,10 @@ async fn bind_listeners(
 ) -> Result<BoundListeners> {
     let public_listener = tokio::net::TcpListener::bind(listen).await?;
     let gateway_listener = match gateway_listen {
-        Some(gateway_listen) => Some((
-            gateway_listen,
-            tokio::net::TcpListener::bind(gateway_listen).await?,
-        )),
+        Some(gateway_listen) => {
+            let listener = tokio::net::TcpListener::bind(gateway_listen).await?;
+            Some((listener.local_addr()?, listener))
+        }
         None => None,
     };
     Ok((public_listener, gateway_listener))
@@ -1222,10 +1225,44 @@ mod tests {
         task.await.unwrap();
     }
 
+    /// A loopback listener whose port stays bound, but not listening, by the
+    /// returned socket after the listener closes. Neither another listener
+    /// nor a client's ephemeral port can take the port meanwhile, so a
+    /// refused connection shows that this listener closed. The cfg is the
+    /// one under which Tokio provides `TcpSocket::set_reuseport`.
+    #[cfg(all(
+        unix,
+        not(target_os = "solaris"),
+        not(target_os = "illumos"),
+        not(target_os = "cygwin")
+    ))]
+    fn listener_with_reserved_port() -> (tokio::net::TcpListener, tokio::net::TcpSocket) {
+        let listener = tokio::net::TcpSocket::new_v4().unwrap();
+        listener.set_reuseport(true).unwrap();
+        listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.set_reuseport(true).unwrap();
+        reserved.bind(listener.local_addr().unwrap()).unwrap();
+        (listener.listen(1024).unwrap(), reserved)
+    }
+
     #[tokio::test]
     async fn public_server_stops_on_shutdown_trigger() {
         let coordinator = ShutdownCoordinator::new();
         let mut servers = Servers::new();
+        #[cfg(all(
+            unix,
+            not(target_os = "solaris"),
+            not(target_os = "illumos"),
+            not(target_os = "cygwin")
+        ))]
+        let (public_listener, _reserved) = listener_with_reserved_port();
+        #[cfg(not(all(
+            unix,
+            not(target_os = "solaris"),
+            not(target_os = "illumos"),
+            not(target_os = "cygwin")
+        )))]
         let public_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let public_addr = public_listener.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "ok" }));
@@ -1617,8 +1654,8 @@ path="{}"
     }
 
     async fn test_reloadable_state() -> Arc<ReloadableState> {
-        let config = temp_path("minimal-broker.toml");
-        let spool = temp_path("minimal-spool");
+        let config = crate::tests::temp_path("minimal-broker.toml");
+        let spool = crate::tests::temp_path("minimal-spool");
         std::fs::write(
             &config,
             format!(
@@ -1652,18 +1689,5 @@ upload_spool_dir = "{}"
         )
         .await
         .unwrap()
-    }
-
-    fn temp_path(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "agent-access-broker-lifecycle-test-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        path
     }
 }

@@ -962,6 +962,7 @@ mod execution_context_tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     fn runtime(execution_context: &str) -> BrokerRuntime {
+        let spool = crate::tests::temp_path("spool");
         let config = parse_broker_config_raw(
             "state-execution-context-test.toml",
             &format!(
@@ -975,7 +976,11 @@ mod execution_context_tests {
                 [policy]
                 authority = "toml"
                 default_decision = "deny"
-                "#
+
+                [limits]
+                upload_spool_dir = {spool:?}
+                "#,
+                spool = spool.display().to_string()
             ),
             &std::sync::Arc::new(crate::backend_registry()),
         )

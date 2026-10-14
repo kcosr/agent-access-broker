@@ -52,12 +52,27 @@ class LocalBrokerProcessTests(unittest.TestCase):
                 child.terminate()
 
     def test_port_conflict(self):
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            listener.listen()
-            port = listener.getsockname()[1]
-            self.assertNotEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
-        self.assertEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
+        if not sys.platform.startswith("linux"):
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                self.assertNotEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
+            self.assertEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
+            return
+        # On Linux a bound socket that is not listening holds the port, so no
+        # other process can take it between the checks, yet the helper's own
+        # SO_REUSEADDR bind still finds the port free.
+        with socket.socket() as reserved:
+            reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            reserved.bind(("127.0.0.1", 0))
+            port = reserved.getsockname()[1]
+            with socket.socket() as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", port))
+                listener.listen()
+                self.assertNotEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
+            self.assertEqual(self.run_helper("check-port", "127.0.0.1", port).returncode, 0)
 
     def test_detached_spawn_survives_launcher_and_uses_its_log(self):
         with tempfile.TemporaryDirectory() as directory:

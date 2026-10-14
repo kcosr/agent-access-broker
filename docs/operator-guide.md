@@ -731,7 +731,9 @@ Example event:
 
 The `http.request` span, the `broker_listening` and `config_reload_completed`
 events, and audit writer, maintenance, and query failure events carry the broker's
-`nodeId`, so logs from several brokers can be told apart.
+`nodeId`, so logs from several brokers can be told apart. A `broker_listening`
+event's `address` is the address its listener bound: with `--listen` port 0 it
+names the port the system assigned.
 
 Request spans and invoke/reload/audit/upstream events include
 `agentRequestId`, `brokerRequestId`, `listener`, `service`, `action`,

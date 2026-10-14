@@ -732,6 +732,8 @@ databases and files:
 - Backend-neutral writer tests in `runtime/tests.rs` run against both backends:
   queue saturation, terminal capacity, shutdown drain, readiness, per-class
   failure tracking, and a fresh UUIDv7 `auditId` plus `nodeId` on every record.
+  A scripted backend checks that the writer records a batch's health changes,
+  including a recovery its commit triggered, before acknowledging its records.
   JSONL retention tests keep the state lock file and other non-rotated files.
 - `runtime/audit_sqlite/tests.rs` covers file and sidecar permissions, symlink
   refusal, migration from empty, unknown migrations, catalog-only open checks,

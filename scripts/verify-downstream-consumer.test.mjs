@@ -5,7 +5,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { inspectLocalToolchain } from "./verify-release-provenance.mjs";
+import { BROKER_LOG_FILTER, inspectLocalToolchain } from "./verify-release-provenance.mjs";
 import {
   ASSEMBLY_GUIDE, ASSEMBLY_GUIDE_SHARED_FILES, ASSEMBLY_PACKAGE, CANONICAL_PROVIDER_URL, CANONICAL_UPSTREAM_URL, CRATES_IO_SOURCE, FIXTURE_QUALIFICATION,
   GUIDE_PROVIDER_URL, GUIDE_SNIPPET_PACKAGE, PROVIDER_GUIDE, PROVIDER_PACKAGE, compiledSourceFiles, dependencyInfoFiles,
@@ -767,6 +767,102 @@ createServer((request, response) => { response.writeHead(503); response.end(); }
   await waitUntil(() => processGone(pid));
   await assert.rejects(fetch(`${controller}/unknown`), /fetch failed/);
   assert.ok(existsSync(join(evidence, "acceptance", "broker.log")));
+});
+
+// A stand-in assembled broker: `config` subcommands succeed as the real
+// validation does for these configurations, and `serve` runs `serve`, a
+// script body with `args` in scope.
+const standInBroker = (directory, serve) => {
+  const broker = join(directory, "stand-in-broker.mjs");
+  writeFileSync(broker, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+const args = process.argv.slice(2);
+const config = readFileSync(args[1], "utf8");
+if (args[2] === "config") {
+  if (config.includes("enable_fake_service = false")) {
+    process.stderr.write("- providers.conformance is a development backend\\n");
+    process.exit(3);
+  }
+  process.exit(0);
+}
+${serve}
+`);
+  chmodSync(broker, 0o755);
+  return broker;
+};
+
+const acceptanceRun = (directory, broker, env = sanitizedEnvironment(process.env).env) => {
+  const supervisor = new ProcessSupervisor({ graceMs: 2_000 });
+  const acceptance = runProcessAcceptance({ supervisor, binary: broker, cli: join(directory, "unused-cli"),
+    run: join(directory, "run"), evidence: join(directory, "evidence"), env, expectedStatus: {} });
+  return { supervisor, acceptance };
+};
+
+test("broker acceptance binds port 0 and reaches the address broker_listening reports", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const broker = standInBroker(directory, `
+if (args[4] !== "127.0.0.1:0") process.exit(9);
+const server = createServer((request, response) => {
+  response.writeHead(request.url === "/v1/readyz" ? 200 : 503);
+  response.end();
+});
+server.listen(0, "127.0.0.1", () => {
+  process.stdout.write(JSON.stringify({ event: "broker_starting", publicListen: args[4] }) + "\\n");
+  process.stdout.write(JSON.stringify({ event: "broker_listening", listener: "public", address: "127.0.0.1:" + server.address().port }) + "\\n");
+});
+process.on("SIGTERM", () => process.exit(0));
+`);
+  const { supervisor, acceptance } = acceptanceRun(directory, broker);
+  try {
+    // Readiness passed at the reported address; the next check fails there.
+    await assert.rejects(acceptance, /Process acceptance failed: healthz \(\{"status":503\}\)/);
+  } finally {
+    await supervisor.stopAll();
+  }
+});
+
+test("broker acceptance reads the listening address under an inherited warning-only filter", posixOnly, async (t) => {
+  const directory = temporary(t);
+  // Like the Broker, a warning-only RUST_LOG hides the INFO broker_listening event.
+  const broker = standInBroker(directory, `
+import { writeFileSync } from "node:fs";
+writeFileSync("broker-rust-log", process.env.RUST_LOG ?? "");
+const server = createServer((request, response) => {
+  response.writeHead(request.url === "/v1/readyz" ? 200 : 503);
+  response.end();
+});
+server.listen(0, "127.0.0.1", () => {
+  if (process.env.RUST_LOG !== "warn") {
+    process.stdout.write(JSON.stringify({ event: "broker_listening", listener: "public", address: "127.0.0.1:" + server.address().port }) + "\\n");
+  }
+});
+process.on("SIGTERM", () => process.exit(0));
+`);
+  const env = { ...sanitizedEnvironment(process.env).env, RUST_LOG: "warn" };
+  const { supervisor, acceptance } = acceptanceRun(directory, broker, env);
+  try {
+    await assert.rejects(acceptance, /Process acceptance failed: healthz \(\{"status":503\}\)/);
+    assert.equal(readFileSync(join(directory, "run", "broker-rust-log"), "utf8"), BROKER_LOG_FILTER);
+  } finally {
+    await supervisor.stopAll();
+  }
+});
+
+test("a broker that exits before reporting its listener fails acceptance at once", posixOnly, async (t) => {
+  const directory = temporary(t);
+  const broker = standInBroker(directory, `
+process.stderr.write(JSON.stringify({ event: "broker_start_failed", error: "Address already in use (os error 98)" }) + "\\n");
+process.exit(1);
+`);
+  const { supervisor, acceptance } = acceptanceRun(directory, broker);
+  const started = Date.now();
+  try {
+    await assert.rejects(acceptance, /The assembled broker exited before readiness with 1/);
+    assert.ok(Date.now() - started < 30_000, "early exit must not wait for the readiness deadline");
+  } finally {
+    await supervisor.stopAll();
+  }
 });
 
 // A leader that starts one descendant in its own process group and waits
