@@ -85,7 +85,7 @@ function McpSetupSection({ url, snippets: { clients, environment } }: { url: str
       </p>
       <div className="pt-mcp-item">
         <span className="pt-mcp-label">Server URL</span>
-        <CopyBlock text={url} label="Copy server URL" />
+        <CopyBlock wrap text={url} label="Copy server URL" />
       </div>
       <div className="pt-mcp-item">
         <div className="pt-mcp-head">
@@ -98,7 +98,7 @@ function McpSetupSection({ url, snippets: { clients, environment } }: { url: str
             options={(Object.keys(SYSTEMS) as System[]).map((value) => ({ value, label: SYSTEMS[value] }))}
           />
         </div>
-        <CopyBlock text={environment[system]} label={`Copy the ${SYSTEMS[system]} line`} />
+        <CopyBlock wrap text={environment[system]} label={`Copy the ${SYSTEMS[system]} line`} />
       </div>
       <div className="pt-mcp-item">
         <span className="pt-mcp-label">Your client</span>
@@ -110,15 +110,17 @@ function McpSetupSection({ url, snippets: { clients, environment } }: { url: str
               </a>
             </div>
           ) : (
-            <>
+            <div className="pt-mcp-item">
               <span className="pt-mcp-label">Command</span>
-              <CopyBlock text={client.command} label={`Copy the ${client.label} command`} />
-            </>
+              <CopyBlock wrap text={client.command} label={`Copy the ${client.label} command`} />
+            </div>
           )}
-          <span className="pt-mcp-label">
-            Or add it to <span className="wb-mono">{client.file}</span>
-          </span>
-          <CopyBlock multiline text={client.config} label={`Copy the ${client.label} config file`} />
+          <div className="pt-mcp-item">
+            <span className="pt-mcp-label">
+              Or add it to <span className="wb-mono">{client.file}</span>
+            </span>
+            <CopyBlock multiline wrap text={client.config} label={`Copy the ${client.label} config file`} />
+          </div>
         </Tabs>
       </div>
     </section>

@@ -245,31 +245,35 @@
   user-select: all;
 }
 
-/* Token created: connect an MCP client with the new token. */
+/* Token created: connect an MCP client with the new token. Groups (a label
+   and its value) are spaced apart more than a label from its value, so a
+   client's command or install button and its config file read as two
+   alternatives. */
 .pt-mcp {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--wb-space-4);
   min-width: 0;
-  padding-top: 14px;
+  padding-top: var(--wb-space-4);
   border-top: 1px solid var(--wb-border);
 }
 .pt-mcp-item,
 .pt-mcp-client {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--wb-space-2);
   min-width: 0;
 }
 .pt-mcp-client {
-  padding-top: 10px;
+  gap: var(--wb-space-5);
+  padding-top: var(--wb-space-3);
 }
 .pt-mcp-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--wb-space-2);
 }
 .pt-mcp-label {
   color: var(--wb-fg-2);

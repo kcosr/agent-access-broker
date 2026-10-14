@@ -1785,6 +1785,12 @@ test("local browser login supports administration, self-service credentials, tok
     await clients.getByRole("tab", { name: "Cursor", exact: true }).click();
     await expect(mcp.getByRole("link", { name: "Add to Cursor", exact: true })).toHaveAttribute("href", /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=agent_access&config=[^&]+$/);
     await expect(mcp.getByRole("tabpanel")).not.toContainText(rawToken);
+    // Snippets wrap instead of hiding text behind a horizontal scroll.
+    const overflowingSnippets = () => mcp.evaluate((section) => [...section.querySelectorAll("code, pre")].filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent));
+    for (const name of ["Pi", "OpenCode", "Claude Code", "Codex", "Cursor"]) {
+      await clients.getByRole("tab", { name, exact: true }).click();
+      expect(await overflowingSnippets(), name).toEqual([]);
+    }
     expect(await page.evaluate(() => localStorage.getItem("aab.portal.mcp-client"))).toBe("cursor");
     await expectNoHorizontalOverflow(page);
 
