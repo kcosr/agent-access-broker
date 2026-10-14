@@ -12,7 +12,7 @@ fn gitlab_service(
 
 #[path = "gitlab_smoke/provisioning.rs"]
 mod provisioning;
-use agent_access_provider::test_support::credential_token;
+use agent_access_provider::test_support::bearer_credential;
 
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
@@ -142,7 +142,7 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
     assert!(
         writes
             .iter()
-            .all(|entry| entry.token.as_deref() == Some("gitlab-service-token"))
+            .all(|entry| entry.credential == bearer_credential("gitlab-service-token"))
     );
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("project.upload"));
@@ -2305,13 +2305,13 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
                     | "create_merge_request_review_summary"
             )
         })
-        .map(|observation| observation.token.clone())
+        .map(|observation| observation.credential.clone())
         .collect::<Vec<_>>();
     assert!(!service_mutations.is_empty());
     assert!(
         service_mutations
             .iter()
-            .all(|token| token.as_deref() == Some("gitlab-service-token"))
+            .all(|credential| *credential == bearer_credential("gitlab-service-token"))
     );
 
     let audit = broker.audit().unwrap().text();
@@ -2476,7 +2476,7 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
                 "missing backend operation {operation}"
             );
             assert!(matching.iter().all(|observation| {
-                observation.token.as_deref() == Some("gitlab-per-user-token")
+                observation.credential == bearer_credential("gitlab-per-user-token")
             }));
         }
         let project_lookups = observations
@@ -2484,11 +2484,9 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
             .filter(|observation| observation.operation == "project")
             .collect::<Vec<_>>();
         assert!(!project_lookups.is_empty(), "missing GitLab project lookup");
-        assert!(
-            project_lookups.iter().all(|observation| {
-                observation.token.as_deref() == Some("gitlab-per-user-token")
-            })
-        );
+        assert!(project_lookups.iter().all(|observation| {
+            observation.credential == bearer_credential("gitlab-per-user-token")
+        }));
     }
 
     let audit = broker.audit().unwrap();
@@ -6603,11 +6601,9 @@ async fn cli_invokes_gitlab_per_user_collaboration_writes_against_stubbed_backen
                 .iter()
                 .any(|observation| observation.operation == "merge_request_reviewers")
         );
-        assert!(
-            reviewer_observations.iter().all(|observation| {
-                observation.token.as_deref() == Some("gitlab-per-user-token")
-            })
-        );
+        assert!(reviewer_observations.iter().all(|observation| {
+            observation.credential == bearer_credential("gitlab-per-user-token")
+        }));
     }
 
     let audit = broker.audit().unwrap().text();
@@ -6796,10 +6792,13 @@ struct ObservedJobList {
     request: GitlabJobListRequest,
 }
 
+/// One credential the stub backend received. GitLab credentials are bearer
+/// tokens and compare by material, so tests check which one arrived without
+/// reading it.
 #[derive(Clone)]
 struct CredentialObservation {
     operation: String,
-    token: Option<String>,
+    credential: agent_access_provider::ExecutionCredential,
 }
 
 struct StubGitlabBackend {
@@ -6914,7 +6913,7 @@ impl StubGitlabBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: Some(credential_token(credential).to_owned()),
+                credential: credential.clone(),
             });
     }
 }
@@ -7412,7 +7411,7 @@ impl GitlabBackend for StubGitlabBackend {
             } else {
                 *self.fork_execution_source_project_id.lock().unwrap()
             }
-        } else if credential_token(credential) == "gitlab-lookup-token" {
+        } else if *credential == bearer_credential("gitlab-lookup-token") {
             *self.fork_lookup_source_project_id.lock().unwrap()
         } else {
             *self.fork_execution_source_project_id.lock().unwrap()
@@ -10070,6 +10069,8 @@ fn assert_atomic_cli_error(label: &str, output: &std::process::Output, secret: &
     );
 }
 
+/// Asserts the operations the stub backend served and the bearer token each
+/// one received.
 fn assert_credential_observations(backend: &StubGitlabBackend, expected: &[(&str, &str)]) {
     let actual = backend
         .credential_observations
@@ -10079,13 +10080,13 @@ fn assert_credential_observations(backend: &StubGitlabBackend, expected: &[(&str
         .map(|observation| {
             (
                 observation.operation.clone(),
-                observation.token.clone().unwrap_or_default(),
+                observation.credential.clone(),
             )
         })
         .collect::<Vec<_>>();
     let expected = expected
         .iter()
-        .map(|(operation, token)| (operation.to_string(), token.to_string()))
+        .map(|(operation, token)| (operation.to_string(), bearer_credential(token)))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
 }

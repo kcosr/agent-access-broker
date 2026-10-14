@@ -8829,7 +8829,7 @@ use sqlite_support::sqlite_sidecar_paths;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{credential_token, credential_username};
+    use agent_access_provider::test_support::{basic_credential, bearer_credential};
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
@@ -13058,8 +13058,7 @@ PRAGMA foreign_keys = ON;
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
         assert_eq!(credential.kind().as_str(), "basic_api_token");
-        assert_eq!(credential_username(&credential), Some("alice@example.com"));
-        assert_eq!(credential_token(&credential), "pat");
+        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
         let verified = store
             .verify_user_credential(
                 &ring,
@@ -13248,7 +13247,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential_token(&credential), "new-pat");
+        assert_eq!(credential, basic_credential("alice@example.com", "new-pat"));
     }
 
     #[test]
@@ -13360,7 +13359,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential_token(&credential), "pat");
+        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
         let verified = store
             .mark_user_credential_verified_if_current(
                 &verification_candidate.target,
@@ -13671,7 +13670,10 @@ PRAGMA foreign_keys = ON;
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(credential_token(&old_candidate.credential), "old-pat");
+        assert_eq!(
+            old_candidate.credential,
+            basic_credential("alice@example.com", "old-pat")
+        );
         let verified = store
             .mark_user_credential_verified_if_current(
                 &old_candidate.target,
@@ -13744,7 +13746,10 @@ PRAGMA foreign_keys = ON;
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(credential_token(&current_candidate.credential), "new-pat");
+        assert_eq!(
+            current_candidate.credential,
+            basic_credential("alice@example.com", "new-pat")
+        );
         let current_verified = store
             .mark_user_credential_verified_if_current(
                 &current_candidate.target,

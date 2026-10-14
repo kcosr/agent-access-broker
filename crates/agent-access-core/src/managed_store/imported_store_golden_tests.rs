@@ -456,8 +456,7 @@ fn imported_secret_rows_from_baseline_decrypt_without_reentry() {
         )
         .unwrap();
     assert_eq!(credential.kind().as_str(), "bearer_token");
-    assert_eq!(credential_username(&credential), None);
-    assert_eq!(credential_token(&credential), token);
+    assert_eq!(credential, bearer_credential(token));
 }
 
 fn golden_hex(value: &str) -> Vec<u8> {
