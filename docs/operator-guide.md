@@ -62,7 +62,8 @@ at controlled ingress and restrict direct access to the loopback/backend port.
    separately, readable by the broker and writable only by deployment owners.
 2. Copy the [production sample](../agent-access-broker.production.sample.toml) to
    `/etc/agent-access-broker/config.toml`. Set the stable node ID, public HTTPS
-   browser origin, state paths, secret paths, and portal static directory. Set
+   browser origin, state paths (including the required
+   `[limits].upload_spool_dir`), secret paths, and portal static directory. Set
    `network.trusted_proxies` to the exact ingress peer addresses; the sample uses
    `127.0.0.1/32`. Ingress must strip client-supplied `Forwarded` and
    `X-Forwarded-For`, then set the verified client address. Keep direct access to
@@ -1216,9 +1217,11 @@ assets, configuration, and persisted schema. Use matching clients that consume
 3. Stop routing new agent work, drain/stop the broker, and deploy the matching
    binary and portal/client artifacts. One process must own the state set; this
    is not a shared-database rolling deployment.
-4. Validate the new configuration. For a supported managed-store forward
-   migration, temporarily set `auto_migrate = true` for startup. Reload never
-   migrates. Review startup migration output and authenticated `admin store status`.
+4. Validate the new configuration with the new executable's `config validate`,
+   which reports settings the release requires. For a supported managed-store
+   forward migration, temporarily set `auto_migrate = true` for startup. Reload
+   never migrates. Review startup migration output and authenticated
+   `admin store status`.
 5. Check liveness/readiness, admin/local login, release provenance, configured
    integrations, representative authorized reads and safe denial probes, and audit
    correlation. Test optional MCP/Git ingress separately if used.

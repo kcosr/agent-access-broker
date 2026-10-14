@@ -140,7 +140,7 @@ durability = "sync_data"
 max_http_body_bytes = 104857600 # 100 MiB for invocation bodies and streamed uploads
 request_body_timeout_ms = 300000 # five-minute total receive deadline
 streaming_idle_timeout_ms = 30000
-upload_spool_dir = "/var/lib/agent-access-broker/spool"
+upload_spool_dir = "/var/lib/agent-access-broker/spool" # required; broker-owned
 
 # Service invocation limits apply per principal and service. Changing defaults
 # does not grant access; principals still need explicit action/resource grants.

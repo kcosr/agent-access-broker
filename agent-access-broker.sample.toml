@@ -736,8 +736,10 @@ max_download_bytes = 104857600
 max_upstream_response_bytes = 536870912
 request_timeout_ms = 30000
 streaming_idle_timeout_ms = 30000
-# Use broker-owned disk-backed storage in production. `serve` startup and reload
-# admission lock this directory for the lifetime of the runtime generation.
+# Required; there is no default. Use broker-owned disk-backed storage in
+# production. A relative path resolves against the working directory. `serve`
+# startup and reload admission lock this directory for the lifetime of the
+# runtime generation.
 upload_spool_dir = "target/agent-access-upload-spool"
 upload_spool_max_bytes = 2147483648
 
