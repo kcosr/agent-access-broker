@@ -453,6 +453,13 @@ All notable changes to this project are documented in this file.
   `{"url": ...}` with `mcp.public_url` when the HTTP MCP endpoint is enabled and
   a `broker_tokens` identity source reads `Authorization: Bearer`, otherwise
   `null`. Auditors receive `null`.
+- After issuing an agent token, the portal's **Token created** dialog shows
+  **Connect an MCP client** when token options report an HTTP MCP endpoint: the
+  server URL, the line that sets `AGENT_ACCESS_TOKEN` (macOS/Linux or Windows
+  PowerShell), and a command (Cursor: an install link) and configuration file
+  for Pi, OpenCode, Claude Code, Codex and Cursor, with copy buttons. Client
+  snippets name the variable, never the token; the chosen client is remembered
+  in the browser.
 
 ### Changed
 

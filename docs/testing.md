@@ -654,7 +654,11 @@ follows later grants.
 Portal unit and Playwright coverage exercises self/admin issuance, action and
 resource selection, wildcard free-form exact values, typed repository selectors,
 immutable review/reveal, existing coarse-token display, unavailable-value
-warnings and restoration, and lifecycle orthogonality. Audit
+warnings and restoration, and lifecycle orthogonality. The portal fixture enables
+loopback HTTP MCP, so the reveal journeys also copy the MCP client setup and check
+that client snippets omit the token; unit tests cover each client's
+snippets and the Cursor install link, and host tests cover when token options
+report the endpoint. Audit
 assertions require canonical safe boundary metadata and forbid raw secrets.
 Deployment smoke covers one fine-grained token and one existing coarse token;
 no database migration or configuration change is expected.

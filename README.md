@@ -98,7 +98,8 @@ may finish. See the [security model](docs/security-model.md),
 
 Administrators manage accounts, resources, grants, credentials, and imported
 services in the portal. Users review their access and manage their own credentials
-and agent tokens; auditors investigate recorded activity.
+and agent tokens, with copy-ready HTTP MCP client setup for a new token; auditors
+investigate recorded activity.
 
 <table>
   <tr>

@@ -245,6 +245,41 @@
   user-select: all;
 }
 
+/* Token created: connect an MCP client with the new token. */
+.pt-mcp {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--wb-border);
+}
+.pt-mcp-item,
+.pt-mcp-client {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pt-mcp-client {
+  padding-top: 10px;
+}
+.pt-mcp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pt-mcp-label {
+  color: var(--wb-fg-2);
+  font-size: var(--wb-fs-12-5);
+  font-weight: var(--wb-fw-strong);
+}
+.pt-mcp-label .wb-mono {
+  font-weight: var(--wb-fw-book);
+}
+
 /* ---------- grant editor */
 .pt-editor {
   display: grid;

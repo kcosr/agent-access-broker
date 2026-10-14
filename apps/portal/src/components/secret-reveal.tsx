@@ -1,5 +1,6 @@
 // One-time secret dialogs: a newly issued token or a generated password. They
 // close only through their buttons so a stray Esc or click cannot lose the secret.
+// `children` follow the secret, such as how to use it.
 import { useState, type ReactNode } from "react";
 import { Banner, Button, Modal } from "../workbench";
 
@@ -8,12 +9,17 @@ export function SecretRevealModal({
   secretLabel,
   secret,
   details,
+  size,
+  children,
   onClose
 }: {
   title: string;
   secretLabel: string;
   secret: string;
   details?: ReactNode;
+  /** Wider ("lg") for long content after the secret. */
+  size?: "md" | "lg";
+  children?: ReactNode;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -21,6 +27,7 @@ export function SecretRevealModal({
     <Modal
       open
       title={title}
+      size={size}
       onClose={onClose}
       dismissible={false}
       closeOnScrim={false}
@@ -48,6 +55,7 @@ export function SecretRevealModal({
         <pre className="wb-code pt-reveal" aria-label={secretLabel}>
           {secret}
         </pre>
+        {children}
       </div>
     </Modal>
   );

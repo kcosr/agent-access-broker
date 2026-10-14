@@ -171,6 +171,14 @@ action, and resource/group restrictions as a ceiling. Choose the smallest useful
 boundary for dedicated automation. The raw token is shown once; save it to the
 agent's protected secret location before closing the dialog.
 
+When the deployment offers [remote HTTP MCP](mcp.md#http-endpoint) with Bearer
+tokens, the **Token created** dialog also shows **Connect an MCP client**: the
+server URL, a line that sets `AGENT_ACCESS_TOKEN` to the new token (macOS/Linux
+or Windows PowerShell), and a command and configuration file for Pi, OpenCode,
+Claude Code, Codex, or Cursor. The client snippets name the variable, never the
+token; the portal remembers the chosen client in the browser. Management tokens
+have no MCP setup.
+
 Token issuance requires an effective invocation grant. It never creates access.
 The lifetime must be one of the choices configured by the operator. A nonexpiring
 token is available only if the operator explicitly permits it.
@@ -247,8 +255,9 @@ agent-access --config ~/.config/agent-access/agent.toml mcp serve
 
 Use `mcp serve --service jira` for one service. For authenticated remote HTTP MCP,
 use your administrator's `/mcp` or `/mcp/<canonical-service-id>` URL and invocation
-token. A service-specific connection changes tool presentation; it does not narrow
-the token. [MCP setup](mcp.md) documents complete client examples and transfers.
+token; the portal shows `/mcp` client setup when it issues the token. A
+service-specific connection changes tool presentation; it does not narrow the
+token. [MCP setup](mcp.md) documents complete client examples and transfers.
 
 Use the broker base URL for your intended ingress. There is no CLI flag to assert
 `X-Agent-Access-Context`; protected context/identity headers require an approved
