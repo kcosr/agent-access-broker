@@ -279,14 +279,30 @@ Confluence credential for both pre-authorization metadata lookup and any
 provider-side execution-time confirmation.
 
 Confluence draft grants require `[broker_tokens].hash_key_ref` to resolve to a
-valid 32-byte base64url signing key. Draft handles are stable HMAC tokens with no
-TTL, signed under that key scoped to the `confluence` service, so no other
-backend's tokens verify as Confluence handles. They bind service, content type, content ID, space key, space ID, tenant
-host, origin (`new` or `staged`), credential mode, and page-draft parent
-placement. Per-user handles also bind the caller principal; service-mode handles
-intentionally do not bind a principal so a service-mode draft can be handed off
-within policy. Page draft view, update, publish, verify, discard, and attachment
-operations re-read the draft and reject placement drift from the bound parent.
+valid 32-byte base64url signing key. A `draftHandle` (prefix
+`aab_confluence_draft_v3_`) is a durable broker continuation with no expiry,
+signed only with that key scoped to the `confluence` service, so it survives
+reloads and restarts and no other backend's tokens verify as Confluence handles.
+Without the key, minting or presenting a handle fails explicitly with
+`upstream_protocol_failed` ("Confluence draft actions require
+broker_tokens.hash_key_ref").
+
+A handle carries the draft's space key, space ID, origin (`new` or `staged`),
+staged base version, and page-draft parent placement. It is bound to the
+`confluence` service, the execution context it was issued in, the tenant host,
+and the content type and ID the action names; any draft action of that content
+accepts it. Its owner travels inside it as a keyed commitment: a handle minted
+in per-user mode belongs to that principal in per-user mode, while a service-mode
+handle intentionally belongs to no principal, so a service-mode draft can be
+handed off to any principal admitted in service mode within policy. Before
+policy, scope resolution verifies the handle, accepts it only when the caller
+could own it, and authorizes its space; after admission the handle is opened
+again and must match the admitted credential mode and principal. Any other
+context, tenant, content, owner, key, or handle version is rejected with
+`invalid_draft_handle`. Handles from earlier versions are not accepted; create
+or stage the draft again. Page draft view, update, publish, verify, discard, and
+attachment operations re-read the draft and reject placement drift from the
+bound parent.
 
 `basic_api_token` credentials use the tenant bases
 (`https://<tenant_host>/wiki/rest/api/` and, for blog metadata/writes/listing,
@@ -354,7 +370,8 @@ prove attachment→page membership after authorization and before streaming byte
 ## `search` and CQL
 
 The `search` input mirrors Jira's: a `query` of `{ type: "cql" | "text", value }`,
-an optional `spaces` array (min 1), `maxResults`, and `nextPageToken`. Raw CQL is
+an optional `spaces` array (min 1), `maxResults`, and a `nextPageToken`
+continuation (see [Search pagination](#search-pagination)). Raw CQL is
 parsed into a broker-owned AST and re-emitted canonically. Omit `spaces` to search
 all effective broker-authorized spaces after grant, token, and execution-context
 restrictions; supply it only to narrow that boundary. Empty or whitespace-only
@@ -468,6 +485,41 @@ without explicit parentheses.
 Live upstream compatibility evidence for the broker-emitted Confluence CQL
 subset is collected by the read-only Confluence CQL conformance smoke described
 in `docs/testing.md`.
+
+### Search pagination
+
+A `search` or `blog.search` result's `nextPageToken` is an opaque broker-signed
+continuation, not Confluence's own cursor. To fetch the next page, pass it back
+unchanged as `nextPageToken` to the same action with the same search:
+
+- the same `query` type and canonical CQL (equivalent spellings are the same
+  query);
+- the same `spaces`, compared as a set;
+- the same effective `maxResults`; an omitted value equals the configured
+  default, and values above `providers.confluence.search.max_results` equal the
+  cap.
+
+The continuation is also bound to the execution context, the principal and
+whether it authenticated, the credential mode, the selected credential's type
+(which chooses the tenant or gateway route), and the Confluence configuration
+the cursor depends on: `tenant_host`, `cloud_id`, and whether
+`api.atlassian.com` is allowed. Any change rejects the token with
+`input_invalid`. Continuations expire 15 minutes after they are issued. They are
+signed with a key generated for each broker runtime generation, so a
+configuration reload or restart also invalidates them. Confluence may also
+expire its own cursor.
+
+A continuation carries no authority and does not bind the effective space
+boundary. Every page is authorized again under current policy, its CQL is
+composed under the current boundary, and returned content is checked against
+it, so a grant change applies from the next page. When that change alters the
+composed CQL, the continuation is rejected with `input_invalid` ("the effective
+Confluence space scope changed since nextPageToken was issued; repeat the search
+without nextPageToken") before Confluence is called; Confluence's cursor is
+never sent with a different query. The broker adds no cursor length limit of its
+own: Confluence's cursor arrives in a response bounded by
+`limits.max_upstream_response_bytes`, and a continuation that would not fit that
+bound fails with `upstream_protocol_failed`, never truncated.
 
 ## Normalized read content and whole-result Markdown
 
@@ -720,8 +772,8 @@ Blog native format support is controlled by
 `providers.confluence.content.blog_formats`. Storage is a non-empty UTF-8
 string; when enabled it also backs normalized Markdown and plain-text writes.
 
-`blog.search` has the same input shape and authorization planning as page
-search, but it composes `type = blogpost` and rejects page hierarchy predicates
+`blog.search` has the same input shape, authorization planning, and
+[pagination](#search-pagination) as page search, but it composes `type = blogpost` and rejects page hierarchy predicates
 (`id`, `content.id`, `ancestor`, and `parent`). It uses the v1
 `content/search` endpoint with `expand=space,version,history`, an optional
 cursor, and validates that every result is a current blog post in an authorized
@@ -805,10 +857,13 @@ If the current comment version differs from `baseVersion`, the broker returns
 `{ commentId, status: "deleted" }` after Confluence returns a successful
 no-content response.
 
-Comment list pagination uses signed `nextPageToken` values. Tokens are short
-lived and are bound to the action, comment kind, container type and ID, parent
-comment for reply lists, requested filters, authorized space, principal,
-credential mode, and upstream cursor. Upstream next links are accepted only when
+Comment list pagination uses opaque broker-signed `nextPageToken`
+continuations carrying Confluence's cursor. Tokens expire 15 minutes after they
+are issued and are bound to the action, comment kind, container type and ID,
+parent comment for reply lists, requested filters and effective `maxResults`,
+authorized space, execution context, principal and whether it authenticated,
+credential mode, credential type and the Confluence route configuration, like
+[attachment list tokens](#attachments). Upstream next links are accepted only when
 they remain on the same Confluence v2 comment collection and contain no
 unsupported query parameters. Pagination may come from `_links.next`, `next`, or
 an RFC `Link` header with `rel="next"`; multiple next links, changed resources,
@@ -835,19 +890,30 @@ then proves attachment→page membership, validates metadata, and streams the
 bounded content with up to 5 allowlisted redirects and same-origin-only auth.
 
 **`attachment.list`** is cursor-paginated. Its input accepts `{ pageId }` or
-`{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is a
-broker-signed opaque token, `base64url(payload).hmac`, binding
-`{ v, service, action, page_id, space, principal, credential_mode, next_position,
-issued_at, expires_at }` with a 15-minute TTL. When `broker_tokens.hash_key_ref`
-is configured, the token is signed with that stable key and validates across
-restarts and instances; otherwise the broker signs with a process-local random key
-that cannot validate after a restart or on a different instance.
+`{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is
+an opaque broker-signed continuation carrying Confluence's next position. It
+expires 15 minutes after it is issued and is bound to the action, the page ID
+and its space, the effective `maxResults` (an omitted value equals the
+configured default; larger values equal the cap), the execution context, the principal and whether it
+authenticated, the credential mode, the selected credential's type (tenant or
+gateway route), and the Confluence route configuration (`tenant_host`,
+`cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
+tokens bind the blog ID, space key, and space ID instead of the page. When
+`broker_tokens.hash_key_ref` is configured, list tokens are signed with that
+stable key and validate across restarts and instances whose clocks differ by up
+to a minute; otherwise the broker signs with a key generated for each runtime
+generation that cannot validate after a reload, a restart, or on a different
+instance. Any other binding, an expired token, or an earlier token version is
+rejected with `input_invalid`; every page is authorized again. Confluence
+positions are bounded only by `limits.max_upstream_response_bytes`, as for
+search.
 
-Draft attachment list pagination tokens use the same 15-minute continuation
-model but bind the signed draft handle facts, the draft action, content type,
-space, parent-page placement, credential mode, optional per-user principal, and
-upstream `next_position`. They are valid only for the same draft handle and
-command.
+Draft attachment list pagination tokens use the same continuation model but bind
+the draft handle facts (content type and ID, space key and ID, origin, base
+version, and parent-page placement) instead of the page, with the effective
+`maxResults`. They follow the
+handle's ownership: a service-mode listing may be continued by any principal
+admitted in service mode, while a per-user listing belongs to its principal.
 
 ## `verify`
 

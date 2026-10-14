@@ -212,7 +212,12 @@ Jira issue view/search include timestamps, small user summaries, priority, and
 labels; Confluence page/blog/draft results include created/updated actor and
 time fields; GitLab issue and merge-request results include timestamps, users,
 labels, milestone, and merge-request draft state. Jira and Confluence search
-results still omit large body fields.
+results still omit large body fields. Continue a Jira or Confluence search, or a
+Confluence attachment or comment list, by passing the returned opaque
+`nextPageToken` unchanged as the `--next-page-token` of the same action with the same
+query, projects or spaces, and `maxResults`. A rejected token (expired after 15
+minutes, invalidated by a Broker reload, or after a grant change rescoped the
+search) means repeating the request without it.
 
 ## Jira
 
@@ -352,6 +357,10 @@ agent-access confluence page draft view 123456789 --draft-handle '<draftHandle>'
 agent-access confluence page draft publish 123456789 --draft-handle '<draftHandle>' --body-format storage
 agent-access confluence page draft discard 123456789 --draft-handle '<draftHandle>'
 ```
+
+Pass `draftHandle` exactly as returned. It does not expire, but it works only in
+the execution context that created it, and a handle created with a per-user
+credential works only for that user.
 
 All twenty Confluence current page/blog, draft, and comment writes use exactly
 one of `--content` or `--content-file` plus required `--content-format`.

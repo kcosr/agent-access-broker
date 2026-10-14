@@ -1,5 +1,6 @@
 //! The Confluence backend seam, its wire types, request bodies, and the HTTP implementation.
 use super::*;
+use agent_access_atlassian::{AtlassianClients, AtlassianProduct, AtlassianRoutes};
 use agent_access_provider::host::UpstreamClientFactory;
 
 #[async_trait]
@@ -947,10 +948,18 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
     }
 }
 
+/// Confluence's REST API on the tenant host or the Atlassian gateway; v2
+/// paths derive from it.
+pub(crate) const CONFLUENCE_PRODUCT: AtlassianProduct = AtlassianProduct {
+    provider: "confluence",
+    name: "Confluence",
+    api_path: "wiki/rest/api/",
+    status_reasons: &[(409, ReasonCode::VersionConflict)],
+};
+
 #[derive(Clone)]
 pub(crate) struct HttpConfluenceBackend {
-    pub(crate) tenant_clients: ConfluenceHttpClients,
-    pub(crate) gateway_clients: Option<ConfluenceHttpClients>,
+    pub(crate) routes: AtlassianRoutes,
     pub(crate) config: ConfluenceProviderConfig,
     pub(crate) limits: ProviderLimits,
 }
@@ -967,34 +976,8 @@ impl HttpConfluenceBackend {
         limits: ProviderLimits,
         clients: &dyn UpstreamClientFactory,
     ) -> Result<Self, ProviderBuildError> {
-        let tenant_base = Url::parse(&format!("https://{}/wiki/rest/api/", config.tenant_host))
-            .map_err(|error| {
-                ProviderBuildError::invalid(format!(
-                    "providers.confluence.tenant_host is invalid: {error}"
-                ))
-            })?;
-        let tenant_clients = ConfluenceHttpClients::new(
-            "providers.confluence.egress_proxy",
-            tenant_base,
-            clients,
-            &config,
-        )?;
-        let gateway_clients = if config.cloud_id.is_some()
-            && agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts)
-        {
-            Some(ConfluenceHttpClients::new(
-                "providers.confluence.egress_proxy",
-                confluence_gateway_api_base(&config)
-                    .map_err(|error| ProviderBuildError::invalid(error.to_string()))?,
-                clients,
-                &config,
-            )?)
-        } else {
-            None
-        };
         Ok(Self {
-            tenant_clients,
-            gateway_clients,
+            routes: AtlassianRoutes::new(CONFLUENCE_PRODUCT, &config.site(), clients)?,
             config,
             limits,
         })
@@ -1003,17 +986,10 @@ impl HttpConfluenceBackend {
     pub(crate) fn client_for(
         &self,
         credential: &ExecutionCredential,
-    ) -> Result<&ConfluenceHttpClients, ConfluenceBackendError> {
-        if credential.kind() == StaticCredentialKind::BearerToken {
-            self.gateway_clients.as_ref().ok_or_else(|| {
-                ConfluenceBackendError::Protocol(
-                    "bearer Confluence credentials require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
-                        .to_string(),
-                )
-            })
-        } else {
-            Ok(&self.tenant_clients)
-        }
+    ) -> Result<&AtlassianClients, ConfluenceBackendError> {
+        self.routes
+            .for_credential(credential)
+            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))
     }
 
     /// Clients for one API base from the test host, routed through the
@@ -1025,16 +1001,15 @@ impl HttpConfluenceBackend {
         api_base_override: Url,
     ) -> Self {
         let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
-        let clients = ConfluenceHttpClients::new(
-            "providers.confluence.egress_proxy",
-            api_base_override,
-            &host,
-            &config,
-        )
-        .expect("Confluence HTTP client configuration is valid");
+        let clients =
+            AtlassianClients::new(CONFLUENCE_PRODUCT, &config.site(), api_base_override, &host)
+                .expect("Confluence HTTP client configuration is valid");
         Self {
-            tenant_clients: clients.clone(),
-            gateway_clients: Some(clients),
+            routes: AtlassianRoutes::from_clients(
+                CONFLUENCE_PRODUCT,
+                clients.clone(),
+                Some(clients),
+            ),
             config,
             limits,
         }
@@ -1069,66 +1044,6 @@ impl HttpConfluenceBackend {
         base.set_query(None);
         Ok(base)
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct ConfluenceHttpClients {
-    pub(crate) api_base: Url,
-    pub(crate) client: UpstreamClient,
-    pub(crate) stream_client: UpstreamClient,
-}
-
-impl ConfluenceHttpClients {
-    pub(crate) fn new(
-        label: &str,
-        api_base: Url,
-        clients: &dyn UpstreamClientFactory,
-        config: &ConfluenceProviderConfig,
-    ) -> Result<Self, ProviderBuildError> {
-        let client = |profile| {
-            UpstreamClient::build(
-                UpstreamClientSpec::new(
-                    label,
-                    "confluence",
-                    &api_base,
-                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    &config.allowed_upstream_hosts,
-                    profile,
-                )
-                .with_status_reasons(&[(409, ReasonCode::VersionConflict)]),
-                clients,
-            )
-        };
-        Ok(Self {
-            client: client(ClientProfile::Request)?,
-            stream_client: client(ClientProfile::Stream)?,
-            api_base,
-        })
-    }
-}
-
-pub(crate) fn confluence_gateway_api_base(
-    config: &ConfluenceProviderConfig,
-) -> Result<Url, ConfluenceBackendError> {
-    if !agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts) {
-        return Err(ConfluenceBackendError::Protocol(
-            "bearer Confluence credentials require api.atlassian.com in allowed_upstream_hosts"
-                .to_string(),
-        ));
-    }
-    let cloud_id = config
-        .cloud_id
-        .as_deref()
-        .ok_or_else(|| {
-            ConfluenceBackendError::Protocol(
-                "bearer Confluence credentials require providers.confluence.cloud_id".to_string(),
-            )
-        })
-        .and_then(validated_cloud_id)?;
-    Url::parse(&format!(
-        "https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/"
-    ))
-    .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))
 }
 
 #[cfg(test)]
@@ -3816,12 +3731,6 @@ pub(crate) fn validate_confluence_body_response(
 
 pub(crate) fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
-}
-
-pub(crate) fn validated_cloud_id(value: &str) -> Result<String, ConfluenceBackendError> {
-    Uuid::parse_str(value)
-        .map(|uuid| uuid.to_string())
-        .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))
 }
 
 pub(crate) fn ensure_url_allowed(

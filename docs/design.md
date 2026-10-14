@@ -157,7 +157,9 @@ also includes a same-origin browser portal frontend:
   contract; broker acceptance tests register it to prove a backend needs no
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
-  backends: Atlassian gateway credential rules and request authorization.
+  backends: Atlassian gateway credential rules, request authorization, the
+  tenant/gateway client routes selected by credential type, and the route
+  fingerprint their relayed continuations bind.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the
@@ -376,13 +378,13 @@ on redirect targets.
 
 The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
-resumable cursor, page token or handle. CloudBees CI log cursors, GitLab REST
-page tokens, and Gmail and Jira search page tokens use it; other native
-providers keep their own token handling, which is described in each provider's
-documentation. A provider that uses the envelope declares each token family
-once: its service and purpose, a version, an explicit payload cap (a family
-relaying an upstream token may instead derive it at construction from a
-configured limit), an optional expiry, and a signing lifetime:
+resumable cursor, page token or handle. Every native provider that returns such
+a token uses it: CloudBees CI log cursors, GitLab REST page tokens, Gmail and
+Jira search page tokens, and Confluence search cursors, list tokens and draft
+handles. A provider declares each token family once: its service and purpose, a
+version, an explicit payload cap (a family relaying an upstream token may
+instead derive it at construction from a configured limit), an optional expiry,
+and a signing lifetime:
 
 - **generation**: a key generated with the provider instance, so a reload or
   restart invalidates the tokens even when a stable key is configured;
@@ -407,6 +409,23 @@ or token is an error, never truncated. The effective grant boundary is not
 bound: the host authorizes every continuation under current policy and the
 provider re-applies its containment and result checks. Each provider's
 documentation states its families' bindings and lifetimes.
+
+A family that relays an upstream service's own page token seals it as text,
+optionally with a keyed commitment to the upstream query the provider composed
+under current authorization; when a grant change recomposes that query, the
+token is rejected as belonging to a different query instead of being sent
+upstream with the new one. Such a family may size its tokens from the
+provider's response limit instead of a declared cap, since the upstream token
+arrives in a bounded upstream response and the continuation leaves in a
+bounded result.
+
+A family whose tokens are read during scope resolution, before the host admits
+a credential mode (Confluence draft handles), binds only what scope resolution
+knows: service, action or handle scope, execution context, configuration and
+the provider's fields. Its owner travels in the token as a keyed ownership
+commitment: scope resolution accepts the token only when the current principal
+could own it, and the provider opens it again after admission, when the
+commitment must match the admitted credential mode and principal.
 
 ### Assembly identity
 
@@ -615,9 +634,10 @@ existence, ownership of a particular object, or an authorization outcome.
   support `before`, `after`, and `append` placement, and verify the parent and
   direct-child order by readback. Create actions resolve
   the target space directly from inputs. Update actions are optimistic-concurrency.
-  Attachment and comment list actions are cursor-paginated with broker-signed
-  HMAC continuation tokens. Twenty current page/blog, draft, and comment
-  mutations use canonical `content` plus explicit `contentFormat`. Markdown and
+  Search, blog search, attachment and comment list actions are cursor-paginated
+  with broker-signed continuation tokens that relay Confluence's cursor. Twenty
+  current page/blog, draft, and comment mutations use canonical `content` plus
+  explicit `contentFormat`. Markdown and
   plain text are converted to constrained storage HTML; native storage remains
   a string, and current page create/update also retain native
   `atlas_doc_format` JSON when enabled. Twenty-six Confluence actions whose

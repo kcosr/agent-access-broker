@@ -1,5 +1,6 @@
 //! The Jira backend seam, its wire types, and the HTTP implementation.
 use super::*;
+use agent_access_atlassian::{AtlassianClients, AtlassianProduct, AtlassianRoutes};
 use agent_access_provider::host::UpstreamClientFactory;
 
 #[cfg(test)]
@@ -685,10 +686,17 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
     }
 }
 
+/// Jira's REST API v3 on the tenant host or the Atlassian gateway.
+pub(crate) const JIRA_PRODUCT: AtlassianProduct = AtlassianProduct {
+    provider: "jira",
+    name: "Jira",
+    api_path: "rest/api/3/",
+    status_reasons: &[],
+};
+
 #[derive(Clone)]
 pub(crate) struct HttpJiraBackend {
-    pub(crate) tenant_clients: JiraHttpClients,
-    pub(crate) gateway_clients: Option<JiraHttpClients>,
+    pub(crate) routes: AtlassianRoutes,
     pub(crate) config: JiraProviderConfig,
     pub(crate) limits: ProviderLimits,
 }
@@ -705,30 +713,8 @@ impl HttpJiraBackend {
         limits: ProviderLimits,
         clients: &dyn UpstreamClientFactory,
     ) -> Result<Self, ProviderBuildError> {
-        let tenant_base = Url::parse(&format!("https://{}/rest/api/3/", config.tenant_host))
-            .map_err(|error| {
-                ProviderBuildError::invalid(format!(
-                    "providers.jira.tenant_host is invalid: {error}"
-                ))
-            })?;
-        let tenant_clients =
-            JiraHttpClients::new("providers.jira.egress_proxy", tenant_base, clients, &config)?;
-        let gateway_clients = if config.cloud_id.is_some()
-            && agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts)
-        {
-            Some(JiraHttpClients::new(
-                "providers.jira.egress_proxy",
-                jira_gateway_api_base(&config)
-                    .map_err(|error| ProviderBuildError::invalid(error.to_string()))?,
-                clients,
-                &config,
-            )?)
-        } else {
-            None
-        };
         Ok(Self {
-            tenant_clients,
-            gateway_clients,
+            routes: AtlassianRoutes::new(JIRA_PRODUCT, &config.site(), clients)?,
             config,
             limits,
         })
@@ -737,17 +723,10 @@ impl HttpJiraBackend {
     pub(crate) fn client_for(
         &self,
         credential: &ExecutionCredential,
-    ) -> Result<&JiraHttpClients, JiraBackendError> {
-        if credential.kind() == StaticCredentialKind::BearerToken {
-            self.gateway_clients.as_ref().ok_or_else(|| {
-                JiraBackendError::Protocol(
-                    "bearer Jira credentials require providers.jira.cloud_id and api.atlassian.com in allowed_upstream_hosts"
-                        .to_string(),
-                )
-            })
-        } else {
-            Ok(&self.tenant_clients)
-        }
+    ) -> Result<&AtlassianClients, JiraBackendError> {
+        self.routes
+            .for_credential(credential)
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))
     }
 
     /// Clients for one API base from the test host, routed through the
@@ -759,16 +738,10 @@ impl HttpJiraBackend {
         api_base_override: Url,
     ) -> Self {
         let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
-        let clients = JiraHttpClients::new(
-            "providers.jira.egress_proxy",
-            api_base_override,
-            &host,
-            &config,
-        )
-        .expect("Jira HTTP client configuration is valid");
+        let clients = AtlassianClients::new(JIRA_PRODUCT, &config.site(), api_base_override, &host)
+            .expect("Jira HTTP client configuration is valid");
         Self {
-            tenant_clients: clients.clone(),
-            gateway_clients: Some(clients),
+            routes: AtlassianRoutes::from_clients(JIRA_PRODUCT, clients.clone(), Some(clients)),
             config,
             limits,
         }
@@ -780,63 +753,6 @@ impl HttpJiraBackend {
     ) -> Result<Url, JiraBackendError> {
         Ok(self.client_for(credential)?.api_base.clone())
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct JiraHttpClients {
-    pub(crate) api_base: Url,
-    pub(crate) client: UpstreamClient,
-    pub(crate) stream_client: UpstreamClient,
-}
-
-impl JiraHttpClients {
-    pub(crate) fn new(
-        label: &str,
-        api_base: Url,
-        clients: &dyn UpstreamClientFactory,
-        config: &JiraProviderConfig,
-    ) -> Result<Self, ProviderBuildError> {
-        let client = |profile| {
-            UpstreamClient::build(
-                UpstreamClientSpec::new(
-                    label,
-                    "jira",
-                    &api_base,
-                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
-                    &config.allowed_upstream_hosts,
-                    profile,
-                ),
-                clients,
-            )
-        };
-        Ok(Self {
-            client: client(ClientProfile::Request)?,
-            stream_client: client(ClientProfile::Stream)?,
-            api_base,
-        })
-    }
-}
-
-pub(crate) fn jira_gateway_api_base(config: &JiraProviderConfig) -> Result<Url, JiraBackendError> {
-    if !agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts) {
-        return Err(JiraBackendError::Protocol(
-            "bearer Jira credentials require api.atlassian.com in allowed_upstream_hosts"
-                .to_string(),
-        ));
-    }
-    let cloud_id = config
-        .cloud_id
-        .as_deref()
-        .ok_or_else(|| {
-            JiraBackendError::Protocol(
-                "bearer Jira credentials require providers.jira.cloud_id".to_string(),
-            )
-        })
-        .and_then(validated_cloud_id)?;
-    Url::parse(&format!(
-        "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/"
-    ))
-    .map_err(|error| JiraBackendError::Protocol(error.to_string()))
 }
 
 #[cfg(test)]
@@ -2179,12 +2095,6 @@ pub(crate) fn validate_jira_body_response(
 
 pub(crate) fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
-}
-
-pub(crate) fn validated_cloud_id(value: &str) -> Result<String, JiraBackendError> {
-    Uuid::parse_str(value)
-        .map(|uuid| uuid.to_string())
-        .map_err(|error| JiraBackendError::Protocol(error.to_string()))
 }
 
 pub(crate) fn issue_from_value(value: Value) -> Result<JiraIssue, JiraBackendError> {

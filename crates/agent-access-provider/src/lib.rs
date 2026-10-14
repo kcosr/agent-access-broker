@@ -17,8 +17,8 @@
 //!   [`ProviderInvocation`]s with a [`ProviderResult`] or a [`ProviderError`].
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
-//!   allowlists, correlation ([`InvocationScope`]), upstream trace events,
-//!   signing ([`OpaqueTokenSigner`]) and continuation envelopes. An OAuth
+//!   allowlists, correlation ([`InvocationScope`]), upstream trace events
+//!   and signed continuation envelopes ([`ContinuationSigner`]). An OAuth
 //!   companion implements [`OAuthDialect`] and declares an
 //!   [`OAuthDialectRegistration`]. Every registration records its declaring
 //!   package with [`module_metadata!`].
@@ -221,8 +221,9 @@ pub use config::{
     validate_upstream_allowlist, validate_upstream_base_url,
 };
 pub use continuation::{
-    ContinuationBinding, ContinuationError, ContinuationFamily, ContinuationLifetime,
-    ContinuationOwner, ContinuationSigner,
+    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFamily,
+    ContinuationLifetime, ContinuationOwner, ContinuationSigner, ContinuationStage,
+    ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
 };
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,
@@ -274,7 +275,7 @@ pub use result::{
     ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
-pub use signing::{OpaqueTokenSigner, SigningError, StableSigningKey};
+pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{

@@ -826,6 +826,7 @@ pub agent_access_provider::ContinuationError::SigningUnavailable
 pub agent_access_provider::ContinuationError::TokenTooLarge
 pub agent_access_provider::ContinuationError::TokenTooLarge::limit: usize
 pub agent_access_provider::ContinuationError::UnsupportedVersion
+pub agent_access_provider::ContinuationError::UpstreamQueryChanged
 impl agent_access_provider::ContinuationError
 pub const fn agent_access_provider::ContinuationError::is_token_rejection(self) -> bool
 impl core::clone::Clone for agent_access_provider::ContinuationError
@@ -1251,25 +1252,6 @@ impl core::marker::Unpin for agent_access_provider::OAuthTokenEncoding
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenEncoding
-#[non_exhaustive] pub enum agent_access_provider::OpaqueTokenSigner
-pub agent_access_provider::OpaqueTokenSigner::ProcessLocal(alloc::sync::Arc<[u8; 32]>)
-pub agent_access_provider::OpaqueTokenSigner::Stable(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>)
-impl agent_access_provider::OpaqueTokenSigner
-pub fn agent_access_provider::OpaqueTokenSigner::is_durable(&self) -> bool
-pub fn agent_access_provider::OpaqueTokenSigner::new(core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> Self
-pub fn agent_access_provider::OpaqueTokenSigner::sign(&self, &[u8], &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::sign_durable(&self, &[u8], &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::verify(&self, &[u8], &[u8], &str) -> core::result::Result<bool, agent_access_provider::SigningError>
-pub fn agent_access_provider::OpaqueTokenSigner::verify_durable(&self, &[u8], &[u8], &str) -> core::result::Result<bool, agent_access_provider::SigningError>
-impl core::clone::Clone for agent_access_provider::OpaqueTokenSigner
-pub fn agent_access_provider::OpaqueTokenSigner::clone(&self) -> agent_access_provider::OpaqueTokenSigner
-impl core::marker::Freeze for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Send for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Sync for agent_access_provider::OpaqueTokenSigner
-impl core::marker::Unpin for agent_access_provider::OpaqueTokenSigner
-impl core::marker::UnsafeUnpin for agent_access_provider::OpaqueTokenSigner
-impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OpaqueTokenSigner
-impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::OpaqueTokenSigner
 pub enum agent_access_provider::ProviderFailureStatus
 pub agent_access_provider::ProviderFailureStatus::BadGateway
 pub agent_access_provider::ProviderFailureStatus::BadRequest
@@ -1809,6 +1791,17 @@ impl core::marker::Unpin for agent_access_provider::ActionDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::ActionDescriptor
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ActionDescriptor
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionDescriptor
+pub struct agent_access_provider::AdmissionStage
+impl agent_access_provider::ContinuationStage for agent_access_provider::AdmissionStage
+impl core::clone::Clone for agent_access_provider::AdmissionStage
+pub fn agent_access_provider::AdmissionStage::clone(&self) -> agent_access_provider::AdmissionStage
+impl core::marker::Freeze for agent_access_provider::AdmissionStage
+impl core::marker::Send for agent_access_provider::AdmissionStage
+impl core::marker::Sync for agent_access_provider::AdmissionStage
+impl core::marker::Unpin for agent_access_provider::AdmissionStage
+impl core::marker::UnsafeUnpin for agent_access_provider::AdmissionStage
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AdmissionStage
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AdmissionStage
 pub struct agent_access_provider::AdmittedContext(_)
 impl agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedContext::action(&self) -> &str
@@ -2094,37 +2087,40 @@ impl core::marker::Unpin for agent_access_provider::ConnectedIdentity
 impl core::marker::UnsafeUnpin for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ConnectedIdentity
-pub struct agent_access_provider::ContinuationBinding
-impl agent_access_provider::ContinuationBinding
-pub fn agent_access_provider::ContinuationBinding::bytes(self, &'static str, &[u8]) -> Self
-pub fn agent_access_provider::ContinuationBinding::delegated(self, &agent_access_provider::DelegatedCredential) -> Self
-pub fn agent_access_provider::ContinuationBinding::family(&self) -> &agent_access_provider::ContinuationFamily
-pub fn agent_access_provider::ContinuationBinding::flag(self, &'static str, bool) -> Self
-pub fn agent_access_provider::ContinuationBinding::number(self, &'static str, u64) -> Self
-pub fn agent_access_provider::ContinuationBinding::optional_number(self, &'static str, core::option::Option<u64>) -> Self
-pub fn agent_access_provider::ContinuationBinding::optional_text(self, &'static str, core::option::Option<&str>) -> Self
-pub fn agent_access_provider::ContinuationBinding::text(self, &'static str, &str) -> Self
-pub fn agent_access_provider::ContinuationBinding::texts<'v>(self, &'static str, impl core::iter::traits::collect::IntoIterator<Item = &'v str>) -> Self
-impl core::clone::Clone for agent_access_provider::ContinuationBinding
-pub fn agent_access_provider::ContinuationBinding::clone(&self) -> agent_access_provider::ContinuationBinding
-impl core::fmt::Debug for agent_access_provider::ContinuationBinding
-pub fn agent_access_provider::ContinuationBinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for agent_access_provider::ContinuationBinding
-impl core::marker::Send for agent_access_provider::ContinuationBinding
-impl core::marker::Sync for agent_access_provider::ContinuationBinding
-impl core::marker::Unpin for agent_access_provider::ContinuationBinding
-impl core::marker::UnsafeUnpin for agent_access_provider::ContinuationBinding
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationBinding
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationBinding
+pub struct agent_access_provider::ContinuationBinding<Stage: agent_access_provider::ContinuationStage>
+impl<Stage: agent_access_provider::ContinuationStage> agent_access_provider::ContinuationBinding<Stage>
+pub fn agent_access_provider::ContinuationBinding<Stage>::bytes(self, &'static str, &[u8]) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::delegated(self, &agent_access_provider::DelegatedCredential) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::family(&self) -> &agent_access_provider::ContinuationFamily
+pub fn agent_access_provider::ContinuationBinding<Stage>::flag(self, &'static str, bool) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::number(self, &'static str, u64) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::optional_number(self, &'static str, core::option::Option<u64>) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::optional_text(self, &'static str, core::option::Option<&str>) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::text(self, &'static str, &str) -> Self
+pub fn agent_access_provider::ContinuationBinding<Stage>::texts<'v>(self, &'static str, impl core::iter::traits::collect::IntoIterator<Item = &'v str>) -> Self
+impl<Stage: agent_access_provider::ContinuationStage> core::fmt::Debug for agent_access_provider::ContinuationBinding<Stage>
+pub fn agent_access_provider::ContinuationBinding<Stage>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<Stage: core::clone::Clone + agent_access_provider::ContinuationStage> core::clone::Clone for agent_access_provider::ContinuationBinding<Stage>
+pub fn agent_access_provider::ContinuationBinding<Stage>::clone(&self) -> agent_access_provider::ContinuationBinding<Stage>
+impl<Stage> core::marker::Freeze for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::Freeze
+impl<Stage> core::marker::Send for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::Send
+impl<Stage> core::marker::Sync for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::Sync
+impl<Stage> core::marker::Unpin for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::Unpin
+impl<Stage> core::marker::UnsafeUnpin for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::UnsafeUnpin
+impl<Stage> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::RefUnwindSafe
+impl<Stage> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::UnwindSafe
 pub struct agent_access_provider::ContinuationFamily
 impl agent_access_provider::ContinuationFamily
 pub fn agent_access_provider::ContinuationFamily::bind(&self, &agent_access_provider::AdmittedContext, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding
+pub fn agent_access_provider::ContinuationFamily::bind_scope(&self, &agent_access_provider::ScopeRequest<'_>, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding<agent_access_provider::ScopeResolutionStage>
 pub const fn agent_access_provider::ContinuationFamily::clock_skew(self, core::time::Duration) -> Self
 pub const fn agent_access_provider::ContinuationFamily::expires_after(self, core::time::Duration) -> Self
 pub const fn agent_access_provider::ContinuationFamily::lifetime(&self) -> agent_access_provider::ContinuationLifetime
 pub const fn agent_access_provider::ContinuationFamily::max_payload_bytes(&self) -> usize
+pub const fn agent_access_provider::ContinuationFamily::max_payload_bytes_within(&self, usize) -> usize
 pub const fn agent_access_provider::ContinuationFamily::max_token_bytes(&self) -> usize
 pub const fn agent_access_provider::ContinuationFamily::new(&'static str, &'static str, u8, agent_access_provider::ContinuationLifetime, usize) -> Self
+pub const fn agent_access_provider::ContinuationFamily::opened_during_scope_resolution(self) -> Self
 pub const fn agent_access_provider::ContinuationFamily::owner(self, agent_access_provider::ContinuationOwner) -> Self
 pub const fn agent_access_provider::ContinuationFamily::purpose(&self) -> &'static str
 pub const fn agent_access_provider::ContinuationFamily::service(&self) -> &'static str
@@ -2151,14 +2147,19 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Continua
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationFamily
 pub struct agent_access_provider::ContinuationSigner
 impl agent_access_provider::ContinuationSigner
-pub fn agent_access_provider::ContinuationSigner::commit(&self, &agent_access_provider::ContinuationBinding, &'static str, &[u8]) -> core::result::Result<[u8; 32], agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::commit<Stage: agent_access_provider::ContinuationStage>(&self, &agent_access_provider::ContinuationBinding<Stage>, &'static str, &[u8]) -> core::result::Result<[u8; 32], agent_access_provider::ContinuationError>
 pub fn agent_access_provider::ContinuationSigner::is_durable(&self) -> bool
 pub fn agent_access_provider::ContinuationSigner::new(core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> Self
 pub fn agent_access_provider::ContinuationSigner::open(&self, &agent_access_provider::ContinuationBinding, &str) -> core::result::Result<alloc::vec::Vec<u8>, agent_access_provider::ContinuationError>
 pub fn agent_access_provider::ContinuationSigner::open_at(&self, &agent_access_provider::ContinuationBinding, &str, std::time::SystemTime) -> core::result::Result<alloc::vec::Vec<u8>, agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::open_during_scope_resolution(&self, &agent_access_provider::ContinuationBinding<agent_access_provider::ScopeResolutionStage>, &str) -> core::result::Result<alloc::vec::Vec<u8>, agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::open_relayed(&self, &agent_access_provider::ContinuationBinding, core::option::Option<&[u8]>, &str) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::open_relayed_at(&self, &agent_access_provider::ContinuationBinding, core::option::Option<&[u8]>, &str, std::time::SystemTime) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
 pub fn agent_access_provider::ContinuationSigner::seal(&self, &agent_access_provider::ContinuationBinding, &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
 pub fn agent_access_provider::ContinuationSigner::seal_at(&self, &agent_access_provider::ContinuationBinding, &[u8], std::time::SystemTime) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
-pub fn agent_access_provider::ContinuationSigner::verify_commitment(&self, &agent_access_provider::ContinuationBinding, &'static str, &[u8], &[u8]) -> core::result::Result<(), agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::seal_relayed(&self, &agent_access_provider::ContinuationBinding, core::option::Option<&[u8]>, &str) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::seal_relayed_at(&self, &agent_access_provider::ContinuationBinding, core::option::Option<&[u8]>, &str, std::time::SystemTime) -> core::result::Result<alloc::string::String, agent_access_provider::ContinuationError>
+pub fn agent_access_provider::ContinuationSigner::verify_commitment<Stage: agent_access_provider::ContinuationStage>(&self, &agent_access_provider::ContinuationBinding<Stage>, &'static str, &[u8], &[u8]) -> core::result::Result<(), agent_access_provider::ContinuationError>
 impl core::clone::Clone for agent_access_provider::ContinuationSigner
 pub fn agent_access_provider::ContinuationSigner::clone(&self) -> agent_access_provider::ContinuationSigner
 impl core::fmt::Debug for agent_access_provider::ContinuationSigner
@@ -3377,6 +3378,17 @@ impl core::marker::Unpin for agent_access_provider::ScopeResolution
 impl core::marker::UnsafeUnpin for agent_access_provider::ScopeResolution
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeResolution
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeResolution
+pub struct agent_access_provider::ScopeResolutionStage
+impl agent_access_provider::ContinuationStage for agent_access_provider::ScopeResolutionStage
+impl core::clone::Clone for agent_access_provider::ScopeResolutionStage
+pub fn agent_access_provider::ScopeResolutionStage::clone(&self) -> agent_access_provider::ScopeResolutionStage
+impl core::marker::Freeze for agent_access_provider::ScopeResolutionStage
+impl core::marker::Send for agent_access_provider::ScopeResolutionStage
+impl core::marker::Sync for agent_access_provider::ScopeResolutionStage
+impl core::marker::Unpin for agent_access_provider::ScopeResolutionStage
+impl core::marker::UnsafeUnpin for agent_access_provider::ScopeResolutionStage
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeResolutionStage
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeResolutionStage
 #[non_exhaustive] pub struct agent_access_provider::SearchAuthorization
 pub agent_access_provider::SearchAuthorization::scope: agent_access_provider::SearchAuthorizationScope
 pub agent_access_provider::SearchAuthorization::scope_type: alloc::string::String
@@ -3703,6 +3715,7 @@ pub const agent_access_provider::OAUTH_MAX_RESPONSE_BYTES: usize
 pub const agent_access_provider::REQUEST_ID_HEADER: &str
 pub const agent_access_provider::RESULT_METADATA_HEADER: &str
 pub const agent_access_provider::SDK_PACKAGE: agent_access_provider::ModuleMetadata
+pub const agent_access_provider::UPSTREAM_QUERY_COMMITMENT_BYTES: usize
 pub const agent_access_provider::UPSTREAM_RETRY_AFTER_MAX_SECONDS: u64
 pub const agent_access_provider::VALIDATION_FIELD_MAX_BYTES: usize
 pub const agent_access_provider::VALIDATION_FRAGMENT_MAX_BYTES: usize
@@ -3716,6 +3729,9 @@ pub fn agent_access_provider::BackendConfig::egress_proxies(&self) -> alloc::vec
 pub fn agent_access_provider::BackendConfig::kind(&self) -> &'static str
 pub fn agent_access_provider::BackendConfig::validate(&self, &agent_access_provider::ValidationContext<'_>, &mut alloc::vec::Vec<alloc::string::String>)
 pub fn agent_access_provider::BackendConfig::validate_resource_attributes(&self, &agent_access_provider::ResourceType, &agent_access_provider::ResourceAttributes) -> core::result::Result<(), alloc::string::String>
+pub trait agent_access_provider::ContinuationStage: agent_access_provider::continuation::sealed::Stage + core::clone::Clone
+impl agent_access_provider::ContinuationStage for agent_access_provider::AdmissionStage
+impl agent_access_provider::ContinuationStage for agent_access_provider::ScopeResolutionStage
 pub trait agent_access_provider::DelegatedLease: core::marker::Send + core::marker::Sync + 'static
 pub fn agent_access_provider::DelegatedLease::access(&self) -> agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedLease::binding_identity(&self) -> agent_access_provider::DelegatedBindingId
@@ -3800,6 +3816,13 @@ pub type agent_access_provider::ResourceActionInputs = fn(&agent_access_provider
 pub type agent_access_provider::ResourceScopes = alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
 pub type agent_access_provider::UploadProgress = tokio::sync::watch::Receiver<tokio::time::instant::Instant>
 
+// Exposed through supported signatures: agent-access-provider (features: test-support)
+
+pub mod agent_access_provider
+pub mod agent_access_provider::continuation
+pub mod agent_access_provider::continuation::sealed
+pub trait agent_access_provider::continuation::sealed::Stage
+
 // Implementation and construction contracts of the items above
 
 enum agent_access_provider::ActionIo: non-exhaustive
@@ -3826,7 +3849,6 @@ enum agent_access_provider::OAuthDialectError: non-exhaustive
 enum agent_access_provider::OAuthRotation: non-exhaustive
 enum agent_access_provider::OAuthScopeMode: non-exhaustive
 enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
-enum agent_access_provider::OpaqueTokenSigner: non-exhaustive
 enum agent_access_provider::ProviderFailureStatus: exhaustive
 enum agent_access_provider::ProviderResultStreamSource: exhaustive
 enum agent_access_provider::ProviderStateError: non-exhaustive
@@ -3848,6 +3870,7 @@ enum agent_access_provider::presentation::RenderBudgetExhausted: non-exhaustive
 enum agent_access_provider::presentation::ResponseFormat: non-exhaustive
 struct agent_access_provider::ActionCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ActionDescriptor: named fields, non-exhaustive
+struct agent_access_provider::AdmissionStage: named fields, private fields
 struct agent_access_provider::AdmittedContext: tuple fields, private fields
 struct agent_access_provider::AdmittedRequest: named fields, private fields
 struct agent_access_provider::AttachmentLimitsConfig: named fields
@@ -3919,6 +3942,7 @@ struct agent_access_provider::ResourceTypeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceTypeRegistry: named fields, private fields
 struct agent_access_provider::ScopeRequest: named fields, private fields
 struct agent_access_provider::ScopeResolution: named fields, private fields
+struct agent_access_provider::ScopeResolutionStage: named fields, private fields
 struct agent_access_provider::SearchAuthorization: named fields, non-exhaustive
 struct agent_access_provider::SearchLimitsConfig: named fields
 struct agent_access_provider::ServiceCapabilities: named fields, non-exhaustive
@@ -3963,6 +3987,7 @@ trait agent_access_provider::BackendConfig::egress_proxies: required fn
 trait agent_access_provider::BackendConfig::kind: required fn
 trait agent_access_provider::BackendConfig::validate: required fn
 trait agent_access_provider::BackendConfig::validate_resource_attributes: provided fn
+trait agent_access_provider::ContinuationStage: not dyn-compatible
 trait agent_access_provider::DelegatedLease: dyn-compatible
 trait agent_access_provider::DelegatedLease::access: required fn
 trait agent_access_provider::DelegatedLease::binding_identity: required fn
@@ -3990,6 +4015,7 @@ trait agent_access_provider::Provider::resource_roots: provided fn
 trait agent_access_provider::Provider::verify_execution_credential: provided fn
 trait agent_access_provider::StableSigningKey: dyn-compatible
 trait agent_access_provider::StableSigningKey::hmac_base64url: required fn
+trait agent_access_provider::continuation::sealed::Stage: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory::build_client: required fn
 trait agent_access_provider::presentation::EmbeddedBodyCodec: dyn-compatible

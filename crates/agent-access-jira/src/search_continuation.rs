@@ -3,36 +3,31 @@
 //!
 //! The binding covers the admitted context (service, action, execution
 //! context, credential mode, principal and whether it authenticated), the
-//! Jira configuration the upstream token depends on, the credential kind that
-//! selects the upstream route, and the normalized caller inputs: query type,
+//! Atlassian route fingerprint of the Jira configuration the upstream token
+//! depends on, the credential kind that selects the upstream route, and the normalized caller inputs: query type,
 //! canonical caller JQL, requested projects and effective `maxResults`. The
 //! effective project boundary is deliberately not bound: every page is
-//! authorized again and composed under the current boundary. The payload
-//! carries a keyed commitment to the composed upstream JQL beside the
-//! upstream token, so a token whose upstream query no longer matches the
-//! current composition is rejected before Jira sees it, never replayed against
-//! a different query.
+//! authorized again and composed under the current boundary. Jira's token is
+//! relayed with the SDK's keyed commitment to the composed upstream JQL
+//! ([`ContinuationSigner::seal_relayed`]), so a token whose upstream query no
+//! longer matches the current composition is rejected before Jira sees it,
+//! never replayed against a different query.
 use super::*;
-
-const UPSTREAM_QUERY_COMMITMENT_BYTES: usize = 32;
-const UPSTREAM_QUERY_LABEL: &str = "upstreamJql";
-/// The version, expiry and MAC bytes an envelope adds around its payload.
-const ENVELOPE_OVERHEAD_BYTES: usize = 1 + 8 + 32;
 
 /// How long a search continuation stays valid after it is issued.
 const JIRA_SEARCH_PAGE_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 
-/// Search pages: a commitment to the composed upstream JQL followed by
-/// Jira's upstream token. Tokens expire 15 minutes after they are issued and
+/// Search pages: Jira's upstream token, relayed with a commitment to the
+/// composed upstream JQL. Tokens expire 15 minutes after they are issued and
 /// are signed with a key generated for each provider instance, so a reload or
-/// restart also invalidates them. The declared cap covers the commitment;
-/// [`SearchPages::new`] adds the upstream token's bound.
+/// restart also invalidates them. Declared without a payload cap;
+/// [`SearchPages::new`] sizes it from the response cap.
 const JIRA_SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
     "jira",
     "search-page",
     1,
     ContinuationLifetime::Generation,
-    UPSTREAM_QUERY_COMMITMENT_BYTES,
+    0,
 )
 .expires_after(JIRA_SEARCH_PAGE_TOKEN_TTL);
 
@@ -56,17 +51,15 @@ impl SearchPages {
     /// stable key.
     pub(crate) fn new(limits: &ProviderLimits) -> Self {
         let cap = usize::try_from(limits.max_upstream_response_bytes).unwrap_or(usize::MAX);
-        // The longest raw envelope whose unpadded base64, ceil(4n/3)
-        // characters, fits within the cap: floor(3 * cap / 4).
-        let raw = (cap / 4) * 3 + (cap % 4).saturating_sub(1);
         Self {
             family: JIRA_SEARCH_PAGES
-                .with_max_payload_bytes(raw.saturating_sub(ENVELOPE_OVERHEAD_BYTES)),
+                .with_max_payload_bytes(JIRA_SEARCH_PAGES.max_payload_bytes_within(cap)),
             signer: ContinuationSigner::new(None),
         }
     }
 
     /// The longest upstream token a continuation carries.
+    #[cfg(test)]
     pub(crate) fn max_upstream_token_bytes(&self) -> usize {
         self.family
             .max_payload_bytes()
@@ -78,17 +71,6 @@ impl SearchPages {
     pub(crate) fn max_token_bytes(&self) -> usize {
         self.family.max_token_bytes()
     }
-}
-
-/// The fingerprint of the configuration an upstream token depends on: the
-/// tenant, the gateway cloud ID and whether the gateway route is enabled.
-pub(crate) fn search_configuration_fingerprint(config: &JiraProviderConfig) -> [u8; 32] {
-    let fields = json!({
-        "tenantHost": config.tenant_host,
-        "cloudId": config.cloud_id,
-        "gateway": agent_access_atlassian::uses_atlassian_gateway_host(&config.allowed_upstream_hosts),
-    });
-    Sha256::digest(fields.to_string().as_bytes()).into()
 }
 
 /// The normalized search a continuation belongs to.
@@ -115,37 +97,22 @@ impl SearchPageRequest<'_> {
             .number("maxResults", u64::from(self.max_results))
     }
 
-    /// Seals Jira's `upstream` token for this search, issued at `now`.
+    /// Seals Jira's `upstream` token for this search, issued at `now`,
+    /// with a commitment to the composed JQL it continues.
     pub(crate) fn seal(
         &self,
         pages: &SearchPages,
         upstream: &str,
         now: SystemTime,
     ) -> Result<String, ProviderError> {
-        let limit = pages.max_upstream_token_bytes();
-        // The commitment always fits unless the response cap cannot hold an
-        // envelope at all.
-        if UPSTREAM_QUERY_COMMITMENT_BYTES.saturating_add(upstream.len())
-            > pages.family.max_payload_bytes()
-        {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                format!(
-                    "Jira returned a nextPageToken longer than the broker's {limit}-byte limit"
-                ),
-            ));
-        }
-        let binding = self.bind(&pages.family);
-        let commitment = pages
-            .signer
-            .commit(&binding, UPSTREAM_QUERY_LABEL, self.query.jql.as_bytes())
-            .map_err(search_page_token_failure)?;
-        let mut payload = Vec::with_capacity(commitment.len() + upstream.len());
-        payload.extend_from_slice(&commitment);
-        payload.extend_from_slice(upstream.as_bytes());
         pages
             .signer
-            .seal_at(&binding, &payload, now)
+            .seal_relayed_at(
+                &self.bind(&pages.family),
+                Some(self.query.jql.as_bytes()),
+                upstream,
+                now,
+            )
             .map_err(search_page_token_failure)
     }
 
@@ -158,31 +125,15 @@ impl SearchPageRequest<'_> {
         token: &str,
         now: SystemTime,
     ) -> Result<String, ProviderError> {
-        let binding = self.bind(&pages.family);
-        let payload = pages
+        pages
             .signer
-            .open_at(&binding, token, now)
-            .map_err(search_page_token_failure)?;
-        if payload.len() < UPSTREAM_QUERY_COMMITMENT_BYTES {
-            return Err(search_page_token_invalid());
-        }
-        let (commitment, upstream) = payload.split_at(UPSTREAM_QUERY_COMMITMENT_BYTES);
-        match pages.signer.verify_commitment(
-            &binding,
-            UPSTREAM_QUERY_LABEL,
-            self.query.jql.as_bytes(),
-            commitment,
-        ) {
-            Ok(()) => {}
-            Err(ContinuationError::Invalid) => {
-                return Err(ProviderError::deny(
-                    ReasonCode::InputInvalid,
-                    "the effective Jira project scope changed since nextPageToken was issued; repeat the search without nextPageToken",
-                ));
-            }
-            Err(error) => return Err(search_page_token_failure(error)),
-        }
-        String::from_utf8(upstream.to_vec()).map_err(|_| search_page_token_invalid())
+            .open_relayed_at(
+                &self.bind(&pages.family),
+                Some(self.query.jql.as_bytes()),
+                token,
+                now,
+            )
+            .map_err(search_page_token_failure)
     }
 }
 
@@ -194,7 +145,17 @@ pub(crate) fn search_page_token_invalid() -> ProviderError {
 }
 
 fn search_page_token_failure(error: ContinuationError) -> ProviderError {
-    if error.is_token_rejection() {
+    if error == ContinuationError::UpstreamQueryChanged {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "the effective Jira project scope changed since nextPageToken was issued; repeat the search without nextPageToken",
+        )
+    } else if let ContinuationError::PayloadTooLarge { limit } = error {
+        ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            format!("Jira returned a nextPageToken longer than the broker's {limit}-byte limit"),
+        )
+    } else if error.is_token_rejection() {
         search_page_token_invalid()
     } else {
         ProviderError::error(
@@ -259,7 +220,7 @@ mod tests {
                     .principal("agent-one")
                     .credential_mode(CredentialMode::PerUser)
                     .build(),
-                configuration: search_configuration_fingerprint(&config),
+                configuration: config.site().route_fingerprint(),
                 credential: basic_credential("agent@example.com", "token"),
                 query: query(scope),
                 requested: BTreeSet::new(),
@@ -295,7 +256,7 @@ mod tests {
         assert_eq!(default.max_token_bytes(), 512 * 1024 * 1024);
         assert_eq!(
             default.max_upstream_token_bytes(),
-            384 * 1024 * 1024 - ENVELOPE_OVERHEAD_BYTES - UPSTREAM_QUERY_COMMITMENT_BYTES
+            384 * 1024 * 1024 - 41 - UPSTREAM_QUERY_COMMITMENT_BYTES
         );
         let fixture = Fixture::new(&["PROJ"]);
         let beyond_ceiling = "u".repeat(100 * 1024);
@@ -449,14 +410,14 @@ mod tests {
             let family = family
                 .expires_after(JIRA_SEARCH_PAGE_TOKEN_TTL)
                 .with_max_payload_bytes(payload_cap);
-            let binding = search.bind(&family);
-            let commitment = pages
+            let foreign = pages
                 .signer
-                .commit(&binding, UPSTREAM_QUERY_LABEL, fixture.query.jql.as_bytes())
+                .seal_relayed(
+                    &search.bind(&family),
+                    Some(fixture.query.jql.as_bytes()),
+                    "upstream",
+                )
                 .unwrap();
-            let mut payload = commitment.to_vec();
-            payload.extend_from_slice(b"upstream");
-            let foreign = pages.signer.seal(&binding, &payload).unwrap();
             let error = search.open(&pages, &foreign, now()).unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{family:?}");
             assert_eq!(error.decision(), Decision::Deny);
@@ -507,5 +468,38 @@ mod tests {
             issued.search().open(&pages, &token, now()).unwrap(),
             "upstream"
         );
+    }
+
+    /// Every search continuation failure stays within the
+    /// provider-reportable subset of the hooks that report it: an empty
+    /// token during scope resolution and every token failure at invocation.
+    #[test]
+    fn search_page_token_failures_pass_the_hook_contracts() {
+        for phase in [HookPhase::ScopeResolution, HookPhase::Invocation] {
+            let hook = agent_access_provider::host::hook_context(
+                "jira",
+                "search",
+                phase,
+                crate::JIRA_BACKEND.domain_reasons(),
+            );
+            for error in [
+                ContinuationError::Invalid,
+                ContinuationError::UnsupportedVersion,
+                ContinuationError::Expired,
+                ContinuationError::UpstreamQueryChanged,
+                ContinuationError::TokenTooLarge { limit: 1 },
+                ContinuationError::PayloadTooLarge { limit: 1 },
+                ContinuationError::SigningUnavailable,
+                ContinuationError::DurableKeyUnavailable,
+            ] {
+                let failure = search_page_token_failure(error);
+                assert_eq!(
+                    hook.check_failure(&failure),
+                    Ok(()),
+                    "{phase:?} {error:?}: {failure:?}"
+                );
+            }
+            assert_eq!(hook.check_failure(&search_page_token_invalid()), Ok(()));
+        }
     }
 }

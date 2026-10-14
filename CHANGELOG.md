@@ -236,6 +236,11 @@ All notable changes to this project are documented in this file.
   `BrokerBuildStatus` is now `agent_access_broker_host::BrokerBuildStatus`; and
   read selected kinds, resource types, route specifications and configured
   service descriptors from `BrokerComposition`.
+- The provider SDK no longer exports `OpaqueTokenSigner`. Seal handles and
+  cursors with a `ContinuationFamily` and `ContinuationSigner`; a
+  `ContinuationLifetime::Durable` family replaces `sign_durable` and
+  `verify_durable`. `StableSigningKey` and `host::service_signing_key` remain
+  the host's signing-key port.
 
 ### Added
 
@@ -275,6 +280,17 @@ All notable changes to this project are documented in this file.
   run time, beyond the 64 KiB ceiling of `ContinuationFamily::new`, for a
   family relaying upstream tokens that only a configured response limit
   bounds; `max_token_bytes()` saturates instead of overflowing.
+- Continuation families can relay an upstream service's own page token
+  (`ContinuationSigner::seal_relayed`/`open_relayed`), optionally with a keyed
+  commitment to the composed upstream query that rejects the token with
+  `ContinuationError::UpstreamQueryChanged` once that query changes, and can
+  size their cap from a response limit with
+  `ContinuationFamily::max_payload_bytes_within`. A family declared
+  `opened_during_scope_resolution()` is opened during scope resolution with
+  `bind_scope` and `ContinuationSigner::open_during_scope_resolution`, its
+  owner carried as a keyed commitment; `ContinuationBinding` records its stage
+  as a `ContinuationStage` type parameter (`AdmissionStage` by default, or
+  `ScopeResolutionStage`).
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph
