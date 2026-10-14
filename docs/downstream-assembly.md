@@ -428,6 +428,21 @@ metadata, provenance maps and labels are honest labeling backed by the
 assembler's build evidence, not cryptographic attestation; whoever builds the
 executable controls them.
 
+Upstream's independent downstream consumer fixture is the reference for this
+process. Its templates in
+[`tests/downstream-consumer/`](../tests/downstream-consumer/README.md) stage a
+separately owned provider repository, containing the conformance provider as a
+stand-in for a downstream provider, and a downstream assembly that links
+production CloudBees CI and that provider. Each is staged as its own local Git
+repository with its own manifest, lockfile and full-revision pins.
+`scripts/verify-downstream-consumer.mjs` builds them `--locked --offline`,
+reviews the lockfiles for one SDK package identity and exact sources, runs the
+provider's tests with SDK test support, checks the release feature graph, and
+starts the assembled executable against a synthetic CloudBees CI controller,
+exercising it with the candidate's CLI. Upstream release qualification runs it
+as the `downstream-consumer` gate; after publication, `--source canonical`
+qualifies the canonical remote pins.
+
 For in-process acceptance tests, enable the host's `test-support` feature in
 development dependencies only and start the assembly's own
 `composition()` and `build_identity()` with

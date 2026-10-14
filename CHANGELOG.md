@@ -320,6 +320,18 @@ All notable changes to this project are documented in this file.
   lifecycle, assembly identity and module provenance, canonical Git pins,
   coordinated upgrades, source overrides, lockfile review, CLI and portal
   assets, the release-feature check and qualification.
+- Release qualification runs a required `downstream-consumer` gate
+  (`node scripts/verify-downstream-consumer.mjs`). It stages a separately owned
+  provider repository with the conformance crate and a downstream Broker
+  assembly as independent Git repositories pinned to the candidate commit,
+  builds and tests them and the candidate's CLI with `--locked --offline` from
+  the shared Cargo download cache, reviews their lockfiles for one SDK package
+  identity, checks that the assembled executable reports its own identity, the
+  locked sources of the host, SDK and modules and their inventory fingerprint,
+  and runs it against a synthetic CloudBees CI controller through that CLI.
+  Every crate in `Cargo.lock` must already be in the download cache, and Cargo
+  configuration outside the driver's private Cargo home must not apply to its
+  stage.
 
 ### Changed
 

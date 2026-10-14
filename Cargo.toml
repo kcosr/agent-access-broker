@@ -18,6 +18,9 @@ members = [
   "crates/agent-access-openapi-upstream",
   "crates/agent-access-teams",
 ]
+# Templates staged as independent repositories by
+# scripts/verify-downstream-consumer.mjs; each has its own workspace root.
+exclude = ["tests/downstream-consumer"]
 resolver = "3"
 
 [workspace.package]

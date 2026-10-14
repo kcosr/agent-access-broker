@@ -1,0 +1,19 @@
+# Workspace root of the staged provider repository. The staging driver adds
+# `crates/agent-access-conformance` from the candidate commit and appends the
+# third-party dependencies that crate inherits to `[workspace.dependencies]`,
+# which therefore stays the last table in this file.
+[workspace]
+members = ["crates/agent-access-conformance"]
+resolver = "3"
+
+[workspace.package]
+version = "0.7.0"
+edition = "2024"
+license = "MIT"
+
+[profile.dev]
+debug = false
+incremental = false
+
+[workspace.dependencies]
+agent-access-provider = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "0000000000000000000000000000000000000000" }

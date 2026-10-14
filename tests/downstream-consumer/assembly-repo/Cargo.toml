@@ -1,0 +1,26 @@
+# A downstream broker distribution. It links upstream crates by the canonical
+# repository URL and the provider repository by its own URL, each pinned to a
+# full revision. The staging driver replaces the all-zero sentinel revisions.
+[package]
+name = "downstream-broker"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+agent-access-broker-host = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "0000000000000000000000000000000000000000" }
+agent-access-cloudbees-ci = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "0000000000000000000000000000000000000000" }
+agent-access-conformance = { git = "https://git.example.com/provider-team/conformance-provider.git", rev = "0000000000000000000000000000000000000000" }
+
+[dev-dependencies]
+agent-access-broker-host = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "0000000000000000000000000000000000000000", features = ["test-support"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde_json = "1.0"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[profile.dev]
+debug = false
+incremental = false

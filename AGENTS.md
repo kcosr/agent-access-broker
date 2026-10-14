@@ -323,6 +323,14 @@ and audit checks through the real `agent-access` binary.
   fixtures with a backup and state locks; never use it on an operational store.
   Run `python3 demo/seed-audit-showcase.test.py` for its SQLite/FTS,
   idempotency, and rollback checks.
+- `tests/downstream-consumer/`: templates for a separately owned provider
+  repository and a downstream Broker assembly, excluded from the root workspace.
+  `scripts/verify-downstream-consumer.mjs` stages them as independent Git
+  repositories pinned to a clean commit, builds them `--locked --offline` from the
+  shared Cargo download cache, and runs the assembled executable; release
+  qualification runs it as the `downstream-consumer` gate. Keep the templates
+  valid TOML with package names distinct from upstream crates, and pin upstream
+  only by the canonical URL with the all-zero sentinel `rev`. See its README.
 - `skills/`: self-contained agent-facing usage skills split by access surface.
 - `scripts/`: release, portal build, and local portal smoke helpers (smoke tests
   are cargo integration tests under `crates/agent-access/tests/`). Trusted-ingress
@@ -523,9 +531,9 @@ empty evidence directory outside the checkout:
 node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
-The driver runs the required standalone Rust, crate-boundary, public API, portal,
-script, documentation, sample-config, Unix signal, native release-provenance, and
-notice checks. It
+The driver runs the required standalone Rust, crate-boundary, public API,
+downstream consumer, portal, script, documentation, sample-config, Unix signal,
+native release-provenance, and notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
