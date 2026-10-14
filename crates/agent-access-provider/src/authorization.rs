@@ -129,13 +129,6 @@ impl UpstreamAuthorization {
     }
 
     /// `request` with this authorization's header, replacing any value it
-    /// already has for that header. Remains only until every caller hands
-    /// the authorization to the send path instead.
-    pub fn apply(&self, request: RequestBuilder) -> RequestBuilder {
-        self.apply_to_builder(request)
-    }
-
-    /// `request` with this authorization's header, replacing any value it
     /// already has for that header. Only the host's own clients use this
     /// directly ([`crate::host::authorize_host_request`]); the upstream
     /// client presents authorizations through [`attach`].

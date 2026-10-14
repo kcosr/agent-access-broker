@@ -10,9 +10,9 @@ use std::sync::Arc;
 /// The access a delegated credential currently grants. Like static
 /// credential material it is read-only: a lease creates it, and providers
 /// read its target, audience, version and expiry through the accessors. They
-/// never read the token: they present it upstream with
-/// [`Self::authorization`] or [`Self::authorization_as`]. The token never
-/// appears in Debug output.
+/// never read the token: they obtain an [`UpstreamAuthorization`] with
+/// [`Self::authorization`] or [`Self::authorization_as`] and hand it to the
+/// upstream client's send methods. The token never appears in Debug output.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq)]
 pub struct DelegatedAccess {
@@ -328,10 +328,12 @@ mod tests {
     fn delegated_access_presents_its_token_without_revealing_it() {
         let access = DelegatedAccess::new("delegated-secret", TARGET, AUDIENCE, "v1", i64::MAX);
         let header = |authorization: UpstreamAuthorization| {
-            let request = authorization
-                .apply(reqwest::Client::new().get(TARGET))
-                .build()
-                .unwrap();
+            let request = crate::host::authorize_host_request(
+                reqwest::Client::new().get(TARGET),
+                &authorization,
+            )
+            .build()
+            .unwrap();
             let value = request.headers()[reqwest::header::AUTHORIZATION].clone();
             assert!(value.is_sensitive());
             value

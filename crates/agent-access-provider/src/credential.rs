@@ -77,10 +77,12 @@ impl StaticCredentialKind {
 /// construction port ([`crate::host`]) and test support construct it, so the
 /// material each kind requires is always present.
 ///
-/// Providers never read the material. They present it upstream with
-/// [`Self::authorization`], in the kind's own HTTP authentication scheme, or
-/// [`Self::authorization_as`], in a [`CredentialPlacement`] the upstream
-/// requires; [`Self::kind`] is the only fact about it they can inspect. The
+/// Providers never read the material. They obtain an
+/// [`UpstreamAuthorization`] with [`Self::authorization`], in the kind's own
+/// HTTP authentication scheme, or [`Self::authorization_as`], in a
+/// [`CredentialPlacement`] the upstream requires, and hand it to the upstream
+/// client's send methods, which add it to the request. [`Self::kind`] is the
+/// only fact about it they can inspect. The
 /// value does not serialize, never appears in Debug output, and compares
 /// equal to a credential with the same kind and material.
 #[derive(Clone, PartialEq, Eq)]
@@ -214,10 +216,12 @@ mod tests {
     }
 
     fn authorization_header(authorization: UpstreamAuthorization) -> String {
-        let request = authorization
-            .apply(reqwest::Client::new().get("https://service.example.test/"))
-            .build()
-            .unwrap();
+        let request = crate::host::authorize_host_request(
+            reqwest::Client::new().get("https://service.example.test/"),
+            &authorization,
+        )
+        .build()
+        .unwrap();
         let value = &request.headers()[reqwest::header::AUTHORIZATION];
         assert!(value.is_sensitive());
         value.to_str().unwrap().to_owned()
