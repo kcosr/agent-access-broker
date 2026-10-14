@@ -813,6 +813,9 @@ fn audit_writer_health_tracks_failure_classes_independently() {
 #[derive(Default)]
 struct ScriptedAuditStorage {
     appends: std::collections::VecDeque<AuditStorageOutcome>,
+    /// Each batch's own health change, such as a recovery its commit
+    /// triggered; none once the script runs out.
+    batch_health: std::collections::VecDeque<AuditHealthChange>,
     probes: std::collections::VecDeque<AuditStorageOutcome>,
     appended_ids: Arc<Mutex<Vec<String>>>,
     probe_inputs: Arc<Mutex<Vec<AuditFailureSet>>>,
@@ -851,7 +854,7 @@ impl AuditStorage for ScriptedAuditStorage {
             .collect();
         AuditAppendOutcome {
             entries,
-            health: AuditHealthChange::default(),
+            health: self.batch_health.pop_front().unwrap_or_default(),
             maintenance_due: false,
         }
     }
@@ -930,6 +933,109 @@ async fn shared_writer_applies_backend_health_changes_without_overwriting_classe
 
     writer.shutdown_and_drain().await.unwrap();
     assert!(closed.load(Ordering::SeqCst));
+}
+
+/// Holds the audit writer where it reports a failed terminal append until
+/// `gate` is released or [`GATE_HOLD_LIMIT`] passes, and counts the reports.
+struct HoldTerminalAppendFailureReports {
+    gate: Arc<(Mutex<bool>, Condvar)>,
+    reports: Arc<AtomicUsize>,
+}
+
+impl<S> tracing_subscriber::Layer<S> for HoldTerminalAppendFailureReports
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: TracingLayerContext<'_, S>) {
+        let mut fields = BTreeMap::new();
+        event.record(&mut JsonVisitor(&mut fields));
+        if fields.get("event").and_then(Value::as_str) == Some("audit_terminal_append_failed") {
+            self.reports.fetch_add(1, Ordering::SeqCst);
+            wait_at_gate(&self.gate);
+        }
+    }
+}
+
+#[tokio::test]
+async fn shared_writer_records_batch_health_before_acknowledging_its_records() {
+    use AuditFailureClass::*;
+    use futures_util::FutureExt;
+    // The writer reports a batch's failed terminal append after it has
+    // acknowledged the batch's earlier records, and is held there while the
+    // test reads health after such an acknowledgement.
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let reports = Arc::new(AtomicUsize::new(0));
+    let _subscriber = tracing::subscriber::set_default(tracing_subscriber::registry().with(
+        HoldTerminalAppendFailureReports {
+            gate: Arc::clone(&gate),
+            reports: Arc::clone(&reports),
+        },
+    ));
+    let storage = ScriptedAuditStorage {
+        appends: [
+            scripted_outcome(Err(std::io::Error::other("database full")), &[Append], &[]),
+            // One batch: a required record commits and a terminal record
+            // fails without a health change of its own.
+            scripted_outcome(Ok(()), &[], &[]),
+            scripted_outcome(Err(std::io::Error::other("record too large")), &[], &[]),
+        ]
+        .into(),
+        // The second batch's commit triggers a successful recovery.
+        batch_health: [
+            AuditHealthChange::default(),
+            AuditHealthChange {
+                mark: AuditFailureSet::EMPTY,
+                clear: AuditFailureSet::of(&[Append]),
+            },
+        ]
+        .into(),
+        probes: [scripted_outcome(
+            Err(std::io::Error::other("recovery is not due")),
+            &[],
+            &[],
+        )]
+        .into(),
+        ..ScriptedAuditStorage::default()
+    };
+    let appended_ids = Arc::clone(&storage.appended_ids);
+    let lock = Arc::new(Mutex::new(()));
+    let writer = AuditWriterHandle::start(
+        AuditWriterConfig {
+            path_label: "scripted-batch-health".to_string(),
+            node_id: TEST_NODE_ID.to_string(),
+            queue_capacity: 4,
+            terminal_queue_capacity: 4,
+            enqueue_timeout: Duration::from_secs(1),
+            lock: Arc::clone(&lock),
+        },
+        Box::new(storage),
+    );
+    let _release = GateRelease(Arc::clone(&gate));
+
+    assert!(writer.append_required(test_audit_record()).await.is_err());
+    assert_eq!(writer.health.recorded(), AuditFailureSet::of(&[Append]));
+
+    // A probe parks the writer on the held lock, so the required and the
+    // terminal record queued behind it are written as one batch.
+    let terminal = writer.reserve_terminal().await.unwrap();
+    let held = lock.lock().unwrap();
+    let mut probe = Box::pin(tokio::task::unconstrained(writer.probe_storage()));
+    assert!((&mut probe).now_or_never().is_none());
+    let mut recovering = Box::pin(tokio::task::unconstrained(
+        writer.append_required(test_audit_record()),
+    ));
+    assert!((&mut recovering).now_or_never().is_none());
+    terminal.send(test_audit_record());
+    drop(held);
+    assert!(probe.await.is_err());
+
+    // The acknowledgement follows the recovery the batch's commit triggered.
+    recovering.await.unwrap();
+    assert_eq!(writer.health.recorded(), AuditFailureSet::EMPTY);
+    release_gate(&gate);
+    writer.shutdown_and_drain().await.unwrap();
+    assert_eq!(reports.load(Ordering::SeqCst), 1);
+    assert_eq!(appended_ids.lock().unwrap().len(), 3);
 }
 
 #[cfg(unix)]
