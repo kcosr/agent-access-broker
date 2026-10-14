@@ -473,7 +473,7 @@ impl CloudbeesCiProvider {
             .cursor
             .map(|c| decode_cursor(&self.log_signer, c, &binding, self.log_scan_limit))
             .transpose()?;
-        let (username, token) = basic_material(credential)?;
+        let authorization = basic_authorization(credential)?;
         let number = input.build_number.expect("required build");
         let url = Self::append(job_url, &[&number.to_string(), "consoleText"]);
         let started = Instant::now();
@@ -484,7 +484,7 @@ impl CloudbeesCiProvider {
                 RedirectRules::new(
                     0,
                     deadline.saturating_duration_since(tokio::time::Instant::now()),
-                    &|r| r.basic_auth(username, Some(token)),
+                    &|r| authorization.apply(r),
                 )
                 .with_vet(&|candidate| *candidate == url)
                 .with_decorate(&|r| r.header(reqwest::header::ACCEPT_ENCODING, "identity")),
