@@ -280,7 +280,8 @@
   font-size: var(--wb-fs-12-5);
   font-weight: var(--wb-fw-strong);
 }
-.pt-mcp-label .wb-mono {
+.pt-mcp-label .wb-mono,
+.pt-mcp-note {
   font-weight: var(--wb-fw-book);
 }
 

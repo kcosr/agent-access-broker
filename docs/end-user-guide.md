@@ -174,10 +174,12 @@ agent's protected secret location before closing the dialog.
 When the deployment offers [remote HTTP MCP](mcp.md#http-endpoint) with Bearer
 tokens, the **Token created** dialog also shows **Connect an MCP client**: the
 server URL, a line that sets `AGENT_ACCESS_TOKEN` to the new token (macOS/Linux
-or Windows PowerShell), and a command and configuration file for Pi, OpenCode,
-Claude Code, Codex, or Cursor. The client snippets name the variable, never the
-token; the portal remembers the chosen client in the browser. Management tokens
-have no MCP setup.
+or Windows PowerShell), and setup for Pi, OpenCode, Claude Code, Codex, or Cursor.
+Pi, OpenCode, and Codex get a command and a configuration file, and Cursor an
+install link and a configuration file. Claude Code gets only a user-scope
+command, which adds the server for all your projects. The client snippets name
+the variable, never the token; the portal remembers the chosen client in the
+browser. Management tokens have no MCP setup.
 
 Token issuance requires an effective invocation grant. It never creates access.
 The lifetime must be one of the choices configured by the operator. A nonexpiring

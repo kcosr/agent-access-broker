@@ -1782,6 +1782,14 @@ test("local browser login supports administration, self-service credentials, tok
     await mcp.getByRole("button", { name: "Copy the Codex config file", exact: true }).click();
     await expect.poll(clipboard).toBe(`[mcp_servers.agent_access]\nurl = "${mcpUrl}"\nbearer_token_env_var = "AGENT_ACCESS_TOKEN"`);
     await expect(mcp.getByRole("tabpanel")).not.toContainText(rawToken);
+    // Claude Code: only the user-scope command, which covers all projects; no configuration file.
+    await clients.getByRole("tab", { name: "Claude Code", exact: true }).click();
+    const claude = mcp.getByRole("tabpanel");
+    await expect(claude.getByText("Command (adds it for all your projects)", { exact: true })).toBeVisible();
+    await claude.getByRole("button", { name: "Copy the Claude Code command", exact: true }).click();
+    await expect.poll(clipboard).toBe(`claude mcp add --scope user --transport http agent_access ${mcpUrl} --header 'Authorization: Bearer \${AGENT_ACCESS_TOKEN}'`);
+    await expect(claude.getByRole("button", { name: "Copy the Claude Code config file", exact: true })).toHaveCount(0);
+    await expect(claude).not.toContainText("Or add it to");
     await clients.getByRole("tab", { name: "Cursor", exact: true }).click();
     await expect(mcp.getByRole("link", { name: "Add to Cursor", exact: true })).toHaveAttribute("href", /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=agent_access&config=[^&]+$/);
     await expect(mcp.getByRole("tabpanel")).not.toContainText(rawToken);

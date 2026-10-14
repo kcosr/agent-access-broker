@@ -111,16 +111,20 @@ function McpSetupSection({ url, snippets: { clients, environment } }: { url: str
             </div>
           ) : (
             <div className="pt-mcp-item">
-              <span className="pt-mcp-label">Command</span>
+              <span className="pt-mcp-label">
+                Command{client.commandNote ? <span className="pt-mcp-note"> ({client.commandNote})</span> : null}
+              </span>
               <CopyBlock wrap text={client.command} label={`Copy the ${client.label} command`} />
             </div>
           )}
-          <div className="pt-mcp-item">
-            <span className="pt-mcp-label">
-              Or add it to <span className="wb-mono">{client.file}</span>
-            </span>
-            <CopyBlock multiline wrap text={client.config} label={`Copy the ${client.label} config file`} />
-          </div>
+          {client.configFile ? (
+            <div className="pt-mcp-item">
+              <span className="pt-mcp-label">
+                Or add it to <span className="wb-mono">{client.configFile.path}</span>
+              </span>
+              <CopyBlock multiline wrap text={client.configFile.text} label={`Copy the ${client.label} config file`} />
+            </div>
+          ) : null}
         </Tabs>
       </div>
     </section>

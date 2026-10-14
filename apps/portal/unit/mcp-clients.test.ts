@@ -6,8 +6,10 @@ import { MCP_SERVER_NAME, MCP_TOKEN_ENV, mcpClients, tokenEnvironment } from "..
 const MCP_URL = "https://broker.example.com/mcp";
 const TOKEN = "aab_ai_synthetic-token-value";
 
-function snippets(client: ReturnType<typeof mcpClients>[number]) {
-  return ["command" in client ? client.command : client.installLink, client.config];
+type Client = ReturnType<typeof mcpClients>[number];
+
+function snippets(client: Client) {
+  return ["command" in client ? client.command : client.installLink, ...(client.configFile ? [client.configFile.text] : [])];
 }
 
 /** The server object in Cursor's install link (base64 of UTF-8 JSON). */
@@ -17,14 +19,14 @@ function cursorLinkServer(installLink: string) {
   return { link, server: JSON.parse(new TextDecoder().decode(bytes)) };
 }
 
-/** The server URL each configuration file names. */
-function configuredUrl(client: ReturnType<typeof mcpClients>[number]): string {
+/** The server URL a configuration file names. */
+function configuredUrl(client: Client, text: string): string {
   if (client.id === "codex") {
-    const line = client.config.split("\n").find((item) => item.startsWith("url = "))!;
+    const line = text.split("\n").find((item) => item.startsWith("url = "))!;
     // A TOML basic string; the JSON escapes used are valid TOML escapes.
     return JSON.parse(line.slice("url = ".length));
   }
-  const config = JSON.parse(client.config);
+  const config = JSON.parse(text);
   return (config.mcpServers ?? config.mcp).agent_access.url;
 }
 
@@ -41,9 +43,11 @@ describe("MCP client snippets", () => {
 
   it("name the server, URL and token variable, never a token value", () => {
     for (const client of mcpClients(MCP_URL)) {
-      expect(client.config, client.id).toContain(MCP_URL);
-      expect(client.config, client.id).toContain(MCP_SERVER_NAME);
-      expect(client.config, client.id).toContain(MCP_TOKEN_ENV);
+      if (client.configFile) {
+        expect(client.configFile.text, client.id).toContain(MCP_URL);
+        expect(client.configFile.text, client.id).toContain(MCP_SERVER_NAME);
+        expect(client.configFile.text, client.id).toContain(MCP_TOKEN_ENV);
+      }
       if ("command" in client) {
         expect(client.command, client.id).toContain(MCP_URL);
         expect(client.command, client.id).toContain(MCP_SERVER_NAME);
@@ -56,20 +60,29 @@ describe("MCP client snippets", () => {
     }
   });
 
-  it("match the documented Codex and Claude Code configuration", () => {
-    const clients = Object.fromEntries(mcpClients(MCP_URL).map((client) => [client.id, client]));
-    expect(clients.codex.config).toBe(`[mcp_servers.agent_access]\nurl = "${MCP_URL}"\nbearer_token_env_var = "AGENT_ACCESS_TOKEN"`);
-    expect(JSON.parse(clients.claude.config)).toEqual({
-      mcpServers: { agent_access: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer ${AGENT_ACCESS_TOKEN}" } } }
+  it("match the documented Codex configuration", () => {
+    const codex = mcpClients(MCP_URL).find((client) => client.id === "codex")!;
+    expect(codex.configFile).toEqual({
+      path: "~/.codex/config.toml",
+      text: `[mcp_servers.agent_access]\nurl = "${MCP_URL}"\nbearer_token_env_var = "AGENT_ACCESS_TOKEN"`
     });
-    expect("command" in clients.claude && clients.claude.command).toBe(
-      `claude mcp add --scope user --transport http agent_access ${MCP_URL} --header 'Authorization: Bearer \${AGENT_ACCESS_TOKEN}'`
-    );
+  });
+
+  it("offer Claude Code only the user-scope command, for all projects, with no file", () => {
+    const claude = mcpClients(MCP_URL).find((client) => client.id === "claude")!;
+    expect(claude).toEqual({
+      id: "claude",
+      label: "Claude Code",
+      command: `claude mcp add --scope user --transport http agent_access ${MCP_URL} --header 'Authorization: Bearer \${AGENT_ACCESS_TOKEN}'`,
+      commandNote: "adds it for all your projects",
+      configFile: null
+    });
+    expect(mcpClients(MCP_URL).filter((client) => !client.configFile).map((client) => client.id)).toEqual(["claude"]);
   });
 
   it("keep every JSON configuration valid", () => {
-    for (const client of mcpClients(MCP_URL).filter((item) => item.file.endsWith(".json"))) {
-      expect(() => JSON.parse(client.config), client.id).not.toThrow();
+    for (const client of mcpClients(MCP_URL)) {
+      if (client.configFile?.path.endsWith(".json")) expect(() => JSON.parse(client.configFile!.text), client.id).not.toThrow();
     }
   });
 
@@ -81,7 +94,7 @@ describe("MCP client snippets", () => {
     expect(`${link.host}${link.pathname}`).toBe("anysphere.cursor-deeplink/mcp/install");
     expect(link.searchParams.get("name")).toBe("agent_access");
     expect(server).toEqual({ url: MCP_URL, headers: { Authorization: "Bearer ${env:AGENT_ACCESS_TOKEN}" } });
-    expect(server).toEqual(JSON.parse(cursor.config).mcpServers.agent_access);
+    expect(server).toEqual(JSON.parse(cursor.configFile!.text).mcpServers.agent_access);
     // Base64 padding and `+`/`/` are percent-encoded inside the query value.
     expect(cursor.installLink).not.toMatch(/config=[^&]*[=+/]/);
   });
@@ -100,11 +113,11 @@ describe("MCP client snippets for unusual URLs", () => {
     const clients = mcpClients(url);
     expect(clients).toHaveLength(5);
     for (const client of clients) {
-      expect(configuredUrl(client), client.id).toBe(url);
+      if (client.configFile) expect(configuredUrl(client, client.configFile.text), client.id).toBe(url);
       if ("installLink" in client) {
         const { server } = cursorLinkServer(client.installLink);
         expect(server.url).toBe(url);
-        expect(server).toEqual(JSON.parse(client.config).mcpServers.agent_access);
+        expect(server).toEqual(JSON.parse(client.configFile!.text).mcpServers.agent_access);
       }
     }
   });

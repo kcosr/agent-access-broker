@@ -457,10 +457,11 @@ All notable changes to this project are documented in this file.
 - After issuing an agent token, the portal's **Token created** dialog shows
   **Connect an MCP client** when token options report an HTTP MCP endpoint: the
   server URL, the line that sets `AGENT_ACCESS_TOKEN` (macOS/Linux or Windows
-  PowerShell), and a command (Cursor: an install link) and configuration file
-  for Pi, OpenCode, Claude Code, Codex and Cursor, with copy buttons. Client
-  snippets name the variable, never the token; the chosen client is remembered
-  in the browser.
+  PowerShell), and setup for Pi, OpenCode, Claude Code, Codex and Cursor, with
+  copy buttons: a command (Cursor: an install link) and a configuration file,
+  except that Claude Code gets only a user-scope command, which adds the server
+  for all of the user's projects. Client snippets name the variable, never the
+  token; the chosen client is remembered in the browser.
 
 ### Changed
 
