@@ -471,3 +471,115 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
     drop(runtime);
     broker.stop().await;
 }
+
+#[tokio::test]
+async fn gmail_search_continuations_survive_refresh_but_not_reconnect() {
+    use wiremock::matchers::{header, query_param, query_param_is_missing};
+    let f = gmail_fixture().await;
+    f.connect("").await;
+    let messages = || Mock::given(method("GET")).and(path("/gmail/v1/users/me/messages"));
+    messages()
+        .and(query_param_is_missing("pageToken"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"nextPageToken":"upstream-page-2","resultSizeEstimate":0})),
+        )
+        .mount(&f.server)
+        .await;
+    messages()
+        .and(query_param("pageToken", "upstream-page-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"resultSizeEstimate":0})))
+        .mount(&f.server)
+        .await;
+    let continued_pages = || async {
+        f.server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| {
+                r.url
+                    .query_pairs()
+                    .any(|(k, v)| k == "pageToken" && v == "upstream-page-2")
+            })
+            .collect::<Vec<_>>()
+    };
+    let (status, first) = f
+        .invoke("message.search", json!({"query":"in:inbox"}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let token = first["result"]["nextPageToken"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(token, "upstream-page-2");
+
+    // A committed refresh-token grant, forced here by Gmail rejecting the
+    // first access once, renews access within the same connection binding.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"access_token":"google-access-2","token_type":"Bearer","expires_in":3600}),
+        ))
+        .with_priority(1)
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/gmail/v1/users/me/profile"))
+        .and(header("authorization", "Bearer google-access-1"))
+        .respond_with(ResponseTemplate::new(401))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    let (status, account) = f.invoke("account.view", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{account}");
+    let continuation = json!({"query":"in:inbox","maxResults":20,"pageToken":token});
+    let (status, next) = f.invoke("message.search", continuation.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert!(next["result"]["nextPageToken"].is_null(), "{next}");
+    let pages = continued_pages().await;
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].headers["authorization"], "Bearer google-access-2");
+
+    // Reconnecting the same Google account creates a new connection, so the
+    // continuation is rejected before Gmail sees its upstream token.
+    let start = f
+        .browser(
+            Method::POST,
+            "/v1/oauth/connect",
+            "reconnect",
+            Some(json!({"service":"gmail","intent":"reconnect"})),
+        )
+        .await;
+    let start = body_json(start).await;
+    let url = url::Url::parse(start["result"]["authorizationUrl"].as_str().unwrap()).unwrap();
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let callback = f
+        .browser(
+            Method::GET,
+            &format!("/v1/oauth/callback/google?state={state}&code=reconnect-code"),
+            "",
+            None,
+        )
+        .await;
+    assert_eq!(callback.status(), StatusCode::OK);
+    let (status, rejected) = f.invoke("message.search", continuation).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["reasonCode"], "input_invalid", "{rejected}");
+    assert_eq!(continued_pages().await.len(), 1);
+    // A new search under the new connection works as usual.
+    let (status, restarted) = f
+        .invoke("message.search", json!({"query":"in:inbox"}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{restarted}");
+    assert_ne!(restarted["result"]["nextPageToken"], json!(token));
+}

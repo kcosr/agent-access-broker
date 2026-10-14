@@ -15,7 +15,7 @@ use std::{
 use tokio::sync::mpsc;
 use wiremock::{
     Mock, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{method, path, query_param, query_param_is_missing},
 };
 #[path = "../../agent-access-broker-host/tests/support/gmail.rs"]
 mod fixture;
@@ -239,6 +239,33 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         let r = success(run(&config, &args));
         assert_eq!(r["result"]["operation"], "trash");
     }
+    // A typed search page continues through canonical invoke: the Broker
+    // envelope binds the typed command's explicit defaults as omitted ones.
+    let messages = || Mock::given(method("GET")).and(path("/gmail/v1/users/me/messages"));
+    messages()
+        .and(query_param_is_missing("pageToken"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"nextPageToken":"page-2"})))
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    messages()
+        .and(query_param("pageToken", "page-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    let page = success(run(
+        &config,
+        &["gmail", "message", "search", "--query", "in:inbox"],
+    ));
+    let page_token = page["result"]["nextPageToken"].as_str().unwrap();
+    assert_ne!(page_token, "page-2");
+    let next = json!({"query":"in:inbox","pageToken":page_token}).to_string();
+    let next = success(run(
+        &config,
+        &["invoke", "gmail.message.search", "--input-json", &next],
+    ));
+    assert!(next["result"]["nextPageToken"].is_null(), "{next}");
     let before = f.server.received_requests().await.unwrap().len();
     for action in ["message.send", "message.delete", "thread.delete"] {
         assert!(

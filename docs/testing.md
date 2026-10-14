@@ -1738,11 +1738,15 @@ the optional `OAUTH_STUB_REPO` Playwright test as described in [oauth.md](oauth.
 
 ## Gmail
 
-`cargo test -p agent-access-gmail` covers Gmail routes, MIME limits, pagination and
-errors. Core OAuth tests cover reusable refresh recovery and account pinning; Broker
-Gmail tests cover managed browser linking and invocation. Test doubles never reach
-Google. The [Gmail live smoke](providers-gmail.md#validation-and-live-smoke) requires
-an operator-owned Google client, browser consent and disposable test messages.
+`cargo test -p agent-access-gmail` covers Gmail routes, MIME limits, errors and
+search continuations: envelope round trips, rejection of changed settings, caller,
+context, connection, purpose, expiry and instance, the upstream token cap, access
+refresh and the single 401 recovery. Core OAuth tests cover reusable refresh
+recovery and account pinning; Broker Gmail tests cover managed browser linking,
+invocation, and continuations that survive a committed refresh but not a
+reconnect. Test doubles never reach Google. The
+[Gmail live smoke](providers-gmail.md#validation-and-live-smoke) requires an
+operator-owned Google client, browser consent and disposable test messages.
 
 
 ## Imported MCP services
