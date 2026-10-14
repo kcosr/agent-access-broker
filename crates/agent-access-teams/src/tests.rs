@@ -139,6 +139,87 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admitted_destination() {
+    let transport = Arc::new(AcceptTransport(std::sync::atomic::AtomicUsize::new(0)));
+    let provider = TeamsProvider {
+        transport: transport.clone(),
+        allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
+        max_bytes: MAX_BODY_BYTES,
+    };
+    let destinations = |values: &[&str]| {
+        BTreeMap::from([(
+            "destination".to_string(),
+            values.iter().map(|value| value.to_string()).collect(),
+        )])
+    };
+    let variant = || InvocationBuilder::from(admitted_invocation());
+    for invocation in [
+        // Service-mode execution carries no credential object at all.
+        variant()
+            .credential(agent_access_provider::test_support::bearer_credential(
+                "unexpected",
+            ))
+            .build(),
+        variant().service("other").build(),
+        // The admitted authority names exactly the requested destination.
+        variant().authority(InvocationAuthority::ActionOnly).build(),
+        variant().resources(destinations(&["other-alerts"])).build(),
+        variant()
+            .resources(destinations(&["other-alerts", "release-alerts"]))
+            .build(),
+    ] {
+        let error = provider.invoke(invocation).await.unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.message, "invalid Teams invocation authority");
+    }
+    // The endpoint is read only from the admitted private attribute, which
+    // must still be a current signed Workflow URL on a configured origin.
+    for (value, reason) in [
+        (
+            "not a SYNTHETIC_SECRET url".to_string(),
+            ReasonCode::CredentialInvalid,
+        ),
+        (
+            "https://other.environment.api.powerplatform.com/route?sig=SYNTHETIC_SECRET"
+                .to_string(),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            ENDPOINT.replace("&sig=SYNTHETIC_SECRET", "&SYNTHETIC_SECRET"),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+    ] {
+        let error = provider
+            .invoke(
+                variant()
+                    .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
+                        "webhookUrl".into(),
+                        value,
+                    )])))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), reason);
+        assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+    }
+    assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // Audit and object IDs name the alias and the endpoint's origin only.
+    let receipt = provider.invoke(admitted_invocation()).await.unwrap();
+    assert_eq!(
+        receipt.audit,
+        Some(json!({"destination":"release-alerts","upstreamOrigin":ORIGIN}))
+    );
+    assert_eq!(
+        receipt.object_ids,
+        Some(json!({"destination":"release-alerts"}))
+    );
+    assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[test]
 fn descriptor_and_schema_preserve_mutation_authority_and_content_union() {
     let descriptor = descriptor();
@@ -336,7 +417,11 @@ fn build_creates_one_single_attempt_client_per_configured_origin() {
 }
 
 async fn transport(server: &MockServer) -> HttpTransport {
-    let base = Url::parse(&format!("{}/", server.uri())).unwrap();
+    transport_for(&server.uri())
+}
+
+fn transport_for(uri: &str) -> HttpTransport {
+    let base = Url::parse(&format!("{uri}/")).unwrap();
     let limits = ProviderLimits::default().with_request_timeout_ms(200);
     let client = UpstreamClient::build(
         UpstreamClientSpec::new(
@@ -344,7 +429,7 @@ async fn transport(server: &MockServer) -> HttpTransport {
             "teams",
             &base,
             EgressDeclaration::Ordinary(None),
-            &[format!("{}/**", server.uri())],
+            &[format!("{uri}/**")],
             ClientProfile::SingleAttempt,
         ),
         &agent_access_provider::test_support::TestHost::with_limits(limits),
@@ -376,6 +461,106 @@ async fn http_posts_once_without_auth_and_discards_response_secrets() {
     assert_eq!(requests[0].headers["content-type"], "application/json");
     assert!(!requests[0].headers.contains_key("authorization"));
     assert_eq!(requests[0].url.query(), Some("sig=SYNTHETIC_SECRET"));
+}
+
+#[tokio::test]
+async fn proven_unsent_requests_are_reported_apart_from_unknown_outcomes() {
+    // A closed port refuses the connection: nothing reached the Workflow.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let uri = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let error = transport_for(&uri)
+        .send(
+            Url::parse(&format!("{uri}/signed?sig=SYNTHETIC_SECRET")).unwrap(),
+            vec![],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert_eq!(error.message, "Teams notification request was not sent");
+    assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+}
+
+#[tokio::test]
+async fn upstream_traces_and_failures_carry_only_the_endpoint_origin() {
+    let capture = agent_access_provider::test_support::install_trace_capture().start();
+    let mut origins = std::collections::BTreeSet::new();
+    for (status, delay_ms) in [(202, 0), (500, 0), (202, 1000)] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .set_body_string("SYNTHETIC_RESPONSE_SECRET")
+                    .set_delay(std::time::Duration::from_millis(delay_ms)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = transport(&server).await;
+        let endpoint = Url::parse(&format!(
+            "{}/private-path/signed?sig=SYNTHETIC_SECRET",
+            server.uri()
+        ))
+        .unwrap();
+        origins.insert(endpoint.origin().ascii_serialization());
+        let outcome = capture
+            .run(agent_access_provider::host::with_provider_context(
+                CorrelationContext::for_tests(),
+                SERVICE.into(),
+                ACTION.into(),
+                agent_access_provider::test_support::in_invocation_hook(
+                    SERVICE,
+                    ACTION,
+                    http.send(endpoint, b"{\"text\":\"SYNTHETIC_CONTENT\"}".to_vec()),
+                ),
+            ))
+            .await;
+        match outcome {
+            Ok(receipt) => assert_eq!(receipt.status, status),
+            Err(error) => {
+                assert_eq!(delay_ms, 1000);
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+                assert!(!format!("{error:?}").contains("private-path"));
+                assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+            }
+        }
+    }
+    let events = capture.take_events();
+    let upstream = events
+        .iter()
+        .filter(|event| event["event"] == "upstream_request_completed")
+        .collect::<Vec<_>>();
+    assert_eq!(upstream.len(), 3, "{events:?}");
+    assert_eq!(
+        upstream
+            .iter()
+            .map(|event| event["upstreamOrigin"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>(),
+        origins
+    );
+    for event in &upstream {
+        assert_eq!(event["upstreamOperation"], ACTION);
+        assert!(event.get("pathTemplate").is_none(), "{event}");
+    }
+    // Classified inside the invocation hook, the classifications pass its
+    // contract and are kept.
+    assert_eq!(
+        upstream
+            .iter()
+            .filter_map(|event| event["reasonCode"].as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["upstream_failed", "upstream_timeout"])
+    );
+    let serialized = serde_json::to_string(&events).unwrap();
+    for private in [
+        "private-path",
+        "SYNTHETIC_SECRET",
+        "SYNTHETIC_CONTENT",
+        "SYNTHETIC_RESPONSE_SECRET",
+    ] {
+        assert!(!serialized.contains(private), "{private}: {serialized}");
+    }
 }
 
 #[tokio::test]

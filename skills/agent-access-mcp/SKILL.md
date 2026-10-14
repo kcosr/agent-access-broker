@@ -237,6 +237,9 @@ the envelope. Imported results can be nested under `result.upstreamMcp` or
   failed. Inspect `operationStatus`, `mutationStatus`, `retrySafe`, or execution
   details when present. Reconcile using an authorized read of upstream state or
   report uncertainty; never blindly replay a mutation.
+- **`not_applied` with `retrySafe: true`:** The provider proved the write was
+  never sent, so nothing changed and it may be repeated. Without that pair,
+  assume nothing about whether a failed write applied.
 - **`applied_unverified`:** Report that the write was applied but not verified.
   Do not turn this into verified success. Service-specific receipts can also
   mean acceptance only, such as Teams endpoint acceptance rather than delivery.

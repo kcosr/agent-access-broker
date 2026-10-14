@@ -404,6 +404,16 @@ All notable changes to this project are documented in this file.
   `broker_provider_contract_failed` when rejected or made outside a provider
   hook. Rejections log a `provider_contract_failed` event with a diagnostic
   code.
+- A GitLab write whose request provably never reached GitLab (no connection
+  was established, including a connect timeout) now fails with
+  `upstream_connection_failed` or `upstream_timeout` and a result of
+  `mutationStatus: "not_applied"`, `retrySafe: true`. Writes with a
+  verification contract (review participation, approvals, suggestion
+  application, webhooks, and provisioning) previously reported it as
+  `mutation_verification_failed` with `applied_unverified` unless a readback
+  proved the target unchanged; other writes returned the same error without a
+  receipt. Failures after the request may have been sent keep their existing
+  outcome.
 
 ### Fixed
 

@@ -161,10 +161,10 @@ All inputs use `project` (the full repository path). IDs are positive integers;
 
 Lists return `items`, `count`, `maxResults`, `isLast`, and `nextPageToken`.
 Pagination is bounded by `providers.gitlab.search.max_results` and uses signed,
-expiring cursors bound to the caller, credential mode, action, project, account,
-provider configuration, and page size. Account token rotation locates the old
-token through the account's paginated token list, capped at 100 pages of 100
-entries; an exhausted lookup fails before rotation.
+expiring cursors bound to the caller, execution context, credential mode,
+action, project, account, provider configuration, and page size. Account token
+rotation locates the old token through the account's paginated token list,
+capped at 100 pages of 100 entries; an exhausted lookup fails before rotation.
 
 Rotation checks the old token's active/revoked state, scopes, and role against
 current operator limits before requesting a replacement. It preserves the
@@ -238,6 +238,11 @@ response, or server error after a write attempt uses the canonical
 `mutationStatus: "applied_unverified"`, `retrySafe: false`,
 `verificationStage: "mutation_response"`, and numeric IDs under `safeLocators`.
 The write may have applied; this status does not prove it succeeded.
+A write the Broker proves was never sent, because no connection was
+established, instead fails with `upstream_connection_failed` (or
+`upstream_timeout` for a connect timeout) and `mutationStatus: "not_applied"`,
+`retrySafe: true`: nothing was issued or changed, and the action can be
+repeated.
 Rotation always identifies the old token as `previousTokenId`; `tokenId` is
 present only when a different new ID was returned. These IDs and the available
 upstream status/duration are also audited. Upstream 400/422 validation responses

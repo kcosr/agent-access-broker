@@ -769,7 +769,7 @@ impl GitlabProvider {
             .backend
             .upload_project(project.id, upload, credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         // Attachment URLs contain secret path segments. Keep all returned metadata
         // out of audit fields and object identifiers.
         Ok(gitlab_result(
@@ -953,7 +953,7 @@ impl GitlabProvider {
             .backend
             .create_issue(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_issue_in_project(&project, &response.value)?;
         ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)?;
         let mut result = gitlab_result_with_request_body_audit(
@@ -1014,7 +1014,7 @@ impl GitlabProvider {
             .backend
             .update_issue(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_issue_in_project(&project, &response.value)?;
         ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)?;
         let mut result = gitlab_result_with_request_body_audit(
@@ -1153,7 +1153,7 @@ impl GitlabProvider {
             .backend
             .create_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_note_target_issue(&response.value, inputs.iid)?;
         let mut result = gitlab_result_with_request_body_audit(
             "issue.note.add",
@@ -1249,7 +1249,7 @@ impl GitlabProvider {
             .backend
             .update_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_issue_note_consistent(
             &project,
             &issue.value,
@@ -1316,7 +1316,7 @@ impl GitlabProvider {
             .backend
             .delete_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         let mut result = gitlab_result(
             "issue.note.delete",
             &project,
@@ -1505,7 +1505,7 @@ impl GitlabProvider {
             .backend
             .create_merge_request(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_merge_request_in_project(&project, &response.value)?;
         ensure_merge_request_description_within_cap(
             &response.value,
@@ -1577,7 +1577,7 @@ impl GitlabProvider {
             .backend
             .update_merge_request(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_merge_request_in_project(&project, &response.value)?;
         ensure_merge_request_description_within_cap(
             &response.value,
@@ -1719,7 +1719,7 @@ impl GitlabProvider {
             .backend
             .create_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_note_target_merge_request(&response.value, inputs.iid)?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.note.add",
@@ -1815,7 +1815,7 @@ impl GitlabProvider {
             .backend
             .update_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_merge_request_note_consistent(
             &project,
             &merge_request.value,
@@ -1882,7 +1882,7 @@ impl GitlabProvider {
             .backend
             .delete_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         let mut result = gitlab_result(
             "merge_request.note.delete",
             &project,
@@ -3072,6 +3072,9 @@ impl GitlabProvider {
             .await;
         let response = match bulk {
             Ok(response) => response,
+            Err(GitlabBackendError::NotSent { timed_out }) => {
+                return Err(mutation_not_sent(timed_out));
+            }
             Err(error) => {
                 let remaining = self
                     .all_current_drafts(project.id, inputs.iid, credential)
@@ -3545,6 +3548,9 @@ impl GitlabProvider {
             .await;
         let response = match mutation {
             Ok(response) => response,
+            Err(GitlabBackendError::NotSent { timed_out }) => {
+                return Err(mutation_not_sent(timed_out));
+            }
             Err(error) => {
                 let unchanged = self
                     .backend
@@ -3730,6 +3736,9 @@ impl GitlabProvider {
             .await;
         let response = match mutation {
             Ok(response) => response,
+            Err(GitlabBackendError::NotSent { timed_out }) => {
+                return Err(mutation_not_sent(timed_out));
+            }
             Err(error) => {
                 let unchanged = self
                     .ensure_suggestions_state(&project, &merge_request, &inputs, credential, false)
@@ -4434,7 +4443,7 @@ impl GitlabProvider {
             .backend
             .create_merge_request_discussion(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_discussion_target_merge_request(&response.value, inputs.iid)?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.discussion.add",
@@ -4500,7 +4509,7 @@ impl GitlabProvider {
             .backend
             .update_merge_request_discussion_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_merge_request_note_consistent(
             &project,
             &merge_request.value,
@@ -4571,7 +4580,7 @@ impl GitlabProvider {
             .backend
             .delete_merge_request_discussion_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         let mut result = gitlab_result(
             "merge_request.discussion.note.delete",
             &project,
@@ -4627,7 +4636,7 @@ impl GitlabProvider {
             .backend
             .set_merge_request_discussion_resolved(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_merge_request_discussion_consistent(
             &project,
             &merge_request.value,
@@ -4808,7 +4817,7 @@ impl GitlabProvider {
             .backend
             .create_branch(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         Ok(gitlab_result_with_request_body_audit(
             "branch.create",
             &project,
@@ -5113,7 +5122,7 @@ impl GitlabProvider {
             .backend
             .create_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         Ok(gitlab_result_with_request_body_audit(
             "file.create",
             &project,
@@ -5176,7 +5185,7 @@ impl GitlabProvider {
             .backend
             .update_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         Ok(gitlab_result_with_request_body_audit(
             "file.update",
             &project,
@@ -5236,7 +5245,7 @@ impl GitlabProvider {
             .backend
             .delete_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         Ok(gitlab_result_with_request_body_audit(
             "file.delete",
             &project,
@@ -5373,7 +5382,7 @@ impl GitlabProvider {
             .backend
             .create_commit(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         Ok(gitlab_result_with_request_body_audit(
             "commit.create",
             &project,
@@ -5483,7 +5492,7 @@ impl GitlabProvider {
             .backend
             .run_pipeline(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_pipeline_in_project(&project, &response.value)?;
         Ok(gitlab_result_with_request_body_audit(
             "pipeline.run",
@@ -5555,7 +5564,7 @@ impl GitlabProvider {
                     .await
             }
         }
-        .map_err(gitlab_backend_error)?;
+        .map_err(gitlab_write_error)?;
         ensure_pipeline_in_project(&project, &response.value)?;
         Ok(gitlab_result(
             operation,
@@ -5804,7 +5813,7 @@ impl GitlabProvider {
             .backend
             .play_job(project.id, inputs.job_id, credential)
             .await
-            .map_err(gitlab_backend_error)?;
+            .map_err(gitlab_write_error)?;
         ensure_job_in_project(&project, &response.value)?;
         Ok(gitlab_result_with_request_body_audit(
             "job.play",
@@ -5852,7 +5861,7 @@ impl GitlabProvider {
                     .await
             }
         }
-        .map_err(gitlab_backend_error)?;
+        .map_err(gitlab_write_error)?;
         ensure_job_in_project(&project, &response.value)?;
         Ok(gitlab_result(
             operation,
@@ -12722,11 +12731,19 @@ fn mutation_backend_error(
     locators: MutationSafeLocators,
 ) -> ProviderError {
     match error {
+        // Only the write itself can be proven unsent; an unsent readback
+        // leaves an applied write unverified.
+        GitlabBackendError::NotSent { timed_out }
+            if stage == MutationVerificationStage::MutationResponse =>
+        {
+            mutation_not_sent(timed_out)
+        }
         GitlabBackendError::DraftPositionShapeInvalid => mutation_verification_failed(
             stage, locators,
         )
         .with_internal_diagnostic_code(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str()),
-        GitlabBackendError::Transport(_)
+        GitlabBackendError::NotSent { .. }
+        | GitlabBackendError::Transport(_)
         | GitlabBackendError::Timeout
         | GitlabBackendError::Protocol(_)
         | GitlabBackendError::ResponseTooLarge
@@ -14075,6 +14092,31 @@ fn gitlab_merge_backend_error(error: GitlabBackendError) -> ProviderError {
             ReasonCode::VersionConflict,
             "GitLab merge request sha does not match current metadata",
         ),
+        other => gitlab_write_error(other),
+    }
+}
+
+/// An action's single upstream write that the SDK proved never reached
+/// GitLab: nothing was applied, so repeating the action is safe. Call it only
+/// for the first write of an action, never after another write applied.
+pub(crate) fn mutation_not_sent(timed_out: bool) -> ProviderError {
+    ProviderError::error(
+        if timed_out {
+            ReasonCode::UpstreamTimeout
+        } else {
+            ReasonCode::UpstreamConnectionFailed
+        },
+        "GitLab request was not sent; nothing was applied",
+    )
+    .with_result(json!({ "mutationStatus": "not_applied", "retrySafe": true }))
+}
+
+/// The error of an action's single upstream write that carries no
+/// verification receipt: a proven-unsent request reports `not_applied`, and
+/// every other failure keeps its ordinary mapping.
+fn gitlab_write_error(error: GitlabBackendError) -> ProviderError {
+    match error {
+        GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
         other => gitlab_backend_error(other),
     }
 }
@@ -14114,11 +14156,13 @@ fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {
             format!("GitLab rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        GitlabBackendError::Transport(_) => ProviderError::error(
-            ReasonCode::UpstreamConnectionFailed,
-            "GitLab request failed",
-        ),
-        GitlabBackendError::Timeout => {
+        GitlabBackendError::NotSent { timed_out: false } | GitlabBackendError::Transport(_) => {
+            ProviderError::error(
+                ReasonCode::UpstreamConnectionFailed,
+                "GitLab request failed",
+            )
+        }
+        GitlabBackendError::NotSent { timed_out: true } | GitlabBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "GitLab request timed out")
         }
         GitlabBackendError::ResponseTooLarge => ProviderError::error(

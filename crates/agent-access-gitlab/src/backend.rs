@@ -2078,8 +2078,14 @@ pub enum GitlabBackendError {
     RateLimited(Option<UpstreamRetryAfter>),
     #[error("GitLab validation failed with HTTP {status}")]
     Validation { status: u16, message: String },
+    /// The SDK proved the request never reached GitLab: it could not be built,
+    /// or no connection was established (`timed_out` for a connect timeout).
+    #[error("GitLab request was not sent")]
+    NotSent { timed_out: bool },
+    /// The request may have reached GitLab.
     #[error("GitLab transport failed: {0}")]
     Transport(String),
+    /// The request may have reached GitLab.
     #[error("GitLab request timed out")]
     Timeout,
     #[error("GitLab response exceeded the configured byte cap")]
@@ -4749,16 +4755,11 @@ pub(crate) async fn send_gitlab_request(
 
 pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError {
     match error {
-        // A request that never reached the upstream fails as it always has:
-        // connect timeouts as timeouts, everything else as transport errors.
-        UpstreamError::Timeout
-        | UpstreamError::NotSent {
-            timed_out: true, ..
-        } => GitlabBackendError::Timeout,
-        UpstreamError::Transport(message)
-        | UpstreamError::NotSent {
-            detail: message, ..
-        } => GitlabBackendError::Transport(message),
+        // Only the SDK's own not-sent classification proves GitLab never
+        // received the request; every other failure may have reached it.
+        UpstreamError::NotSent { timed_out, .. } => GitlabBackendError::NotSent { timed_out },
+        UpstreamError::Timeout => GitlabBackendError::Timeout,
+        UpstreamError::Transport(message) => GitlabBackendError::Transport(message),
         UpstreamError::NotAllowed | UpstreamError::Redirect => {
             GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
         }

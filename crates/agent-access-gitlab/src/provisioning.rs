@@ -267,6 +267,10 @@ fn provisioning_unverified(locators: &Value) -> ProviderError {
     )
 }
 fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> ProviderError {
+    // Every provisioning action performs at most one write, after its reads.
+    if let (GitlabBackendError::NotSent { timed_out }, Some(_)) = (&error, mutation) {
+        return mutation_not_sent(*timed_out);
+    }
     let status = match &error {
         GitlabBackendError::HttpStatus(status) | GitlabBackendError::Validation { status, .. } => {
             Some(*status)
@@ -1013,6 +1017,28 @@ mod tests {
             assert_eq!(failure.upstream_status, Some(status));
             assert!(failure.result.is_none());
             assert!(!failure.message.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn provisioning_writes_proven_unsent_are_not_applied_and_retry_safe() {
+        let locators = json!({"userId":70,"previousTokenId":10});
+        for (timed_out, reason) in [
+            (false, ReasonCode::UpstreamConnectionFailed),
+            (true, ReasonCode::UpstreamTimeout),
+        ] {
+            let failure =
+                provisioning_failure(GitlabBackendError::NotSent { timed_out }, Some(&locators));
+            assert_eq!(failure.decision(), Decision::Error);
+            assert_eq!(failure.reason_code(), reason);
+            assert_eq!(
+                failure.result.as_deref(),
+                Some(&json!({"mutationStatus":"not_applied","retrySafe":true}))
+            );
+            // A read that was never sent carries no mutation receipt.
+            let read = provisioning_failure(GitlabBackendError::NotSent { timed_out }, None);
+            assert_eq!(read.reason_code(), reason);
+            assert!(read.result.is_none());
         }
     }
 
