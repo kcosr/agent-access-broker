@@ -606,9 +606,7 @@ impl ConformanceProvider {
         let response = self
             .pings
             .send(
-                self.pings
-                    .request(reqwest::Method::POST, url)
-                    .header("X-Endpoint-Key", key)
+                endpoint_key(self.pings.request(reqwest::Method::POST, url), key)
                     .json(&json!({"message": inputs.message})),
                 UpstreamCall::new("endpoint.ping").with_authorization(&authorization),
             )
@@ -917,6 +915,19 @@ impl Provider for ConformanceProvider {
                 "conformance action is not supported",
             )),
         }
+    }
+}
+
+/// `request` with the endpoint's private key, marked sensitive so the client
+/// keeps it on the endpoint's own origin. A key no header value can hold
+/// fails the request build, as an unmarked header would.
+fn endpoint_key(request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
+    match reqwest::header::HeaderValue::from_str(key) {
+        Ok(mut value) => {
+            value.set_sensitive(true);
+            request.header("X-Endpoint-Key", value)
+        }
+        Err(_) => request.header("X-Endpoint-Key", key),
     }
 }
 
@@ -1341,6 +1352,29 @@ mod tests {
         assert_eq!(
             descriptor.credential_profile_kind("api_token"),
             Some("bearer_token")
+        );
+    }
+
+    /// The endpoint key is a secret: the client keeps it on the endpoint's
+    /// origin like any credential, and Debug output hides it.
+    #[test]
+    fn the_endpoint_key_header_is_sensitive() {
+        let request = endpoint_key(
+            reqwest::Client::new().post("https://pings.example.test/endpoints/primary/ping"),
+            "endpoint-secret",
+        )
+        .build()
+        .unwrap();
+        let value = &request.headers()["x-endpoint-key"];
+        assert_eq!(value, "endpoint-secret");
+        assert!(value.is_sensitive());
+        assert!(
+            endpoint_key(
+                reqwest::Client::new().post("https://pings.example.test/"),
+                "bad\nkey"
+            )
+            .build()
+            .is_err()
         );
     }
 }
