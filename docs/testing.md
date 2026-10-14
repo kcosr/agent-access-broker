@@ -66,7 +66,7 @@ repository URL forms, with and without `.git`, must reach canonical `.git`
 upstream paths. It also checks upstream credential selection, repository denial
 before forwarding, and disabled redirect following. Git configuration, tokens,
 repositories, and certificate trust are isolated from the user's environment.
-Run it with `cargo test --locked -p agent-access-broker --test git_http_gateway`;
+Run it with `cargo test --locked -p agent-access-broker-host --test git_http_gateway`;
 the ordinary locked Rust suite includes it. Its ignored `git_http_gateway_child`
 test is invoked by the parent with isolated proxy settings, as with the outbound
 TLS child fixture below. This fixture uses real Git smart HTTP, not a live GitLab
@@ -121,6 +121,67 @@ environment of concurrent tests. The ignored `outbound_tls_child` test is only
 intended to run through that parent; do not invoke it with `--include-ignored`.
 Run the harness with `cargo test -p agent-access-core --test outbound_tls`.
 
+Provider and Broker unit tests share the `test-support` feature of
+`agent-access-provider`. Its `TestHost` lends a provider build context with a
+deterministic, offline upstream client factory: clients trust only a disposable
+test CA embedded in that package, never read proxy environment variables, use a
+configured service proxy only when it has no credential references, and record
+each requested label, base URL, profile and route in `built_clients()`. Core's
+own network tests cover proxy precedence, credential resolution and the
+literal-loopback caller categories against the real host factory.
+
+Broker acceptance tests use the `test-support` feature of
+`agent-access-broker-host`. Its `test_support::IsolatedBroker` starts an
+assembly's composition and identity on one real configuration file, either a
+TOML document written privately (`0600` in a `0700` fixture directory) or a
+test-owned path, through the same startup as `serve`: configuration validation,
+state locks, readiness, reload publication, and operation and audit drain. Its
+loopback listeners are bound to ephemeral ports when the fixture is created, so
+a configuration can name their addresses, such as `[mcp] public_url`. It
+installs no process signal handler or global log subscriber. The lifecycle's
+tasks, reloads and connections report to the dispatcher of the task that
+starts the broker; tasks that request handlers spawn themselves report to the
+default dispatcher. `RunningBroker::reload` and `shutdown` stand in for SIGUSR2
+and SIGTERM. As in the process, connections still open at the shutdown deadline
+are cut off. `join` ends HTTP MCP sessions a client left open, as process exit
+does, and returns a drain report once every state lock is released, so a test
+can restart on the same state. `ProviderFixture` is a fixture control, not an
+embedding API: it supplies the provider of a selected native kind that the
+configuration configures, built for each generation, while configuration
+validation, admission and generation ownership still apply.
+`RunningBroker::audit` and `managed_store` give read-only views of the
+fixture's stores; the views keep the fixture directory and stay readable after
+`join`. Startup creates an empty audit store, so a test that checks that a
+value is absent from the audit first requires the exercised request's records
+with `AuditStoreView::require_request` or `require_action` (host unit tests use
+`require_audit_request` and `require_audit_action`); otherwise the check would
+pass if nothing were audited. `portal_service_catalog` exports the grant catalog that the portal
+conformance fixture records. The feature adds construction and control APIs
+only. Release builds must not enable it, and test binaries into which Cargo
+unifies it keep production semantics.
+
+Outside the host, tests start an in-process broker only through
+`IsolatedBroker`; process-level tests, such as the assembly's `state_locks` and
+`exit_status`, run the built executable. The host exports no router, reload
+state or runtime state, and the `agent-access-broker` library exports only
+`composition()` and `build_identity()`, which the CLI smokes and the assembly's
+acceptance tests pass to `IsolatedBroker::new`. They compare a served status
+with `BrokerApplication::status()` for the same composition and identity, and
+CLI unit tests read route specifications and configured service descriptors
+from the composition's read-only projection rather than rebuilding the backend
+registry. Host unit tests under `crates/agent-access-broker-host/src/tests/`
+run inside the crate and may also drive its internal routers and runtime
+snapshots directly.
+
+Tests that assert `tracing` events call
+`install_trace_capture()`, which installs one capturing dispatcher as the test
+binary's global default, then start a capture and run the observed work through
+`TraceCapture::run` or `in_scope`. A capture records only the events inside its
+span, including owned work carried by `InvocationScope` or another instrumented
+future, so concurrent tests need no lock. Events on uninstrumented tasks,
+blocking closures, or plain threads are not captured. A test binary that uses it
+must not install another global subscriber.
+
 Reload behavior fixtures use the production admission and shutdown budgets.
 Runtime construction loads the host CA store and performs local filesystem work,
 which can exceed a one-second deadline under parallel test load. Tests that
@@ -146,20 +207,75 @@ npm --prefix apps/portal run build
 npm --prefix apps/portal run test:unit
 npm --prefix apps/portal run test:e2e
 node --test scripts/*.test.mjs
+node scripts/check-crate-boundaries.mjs
+node scripts/public-api.mjs check
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
 node scripts/check-doc-links.mjs
 ```
 
+Every workspace crate declares one role in its manifest:
+
+```toml
+[package.metadata.agent-access]
+role = "native"
+```
+
+The roles are `sdk` (`agent-access-provider`), `core`, `host`
+(`agent-access-broker-host`), `assembly` (`agent-access-broker`), `cli`
+(`agent-access`), `native` (backend crates), `reference`
+(`agent-access-conformance`), `adapter` (the MCP and OpenAPI import adapters),
+and `helper` (`agent-access-atlassian`, `agent-access-content`).
+`node scripts/check-crate-boundaries.mjs` reads
+`cargo metadata --locked --format-version 1 --all-features` and fails when a
+workspace member has no known role or when a resolved dependency edge crosses
+these boundaries:
+
+- The SDK has no dependency of any kind on another workspace crate.
+- Native, reference, and helper crates have no normal, build, or development
+  dependency on core, host, assembly, CLI, or adapter crates.
+- Adapter normal and build dependencies reach only SDK, helper, and core crates.
+- The transitive normal and build dependency closures of core and the host
+  contain no native, adapter, or reference crate. Development dependencies may
+  link real backends for tests.
+- The CLI's normal and build closure contains no host, assembly, native,
+  adapter, or reference crate. Its core dependency is reported as allowed.
+
+Its unit tests use synthetic metadata and run with the other script tests.
+
+`node scripts/public-api.mjs check` regenerates the supported public API
+inventory and fails when it differs from the checked-in `api/` files. It covers
+the SDK and host with and without `test-support`, the assembly library, the
+reviewed selection entry points of the native and import adapter crates the
+assembly links, and the workspace and third-party types those signatures expose.
+After an intended and reviewed API change, run `node scripts/public-api.mjs
+update` and commit the `api/` diff. The check requires the `nightly-2026-07-13`
+Rust toolchain, installed with rustup, and `cargo-public-api` 0.52.0 on `PATH`.
+Set `AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is in a different
+rustup home from the active one:
+
+```bash
+rustup toolchain install nightly-2026-07-13 --profile minimal
+cargo install cargo-public-api --version 0.52.0 --locked
+AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME="$HOME/.rustup" node scripts/public-api.mjs check
+```
+
+It runs the nightly's rustdoc by absolute path, so `rust-toolchain.toml` does
+not select the toolchain, and builds only in `target/public-api`. A missing or
+mismatched tool fails with exit status 2; the check never skips. Its unit tests
+use synthetic rustdoc JSON and Cargo metadata, check the reviewed entry points
+against the repository's own metadata, and run with the other script tests. See the [inventory guide](../api/README.md) for the file format and review
+rules.
+
 On Unix, run the real-signal parent fixture separately:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 The parent starts guarded child fixtures for SIGTERM/SIGINT shutdown and SIGUSR2
-reload. Never invoke `tests::unix_signal_smoke_child_harness` directly; it is an
+reload. Never invoke `lifecycle::tests::unix_signal_smoke_child_harness` directly; it is an
 entrypoint for the parent. Do not broaden this command to all ignored tests,
 which include separately authorized live-provider smokes. Record the signal
 fixture as not applicable on non-Unix platforms.
@@ -268,7 +384,14 @@ admin-only reveal, CSRF, no-store, and audit failure before decryption. These te
 make no live Workflow calls; rendering and final delivery need a separately
 authorized dedicated Workflow test.
 
-The backend-contract acceptance suite (`cargo test -p agent-access-broker
+Core stored-format golden tests use rows written by an earlier release. Per-user
+credential rows and imported execution slots must still resolve to the same
+material with fixed AAD bytes. Imported service definitions, including credential
+bindings, accepted action definitions and hashes, and discovery previews keep their
+exact JSON. A failure means stored credentials or imports would need reentry or
+change identity; fix the change rather than regenerating the vectors.
+
+The backend-contract acceptance suite (`cargo test -p agent-access-broker-host
 conformance`) registers the test-only `agent-access-conformance` backend beside
 the linked backends and exercises it through TOML configuration and
 validation, discovery, the catalog/OpenAPI/send-schema projections, JSON,
@@ -280,9 +403,10 @@ only for an authorized invocation of its endpoint. It also checks
 `apps/portal/unit/conformance.fixture.json`, which the portal's unit tests
 (`npm --prefix apps/portal run test:unit`) use to exercise resource labels,
 namespace coverage, grant choices, and private attribute fields for a backend
-the portal was not written for. After changing the conformance backend or the
-policy catalog shape, regenerate the fixture with
-`UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker conformance_portal_fixture`.
+the portal was not written for; its grant catalog comes from
+`test_support::portal_service_catalog`. After changing the conformance backend
+or the policy catalog shape, regenerate the fixture with
+`UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker-host conformance_portal_fixture`.
 CloudBees CI coverage includes deterministic provider, policy/config,
 managed-store migration, typed CLI parser/lowering, and an in-process Broker
 smoke with a stubbed controller and the real CLI. The smoke drives artifact,
@@ -327,12 +451,22 @@ the expected immutable commit or exact tag:
 node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
-The verifier builds Broker and CLI release executables locally with locked
-dependencies and required provenance. It starts the Broker on loopback with a
-temporary minimal identity and asserts that `/v1/broker/status` matches the
-expected package version and commit. It checks CLI startup with `--help` and
-fails if the checkout is dirty or `HEAD` changes. It does not publish artifacts
-or perform the source release.
+The verifier first rejects a release dependency graph (normal and build units of
+`agent-access-broker` and `agent-access`) whose resolved features include
+`test-support` on any package, or that links a `reference` crate. It then builds
+Broker and CLI release executables locally with locked dependencies and required
+provenance. It starts the Broker on loopback with a temporary minimal identity and
+asserts that `/v1/broker/status` names the `agent-access-broker` assembly at the
+expected package version, with the expected commit as evidence-backed provenance
+for the assembly, host, SDK and every module, and that each of those packages
+resolves to exactly one tracked path package in the checkout. It checks CLI
+startup with `--help` and fails if the checkout is dirty or `HEAD` changes. It
+does not publish artifacts or perform the source release. Its script tests run
+`cargo tree` on small generated workspaces to show that test support enabled
+through a release package's default features is rejected while a dev-only
+activation is allowed, and that a second module origin from a local Git
+repository is ignored when only a development feature selects it but rejected
+when production selects it.
 
 To opt into a configured remote build service explicitly:
 
@@ -547,16 +681,16 @@ databases and files:
   pool: deadlines while waiting and executing, admission overflow, disconnect
   interrupts that cannot reach the next query, generation drain, and no read
   transaction left open.
-- The broker suite `crates/agent-access-broker/src/tests/audit_query.rs`
-  (`cargo test -p agent-access-broker audit_query`) covers route availability
+- The broker suite `crates/agent-access-broker-host/src/tests/audit_query.rs`
+  (`cargo test -p agent-access-broker-host audit_query`) covers route availability
   with SQLite, JSONL, and disabled audit or management across the catalog,
   OpenAPI, and send schema; `auditQueryable`; CSRF-free browser reads; the
   admin, service-manager, and self visibility tiers; timelines; cursor
   continuation and binding, including a path-changing reload; successes that
   are neither audited nor logged; audited denials; busy and slow queries; and
   queries while audit writes fail.
-  `crates/agent-access-broker/src/tests/management_read_audit.rs`
-  (`cargo test -p agent-access-broker management_read_audit`) calls every
+  `crates/agent-access-broker-host/src/tests/management_read_audit.rs`
+  (`cargo test -p agent-access-broker-host management_read_audit`) calls every
   read route in the runtime catalog and checks that it answers with its
   classified operation and leaves an audit record exactly when it is an
   audited read, denied, or failed; that the portal page-load reads and
@@ -1503,7 +1637,7 @@ temporary tokens/configuration and stop the local broker after the run.
 
 ## Downstream HTTP MCP
 
-`cargo test -p agent-access-broker --lib tests::mcp::` exercises the real public
+`cargo test -p agent-access-broker-host --lib tests::mcp::` exercises the real public
 router and SDK transport: initialization, helpers, native JSON calls, resource
 denials, current bearer authentication, session ownership, reload/expiry,
 protocol errors, and request/response bounds. Core ownership tests and Broker
@@ -1535,7 +1669,7 @@ external proxy executable or another repository. These commands run a focused
 subset of HTTP/MCP/Git admission and shared-runtime caller tests:
 
 ```sh
-cargo test --locked -p agent-access-broker --lib tests::managed_identity
+cargo test --locked -p agent-access-broker-host --lib tests::managed_identity
 cargo test --locked -p agent-access-core --lib trusted_caller
 ```
 
@@ -1564,14 +1698,19 @@ end-to-end harnesses are separate from this repository's build and test suite.
 
 ## Development OAuth test provider
 
-The shared-core `oauth::tests` and managed-store OAuth tests cover encrypted
+The shared-core `oauth::tests` select the `stub` dialect and `oauth_stub`
+records backend from `agent-access-fake` explicitly; `cargo test -p
+agent-access-fake` covers the dialect's protocol units and the records
+backend's configuration. Those and the managed-store OAuth tests cover encrypted
 storage, consent/session/grant and binding fences, refresh concurrency/cancellation,
 restart, rotation and disconnect races. Personal setup tests cover direct/group
 `per_user` grants without credential rights, rights-only denial, current
 membership expiry, owner cleanup after grant loss and denied-flow retry behavior.
 Resource/context availability remains independent of setup authorization.
 The separate `oauth-provider-stub` repository contains provider protocol tests and `scripts/broker_e2e.py`, which drives the
-real Broker and CLI. With built binaries and portal assets, run the harness and
+real Broker and CLI. Its generated configuration points both
+`[providers.oauth_stub] base_url` and the `stub` registration at the same test
+server. With built binaries and portal assets, run the harness and
 the optional `OAUTH_STUB_REPO` Playwright test as described in [oauth.md](oauth.md).
 
 ## Gmail
@@ -1590,8 +1729,11 @@ or production write target is required. `agent-access-provider` tests the bounde
 import contract, `agent-access-core` tests store/key lifecycle and stable naming,
 and broker `imports_foundation`, `imports_mcp`, and `imports_management` suites
 exercise restart, publication cancellation, normal authorization/limits/audit,
-credential isolation, and the administrator lifecycle. `agent-access-mcp-upstream`
-uses the pinned SDK's real HTTP server plus raw protocol fixtures. Two-version
+credential isolation, and the administrator lifecycle. The foundation suites load
+a development-only synthetic import adapter from the broker host's test tree;
+only test registries select it, and the broker binary never links it.
+`agent-access-mcp-upstream` uses the pinned SDK's real HTTP server plus raw
+protocol fixtures. Two-version
 regression coverage must include:
 
 - `2026-07-28`, `2025-11-25` and dual-version servers, current-version preference,

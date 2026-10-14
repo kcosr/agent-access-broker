@@ -93,7 +93,9 @@ escaped independently.
 Documents are limited to 4 MiB (or the configured upstream response limit, if
 smaller), 512 operations, and a 16 MiB expanded discovery manifest. Each accepted
 operation and schema also has bounded size/depth/regex budgets. Oversized
-discovery fails with an explicit limit error.
+discovery fails with an explicit limit error. A document server answering HTTP
+429 reports `upstream_rate_limited` for the imported service, naming the wait
+when the response carries a valid `Retry-After`.
 
 References are local and bounded, targeting the appropriate `components`
 collection; schema references target `components.schemas`. Request and response

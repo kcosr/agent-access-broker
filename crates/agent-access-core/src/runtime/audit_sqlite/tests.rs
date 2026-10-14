@@ -225,8 +225,8 @@ use super::super::{
 };
 use crate::{
     AuditConfig, AuditStoreType, DEFAULT_EXECUTION_CONTEXT, ExecutionContext, LimitsConfig,
-    ReasonCode,
 };
+use agent_access_provider::ReasonCode;
 use rusqlite::OpenFlags;
 use serde_json::{Value, json};
 use std::future::Future;
@@ -1225,25 +1225,25 @@ struct CountingProvider {
 }
 
 impl agent_access_provider::test_support::DescribedProvider for CountingProvider {
-    fn descriptor(&self) -> crate::ServiceDescriptor {
+    fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
         agent_access_fake::fake_descriptor()
     }
 }
 
 #[async_trait::async_trait]
-impl crate::Provider for CountingProvider {
-    fn resolve_scopes(
+impl agent_access_provider::Provider for CountingProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<crate::ResourceScopes, crate::ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: agent_access_provider::ScopeRequest<'_>,
+    ) -> Result<agent_access_provider::ScopeResolution, agent_access_provider::ProviderError> {
+        agent_access_provider::Provider::resolve_scopes(&agent_access_fake::FakeProvider, request)
+            .await
     }
 
     async fn invoke(
         &self,
-        request: crate::ProviderInvocation,
-    ) -> Result<crate::ProviderResult, crate::ProviderError> {
+        request: agent_access_provider::ProviderInvocation,
+    ) -> Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         agent_access_fake::FakeProvider.invoke(request).await
     }
@@ -1376,7 +1376,7 @@ async fn a_full_database_fails_closed_and_recovers_without_a_restart() {
     let denied = invoke("full-denied").await;
     assert_eq!(
         denied.envelope.reason_code,
-        Some(ReasonCode::AuditUnavailable)
+        Some(ReasonCode::AuditUnavailable.into())
     );
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 

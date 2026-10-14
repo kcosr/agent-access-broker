@@ -7,25 +7,22 @@
 //! keep a private attribute that a single-attempt action consumes. Broker acceptance tests register it beside the linked
 //! backends; that it needs nothing outside this crate and the registration
 //! list is the point.
-mod imports;
-pub use imports::{
-    CONFORMANCE_IMPORT_ADAPTER, ConformanceImportAdapter, conformance_import_action,
-};
-
 use agent_access_provider::presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, ReadContentFormat,
     RenderBudget, RenderContext, RenderError, RenderedBody,
 };
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BrokerBodyPart, BrokerBodyPartSpec,
-    BuildContext, ClientProfile, CredentialDescriptor, EgressProxyConfig, HostError,
-    NamespaceSelectorDescriptor, Provider, ProviderError, ProviderInvocation, ProviderResult,
-    ProviderResultStream, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
+    ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
+    BrokerBodyPart, BrokerBodyPartSpec, BuildContext, ClientProfile, CredentialDescriptor,
+    CredentialView, EgressDeclaration, EgressProxyConfig, NamespaceSelectorDescriptor, Provider,
+    ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
+    ProviderState, ProviderStreamError, ReasonCode, ResourceAttributeDescriptor,
     ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ServiceDescriptor, ServiceSurface, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
-    complete_upstream_trace, file_upload_body, parse_backend_config, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
+    attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -39,53 +36,48 @@ const SERVICE: &str = "conformance";
 const LABEL: &str = "providers.conformance";
 const MAX_PING_MESSAGE_BYTES: usize = 1024;
 
-pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[&CONFORMANCE_ITEM_RESOURCE, &CONFORMANCE_ENDPOINT_RESOURCE],
-    parse: parse_backend_config::<ConformanceConfig>,
-    development_only: true,
-};
+pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<ConformanceConfig>,
+)
+.with_resource_types(&[&CONFORMANCE_ITEM_RESOURCE, &CONFORMANCE_ENDPOINT_RESOURCE])
+.development_only();
 
 /// Items on shelves, identified as `shelf/item` with up to two nested
 /// shelves. Namespaces cover a shelf and everything below it.
-pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: Some(item_inputs),
-    attributes: &[],
-    id: ResourceType::from_static("conformance_item"),
-    label: "Conformance item",
-    plural_label: "Conformance items",
-    example: "shelf-one/item-one",
-    canonical: |value| is_item_path(value, 2..=4),
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: |value| is_item_path(value, 1..=3),
-        label: "Items on a shelf",
-        members_label: "Items",
-        example: "shelf-one",
-    }),
-};
+pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("conformance_item"),
+    "Conformance item",
+    "Conformance items",
+    "shelf-one/item-one",
+    |value| is_item_path(value, 2..=4),
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    |value| is_item_path(value, 1..=3),
+    "Items on a shelf",
+    "Items",
+    "shelf-one",
+))
+.with_action_inputs(item_inputs);
 
 /// Named endpoints that receive pings. Each managed entry keeps the key the
 /// upstream expects as a private attribute: encrypted by the broker, shown
 /// only through an audited admin reveal, and handed to the provider only for
 /// an authorized invocation that targets exactly that endpoint.
-pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "signingKey",
-        label: "Signing key",
-        description: "Key the conformance upstream requires for pings to this endpoint",
-        required: true,
-        validate: |value| {
-            (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic())
-        },
-    }],
-    id: ResourceType::from_static("conformance_endpoint"),
-    label: "Conformance endpoint",
-    plural_label: "Conformance endpoints",
-    example: "alerts",
-    canonical: is_endpoint_name,
-    namespace: None,
-};
+pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("conformance_endpoint"),
+    "Conformance endpoint",
+    "Conformance endpoints",
+    "alerts",
+    is_endpoint_name,
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "signingKey",
+    "Signing key",
+    "Key the conformance upstream requires for pings to this endpoint",
+    |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
+)]);
 
 /// An exact item is addressed by its whole path.
 fn item_inputs(selector: &ResourceSelector) -> Option<Map<String, Value>> {
@@ -188,7 +180,7 @@ impl BackendConfig for ConformanceConfig {
         resource_type: &ResourceType,
         _attributes: &ResourceAttributes,
     ) -> Result<(), String> {
-        if resource_type != &CONFORMANCE_ENDPOINT_RESOURCE.id {
+        if resource_type != CONFORMANCE_ENDPOINT_RESOURCE.id() {
             return Err("conformance items have no private attributes".into());
         }
         if !self.endpoints {
@@ -210,7 +202,7 @@ impl BackendConfig for ConformanceConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         ConformanceProvider::build(self, host).map(|provider| Arc::new(provider) as _)
     }
 }
@@ -251,10 +243,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     };
     let mut resource_scopes = BTreeMap::from([(
         "item".into(),
-        ResourceScopeCapabilities {
-            resource_type: CONFORMANCE_ITEM_RESOURCE.id.clone(),
-            selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-        },
+        ResourceScopeCapabilities::new(
+            CONFORMANCE_ITEM_RESOURCE.id().clone(),
+            vec!["exact".into(), "namespace".into(), "all".into()],
+        ),
     )]);
     let mut actions = vec![
         action("item.view", "View an item and its text body", &locator)
@@ -273,10 +265,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     if config.endpoints {
         resource_scopes.insert(
             "endpoint".into(),
-            ResourceScopeCapabilities {
-                resource_type: CONFORMANCE_ENDPOINT_RESOURCE.id.clone(),
-                selectors: vec!["exact".into(), "all".into()],
-            },
+            ResourceScopeCapabilities::new(
+                CONFORMANCE_ENDPOINT_RESOURCE.id().clone(),
+                vec!["exact".into(), "all".into()],
+            ),
         );
         actions.push(
             ActionDescriptor::new(
@@ -296,26 +288,23 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             .resource_attributes(),
         );
     }
-    ServiceDescriptor {
-        service: SERVICE.into(),
-        display_name: "Conformance".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes,
-        actions,
-        credentials: CredentialDescriptor::default()
-            .service_kinds(&["bearer_token"])
-            .profile("api_token", "bearer_token"),
-        presentation_body_limit: None,
-    }
+    ServiceDescriptor::new(SERVICE, "Conformance")
+        .with_resource_scopes(resource_scopes)
+        .with_actions(actions)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .service_kinds(&["bearer_token"])
+                .profile("api_token", "bearer_token"),
+        )
 }
 
-const ITEM_PRESENTATION: ActionPresentation = ActionPresentation {
-    embedded_bodies: &[EmbeddedBody {
-        owner_path: &[BodyPathSegment::Field("item")],
-        codec: &PlainBody,
-    }],
-    whole: Some(&render_item),
-};
+const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(
+    &[EmbeddedBody::new(
+        &[BodyPathSegment::Field("item")],
+        &PlainBody,
+    )],
+    Some(&render_item),
+);
 
 /// An item's `body` is plain text: Markdown escapes it, text keeps it.
 struct PlainBody;
@@ -348,7 +337,7 @@ impl EmbeddedBodyCodec for PlainBody {
                 out.finish()
             }
         };
-        Ok(Some(RenderedBody { format, value }))
+        Ok(Some(RenderedBody::new(format, value)))
     }
 }
 
@@ -468,21 +457,23 @@ fn status_error(status: reqwest::StatusCode) -> ProviderError {
 }
 
 impl ConformanceProvider {
-    fn build(config: &ConformanceConfig, host: &BuildContext<'_>) -> Result<Self, HostError> {
+    fn build(
+        config: &ConformanceConfig,
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
         let base = Url::parse(&format!("{}/", config.base_url.trim_end_matches('/')))
-            .map_err(|_| HostError::invalid(format!("{LABEL}.base_url is invalid")))?;
+            .map_err(|_| ProviderBuildError::invalid(format!("{LABEL}.base_url is invalid")))?;
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: LABEL,
-                    provider: SERVICE,
-                    base: &base,
-                    egress_proxy: config.egress_proxy.as_ref(),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                UpstreamClientSpec::new(
+                    LABEL,
+                    SERVICE,
+                    &base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[],
-                },
-                host.network(),
+                ),
+                host.clients(),
             )
         };
         Ok(Self {
@@ -492,9 +483,9 @@ impl ConformanceProvider {
             pings: client(ClientProfile::SingleAttempt)?,
             endpoints: config.endpoints,
             shelves: config.shelves.clone(),
-            max_response_bytes: host.limits.max_upstream_response_bytes,
-            max_download_bytes: host.limits.max_download_bytes,
-            idle_timeout: Duration::from_millis(host.limits.streaming_idle_timeout_ms),
+            max_response_bytes: host.limits().max_upstream_response_bytes,
+            max_download_bytes: host.limits().max_download_bytes,
+            idle_timeout: Duration::from_millis(host.limits().streaming_idle_timeout_ms),
             max_upload_bytes: config.max_upload_bytes,
         })
     }
@@ -515,16 +506,17 @@ impl ConformanceProvider {
     }
 
     fn token(request: &ProviderInvocation) -> Result<&str, ProviderError> {
-        request
-            .credential
-            .as_ref()
-            .and_then(|credential| credential.token.as_deref())
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialNotProvisioned,
-                    "conformance needs a bearer token",
-                )
-            })
+        match request
+            .execution()
+            .static_credential()
+            .map(|credential| credential.view())
+        {
+            Some(CredentialView::Bearer { token }) => Ok(token),
+            _ => Err(ProviderError::deny(
+                ReasonCode::CredentialNotProvisioned,
+                "conformance needs a bearer token",
+            )),
+        }
     }
 
     /// Reads a JSON response within the response limit, each chunk within
@@ -539,7 +531,7 @@ impl ConformanceProvider {
         let trace = take_upstream_trace(&mut response);
         let outcome = self.read_json_body(response).await.and_then(parse);
         if let Some(trace) = trace {
-            trace.complete(outcome.as_ref().err().map(|error| error.reason_code));
+            trace.complete(outcome.as_ref().err().map(|error| error.reason_code()));
         }
         outcome
     }
@@ -592,22 +584,18 @@ impl ConformanceProvider {
         status: u16,
         started: Instant,
     ) -> ProviderResult {
-        ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({"provider": SERVICE, "operation": action, "item": item})),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids: Some(json!({"item": item})),
-        }
+        ProviderResult::new(result)
+            .with_audit(json!({"provider": SERVICE, "operation": action, "item": item}))
+            .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64))
+            .with_object_ids(json!({"item": item}))
     }
 
     /// Sends one ping with the endpoint's private key. The runtime resolved
     /// the key from the authorized endpoint's managed entry; it never enters
     /// the result, audit, or errors.
     async fn ping(&self, request: &ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let inputs = ping_inputs(&request.inputs)?;
-        let Some(key) = request.resource_attributes.get("signingKey") else {
+        let inputs = ping_inputs(request.inputs())?;
+        let Some(key) = request.resource_attributes().get("signingKey") else {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
                 "conformance endpoint has no signing key configured",
@@ -646,16 +634,9 @@ impl ConformanceProvider {
                     })
             })
             .await?;
-        Ok(ProviderResult {
-            result: json!({"endpoint": inputs.endpoint, "receipt": receipt}),
-            stream: None,
-            audit: Some(
+        Ok(ProviderResult::new(json!({"endpoint": inputs.endpoint, "receipt": receipt})).with_audit(
                 json!({"provider": SERVICE, "operation": "endpoint.ping", "endpoint": inputs.endpoint}),
-            ),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids: Some(json!({"endpoint": inputs.endpoint})),
-        })
+            ).with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)).with_object_ids(json!({"endpoint": inputs.endpoint})))
     }
 
     async fn view(
@@ -715,7 +696,7 @@ impl ConformanceProvider {
             .map_err(upstream_error)?;
         if !response.status().is_success() {
             let error = status_error(response.status());
-            complete_upstream_trace(&mut response, Some(error.reason_code));
+            complete_upstream_trace(&mut response, Some(error.reason_code()));
             return Err(error);
         }
         let size = response.content_length();
@@ -724,7 +705,7 @@ impl ConformanceProvider {
                 ReasonCode::AttachmentSizeDenied,
                 "conformance content exceeds the download limit",
             );
-            complete_upstream_trace(&mut response, Some(error.reason_code));
+            complete_upstream_trace(&mut response, Some(error.reason_code()));
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -786,9 +767,9 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
-        let inputs = upload_inputs(&request.inputs, self.max_upload_bytes)?;
+        let inputs = upload_inputs(request.inputs(), self.max_upload_bytes)?;
         let attachment = &inputs.attachments[0];
-        let [part] = request.body_parts.as_slice() else {
+        let [part] = request.body_parts() else {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "conformance.item.upload takes one file part",
@@ -872,13 +853,8 @@ fn check_part(part: &BrokerBodyPart, attachment: &AttachmentInput) -> Result<(),
     Ok(())
 }
 
-#[async_trait]
-impl Provider for ConformanceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl ConformanceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action == "endpoint.ping" && self.endpoints {
             let endpoint = ping_inputs(inputs)?.endpoint;
             return Ok(BTreeMap::from([("endpoint".into(), vec![endpoint])]));
@@ -904,9 +880,20 @@ impl Provider for ConformanceProvider {
         }
         Ok(BTreeMap::from([("item".into(), vec![item])]))
     }
+}
+
+#[async_trait]
+impl Provider for ConformanceProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
-        if resource_type == &CONFORMANCE_ITEM_RESOURCE.id {
+        if resource_type == CONFORMANCE_ITEM_RESOURCE.id() {
             self.shelves.clone()
         } else {
             Vec::new()
@@ -915,39 +902,43 @@ impl Provider for ConformanceProvider {
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
-        if request.action != "item.upload" {
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
+    ) -> Result<BodyAdmission, ProviderError> {
+        if request.action() != "item.upload" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "conformance action does not accept file parts",
             ));
         }
-        let inputs = upload_inputs(&request.inputs, self.max_upload_bytes)?;
-        Ok(inputs
+        let inputs = upload_inputs(request.inputs(), self.max_upload_bytes)?;
+        let part_specs = inputs
             .attachments
             .into_iter()
-            .map(|attachment| BrokerBodyPartSpec {
-                name: attachment.field,
-                file_name: attachment.filename,
-                content_type: attachment.content_type,
-                size: attachment.size,
-                sha256: attachment.sha256,
+            .map(|attachment| {
+                BrokerBodyPartSpec::new(
+                    attachment.field,
+                    attachment.filename,
+                    attachment.content_type,
+                    attachment.size,
+                    attachment.sha256,
+                )
             })
-            .collect())
+            .collect();
+        Ok(BodyAdmission::new(part_specs, StateDisposition::Keep))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if request.action == "endpoint.ping" && self.endpoints {
+        if request.action() == "endpoint.ping" && self.endpoints {
             return self.ping(&request).await;
         }
         let item = request
-            .resource_scopes
+            .resource_scopes()?
             .get("item")
             .and_then(|items| items.first())
             .cloned()
             .ok_or_else(|| invalid("conformance item scope is missing"))?;
-        match request.action.as_str() {
+        match request.action() {
             "item.view" => self.view(&request, &item).await,
             "item.download" => self.download(&request, &item).await,
             "item.upload" => self.upload(&request, &item).await,
@@ -964,11 +955,10 @@ mod tests {
     use super::*;
     use agent_access_provider::presentation::response_capabilities;
     use agent_access_provider::test_support::{
-        captured_upstream_requests, start_capturing_events, test_outbound_tls,
+        InvocationBuilder, TestHost, bearer_credential, install_trace_capture,
     };
     use agent_access_provider::{
-        ActionIo, CorrelationContext, EgressProxyRuntimeConfig, ExecutionCredential,
-        InvocationIdentity, ProviderLimits, with_provider_context,
+        ActionIo, CorrelationContext, ProviderLimits, host::with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
@@ -986,17 +976,40 @@ mod tests {
     }
 
     fn provider(base_url: &str, limits: ProviderLimits) -> ConformanceProvider {
-        ConformanceProvider::build(
-            &config(base_url),
-            &BuildContext {
-                limits: &limits,
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &test_outbound_tls(),
-                attribution: Default::default(),
-                stable_signing_key: None,
-            },
-        )
-        .unwrap()
+        ConformanceProvider::build(&config(base_url), &TestHost::with_limits(limits).context())
+            .unwrap()
+    }
+
+    #[test]
+    fn build_declares_each_transfer_profile_with_the_configured_proxy() {
+        let host = TestHost::default();
+        let mut config = config("https://conformance.example.test");
+        config.egress_proxy = Some(EgressProxyConfig {
+            url: "http://conformance-proxy.example:3128".into(),
+            username_ref: None,
+            password_ref: None,
+        });
+        ConformanceProvider::build(&config, &host.context()).unwrap();
+        let built = host.built_clients();
+        assert_eq!(
+            built
+                .iter()
+                .map(|client| client.profile)
+                .collect::<Vec<_>>(),
+            [
+                ClientProfile::Request,
+                ClientProfile::Stream,
+                ClientProfile::Upload,
+                ClientProfile::SingleAttempt,
+            ]
+        );
+        for client in built {
+            assert_eq!(client.label, LABEL);
+            assert_eq!(
+                client.route.audit_value(),
+                json!({"mode": "service", "proxy": "http://conformance-proxy.example:3128"})
+            );
+        }
     }
 
     fn invocation(
@@ -1008,42 +1021,29 @@ mod tests {
             .as_str()
             .map(|item| BTreeMap::from([("item".into(), vec![item.to_owned()])]))
             .unwrap_or_default();
-        ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: InvocationIdentity::anonymous(),
-            service: SERVICE.into(),
-            action: action.into(),
-            correlation: CorrelationContext::for_tests(),
-            inputs,
-            body_parts,
-            resource_scopes,
-            credential_mode: "service".into(),
-            credential: Some(ExecutionCredential {
-                kind: "bearer_token".into(),
-                username: None,
-                token: Some("token".into()),
-            }),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        }
+        InvocationBuilder::new(SERVICE, action)
+            .inputs(inputs)
+            .resources(resource_scopes)
+            .credential(bearer_credential("token"))
+            .body_parts(body_parts)
+            .build()
     }
 
     const KEY: &str = "endpoint-key-sentinel-0123456789";
 
     fn ping(key: Option<&str>) -> ProviderInvocation {
-        let mut request = invocation(
+        let request = invocation(
             "endpoint.ping",
             json!({"endpoint": "alerts", "message": "hello"}),
             Vec::new(),
         );
-        request.resource_scopes = BTreeMap::from([("endpoint".into(), vec!["alerts".into()])]);
-        request.resource_attributes = key
-            .map(|key| BTreeMap::from([("signingKey".to_string(), key.to_string())]).into())
-            .unwrap_or_default();
-        request
+        InvocationBuilder::from(request)
+            .resources(BTreeMap::from([("endpoint".into(), vec!["alerts".into()])]))
+            .resource_attributes(
+                key.map(|key| BTreeMap::from([("signingKey".to_string(), key.to_string())]).into())
+                    .unwrap_or_default(),
+            )
+            .build()
     }
 
     #[tokio::test]
@@ -1083,9 +1083,9 @@ mod tests {
             .await;
         let provider = provider(&server.uri(), ProviderLimits::default());
         let failed = provider.invoke(ping(Some(KEY))).await.unwrap_err();
-        assert_eq!(failed.reason_code, ReasonCode::UpstreamFailed);
+        assert_eq!(failed.reason_code(), ReasonCode::UpstreamFailed);
         let unconfigured = provider.invoke(ping(None)).await.unwrap_err();
-        assert_eq!(unconfigured.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(unconfigured.reason_code(), ReasonCode::ScopeUnresolved);
         assert!(!format!("{failed:?}").contains(KEY));
     }
 
@@ -1095,7 +1095,7 @@ mod tests {
             value: "shelf-one/item-one".into(),
         };
         assert_eq!(
-            (CONFORMANCE_ITEM_RESOURCE.action_inputs.unwrap())(&exact),
+            CONFORMANCE_ITEM_RESOURCE.action_inputs(&exact),
             Some(Map::from_iter([(
                 "item".into(),
                 json!("shelf-one/item-one")
@@ -1107,10 +1107,7 @@ mod tests {
             },
             ResourceSelector::All,
         ] {
-            assert_eq!(
-                (CONFORMANCE_ITEM_RESOURCE.action_inputs.unwrap())(&selector),
-                None
-            );
+            assert_eq!(CONFORMANCE_ITEM_RESOURCE.action_inputs(&selector), None);
         }
         let mut provider = provider(
             "https://conformance.example.test",
@@ -1118,39 +1115,39 @@ mod tests {
         );
         assert!(
             provider
-                .resource_roots(&CONFORMANCE_ITEM_RESOURCE.id)
+                .resource_roots(CONFORMANCE_ITEM_RESOURCE.id())
                 .is_empty()
         );
         provider.shelves = vec!["shelf-one".into(), "shelf-two".into()];
         assert_eq!(
-            provider.resource_roots(&CONFORMANCE_ITEM_RESOURCE.id),
+            provider.resource_roots(CONFORMANCE_ITEM_RESOURCE.id()),
             ["shelf-one", "shelf-two"]
         );
         assert!(
             provider
-                .resource_roots(&CONFORMANCE_ENDPOINT_RESOURCE.id)
+                .resource_roots(CONFORMANCE_ENDPOINT_RESOURCE.id())
                 .is_empty()
         );
         assert!(
             provider
-                .resolve_scopes("item.view", &json!({"item": "shelf-two/item"}))
+                .local_scopes("item.view", &json!({"item": "shelf-two/item"}))
                 .is_ok()
         );
         let outside = provider
-            .resolve_scopes("item.view", &json!({"item": "shelf-three/item"}))
+            .local_scopes("item.view", &json!({"item": "shelf-three/item"}))
             .unwrap_err();
-        assert_eq!(outside.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(outside.reason_code(), ReasonCode::InputInvalid);
         let mut config = config("https://conformance.example.test");
         for shelves in [vec!["a/b"], vec!["one", "one"], vec![""]] {
             config.shelves = shelves.into_iter().map(String::from).collect();
             let mut errors = Vec::new();
             config.validate(
-                &ValidationContext {
-                    environment: "development",
-                    policy_authority: "toml",
-                    limits: &ProviderLimits::default(),
-                    credentials: Default::default(),
-                },
+                &ValidationContext::new(
+                    "development",
+                    "toml",
+                    &ProviderLimits::default(),
+                    Default::default(),
+                ),
                 &mut errors,
             );
             assert_eq!(
@@ -1193,17 +1190,17 @@ mod tests {
         );
         let mut config = config("https://conformance.example.test");
         config
-            .validate_resource_attributes(&endpoint.id, &key(KEY))
+            .validate_resource_attributes(endpoint.id(), &key(KEY))
             .unwrap();
         assert!(
             config
-                .validate_resource_attributes(&CONFORMANCE_ITEM_RESOURCE.id, &key(KEY))
+                .validate_resource_attributes(CONFORMANCE_ITEM_RESOURCE.id(), &key(KEY))
                 .is_err()
         );
         config.endpoints = false;
         assert_eq!(
             config
-                .validate_resource_attributes(&endpoint.id, &key(KEY))
+                .validate_resource_attributes(endpoint.id(), &key(KEY))
                 .unwrap_err(),
             "conformance endpoints need providers.conformance.endpoints = true"
         );
@@ -1225,10 +1222,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn json_traces_record_how_the_body_turned_out() {
-        let limits = ProviderLimits {
-            max_upstream_response_bytes: 64,
-            ..ProviderLimits::default()
-        };
+        let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
         for (body, reason) in [
             (r#"{"title":"T","body":"B"}"#.to_string(), None),
             ("not json".to_string(), Some("upstream_protocol_failed")),
@@ -1247,9 +1241,15 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
                 .mount(&server)
                 .await;
-            start_capturing_events();
-            let outcome = view(&provider(&server.uri(), limits.clone())).await;
-            let events = captured_upstream_requests();
+            let capture = install_trace_capture().start();
+            let outcome = capture
+                .run(agent_access_provider::test_support::in_invocation_hook(
+                    "conformance",
+                    "item.view",
+                    view(&provider(&server.uri(), limits.clone())),
+                ))
+                .await;
+            let events = capture.take_upstream_requests();
             assert_eq!(events.len(), 1, "{body}: {events:?}");
             assert_eq!(events[0]["http.statusCode"], 200);
             match reason {
@@ -1258,7 +1258,7 @@ mod tests {
                     assert!(events[0].get("reasonCode").is_none(), "{events:?}");
                 }
                 Some(reason) => {
-                    assert_eq!(outcome.unwrap_err().reason_code.as_str(), reason);
+                    assert_eq!(outcome.unwrap_err().reason_code().as_str(), reason);
                     assert_eq!(events[0]["reasonCode"], reason, "{body}");
                 }
             }
@@ -1288,19 +1288,15 @@ mod tests {
         });
         let provider = provider(
             &base,
-            ProviderLimits {
-                streaming_idle_timeout_ms: 200,
-                ..ProviderLimits::default()
-            },
+            ProviderLimits::default().with_streaming_idle_timeout_ms(200),
         );
         let content = b"payload";
-        let part = BrokerBodyPart {
-            name: "file".into(),
-            file_name: Some("notes.txt".into()),
-            content_type: Some("text/plain".into()),
-            bytes: content.to_vec(),
-            temp_file: None,
-        };
+        let part = BrokerBodyPart::in_memory(
+            "file",
+            Some("notes.txt".into()),
+            Some("text/plain".into()),
+            content.to_vec(),
+        );
         let inputs = json!({"item": "shelf/item", "attachments": [{
             "field": "file", "filename": "notes.txt", "contentType": "text/plain",
             "size": content.len(), "sha256": part.sha256_hex()
@@ -1312,7 +1308,7 @@ mod tests {
         .await
         .expect("the idle timeout bounds the response body");
         assert_eq!(
-            outcome.unwrap_err().reason_code,
+            outcome.unwrap_err().reason_code(),
             ReasonCode::UpstreamTimeout
         );
         server.abort();
@@ -1327,9 +1323,9 @@ mod tests {
         assert!(!item.is_canonical_target("a/b/c/d/e"));
         assert!(!item.is_canonical_target("Shelf/item"));
         assert!(!item.is_canonical_target("shelf//item"));
-        let namespace = item.namespace.as_ref().unwrap();
-        assert!((namespace.valid)("shelf-one"));
-        assert!(!(namespace.valid)("a/b/c/d"));
+        let namespace = item.namespace().unwrap();
+        assert!(namespace.is_valid("shelf-one"));
+        assert!(!namespace.is_valid("a/b/c/d"));
     }
 
     #[test]

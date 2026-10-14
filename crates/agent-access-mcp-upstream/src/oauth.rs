@@ -1,5 +1,6 @@
 //! Preregistered MCP OAuth clients with operator-pinned resource and AS metadata.
 //! Metadata is evidence to validate, never authority to choose a new destination.
+use agent_access_core::imports::ImportOAuthCompanion;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use reqwest::Method;
@@ -7,11 +8,24 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
-pub static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration {
-    id: "mcp_oauth",
-    development_only: false,
-    dialect: &McpOAuthDialect,
+static MCP_OAUTH_DIALECT: OAuthDialectRegistration = OAuthDialectRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "mcp_oauth",
+    &McpOAuthDialect,
+);
+
+/// Personal MCP import connections: a registration approves the resource
+/// pinned by its validated adapter settings.
+pub(crate) const IMPORT_AUTHENTICATION: ImportOAuthCompanion = ImportOAuthCompanion {
+    dialect: &MCP_OAUTH_DIALECT,
+    approved_resource,
 };
+
+fn approved_resource(config: &OAuthRegistrationConfig) -> Option<String> {
+    endpoints(config)
+        .ok()
+        .map(|endpoints| endpoints.resource.to_owned())
+}
 
 struct McpOAuthDialect;
 const SETTINGS: [&str; 5] = [
@@ -32,13 +46,7 @@ struct Endpoints<'a> {
 
 fn approved_url(raw: &str, insecure_loopback: bool) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|_| "MCP OAuth endpoint must be an absolute URL")?;
-    let loopback = url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host
-                .trim_matches(['[', ']'])
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    });
+    let loopback = is_literal_loopback(&url);
     if raw.len() > 2048
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -49,7 +57,7 @@ fn approved_url(raw: &str, insecure_loopback: bool) -> Result<Url, String> {
         || raw.chars().any(char::is_control)
         || !(url.scheme() == "https" || (insecure_loopback && loopback && url.scheme() == "http"))
     {
-        return Err("MCP OAuth endpoints require HTTPS without credentials, query, fragment or wildcards; HTTP needs explicit loopback permission".into());
+        return Err("MCP OAuth endpoints require HTTPS without credentials, query, fragment or wildcards; HTTP needs explicit loopback permission and a literal loopback IP address".into());
     }
     Ok(url)
 }
@@ -66,7 +74,12 @@ fn endpoints(config: &OAuthRegistrationConfig) -> Result<Endpoints<'_>, String> 
         approved_url(value, config.allow_insecure_loopback)?;
     }
     approved_url(&config.base_url, config.allow_insecure_loopback)?;
-    if config.encoding != OAuthTokenEncoding::Form || config.rotation == OAuthRotation::RotateBoth {
+    if config.encoding != OAuthTokenEncoding::Form
+        || !matches!(
+            config.rotation,
+            OAuthRotation::PreserveOld | OAuthRotation::RotateRefresh
+        )
+    {
         return Err(
             "MCP OAuth requires form token encoding and preserve_old or rotate_refresh rotation"
                 .into(),
@@ -123,15 +136,19 @@ fn validate_profile(
             return Err("MCP OAuth server-default profiles must omit scopes".into());
         }
         OAuthScopeMode::ServerDefault => {}
+        _ => return Err("MCP OAuth profiles must use explicit or server-default scopes".into()),
     }
     Ok(())
 }
 
-fn client_auth_method(auth: OAuthClientAuth) -> &'static str {
+/// The token endpoint authentication method name, or `None` for a method
+/// this dialect does not support.
+fn client_auth_method(auth: OAuthClientAuth) -> Option<&'static str> {
     match auth {
-        OAuthClientAuth::None => "none",
-        OAuthClientAuth::ClientSecretPost => "client_secret_post",
-        OAuthClientAuth::ClientSecretBasic => "client_secret_basic",
+        OAuthClientAuth::None => Some("none"),
+        OAuthClientAuth::ClientSecretPost => Some("client_secret_post"),
+        OAuthClientAuth::ClientSecretBasic => Some("client_secret_basic"),
+        _ => None,
     }
 }
 
@@ -208,7 +225,8 @@ async fn discover(
             .is_some_and(|methods| methods.contains(&"S256"))
         || !string_list(&server, "token_endpoint_auth_methods_supported")?
             .unwrap_or_else(|| vec!["client_secret_basic"])
-            .contains(&client_auth_method(config.client_auth))
+            .iter()
+            .any(|method| Some(*method) == client_auth_method(config.client_auth))
         || string_list(&server, "grant_types_supported")?.is_some_and(|types| {
             !types.contains(&if refresh {
                 "refresh_token"
@@ -225,10 +243,7 @@ async fn discover(
         Some(Value::Bool(value)) => *value,
         _ => return Err(OAuthDialectError::InvalidResponse),
     };
-    Ok(OAuthCallbackIssuer {
-        value: config.base_url.clone(),
-        required,
-    })
+    Ok(OAuthCallbackIssuer::new(config.base_url.clone(), required))
 }
 
 #[async_trait]
@@ -289,18 +304,15 @@ impl OAuthDialect for McpOAuthDialect {
         request: AuthorizationRequest<'_>,
     ) -> Result<PreparedAuthorization, OAuthDialectError> {
         let callback_issuer = discover(http, client.config, false).await?;
-        Ok(PreparedAuthorization {
-            url: self.authorization_url(client, profile, request)?,
+        Ok(PreparedAuthorization::new(
+            self.authorization_url(client, profile, request)?,
             callback_issuer,
-        })
+        ))
     }
 
     fn callback_issuer(&self, config: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
         // Dynamic preparation supplies the authoritative advertised requirement.
-        OAuthCallbackIssuer {
-            value: config.base_url.clone(),
-            required: true,
-        }
+        OAuthCallbackIssuer::new(config.base_url.clone(), true)
     }
 
     fn refresh_replay(&self, _: &OAuthRegistrationConfig) -> RefreshReplay {
@@ -355,10 +367,9 @@ impl OAuthDialect for McpOAuthDialect {
         _: &OAuthClient<'_>,
         _: &str,
     ) -> Result<ConnectedIdentity, OAuthDialectError> {
-        Ok(ConnectedIdentity {
-            subject: None,
-            display_name: "Connected; upstream account identity unavailable".into(),
-        })
+        Ok(ConnectedIdentity::new(
+            "Connected; upstream account identity unavailable",
+        ))
     }
 
     async fn discover_targets(
@@ -371,12 +382,14 @@ impl OAuthDialect for McpOAuthDialect {
         let endpoints = endpoints(client.config).map_err(|_| OAuthDialectError::Configuration)?;
         // Resource binding was validated before issuing/refreshing the token;
         // only the actual grant's scopes supply authorization evidence here.
-        Ok(vec![OAuthTarget {
-            id: endpoints.resource.into(),
-            audience: endpoints.resource.into(),
-            name: "Connected MCP resource".into(),
-            scopes: granted_scopes.clone(),
-        }])
+        Ok(vec![
+            OAuthTarget::new(
+                endpoints.resource,
+                endpoints.resource,
+                granted_scopes.clone(),
+            )
+            .with_name("Connected MCP resource"),
+        ])
     }
 }
 
@@ -425,6 +438,7 @@ async fn token(
                 Some(encode(client.client_secret)),
             );
         }
+        _ => return Err(OAuthDialectError::Configuration),
     }
     let response = http
         .send(
@@ -489,6 +503,7 @@ fn parse_grant(
                 .flatten()
                 .cloned()
                 .collect(),
+            _ => return Err(OAuthDialectError::Configuration),
         },
         _ => return Err(invalid()),
     };
@@ -520,18 +535,16 @@ fn parse_grant(
         .and_then(Value::as_str)
         .filter(|value| value.eq_ignore_ascii_case("Bearer"))
         .ok_or_else(invalid)?;
-    Ok(TokenGrant {
-        access_token: access_token.into(),
-        token_type: token_type.into(),
-        expires_in: body
-            .get("expires_in")
+    Ok(TokenGrant::new(
+        access_token,
+        token_type,
+        body.get("expires_in")
             .and_then(Value::as_u64)
             .filter(|value| *value > 0)
             .ok_or_else(invalid)?,
-        scopes,
         refresh_token,
-        supersedes_other_access: false,
-    })
+    )
+    .with_scopes(scopes))
 }
 
 #[cfg(test)]

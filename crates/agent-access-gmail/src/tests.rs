@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -8,17 +9,14 @@ use wiremock::{
 struct Lease;
 #[async_trait]
 impl DelegatedLease for Lease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("gmail-test-binding")
+    }
     fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
         Ok(())
     }
     fn access(&self) -> DelegatedAccess {
-        DelegatedAccess {
-            token: "secret".into(),
-            target: GMAIL_TARGET.into(),
-            audience: GMAIL_AUDIENCE.into(),
-            version: "v1".into(),
-            expires_at: i64::MAX,
-        }
+        DelegatedAccess::new("secret", GMAIL_TARGET, GMAIL_AUDIENCE, "v1", i64::MAX)
     }
     async fn revalidate(&self) -> Result<(), ProviderError> {
         Ok(())
@@ -30,36 +28,93 @@ impl DelegatedLease for Lease {
         ))
     }
 }
-fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: InvocationIdentity::anonymous(),
-        service: "gmail".into(),
-        action: action.into(),
-        correlation: CorrelationContext::new("gmail-test".into(), "gmail-broker-test".into()),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: BTreeMap::new(),
-        credential_mode: "per_user".into(),
-        credential: None,
-        lookup_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: Some(DelegatedCredential::new(Arc::new(Lease))),
+/// A lease whose refresh is already in progress for the same connection.
+struct BusyLease;
+#[async_trait]
+impl DelegatedLease for BusyLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        Lease.binding_identity()
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn access(&self) -> DelegatedAccess {
+        Lease.access()
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(agent_access_provider::host::port_failure(
+            agent_access_provider::host::HostPort::DelegatedLease,
+            ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+        ))
     }
 }
+
+#[tokio::test]
+async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let request = InvocationBuilder::from(invocation("account.view", json!({})))
+        .delegated(agent_access_provider::host::delegated_credential(Arc::new(
+            BusyLease,
+        )))
+        .build();
+    let error = provider(&server).invoke(request).await.unwrap_err();
+    assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
+    assert_eq!(error.reason_code().http_status(), 429);
+    assert_eq!(
+        error.reason_code().host_port(),
+        Some(agent_access_provider::host::HostPort::DelegatedLease)
+    );
+    // The host accepts it at the invocation boundary, though Gmail itself
+    // could not report concurrency_limited.
+    let hook = agent_access_provider::host::hook_context(
+        "gmail",
+        "account.view",
+        agent_access_provider::HookPhase::Invocation,
+        GMAIL_BACKEND.domain_reasons(),
+    );
+    assert_eq!(hook.check_failure(&error), Ok(()));
+}
+
+fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
+    InvocationBuilder::new("gmail", action)
+        .inputs(inputs)
+        .correlation(CorrelationContext::new(
+            "gmail-test".into(),
+            "gmail-broker-test".into(),
+        ))
+        .credential_mode(CredentialMode::PerUser)
+        .delegated(agent_access_provider::host::delegated_credential(Arc::new(
+            Lease,
+        )))
+        .build()
+}
 fn provider(server: &MockServer) -> GmailProvider {
-    let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
+    let host = agent_access_provider::test_support::TestHost::default();
     GmailProvider::new(
         Url::parse(&format!("{}/gmail/v1/users/me/", server.uri())).unwrap(),
-        UpstreamNetwork {
-            limits: &ProviderLimits::default(),
-            egress: &EgressProxyRuntimeConfig::direct(),
-            outbound_tls: &tls,
-        },
+        &host,
+        &host.limits,
     )
     .unwrap()
+}
+
+#[test]
+fn build_uses_one_request_client_for_the_gmail_api() {
+    let host = agent_access_provider::test_support::TestHost::default();
+    GmailConfig {}.build(&host.context()).unwrap();
+    let built = host.built_clients();
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].base.as_str(), API);
+    assert_eq!(built[0].profile, ClientProfile::Request);
+    assert!(!built[0].literal_loopback);
 }
 fn message() -> Value {
     json!({"id":"a123","threadId":"b456","labelIds":["INBOX"],"snippet":"private snippet","payload":{"mimeType":"text/plain","headers":[{"name":"Subject","value":"private subject"}],"body":{"data":URL_SAFE_NO_PAD.encode("private body")}}})
@@ -271,14 +326,14 @@ async fn rate_limits_and_ambiguous_mutations_never_replay() {
             .unwrap_err();
         assert_eq!(err.object_ids.as_deref(), Some(&json!({"thread":"a123"})));
         assert_eq!(err.upstream_status, Some(status));
-        assert_eq!(err.reason_code, expected, "{status} {reason}");
+        assert_eq!(err.reason_code(), expected, "{status} {reason}");
         assert!(!err.message.contains("secret"));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         if expected != ReasonCode::UpstreamRateLimited {
             assert!(err.result.is_none());
             continue;
         }
-        assert_eq!(err.decision, Decision::Error);
+        assert_eq!(err.decision(), Decision::Error);
         let result = err.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
         assert_eq!(result["service"], "gmail");
@@ -384,7 +439,7 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
                 .invoke(invocation(action, json!({"id":"a123"})))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, reason);
+            assert_eq!(error.reason_code(), reason);
             assert_eq!(error.upstream_status, Some(status));
             assert_eq!(
                 error.message.contains("unknown"),

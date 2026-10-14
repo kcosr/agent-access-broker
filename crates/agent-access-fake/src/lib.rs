@@ -1,10 +1,26 @@
-//! The development fake backend: one `echo` action authorized against
-//! `fake_project` resources, used by smoke tests and local fixtures.
+//! Development fixtures, each an independent selection for an assembly:
+//!
+//! - [`FAKE_BACKEND`]: the `fake` backend, one `echo` action authorized
+//!   against `fake_project` resources, used by smoke tests and local fixtures;
+//! - [`OAUTH_STUB_BACKEND`]: the `oauth_stub` records backend, reading
+//!   `oauth_collection` resources with the caller's delegated OAuth access;
+//! - [`STUB_OAUTH_DIALECT`]: the `stub` OAuth dialect for the independent
+//!   OAuth test server.
+//!
+//! Every fixture is development-only: configuring one requires a
+//! non-production deployment with `deployment.enable_fake_service`.
+mod oauth_records;
+mod oauth_stub;
+
+pub use oauth_records::{OAUTH_COLLECTION_RESOURCE, OAUTH_STUB_BACKEND, OAuthStubProviderConfig};
+pub use oauth_stub::STUB_OAUTH_DIALECT;
+
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, CredentialDescriptor,
-    EgressProxyConfig, HostError, Provider, ProviderError, ProviderInvocation, ProviderResult,
-    ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType, ResourceTypeDescriptor,
-    ServiceDescriptor, ServiceProvider, ServiceSurface, ValidationContext, parse_backend_config,
+    EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceProvider,
+    ValidationContext, parse_backend_config,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -21,9 +37,10 @@ impl Default for FakeProvider {
     }
 }
 
-#[async_trait]
-impl Provider for FakeProvider {
-    fn resolve_scopes(
+impl FakeProvider {
+    /// The `echo` action's `fake_project` scope, resolved locally. Test
+    /// providers reuse it for their own echo-shaped actions.
+    pub fn echo_scopes(
         &self,
         action: &str,
         inputs: &Value,
@@ -70,39 +87,45 @@ impl Provider for FakeProvider {
         scopes.insert("project".to_string(), vec![project.to_string()]);
         Ok(scopes)
     }
+}
+
+#[async_trait]
+impl Provider for FakeProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        let Some(message) = request.inputs.get("message").and_then(Value::as_str) else {
+        let Some(message) = request.inputs().get("message").and_then(Value::as_str) else {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
                 "fake.echo requires message",
             ));
         };
         let project = request
-            .resource_scopes
-            .get("project")
+            .authority()
+            .resources()
+            .and_then(|scopes| scopes.get("project"))
             .and_then(|values| values.first())
             .cloned()
             .unwrap_or_default();
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action,
-                "project": project,
-                "message": message,
-                "credentialMode": request.credential_mode,
-                "principal": request.identity.principal,
-            }),
-            stream: None,
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-                "messageLength": message.len(),
-            })),
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+            "project": project,
+            "message": message,
+            "credentialMode": request.credential_mode(),
+            "principal": request.identity().principal,
+        }))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+            "messageLength": message.len(),
+        })))
     }
 }
 
@@ -113,18 +136,15 @@ pub struct FakeProviderConfig {}
 
 /// The fake service: its projects, actions, and credential modes.
 pub fn fake_descriptor() -> ServiceDescriptor {
-    ServiceDescriptor {
-        service: "fake".to_string(),
-        display_name: "Fake Provider".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("fake", "Fake Provider")
+        .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: FAKE_PROJECT_RESOURCE.id.clone(),
-                selectors: vec!["exact".to_string(), "all".to_string()],
-            },
-        )]),
-        actions: vec![
+            ResourceScopeCapabilities::new(
+                FAKE_PROJECT_RESOURCE.id().clone(),
+                vec!["exact".to_string(), "all".to_string()],
+            ),
+        )]))
+        .with_actions(vec![
             ActionDescriptor::new(
                 "echo",
                 "Echo scalar inputs after policy and credential selection",
@@ -141,10 +161,8 @@ pub fn fake_descriptor() -> ServiceDescriptor {
             .read_only()
             .scope("project")
             .credential_modes(["service", "per_user"]),
-        ],
-        credentials: CredentialDescriptor::without_execution_credential(),
-        presentation_body_limit: None,
-    }
+        ])
+        .with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// The fake provider paired with its descriptor, for runtimes built without
@@ -153,12 +171,13 @@ pub fn fake_service_provider() -> ServiceProvider {
     ServiceProvider::new(fake_descriptor(), Arc::new(FakeProvider))
 }
 
-pub static FAKE_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "fake",
-    resource_types: &[&FAKE_PROJECT_RESOURCE],
-    parse: parse_backend_config::<FakeProviderConfig>,
-    development_only: true,
-};
+pub static FAKE_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "fake",
+    parse_backend_config::<FakeProviderConfig>,
+)
+.with_resource_types(&[&FAKE_PROJECT_RESOURCE])
+.development_only();
 
 impl BackendConfig for FakeProviderConfig {
     fn kind(&self) -> &'static str {
@@ -175,22 +194,19 @@ impl BackendConfig for FakeProviderConfig {
         Vec::new()
     }
 
-    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(FakeProvider))
     }
 }
 
 /// Projects of the development fake service.
-pub static FAKE_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("fake_project"),
-    label: "Fake project",
-    plural_label: "Fake projects",
-    example: "TEST",
-    canonical: is_fake_project_key,
-    namespace: None,
-};
+pub static FAKE_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("fake_project"),
+    "Fake project",
+    "Fake projects",
+    "TEST",
+    is_fake_project_key,
+);
 
 fn is_fake_project_key(value: &str) -> bool {
     let mut chars = value.chars();

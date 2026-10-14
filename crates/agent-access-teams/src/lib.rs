@@ -19,22 +19,19 @@ const MAX_BODY_BYTES: u64 = 24 * 1024;
 const ACTION: &str = "notification.send";
 const SERVICE: &str = "teams";
 
-pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    id: ResourceType::from_static("teams_notification_destination"),
-    label: "Teams notification destination",
-    plural_label: "Teams notification destinations",
-    example: "release-alerts",
-    canonical: valid_destination,
-    namespace: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "webhookUrl",
-        label: "Webhook URL",
-        description: "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
-        required: true,
-        validate: valid_webhook_url,
-    }],
-};
+pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("teams_notification_destination"),
+    "Teams notification destination",
+    "Teams notification destinations",
+    "release-alerts",
+    valid_destination,
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "webhookUrl",
+    "Webhook URL",
+    "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
+    valid_webhook_url,
+)]);
 
 fn valid_destination(value: &str) -> bool {
     !value.is_empty()
@@ -98,12 +95,12 @@ impl std::fmt::Debug for TeamsConfig {
     }
 }
 
-pub static TEAMS_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "teams",
-    resource_types: &[&TEAMS_DESTINATION_RESOURCE],
-    parse: parse_backend_config::<TeamsConfig>,
-    development_only: false,
-};
+pub static TEAMS_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "teams",
+    parse_backend_config::<TeamsConfig>,
+)
+.with_resource_types(&[&TEAMS_DESTINATION_RESOURCE]);
 
 impl TeamsConfig {
     fn origins(&self) -> Result<Vec<Url>, String> {
@@ -148,7 +145,7 @@ impl BackendConfig for TeamsConfig {
         resource_type: &ResourceType,
         attributes: &ResourceAttributes,
     ) -> Result<(), String> {
-        if resource_type != &TEAMS_DESTINATION_RESOURCE.id {
+        if resource_type != TEAMS_DESTINATION_RESOURCE.id() {
             return Err("unsupported Teams resource type".into());
         }
         if let Some(value) = attributes.get("webhookUrl") {
@@ -173,46 +170,34 @@ impl BackendConfig for TeamsConfig {
             .map(|p| vec![("providers.teams.egress_proxy".into(), p)])
             .unwrap_or_default()
     }
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        let origins = self.origins().map_err(|error| {
-            HostError::Config(ConfigError::Invalid {
-                errors: vec![error],
-            })
-        })?;
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let origins = self.origins().map_err(ProviderBuildError::invalid)?;
         let mut clients = BTreeMap::new();
         for base in origins {
             let client = UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.teams",
-                    provider: "teams",
-                    base: &base,
-                    egress_proxy: self.egress_proxy.as_ref(),
-                    allowed_upstream_hosts: &self.allowed_upstream_hosts,
-                    profile: ClientProfile::SingleAttempt,
-                    status_reasons: &[],
-                },
-                host.network(),
+                UpstreamClientSpec::new(
+                    "providers.teams",
+                    "teams",
+                    &base,
+                    EgressDeclaration::Ordinary(self.egress_proxy.as_ref()),
+                    &self.allowed_upstream_hosts,
+                    ClientProfile::SingleAttempt,
+                ),
+                host.clients(),
             )?;
             clients.insert(base.origin().ascii_serialization(), client);
         }
         Ok(Arc::new(TeamsProvider {
             transport: Arc::new(HttpTransport { clients }),
             allowed_upstream_hosts: self.allowed_upstream_hosts.clone(),
-            max_bytes: host.limits.max_http_body_bytes.min(MAX_BODY_BYTES),
+            max_bytes: host.limits().max_http_body_bytes.min(MAX_BODY_BYTES),
         }))
     }
 }
 
 pub fn descriptor() -> ServiceDescriptor {
-    ServiceDescriptor {
-        service: "teams".into(), display_name: "Microsoft Teams notifications".into(), surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities {
-            resource_type: TEAMS_DESTINATION_RESOURCE.id.clone(), selectors: vec!["exact".into(), "all".into()],
-        })]),
-        actions: vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
-            .scope("destination").credential_modes(["service"]).resource_attributes()],
-        credentials: CredentialDescriptor::without_execution_credential(), presentation_body_limit: None,
-    }
+    ServiceDescriptor::new("teams", "Microsoft Teams notifications").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TEAMS_DESTINATION_RESOURCE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
+            .scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// What the Workflow endpoint answered: its status and, for HTTP 429, the
@@ -267,7 +252,7 @@ impl NotificationTransport for HttpTransport {
             ProviderError::error(error.reason_code(), message)
         })?;
         let status = response.status().as_u16();
-        complete_upstream_trace(&mut response, status_reason(status));
+        complete_upstream_trace(&mut response, status_reason(status).map(Into::into));
         // Neither success nor error response bodies, headers or Location values
         // belong in broker results; only a throttling wait is read, as a
         // bounded number. Do not read an unbounded upstream body.
@@ -298,13 +283,8 @@ struct TeamsProvider {
     max_bytes: u64,
 }
 
-#[async_trait]
-impl Provider for TeamsProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl TeamsProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != ACTION {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -314,14 +294,28 @@ impl Provider for TeamsProvider {
         let (destination, _) = payload::prepare(inputs, self.max_bytes)?;
         Ok(BTreeMap::from([("destination".into(), vec![destination])]))
     }
+}
+
+#[async_trait]
+impl Provider for TeamsProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
-        let (destination, body) = payload::prepare(&request.inputs, self.max_bytes)?;
-        if request.service != "teams"
-            || request.credential_mode != "service"
-            || request.credential.is_some()
-            || request.delegated_credential.is_some()
-            || request.resource_scopes.get("destination") != Some(&vec![destination.clone()])
+        self.local_scopes(request.action(), request.inputs())?;
+        let (destination, body) = payload::prepare(request.inputs(), self.max_bytes)?;
+        if request.service() != "teams"
+            || request.credential_mode() != CredentialMode::Service
+            || !request.execution().is_none()
+            || request
+                .authority()
+                .resources()
+                .and_then(|scopes| scopes.get("destination"))
+                != Some(&vec![destination.clone()])
         {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -329,7 +323,7 @@ impl Provider for TeamsProvider {
             ));
         }
         let value = request
-            .resource_attributes
+            .resource_attributes()
             .get("webhookUrl")
             .ok_or_else(|| {
                 ProviderError::deny(
@@ -373,14 +367,12 @@ impl Provider for TeamsProvider {
                 .with_upstream(Some(status), Some(elapsed))
                 .with_audit(audit));
         }
-        Ok(ProviderResult {
-            result: json!({"destination":destination,"accepted":true}),
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(status),
-            upstream_duration_ms: Some(elapsed),
-            object_ids: Some(json!({"destination":destination})),
-        })
+        Ok(
+            ProviderResult::new(json!({"destination":destination,"accepted":true}))
+                .with_audit(audit)
+                .with_upstream(Some(status), Some(elapsed))
+                .with_object_ids(json!({"destination":destination})),
+        )
     }
 }
 

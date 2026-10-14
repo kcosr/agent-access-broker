@@ -182,7 +182,7 @@ impl CompatFixture {
             .filter(|r| r.method() == method)
             .count()
     }
-    fn provider(&self, host: &Host) -> Arc<dyn Provider> {
+    fn provider(&self, host: &test_support::TestHost) -> Arc<dyn Provider> {
         McpAdapter
             .build(
                 &definition(&self.endpoint),
@@ -193,7 +193,7 @@ impl CompatFixture {
             .unwrap()
     }
     async fn invoke(&self) -> Result<ProviderResult, ProviderError> {
-        self.provider(&Host::new())
+        self.provider(&test_host())
             .invoke(invocation(
                 json!({"region":"private-tool-input"}),
                 "private-static-token",
@@ -206,9 +206,13 @@ impl CompatFixture {
                 &definition(&self.endpoint),
                 &ImportedDiscoveryAuthentication::Static(credential("private-discovery-token")),
                 None,
-                &Host::new().context(),
+                &test_host().context(),
             )
             .await
+            .map_err(|error| match error {
+                AdapterDiscoveryError::Failed(error) => error,
+                other => panic!("unexpected discovery failure: {other:?}"),
+            })
     }
 }
 async fn compat_handler(
@@ -299,8 +303,8 @@ fn assert_legacy_requests(fixture: &CompatFixture, session: Option<&str>) {
                 assert_eq!(request.body["params"]["protocolVersion"], PREVIOUS);
                 assert_eq!(request.body["params"]["capabilities"], json!({}));
                 assert_eq!(
-                    request.body["params"]["clientInfo"]["name"],
-                    "agent-access-broker"
+                    request.body["params"]["clientInfo"],
+                    json!({"name": "agent-access-broker-host", "version": env!("CARGO_PKG_VERSION")})
                 );
             }
             _ => {
@@ -375,7 +379,7 @@ async fn legacy_json_and_sse_discovery_verification_and_invocation_share_the_lif
                     .unwrap()
                     .contains("private-")
             );
-            let provider = fixture.provider(&Host::new());
+            let provider = fixture.provider(&test_host());
             let verification = provider
                 .verify_execution_credential(
                     &credential("private-verification-token"),
@@ -819,7 +823,7 @@ async fn cleanup_deadline_keeps_the_known_success_and_all_candidates_share_one_b
     plan.probe = plan.probe.header("mcp-session-id", PROBE_SESSION);
     plan.cleanup.delay = Duration::from_secs(5);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 250;
     let started = Instant::now();
     let result = fixture
@@ -843,7 +847,7 @@ async fn cleanup_deadline_keeps_the_known_success_and_all_candidates_share_one_b
     plan.probe = plan.probe.header("mcp-session-id", PROBE_SESSION);
     plan.cleanup.delay = Duration::from_millis(1_500);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 5_000;
     let started = Instant::now();
     fixture
@@ -893,14 +897,14 @@ async fn legacy_call_errors_have_one_dispatch_and_no_session_recovery() {
     let mut plan = Plan::default();
     plan.call.delay = Duration::from_secs(1);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 100;
     let error = fixture
         .provider(&host)
         .invoke(invocation(json!({"region":"east"}), "secret"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_write(&error, true);
     assert_eq!(fixture.count("tools/call"), 1);
     assert_eq!(fixture.count("DELETE"), 0);
@@ -934,7 +938,7 @@ async fn legacy_server_requests_and_closed_priming_streams_fail_without_resumpti
 async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
     for permitted_requests in 0..=4 {
         let fixture = CompatFixture::new(Plan::default()).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -958,7 +962,7 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
             );
         } else {
             let error = outcome.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);
             assert_eq!(fixture.count("tools/call"), 0);
         }
@@ -971,7 +975,7 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
         ..Plan::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &oauth_definition(&fixture.endpoint),
@@ -1011,7 +1015,7 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
             _ => unreachable!(),
         }
         let fixture = CompatFixture::new(plan).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -1029,7 +1033,7 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
             assert_eq!(fixture.count("DELETE"), 1);
         } else {
             let error = outcome.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
             assert_eq!(error.upstream_status, Some(401));
             assert_write(&error, phase == "call");
             assert_eq!(
@@ -1062,15 +1066,15 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
         assert_eq!(error.upstream_status, Some(status.as_u16()));
         assert_write(&error, false);
         if status == StatusCode::TOO_MANY_REQUESTS {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
             assert_eq!(error.result.as_ref().unwrap()["retryAfterSeconds"], 7);
         } else {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
         }
         assert_eq!(fixture.methods(), ["server/discover", "initialize"]);
     }
     let fixture = CompatFixture::new(Plan::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &oauth_definition(&fixture.endpoint),
@@ -1082,7 +1086,7 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     lease.reject_after.store(1, Ordering::SeqCst);
     let error = provider.invoke(request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     assert_eq!(
         error.upstream_status, None,
         "pre-send initialize failure must not inherit probe 404"
@@ -1096,7 +1100,7 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
         ..Plan::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let mut def = definition(&fixture.endpoint);
     def.execution_bindings
         .push(ImportedCredentialBinding::token(
@@ -1107,10 +1111,14 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
         .build(&def, &[action()], None, &host.context())
         .unwrap();
     let mut alice = invocation(json!({"region":"east"}), "alice-private-token");
-    alice.credential_mode = "per_user".into();
+    alice = InvocationBuilder::from(alice)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     let mut bob = invocation(json!({"region":"west"}), "bob-private-token");
-    bob.credential_mode = "per_user".into();
-    bob.identity.principal = "bob".into();
+    bob = InvocationBuilder::from(bob)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    bob = InvocationBuilder::from(bob).principal("bob").build();
     let (discovery, alice, bob) = tokio::join!(
         fixture.discover(),
         provider.invoke(alice),
@@ -1160,20 +1168,21 @@ async fn legacy_trace_projection_keeps_sessions_errors_payloads_and_instructions
         ..Plan::default()
     })
     .await;
-    test_support::start_capturing_events();
-    let result = with_provider_context(
-        CorrelationContext::for_tests(),
-        "example".into(),
-        "item.update".into(),
-        fixture.invoke(),
-    )
-    .await
-    .unwrap();
+    let capture = test_support::install_trace_capture().start();
+    let result = capture
+        .run(agent_access_provider::host::with_provider_context(
+            CorrelationContext::for_tests(),
+            "example".into(),
+            "item.update".into(),
+            fixture.invoke(),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
         result.result["upstreamMcp"]["content"][0]["text"],
         "private-tool-output"
     );
-    let logged = serde_json::to_string(&test_support::captured_events()).unwrap();
+    let logged = serde_json::to_string(&capture.take_events()).unwrap();
     for private in [
         SESSION,
         PROBE_SESSION,
@@ -1280,7 +1289,7 @@ async fn pinned_sdk_previous_only_servers_support_sessions_and_sessionless_json_
             let server = tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             });
-            let host = Host::new();
+            let host = test_host();
             let discovery = McpAdapter
                 .discover(
                     &definition(&endpoint),
@@ -1380,7 +1389,7 @@ async fn pinned_sdk_both_versions_prefers_current_without_legacy_state() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    let host = Host::new();
+    let host = test_host();
     let discovery = McpAdapter
         .discover(
             &definition(&endpoint),
@@ -1472,7 +1481,7 @@ async fn startup_and_notification_bodies_retain_response_budgets() {
             _ => unreachable!(),
         }
         let fixture = CompatFixture::new(plan).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.max_upstream_response_bytes = 1500;
         let error = fixture
             .provider(&host)
@@ -1487,14 +1496,14 @@ async fn startup_and_notification_bodies_retain_response_budgets() {
     let mut plan = Plan::default();
     plan.probe.delay = Duration::from_secs(1);
     let fixture = CompatFixture::new(plan).await;
-    let mut host = Host::new();
+    let mut host = test_host();
     host.limits.request_timeout_ms = 100;
     let error = fixture
         .provider(&host)
         .invoke(invocation(json!({"region":"east"}), "secret"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_write(&error, false);
     assert_eq!(fixture.methods(), ["server/discover"]);
 }
@@ -1517,16 +1526,18 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
         let outcome = McpAdapter
             .discover(
                 &oauth_definition(&fixture.endpoint),
-                &ImportedDiscoveryAuthentication::Delegated(request.delegated_credential.unwrap()),
+                &ImportedDiscoveryAuthentication::Delegated(
+                    request.execution().delegated().cloned().unwrap(),
+                ),
                 None,
-                &Host::new().context(),
+                &test_host().context(),
             )
             .await;
         if permitted_requests == 4 {
-            assert_eq!(
-                outcome.unwrap_err().reason_code,
-                ReasonCode::CredentialInvalid
-            );
+            assert!(matches!(
+                outcome.unwrap_err(),
+                AdapterDiscoveryError::Failed(error) if error.reason_code() == ReasonCode::CredentialInvalid
+            ));
             assert_eq!(fixture.count("tools/list"), 1);
         } else {
             assert_eq!(outcome.unwrap().tools.len(), 1);
@@ -1548,6 +1559,9 @@ struct ChangingBindingLease {
 }
 #[async_trait]
 impl DelegatedLease for ChangingBindingLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        self.inner.binding_identity()
+    }
     fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         self.inner.mark_rejected(version)
     }
@@ -1558,11 +1572,23 @@ impl DelegatedLease for ChangingBindingLease {
         self.inner.revalidate().await?;
         if self.inner.validations.load(Ordering::SeqCst) > self.after {
             let mut access = self.inner.access.lock().unwrap();
-            if self.change_audience {
-                access.audience = "https://different.example/mcp".into();
+            *access = if self.change_audience {
+                DelegatedAccess::new(
+                    access.token(),
+                    access.target(),
+                    "https://different.example/mcp",
+                    access.version(),
+                    access.expires_at(),
+                )
             } else {
-                access.target = "https://different.example/mcp".into();
-            }
+                DelegatedAccess::new(
+                    access.token(),
+                    "https://different.example/mcp",
+                    access.audience(),
+                    access.version(),
+                    access.expires_at(),
+                )
+            };
         }
         Ok(())
     }
@@ -1577,22 +1603,27 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
         for change_audience in [false, true] {
             let fixture = CompatFixture::new(Plan::default()).await;
             let (mut request, lease) = leased_invocation(&fixture.endpoint, false);
-            request.delegated_credential =
-                Some(DelegatedCredential::new(Arc::new(ChangingBindingLease {
-                    inner: lease.clone(),
-                    after,
-                    change_audience,
-                })));
+            request = InvocationBuilder::from(request)
+                .execution(ExecutionAccess::Delegated(
+                    agent_access_provider::host::delegated_credential(Arc::new(
+                        ChangingBindingLease {
+                            inner: lease.clone(),
+                            after,
+                            change_audience,
+                        },
+                    )),
+                ))
+                .build();
             let provider = McpAdapter
                 .build(
                     &oauth_definition(&fixture.endpoint),
                     &[action()],
                     None,
-                    &Host::new().context(),
+                    &test_host().context(),
                 )
                 .unwrap();
             let error = provider.invoke(request).await.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);
             assert_eq!(fixture.requests().len(), after);
             assert_eq!(fixture.count("tools/call"), 0);
@@ -1633,11 +1664,11 @@ async fn normal_http_error_statuses_preserve_existing_categories_in_both_lifecyc
                     fixture.discover().await.unwrap_err()
                 };
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     ReasonCode::UpstreamFailed,
                     "legacy={legacy}, method={method}, status={status}"
                 );
-                assert_eq!(error.reason_code.http_status(), 424);
+                assert_eq!(error.reason_code().http_status(), 424);
                 assert_eq!(error.upstream_status, Some(status.as_u16()));
                 assert_eq!(fixture.count("server/discover"), 1);
                 assert_eq!(fixture.count("initialize"), usize::from(legacy));
@@ -1680,8 +1711,8 @@ async fn legacy_handshake_http_rejections_preserve_status_categories_and_session
             }
             let fixture = CompatFixture::new(plan).await;
             let error = fixture.invoke().await.unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
-            assert_eq!(error.reason_code.http_status(), 424);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+            assert_eq!(error.reason_code().http_status(), 424);
             assert_eq!(error.upstream_status, Some(status.as_u16()));
             assert_write(&error, false);
             assert_eq!(fixture.count("server/discover"), 1);

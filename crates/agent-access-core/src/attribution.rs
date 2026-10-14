@@ -1,4 +1,4 @@
-use crate::{
+use agent_access_provider::{
     ProviderAttributionConfig, ServiceDescriptor, matching_attribution_capabilities,
     validate_attribution_pattern,
 };
@@ -70,29 +70,26 @@ pub(crate) fn validate_attribution_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AttributionCapability, AttributionRepresentation, AttributionVerb};
+    use agent_access_provider::{
+        AttributionCapability, AttributionRepresentation, AttributionVerb,
+    };
     use serde_json::json;
 
     fn descriptor(actions: &[(&str, Option<AttributionCapability>)]) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "example".to_string(),
-            display_name: "Example".to_string(),
-            surface: crate::ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::new(),
-            actions: actions
+        ServiceDescriptor::new("example", "Example").with_actions(
+            actions
                 .iter()
                 .map(|(action, capability)| {
-                    let descriptor = crate::ActionDescriptor::new(*action, "test", json!({}))
-                        .credential_modes(["service"]);
+                    let descriptor =
+                        agent_access_provider::ActionDescriptor::new(*action, "test", json!({}))
+                            .credential_modes(["service"]);
                     match capability {
                         Some(capability) => descriptor.attribution(*capability),
                         None => descriptor,
                     }
                 })
                 .collect(),
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+        )
     }
 
     const BODY_ADD: AttributionCapability = AttributionCapability::required(
@@ -163,9 +160,10 @@ mod tests {
             ),
             (
                 "view_only".to_string(),
-                std::sync::Arc::new(ServiceDescriptor {
-                    service: "view_only".to_string(),
-                    ..descriptor(&[("item.view", None)])
+                std::sync::Arc::new({
+                    let mut descriptor = descriptor(&[("item.view", None)]);
+                    descriptor.service = "view_only".to_string();
+                    descriptor
                 }),
             ),
         ]);

@@ -1,10 +1,11 @@
 //! The Confluence backend seam, its wire types, request bodies, and the HTTP implementation.
 use super::*;
+use agent_access_provider::host::UpstreamClientFactory;
 
 #[async_trait]
 pub trait ConfluenceBackend: Send + Sync {
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        EgressProxySelection::direct().audit_value()
+        EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
@@ -683,24 +684,21 @@ pub struct ConfluencePageUpdateRequest {
     pub body: ConfluencePageBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluencePagePreflight {
     pub(crate) page: ConfluencePage,
     pub(crate) upstream_status: u16,
     pub(crate) upstream_duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluenceBlogPreflight {
     pub(crate) blog: ConfluenceBlog,
     pub(crate) upstream_status: u16,
     pub(crate) upstream_duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluenceDraftContentPreflight {
     pub(crate) content: ConfluenceDraftContent,
     pub(crate) upstream_status: u16,
@@ -959,39 +957,26 @@ pub(crate) struct HttpConfluenceBackend {
 
 impl HttpConfluenceBackend {
     #[cfg(test)]
-    pub(crate) fn new(config: ConfluenceProviderConfig, limits: ProviderLimits) -> Self {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
-        )
-        .expect("Confluence HTTP client configuration is valid")
+    pub(crate) fn for_tests(config: ConfluenceProviderConfig, limits: ProviderLimits) -> Self {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host).expect("Confluence HTTP client configuration is valid")
     }
 
-    pub(crate) fn new_with_egress(
+    pub(crate) fn new(
         config: ConfluenceProviderConfig,
         limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let tenant_base = Url::parse(&format!("https://{}/wiki/rest/api/", config.tenant_host))
             .map_err(|error| {
-                HostError::Config(crate::ConfigError::Invalid {
-                    errors: vec![format!(
-                        "providers.confluence.tenant_host is invalid: {error}"
-                    )],
-                })
+                ProviderBuildError::invalid(format!(
+                    "providers.confluence.tenant_host is invalid: {error}"
+                ))
             })?;
-        let network = UpstreamNetwork {
-            limits: &limits,
-            egress: egress_proxy,
-            outbound_tls,
-        };
         let tenant_clients = ConfluenceHttpClients::new(
             "providers.confluence.egress_proxy",
             tenant_base,
-            network,
+            clients,
             &config,
         )?;
         let gateway_clients = if config.cloud_id.is_some()
@@ -999,12 +984,9 @@ impl HttpConfluenceBackend {
         {
             Some(ConfluenceHttpClients::new(
                 "providers.confluence.egress_proxy",
-                confluence_gateway_api_base(&config).map_err(|error| {
-                    HostError::Config(crate::ConfigError::Invalid {
-                        errors: vec![error.to_string()],
-                    })
-                })?,
-                network,
+                confluence_gateway_api_base(&config)
+                    .map_err(|error| ProviderBuildError::invalid(error.to_string()))?,
+                clients,
                 &config,
             )?)
         } else {
@@ -1022,7 +1004,7 @@ impl HttpConfluenceBackend {
         &self,
         credential: &ExecutionCredential,
     ) -> Result<&ConfluenceHttpClients, ConfluenceBackendError> {
-        if credential.kind == "bearer_token" {
+        if credential.kind() == StaticCredentialKind::BearerToken {
             self.gateway_clients.as_ref().ok_or_else(|| {
                 ConfluenceBackendError::Protocol(
                     "bearer Confluence credentials require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
@@ -1034,44 +1016,28 @@ impl HttpConfluenceBackend {
         }
     }
 
+    /// Clients for one API base from the test host, routed through the
+    /// configuration's service proxy when it sets one.
     #[cfg(test)]
     pub(crate) fn new_with_api_base(
         config: ConfluenceProviderConfig,
         limits: ProviderLimits,
         api_base_override: Url,
     ) -> Self {
-        Self::new_with_api_base_and_egress(
-            config,
-            limits,
-            api_base_override,
-            &EgressProxyRuntimeConfig::direct(),
-        )
-        .expect("Confluence HTTP client configuration is valid")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_api_base_and_egress(
-        config: ConfluenceProviderConfig,
-        limits: ProviderLimits,
-        api_base_override: Url,
-        egress_proxy: &EgressProxyRuntimeConfig,
-    ) -> Result<Self, HostError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
         let clients = ConfluenceHttpClients::new(
             "providers.confluence.egress_proxy",
             api_base_override,
-            UpstreamNetwork {
-                limits: &limits,
-                egress: egress_proxy,
-                outbound_tls: &agent_access_provider::test_support::test_outbound_tls(),
-            },
+            &host,
             &config,
-        )?;
-        Ok(Self {
+        )
+        .expect("Confluence HTTP client configuration is valid");
+        Self {
             tenant_clients: clients.clone(),
             gateway_clients: Some(clients),
             config,
             limits,
-        })
+        }
     }
 
     pub(crate) fn api_base(
@@ -1116,21 +1082,21 @@ impl ConfluenceHttpClients {
     pub(crate) fn new(
         label: &str,
         api_base: Url,
-        network: UpstreamNetwork<'_>,
+        clients: &dyn UpstreamClientFactory,
         config: &ConfluenceProviderConfig,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
+                UpstreamClientSpec::new(
                     label,
-                    provider: "confluence",
-                    base: &api_base,
-                    egress_proxy: config.egress_proxy.as_ref(),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                    "confluence",
+                    &api_base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[(409, ReasonCode::VersionConflict)],
-                },
-                network,
+                )
+                .with_status_reasons(&[(409, ReasonCode::VersionConflict)]),
+                clients,
             )
         };
         Ok(Self {
@@ -1171,7 +1137,7 @@ impl HttpConfluenceBackend {
         self.client_for(credential)
             .unwrap()
             .client
-            .egress_proxy()
+            .egress_route()
             .audit_value()
     }
 }
@@ -1196,8 +1162,8 @@ impl HttpConfluenceBackend {
 impl ConfluenceBackend for HttpConfluenceBackend {
     fn egress_proxy_audit(&self, credential: &ExecutionCredential) -> Value {
         self.client_for(credential)
-            .map(|clients| clients.client.egress_proxy().audit_value())
-            .unwrap_or_else(|_| EgressProxySelection::direct().audit_value())
+            .map(|clients| clients.client.egress_route().audit_value())
+            .unwrap_or_else(|_| EgressRoute::direct().audit_value())
     }
 
     async fn current_user(
@@ -1356,10 +1322,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)?
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "page.ancestors",
-                    attempt: attempt as u32,
-                },
+                UpstreamCall::new("page.ancestors").with_attempt(attempt as u32),
             )
             .await?;
             last_status = response.status().as_u16();
@@ -1413,10 +1376,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)?
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "page.direct_children",
-                    attempt: attempt as u32,
-                },
+                UpstreamCall::new("page.direct_children").with_attempt(attempt as u32),
             )
             .await?;
             last_status = response.status().as_u16();
@@ -2292,10 +2252,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)?
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "attachment.list",
-                    attempt,
-                },
+                UpstreamCall::new("attachment.list").with_attempt(attempt),
             )
             .await?;
             let status = response.status().as_u16();
@@ -2408,10 +2365,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 client,
                 authenticated_request(client.request(Method::GET, url.clone()), credential)?
                     .header("Accept", "application/json"),
-                UpstreamCall {
-                    operation: "blog.attachment.lookup",
-                    attempt,
-                },
+                UpstreamCall::new("blog.attachment.lookup").with_attempt(attempt),
             )
             .await?;
             let status = response.status().as_u16();
@@ -2604,7 +2558,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -2905,7 +2862,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -2989,7 +2949,10 @@ impl HttpConfluenceBackend {
             .max_download_bytes
             .min(self.limits.max_download_bytes);
         if let Err(error) = validate_confluence_body_response(&response, byte_cap) {
-            complete_upstream_trace(&mut response, Some(confluence_backend_reason_code(&error)));
+            complete_upstream_trace(
+                &mut response,
+                Some(confluence_backend_reason_code(&error).into()),
+            );
             return Err(error);
         }
         complete_upstream_trace(&mut response, None);
@@ -3020,19 +2983,17 @@ impl HttpConfluenceBackend {
         credential: &ExecutionCredential,
     ) -> Result<reqwest::Response, ConfluenceBackendError> {
         let client = self.stream_client(credential)?;
-        let authorization = confluence_authorization(credential)?;
+        let authorization = atlassian_authorization(credential)?;
         client
             .get_following_redirects(
                 url,
-                RedirectRules {
-                    max_redirects: 5,
-                    deadline: Duration::from_millis(self.limits.request_timeout_ms),
-                    // Atlassian media hosts join broker logs by these headers.
-                    correlate_other_origins: true,
-                    vet: &|_| true,
-                    decorate: &|request| request,
-                    authorize: &|request| authorization.apply(request),
-                },
+                RedirectRules::new(
+                    5,
+                    Duration::from_millis(self.limits.request_timeout_ms),
+                    &|request| authorization.apply(request),
+                )
+                // Atlassian media hosts join broker logs by these headers.
+                .correlating_other_origins(),
                 "attachment.download",
             )
             .await
@@ -3040,23 +3001,20 @@ impl HttpConfluenceBackend {
     }
 }
 
+/// `builder` with `credential`'s authorization; an unsupported credential
+/// kind fails before any request is sent.
 pub(crate) fn authenticated_request(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, ConfluenceBackendError> {
-    Ok(confluence_authorization(credential)?.apply(builder))
+    Ok(atlassian_authorization(credential)?.apply(builder))
 }
 
-pub(crate) fn confluence_authorization(
+fn atlassian_authorization(
     credential: &ExecutionCredential,
 ) -> Result<AtlassianAuthorization<'_>, ConfluenceBackendError> {
-    AtlassianAuthorization::new(credential).map_err(|error| {
-        ConfluenceBackendError::Protocol(match error {
-            AtlassianCredentialError::UnsupportedKind => {
-                "unsupported Confluence credential kind".to_string()
-            }
-            error => error.to_string(),
-        })
+    AtlassianAuthorization::new(credential).ok_or_else(|| {
+        ConfluenceBackendError::Protocol("unsupported Confluence credential kind".to_string())
     })
 }
 
@@ -3090,6 +3048,8 @@ pub(crate) fn confluence_upstream_error(error: UpstreamError) -> ConfluenceBacke
         UpstreamError::Redirect => ConfluenceBackendError::Protocol(
             "Confluence attachment redirect is invalid".to_string(),
         ),
+        // Any other failure produced no usable response.
+        other => ConfluenceBackendError::Transport(other.to_string()),
     }
 }
 
@@ -3628,7 +3588,13 @@ pub(crate) fn complete_confluence_trace<T>(
     outcome: &Result<T, ConfluenceBackendError>,
 ) {
     if let Some(trace) = trace {
-        trace.complete(outcome.as_ref().err().map(confluence_backend_reason_code));
+        trace.complete(
+            outcome
+                .as_ref()
+                .err()
+                .map(confluence_backend_reason_code)
+                .map(Into::into),
+        );
     }
 }
 

@@ -16,12 +16,15 @@ pub trait StableSigningKey: Send + Sync {
     fn hmac_base64url(&self, context: &[u8], payload: &[u8]) -> Result<String, SigningError>;
 }
 
+/// The signing key is unavailable. A unit error by design: it carries no
+/// detail about the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("signing key is unavailable")]
 pub struct SigningError;
 
 /// Signs opaque tokens with the broker's stable key when one is configured,
 /// and otherwise with a key that lives only as long as this process.
+#[non_exhaustive]
 #[derive(Clone)]
 pub enum OpaqueTokenSigner {
     Stable(Arc<dyn StableSigningKey>),
@@ -32,11 +35,7 @@ impl OpaqueTokenSigner {
     pub fn new(stable: Option<Arc<dyn StableSigningKey>>) -> Self {
         match stable {
             Some(key) => Self::Stable(key),
-            None => {
-                let mut key = [0_u8; 32];
-                OsRng.fill_bytes(&mut key);
-                Self::ProcessLocal(Arc::new(key))
-            }
+            None => Self::ProcessLocal(generate_local_key()),
         }
     }
 
@@ -44,11 +43,7 @@ impl OpaqueTokenSigner {
         match self {
             Self::Stable(key) => key.hmac_base64url(context, payload),
             Self::ProcessLocal(key) => {
-                let mut mac =
-                    <HmacSha256 as Mac>::new_from_slice(key.as_ref()).map_err(|_| SigningError)?;
-                mac.update(context);
-                mac.update(payload);
-                Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+                Ok(URL_SAFE_NO_PAD.encode(local_hmac(key, context, payload)))
             }
         }
     }
@@ -87,6 +82,21 @@ impl OpaqueTokenSigner {
         let expected = self.sign_durable(context, payload)?;
         Ok(bool::from(expected.as_bytes().ct_eq(signature.as_bytes())))
     }
+}
+
+/// HMAC-SHA256 over `context` then `payload` with a key held in this process.
+pub(crate) fn local_hmac(key: &[u8; 32], context: &[u8], payload: &[u8]) -> [u8; 32] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts 32-byte keys");
+    mac.update(context);
+    mac.update(payload);
+    mac.finalize().into_bytes().into()
+}
+
+/// A fresh random 32-byte key that never leaves this process.
+pub(crate) fn generate_local_key() -> Arc<[u8; 32]> {
+    let mut key = [0_u8; 32];
+    OsRng.fill_bytes(&mut key);
+    Arc::new(key)
 }
 
 /// Scopes a stable key to one service: every signature also covers the

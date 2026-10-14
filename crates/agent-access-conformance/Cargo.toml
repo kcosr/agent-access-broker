@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "Test-only backend that exercises every extension point of the backend contract"
 
+[package.metadata.agent-access]
+role = "reference"
+
 [dependencies]
 agent-access-provider = { path = "../agent-access-provider" }
 async-trait.workspace = true

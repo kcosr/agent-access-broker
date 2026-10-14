@@ -121,11 +121,7 @@ impl Fixture {
             "mcp_oauth",
             &Url::parse(&base).unwrap(),
             &McpOAuthDialect.upstream_allowlist(&config),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &test_support::test_outbound_tls(),
-            },
+            &test_support::TestHost::default(),
         )
         .unwrap();
         Self {
@@ -136,15 +132,15 @@ impl Fixture {
         }
     }
     fn client(&self) -> OAuthClient<'_> {
-        OAuthClient {
-            registration_id: "mcp",
-            config: &self.config,
-            client_secret: if self.config.client_auth == OAuthClientAuth::None {
+        OAuthClient::new(
+            "mcp",
+            &self.config,
+            if self.config.client_auth == OAuthClientAuth::None {
                 ""
             } else {
                 "secret&value"
             },
-        }
+        )
     }
     fn profile(&self) -> &OAuthPermissionProfile {
         &self.config.permission_profiles["read"]
@@ -160,10 +156,7 @@ impl Fixture {
                 &self.http,
                 &self.client(),
                 self.profile(),
-                AuthorizationRequest {
-                    state: "flow-state",
-                    code_challenge_s256: "pkce-challenge",
-                },
+                AuthorizationRequest::new("flow-state", "pkce-challenge"),
             )
             .await
     }
@@ -172,11 +165,7 @@ impl Fixture {
             .exchange_code(
                 &self.http,
                 &self.client(),
-                CodeExchange {
-                    code: "one-use-code",
-                    code_verifier: "pkce-verifier",
-                    profile: self.profile(),
-                },
+                CodeExchange::new("one-use-code", "pkce-verifier", self.profile()),
             )
             .await
     }
@@ -329,6 +318,7 @@ async fn code_and_refresh_support_public_post_and_basic_clients_without_identity
                             b"app%3Aid:secret%26value"
                         );
                     }
+                    other => panic!("untested client authentication {other:?}"),
                 }
             }
             assert_eq!(calls[0].2["code_verifier"], "pkce-verifier");
@@ -695,6 +685,62 @@ async fn metadata_bounds_and_registration_errors_fail_closed() {
     assert_eq!(fixture.token_calls(), 0);
 }
 
+/// Moves every approved endpoint, including the resource bound by each
+/// profile, from the fixture's `http://127.0.0.1` origin to `origin`.
+fn with_endpoint_origin(config: &OAuthRegistrationConfig, origin: &str) -> OAuthRegistrationConfig {
+    let move_origin = |value: &str| value.replacen("http://127.0.0.1", origin, 1);
+    let mut config = config.clone();
+    config.base_url = move_origin(&config.base_url);
+    for value in config.adapter_settings.values_mut() {
+        *value = move_origin(value);
+    }
+    for profile in config.permission_profiles.values_mut() {
+        profile.audience = move_origin(&profile.audience);
+        profile.target = move_origin(&profile.target);
+    }
+    config
+}
+
+#[tokio::test]
+async fn insecure_endpoints_require_literal_loopback_addresses() {
+    let fixture = Fixture::new(OAuthClientAuth::None).await;
+    for origin in ["http://127.0.0.1", "http://[::1]", "https://localhost"] {
+        McpOAuthDialect
+            .validate_registration(&with_endpoint_origin(&fixture.config, origin))
+            .unwrap_or_else(|error| panic!("{origin}: {error}"));
+    }
+    for origin in ["http://localhost", "http://LOCALHOST", "http://mcp.example"] {
+        assert!(
+            McpOAuthDialect
+                .validate_registration(&with_endpoint_origin(&fixture.config, origin))
+                .is_err(),
+            "{origin}"
+        );
+    }
+    // Each endpoint is checked on its own: an approved loopback issuer does not
+    // admit a plain-HTTP `localhost` endpoint beside it.
+    let insecure = with_endpoint_origin(&fixture.config, "http://localhost");
+    let mut config = fixture.config.clone();
+    config.base_url = insecure.base_url.clone();
+    assert!(McpOAuthDialect.validate_registration(&config).is_err());
+    for key in SETTINGS {
+        let mut config = fixture.config.clone();
+        config
+            .adapter_settings
+            .insert(key.into(), insecure.adapter_settings[key].clone());
+        if key == "resource" {
+            config.permission_profiles = insecure.permission_profiles.clone();
+        }
+        assert!(
+            McpOAuthDialect.validate_registration(&config).is_err(),
+            "{key}"
+        );
+    }
+    let mut config = fixture.config.clone();
+    config.allow_insecure_loopback = false;
+    assert!(McpOAuthDialect.validate_registration(&config).is_err());
+}
+
 #[tokio::test]
 async fn both_permission_modes_require_exact_resource_and_valid_scope_configuration() {
     assert!(McpOAuthDialect.supports_server_default_scopes());
@@ -720,6 +766,7 @@ async fn both_permission_modes_require_exact_resource_and_valid_scope_configurat
         let invalid_scopes = match scope_mode {
             OAuthScopeMode::Explicit => vec![None, Some(vec![])],
             OAuthScopeMode::ServerDefault => vec![Some(vec![]), Some(vec!["read".into()])],
+            other => panic!("untested scope mode {other:?}"),
         };
         for scopes in invalid_scopes {
             let mut config = fixture.config.clone();
@@ -842,4 +889,56 @@ async fn access_only_and_rotation_scopes_follow_actual_grant_evidence() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn the_import_companion_approves_only_the_validated_resource() {
+    let fixture = Fixture::new(OAuthClientAuth::None).await;
+    let resource = fixture.config.adapter_settings["resource"].clone();
+    let approved = IMPORT_AUTHENTICATION.approved_resource;
+    assert_eq!(approved(&fixture.config), Some(resource.clone()));
+    let mut mismatched = fixture.config.clone();
+    mismatched
+        .permission_profiles
+        .get_mut("read")
+        .unwrap()
+        .target = format!("{resource}/other");
+    assert_eq!(approved(&mismatched), None);
+    let mut missing = fixture.config.clone();
+    missing.adapter_settings.remove("token_endpoint");
+    assert_eq!(approved(&missing), None);
+}
+
+#[test]
+fn the_mcp_selection_contributes_its_companion_exactly_once() {
+    use agent_access_core::BackendRegistry;
+    let registry = BackendRegistry::empty()
+        .with_imported_adapters([crate::registration()])
+        .unwrap();
+    assert_eq!(
+        registry.oauth_dialect_ids().collect::<Vec<_>>(),
+        ["mcp_oauth"]
+    );
+    assert_eq!(
+        registry
+            .import_authentication("mcp_http")
+            .map(|companion| companion.dialect.id()),
+        Some("mcp_oauth")
+    );
+    // Selecting the same static again is a duplicate, in either order.
+    let duplicate = ["OAuth dialect mcp_oauth is registered more than once"];
+    assert_eq!(
+        registry
+            .with_oauth_dialects([&MCP_OAUTH_DIALECT])
+            .unwrap_err(),
+        duplicate
+    );
+    assert_eq!(
+        BackendRegistry::empty()
+            .with_oauth_dialects([&MCP_OAUTH_DIALECT])
+            .unwrap()
+            .with_imported_adapters([crate::registration()])
+            .unwrap_err(),
+        duplicate
+    );
 }

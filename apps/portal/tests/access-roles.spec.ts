@@ -49,7 +49,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
     else if (pathname === "/v1/admin/policy/effective-access") result = { policyGeneration: 1, access: [] };
     else if (pathname.endsWith("/tokens/options") || pathname.endsWith("/agent-tokens/options")) result = options;
-    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: false, availableKinds: [], oauthRegistrations: [], services: [] };
+    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: false, availableKinds: [], importAuthentication: [], services: [] };
     else if (pathname === "/v1/resource-types") result = { resourceTypes: [] };
     else if (pathname.endsWith("/audit/options")) result = { services: [] };
     else if (pathname.endsWith("/audit/events")) result = { records: [], nextCursor: null };
@@ -362,10 +362,10 @@ test("Auditor can inspect a stored import preview while discovery and acceptance
     status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", updatedBy: "admin"
   };
   const data = {
-    service: imported, operatorAllowed: false, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], oauthRegistrations: [], affectedGrants: [], affectedGrantsByAction: {},
+    service: imported, operatorAllowed: false, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {},
     preview: { service: "metrics", serviceVersion: 1, catalogRevision: 1, configRevision: "fixture", credentialVersions: {}, manifestHash: "fixture-preview", manifest: { protocolVersion: "fixture", metadata: {}, tools: [{ definition, unsupportedReason: null, readOnlyHint: true }] }, createdAt: "2026-09-29T00:00:00Z", expiresAt: "2026-09-30T00:00:00Z", createdBy: "admin" }
   };
-  await page.route("**/v1/admin/imports", (route) => route.fulfill({ json: envelope({ catalogRevision: 1, operatorEnabled: false, availableKinds: [], oauthRegistrations: [], services: [imported] }) }));
+  await page.route("**/v1/admin/imports", (route) => route.fulfill({ json: envelope({ catalogRevision: 1, operatorEnabled: false, availableKinds: [], importAuthentication: [], services: [imported] }) }));
   await page.route("**/v1/admin/imports/metrics/preview", (route) => route.fulfill({ json: envelope(data) }));
   await page.goto(`${baseUrl}/ui/admin/catalog/services/metrics/import`);
   await page.getByRole("button", { name: "Review preview", exact: true }).click();

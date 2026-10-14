@@ -17,7 +17,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "search is not used by normalized read tests".to_string(),
@@ -27,7 +27,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page creation is not used by normalized read tests".to_string(),
@@ -37,7 +37,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page updates are not used by normalized read tests".to_string(),
@@ -48,7 +48,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attachment upload is not used by normalized read tests".to_string(),
@@ -58,7 +58,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attachment listing is not used by normalized read tests".to_string(),
@@ -69,7 +69,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -80,7 +80,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("page_metadata");
         if page_id != self.page.id {
@@ -96,7 +96,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page(
         &self,
         page_id: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("page");
         if page_id != self.page.id {
@@ -114,7 +114,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         kind: ConfluenceCommentKind,
         comment_id: &str,
         _body_format: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comment");
         let comment = self
@@ -133,7 +133,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn comments_page(
         &self,
         request: ConfluenceCommentListRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comments_page");
         let comments = self
@@ -171,7 +171,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         _body_format: Option<&str>,
         max_results: u32,
         _cursor: Option<&str>,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comment_replies_page");
         let comments = self
@@ -231,18 +231,6 @@ fn normalized_comment(id: &str, parent_comment_id: Option<&str>, body: &str) -> 
     }
 }
 
-async fn normalized_runtime(
-    backend: Arc<NormalizedReadBackend>,
-    audit_name: &str,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let audit_path = temp_path(audit_name);
-    let config = confluence_config(&audit_path);
-    let provider =
-        confluence_provider_with_backend(&config, confluence_provider_config(2), backend);
-    let runtime = agent_access_core::BrokerRuntime::with_providers(config, vec![provider]).unwrap();
-    start_broker(runtime).await
-}
-
 async fn invoke(
     base_url: &str,
     action: &str,
@@ -282,7 +270,8 @@ async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
         comments: BTreeMap::new(),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) = normalized_runtime(backend.clone(), "normalized-page.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let (native_status, native) = invoke(
         &base_url,
@@ -336,7 +325,7 @@ async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
     assert!(!value.contains("\"type\":\"doc\""));
     assert_eq!(backend.take_calls(), native_calls);
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -350,8 +339,8 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
         comments: BTreeMap::new(),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) =
-        normalized_runtime(backend.clone(), "malformed-normalized-page.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let (status, body) = invoke(
         &base_url,
@@ -368,7 +357,7 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
     assert!(!body.to_string().contains(STORAGE));
     assert_eq!(backend.take_calls(), vec!["page_metadata", "page"]);
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -389,7 +378,8 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         ]),
         calls: Mutex::new(Vec::new()),
     });
-    let (base_url, server) = normalized_runtime(backend.clone(), "normalized-comments.audit").await;
+    let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
+    let base_url = broker.public_url();
 
     let list_inputs = serde_json::json!({
         "pageId":"123456",
@@ -509,5 +499,5 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
     );
     assert_eq!(backend.take_calls(), native_reply_calls);
 
-    server.abort();
+    stop(broker).await;
 }

@@ -178,7 +178,7 @@ pub(crate) struct BuiltConfluenceSearchQuery {
 pub(crate) fn search_authorization(
     request: &ProviderInvocation,
 ) -> Result<SearchAuthorization, ProviderError> {
-    request.search_authorization.clone().ok_or_else(|| {
+    request.authority().search().cloned().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::ServiceActionDenied,
             "search authorization is unavailable",

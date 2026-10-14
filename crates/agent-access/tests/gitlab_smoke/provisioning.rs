@@ -33,18 +33,9 @@ fn account() -> Value {
 struct Fixture {
     upstream: MockServer,
     base_url: String,
-    server: tokio::task::JoinHandle<()>,
+    broker: RunningBroker,
+    /// A private directory for the CLI's token output files.
     dir: tempfile::TempDir,
-    audit: std::path::PathBuf,
-    extra_dirs: Vec<std::path::PathBuf>,
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        self.server.abort();
-        for path in &self.extra_dirs {
-            let _ = std::fs::remove_dir_all(path);
-        }
-    }
 }
 impl Fixture {
     async fn new(enabled: bool, actions: &[&str]) -> Self {
@@ -55,64 +46,14 @@ impl Fixture {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let audit = dir.path().join("audit.jsonl");
-        let mut config = gitlab_per_user_config(&audit);
-        let mut extra_dirs = vec![];
-        // The existing fixture allocates credential files separately; retain their directory ownership for cleanup.
-        for entry in config
-            .credentials
-            .service
-            .values()
-            .chain(config.credentials.lookup.values())
-            .chain(config.credentials.per_user.values())
-        {
-            if let Some(reference) = &entry.token_ref
-                && let Some(path) = reference.strip_prefix("file:")
-            {
-                extra_dirs.push(std::path::Path::new(path).parent().unwrap().to_owned());
-            }
-            if let Some(path) = &entry.path {
-                let store: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-                for credential in store["credentials"].as_array().unwrap() {
-                    if let Some(path) = credential["token_ref"]
-                        .as_str()
-                        .unwrap()
-                        .strip_prefix("file:")
-                    {
-                        extra_dirs.push(std::path::Path::new(path).parent().unwrap().to_owned());
-                    }
-                }
-                extra_dirs.push(std::path::Path::new(path).parent().unwrap().to_owned());
-            }
-        }
-        for source in &config.identity.sources {
-            for principal in &source.principals {
-                for reference in &principal.token_refs {
-                    if let Some(path) = reference.strip_prefix("file:") {
-                        extra_dirs.push(std::path::Path::new(path).parent().unwrap().to_owned());
-                    }
-                }
-            }
-        }
-        extra_dirs.push(
-            std::path::Path::new(&config.limits.upload_spool_dir)
-                .parent()
-                .unwrap()
-                .to_owned(),
-        );
-        let provider = config
-            .providers
-            .get_mut::<agent_access_gitlab::GitlabProviderConfig>()
-            .unwrap();
+        let mut document = gitlab_per_user_document();
+        let provider = &mut document.provider;
         provider.provisioning.enabled = enabled;
         provider.api_base_url = format!("{}/api/v4", upstream.uri());
         provider.web_base_url = upstream.uri();
         provider.allowed_upstream_hosts = vec![format!("{}/api/v4/**", upstream.uri())];
-        config.limits.invocations.default = Some(agent_access_core::InvocationLimitConfig {
-            requests: 1000,
-            window: "1m".into(),
-        });
-        for grant in &mut config.policy.grants {
+        document.default_invocation_limit = Some((1000, "1m"));
+        for grant in &mut document.grants {
             grant.actions = actions.iter().map(|s| s.to_string()).collect();
         }
         Mock::given(method("GET"))
@@ -122,16 +63,17 @@ impl Fixture {
             ))
             .mount(&upstream)
             .await;
-        let runtime = agent_access_core::BrokerRuntime::new(config).unwrap();
-        let (base_url, server) = start_broker(runtime).await;
+        let broker = start_registered_broker(&document).await;
+        let base_url = broker.public_url();
         Self {
             upstream,
             base_url,
-            server,
+            broker,
             dir,
-            audit,
-            extra_dirs,
         }
+    }
+    async fn stop(self) {
+        stop(self.broker).await;
     }
     async fn mock(&self, method_name: &str, url: &str, body: Value, status: u16) {
         Mock::given(method(method_name))
@@ -157,8 +99,14 @@ impl Fixture {
         assert_eq!(value["decision"], "allow", "{value}");
         value
     }
-    fn assert_audit_safe(&self) {
-        let audit = std::fs::read_to_string(&self.audit).unwrap();
+    /// Requires the records of the GitLab `audited` actions, then checks
+    /// that no credential or private account field reached the audit.
+    fn assert_audit_safe(&self, audited: &[&str]) {
+        let audit = self.broker.audit().unwrap();
+        for action in audited {
+            audit.require_action("gitlab", action);
+        }
+        let audit = audit.text();
         for secret in [
             ISSUED,
             "gitlab-per-user-token",
@@ -354,7 +302,8 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
             json!({"project":"sip/service","tokenId":11}),
         )
         .await;
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create", "project.access_token.rotate"]);
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -519,7 +468,12 @@ async fn provisioning_service_account_create_membership_tokens_rotation_and_revo
             json!({"project":"sip/service","userId":70}),
         )
         .await;
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&[
+        "service_account.create",
+        "service_account.token.create",
+        "service_account.token.rotate",
+    ]);
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -586,6 +540,9 @@ async fn provisioning_limits_project_ownership_and_exact_grants_prevent_upstream
             .iter()
             .all(|request| request.method.as_str() == "GET")
     );
+    fixture.stop().await;
+    disabled.stop().await;
+    read_only.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -689,6 +646,7 @@ async fn provisioning_catalog_openapi_send_and_pagination_bindings() {
         )
         .await;
     assert!(!status.is_success());
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -711,12 +669,7 @@ async fn provisioning_unknown_mutations_and_malformed_token_responses_never_expo
     assert_eq!(result["decision"], "error");
     assert_eq!(result["result"]["verificationStage"], "mutation_response");
     assert_eq!(result["result"]["safeLocators"]["tokenId"], 10);
-    let record = agent_access_core::test_support::read_audit_records(
-        agent_access_core::AuditStoreType::Jsonl,
-        &fixture.audit,
-    )
-    .pop()
-    .unwrap();
+    let record = fixture.broker.audit().unwrap().records().pop().unwrap();
     assert_eq!(record["objectIds"]["tokenId"], 10);
     assert_eq!(record["objectIds"]["userId"], 70);
     assert_eq!(record["upstreamStatus"], 201);
@@ -768,14 +721,10 @@ async fn provisioning_unknown_mutations_and_malformed_token_responses_never_expo
     assert_eq!(result["reasonCode"], "input_invalid");
     assert!(result["result"].get("mutationStatus").is_none());
     assert!(!result.to_string().contains(ISSUED));
-    let record = agent_access_core::test_support::read_audit_records(
-        agent_access_core::AuditStoreType::Jsonl,
-        &fixture.audit,
-    )
-    .pop()
-    .unwrap();
+    let record = fixture.broker.audit().unwrap().records().pop().unwrap();
     assert_eq!(record["upstreamStatus"], 422);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create"]);
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -809,6 +758,7 @@ async fn provisioning_rotation_rejects_inactive_overprivileged_and_wrong_owner_t
                 .iter()
                 .all(|r| r.method.as_str() == "GET")
         );
+        fixture.stop().await;
     }
     let fixture = Fixture::new(true, ACTIONS).await;
     fixture
@@ -838,6 +788,7 @@ async fn provisioning_rotation_rejects_inactive_overprivileged_and_wrong_owner_t
             .iter()
             .all(|r| r.method.as_str() == "GET")
     );
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -874,7 +825,8 @@ async fn provisioning_member_set_adds_only_a_proven_project_service_account() {
         )
         .await;
     assert_eq!(result["result"]["member"]["userId"], 70);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["service_account.member.set"]);
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -959,7 +911,8 @@ async fn provisioning_token_file_denials_cleanup_but_uncertain_writes_preserve_r
                     .all(|r| r.method.as_str() == "GET")
             );
         }
-        fixture.assert_audit_safe();
+        fixture.assert_audit_safe(&["project.access_token.create"]);
+        fixture.stop().await;
     }
 }
 
@@ -1037,7 +990,8 @@ async fn provisioning_service_account_rotation_lookup_pagination_is_bounded_befo
             assert!(result["result"].get("mutationStatus").is_none());
         }
         fixture.upstream.verify().await;
-        fixture.assert_audit_safe();
+        fixture.assert_audit_safe(&["service_account.token.rotate"]);
+        fixture.stop().await;
     }
 }
 
@@ -1091,5 +1045,6 @@ async fn provisioning_token_file_cleanup_failure_preserves_denial_and_exit_code(
     assert!(warning.contains(output_path.to_str().unwrap()));
     assert!(!warning.contains(ISSUED));
     assert_eq!(std::fs::metadata(&output_path).unwrap().len(), 0);
-    fixture.assert_audit_safe();
+    fixture.assert_audit_safe(&["project.access_token.create"]);
+    fixture.stop().await;
 }

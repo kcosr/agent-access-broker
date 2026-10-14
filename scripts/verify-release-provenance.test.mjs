@@ -4,17 +4,23 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   StatusMetadataMismatch,
+  assertReleaseFeatureGraph,
   assertReleaseStatus,
+  assertStampedSources,
   assertCleanAt,
   assertNoToolchainOverrides,
   cargoConfigInventory,
   inspectLocalToolchain,
+  parseCargoTree,
   parseProvenanceArguments,
   provenanceBuildPlan,
+  referenceCrates,
+  releaseFeatureTreeArgs,
+  releasePackageOrigins,
   validateToolchainVersions,
 } from "./verify-release-provenance.mjs";
 
@@ -38,19 +44,24 @@ function temporary(t) {
   return root;
 }
 
+function releaseStatus() {
+  const source = { revision: expected.commit, provenance: "evidence" };
+  return {
+    assembly: { name: "agent-access-broker", version: expected.version, qualification: "unqualified", source: { ...source } },
+    host: { crate: "agent-access-broker-host", version: expected.version, source: { ...source } },
+    sdk: { crate: "agent-access-provider", version: expected.version, source: { ...source } },
+    modules: [
+      { crate: "agent-access-fake", version: expected.version, roles: [{ role: "native", id: "fake" }], source: { ...source } },
+      { crate: "agent-access-jira", version: expected.version, roles: [{ role: "native", id: "jira" }], source: { ...source } },
+    ],
+    inventoryFingerprint: `sha256:${"0".repeat(64)}`,
+    catalogVersion: "agent-access.catalog.v2",
+    sendSchemaVersion: "agent-access.send.v1",
+  };
+}
+
 test("accepts the exact release status", () => {
-  assert.doesNotThrow(() =>
-    assertReleaseStatus(
-      {
-        brokerVersion: expected.version,
-        buildCommit: expected.commit,
-        buildProvenance: "release",
-        catalogVersion: "agent-access.catalog.v2",
-        sendSchemaVersion: "agent-access.send.v1",
-      },
-      expected,
-    ),
-  );
+  assert.doesNotThrow(() => assertReleaseStatus(releaseStatus(), expected));
 });
 
 test("provenance verification is local by default and build service requires an explicit option", () => {
@@ -231,23 +242,26 @@ test("checkout validation rejects a Git core.worktree redirect before build admi
 });
 
 test("classifies every metadata mismatch as definitive", () => {
-  for (const status of [
-    {
-      brokerVersion: "0.2.0",
-      buildCommit: expected.commit,
-      buildProvenance: "release",
-    },
-    {
-      brokerVersion: expected.version,
-      buildCommit: "ffffffffffffffffffffffffffffffffffffffff",
-      buildProvenance: "release",
-    },
-    {
-      brokerVersion: expected.version,
-      buildCommit: expected.commit,
-      buildProvenance: "unavailable",
-    },
-  ]) {
+  const unavailable = { revision: null, provenance: "unavailable" };
+  const mutations = [
+    (status) => { status.assembly.version = "0.2.0"; },
+    (status) => { status.assembly.name = "downstream-broker"; },
+    (status) => { status.assembly.source.revision = "ffffffffffffffffffffffffffffffffffffffff"; },
+    (status) => { status.assembly.source = unavailable; },
+    (status) => { status.assembly.source.provenance = "declared"; },
+    (status) => { status.host.source = unavailable; },
+    (status) => { status.host.crate = "agent-access-core"; },
+    (status) => { status.sdk.version = "0.2.0"; },
+    (status) => { status.sdk.source.provenance = "declared"; },
+    (status) => { status.modules[1].source = unavailable; },
+    (status) => { status.modules[0].source.revision = "ffffffffffffffffffffffffffffffffffffffff"; },
+    (status) => { status.modules = []; },
+    (status) => { delete status.modules; },
+    (status) => { delete status.assembly; },
+  ];
+  for (const mutate of mutations) {
+    const status = releaseStatus();
+    mutate(status);
     assert.throws(
       () => assertReleaseStatus(status, expected),
       (error) => {
@@ -255,10 +269,249 @@ test("classifies every metadata mismatch as definitive", () => {
         assert.equal(error.name, "StatusMetadataMismatch");
         assert.equal(
           error.message,
-          `status mismatch: expected version=${expected.version} commit=${expected.commit} provenance=release; received ${JSON.stringify(status)}`,
+          `status mismatch: expected agent-access-broker version=${expected.version} with evidence-backed commit=${expected.commit} for the assembly, host, SDK and every module; received ${JSON.stringify(status)}`,
         );
         return true;
       },
     );
   }
+  assert.throws(() => assertReleaseStatus(null, expected), StatusMetadataMismatch);
+});
+
+const CLEAN_TREE = `agent-access-broker v0.1.0 (/checkout/crates/agent-access-broker)	default
+agent-access-broker-host v0.1.0 (/checkout/crates/agent-access-broker-host)	
+agent-access-provider v0.1.0 (/checkout/crates/agent-access-provider)	
+serde v1.0.228	default,derive,std
+serde_derive v1.0.228 (proc-macro)	default
+[build-dependencies]
+cc v1.2.0	
+
+agent-access v0.1.0 (/checkout/crates/agent-access)	
+agent-access-provider v0.1.0 (/checkout/crates/agent-access-provider)	 (*)
+`;
+
+test("the release feature check resolves both release packages without dev units", () => {
+  assert.deepEqual(releaseFeatureTreeArgs(toolchain.host), ["tree", "--locked", "--target", toolchain.host,
+    "-p", "agent-access-broker", "-p", "agent-access", "-e", "normal,build", "--prefix", "none",
+    "--format", "{p}\t{f}"]);
+});
+
+test("parses each unit's identity and resolved features from cargo tree output", () => {
+  assert.deepEqual(parseCargoTree(CLEAN_TREE).map((pkg) => `${pkg.name}@${pkg.version}[${pkg.source}]:${pkg.features.join(",")}`), [
+    "agent-access-broker@0.1.0[/checkout/crates/agent-access-broker]:default",
+    "agent-access-broker-host@0.1.0[/checkout/crates/agent-access-broker-host]:",
+    "agent-access-provider@0.1.0[/checkout/crates/agent-access-provider]:",
+    "serde@1.0.228[null]:default,derive,std", "serde_derive@1.0.228[null]:default", "cc@1.2.0[null]:",
+    "agent-access@0.1.0[/checkout/crates/agent-access]:",
+  ]);
+  // Units of one package with different feature sets are merged; origins are not.
+  const parsed = parseCargoTree([
+    "tokio v1.0.0\tio-util", "tokio v1.0.0\tmacros,rt (*)",
+    "pm v0.1.0 (proc-macro) (/checkout/crates/pm)\t",
+    "agent-access-jira v0.1.0 (/checkout/crates/agent-access-jira)\t",
+    "agent-access-jira v0.1.0 (https://example.test/other.git?rev=v1#ffffffff)\t",
+  ].join("\n"));
+  assert.deepEqual(parsed, [
+    { name: "tokio", version: "1.0.0", source: null, features: ["io-util", "macros", "rt"] },
+    { name: "pm", version: "0.1.0", source: "/checkout/crates/pm", features: [] },
+    { name: "agent-access-jira", version: "0.1.0", source: "/checkout/crates/agent-access-jira", features: [] },
+    { name: "agent-access-jira", version: "0.1.0", source: "https://example.test/other.git?rev=v1#ffffffff", features: [] },
+  ]);
+});
+
+test("reference crates come from workspace role metadata", () => {
+  const metadata = {
+    workspace_members: ["conformance-id", "fake-id"],
+    packages: [
+      { id: "conformance-id", name: "agent-access-conformance", metadata: { "agent-access": { role: "reference" } } },
+      { id: "fake-id", name: "agent-access-fake", metadata: { "agent-access": { role: "native" } } },
+      { id: "registry-id", name: "outside-reference", metadata: { "agent-access": { role: "reference" } } },
+    ],
+  };
+  assert.deepEqual(referenceCrates(metadata), ["agent-access-conformance"]);
+  assert.deepEqual(referenceCrates({}), []);
+});
+
+test("rejects any resolved test-support feature or reference crate in the release graph", () => {
+  const references = ["agent-access-conformance"];
+  assert.doesNotThrow(() => assertReleaseFeatureGraph(CLEAN_TREE, references));
+  assert.throws(
+    () => assertReleaseFeatureGraph(`${CLEAN_TREE}agent-access-provider v0.1.0 (/checkout/crates/agent-access-provider)\ttest-support (*)\nagent-access-core v0.1.0 (/checkout/crates/agent-access-core)\tdefault,test-support\n`, references),
+    /Release dependency graph enables test-only code: test feature agent-access-core\/test-support, test feature agent-access-provider\/test-support$/,
+  );
+  assert.throws(
+    () => assertReleaseFeatureGraph(`${CLEAN_TREE}agent-access-conformance v0.1.0 (/checkout/crates/agent-access-conformance)\t\n`, references),
+    /enables test-only code: reference crate agent-access-conformance$/,
+  );
+  // A feature that merely shares the prefix is not the test-support feature.
+  assert.doesNotThrow(() => assertReleaseFeatureGraph(`${CLEAN_TREE}tokio v1.0.0\ttest-support-extra\n`, references));
+  assert.throws(() => assertReleaseFeatureGraph("agent-access v0.1.0 (/checkout/crates/agent-access)\t\n", references),
+    /omits release package agent-access-broker$/);
+  assert.throws(() => assertReleaseFeatureGraph("", references), /omits release package agent-access-broker, agent-access$/);
+});
+
+// A minimal real workspace: the provider's test-support feature reaches the
+// broker only through the broker's default features, and the CLI only
+// through a dev-dependency.
+function featureFixture(t, { brokerDefault }) {
+  const root = temporary(t);
+  const write = (file, contents) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), contents);
+  };
+  const manifest = (name, body = "") => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${body}`;
+  const provider = 'agent-access-provider = { path = "../provider" }';
+  write("Cargo.toml", '[workspace]\nmembers = ["broker", "cli", "provider"]\nresolver = "2"\n');
+  write("broker/Cargo.toml", manifest("agent-access-broker", `\n[dependencies]\n${provider}\n`
+    + (brokerDefault ? '\n[features]\ndefault = ["agent-access-provider/test-support"]\n' : "")));
+  write("cli/Cargo.toml", manifest("agent-access", `\n[dependencies]\n${provider}\n\n[dev-dependencies]\n`
+    + 'agent-access-provider = { path = "../provider", features = ["test-support"] }\n'));
+  write("provider/Cargo.toml", manifest("agent-access-provider", "\n[features]\ntest-support = []\n"));
+  for (const crate of ["broker", "cli", "provider"]) write(`${crate}/src/lib.rs`, "");
+  const env = { ...process.env };
+  delete env.CARGO_TARGET_DIR;
+  const run = (command, args) => execFileSync(command, args, { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  run("cargo", ["generate-lockfile", "--offline"]);
+  const host = /^host: (\S+)$/m.exec(run("rustc", ["-vV"]))[1];
+  return run("cargo", [...releaseFeatureTreeArgs(host), "--offline"]);
+}
+
+test("real cargo tree: a release root's default feature enabling test support is rejected", (t) => {
+  assert.throws(() => assertReleaseFeatureGraph(featureFixture(t, { brokerDefault: true }), []),
+    /enables test-only code: test feature agent-access-provider\/test-support$/);
+});
+
+test("real cargo tree: a dev-only test-support activation stays allowed", (t) => {
+  const output = featureFixture(t, { brokerDefault: false });
+  assert.doesNotThrow(() => assertReleaseFeatureGraph(output, []));
+  assert.ok(parseCargoTree(output).some((pkg) => pkg.name === "agent-access-provider"));
+});
+
+const ROOT = "/checkout";
+const TRACKED = new Set(["crates/agent-access-broker/Cargo.toml", "crates/agent-access-broker-host/Cargo.toml",
+  "crates/agent-access-provider/Cargo.toml", "crates/agent-access-jira/Cargo.toml", "crates/agent-access/Cargo.toml"]);
+const unit = (name, source) => `${name} v0.1.0${source ? ` (${source})` : ""}\t`;
+const RELEASE_TREE = [
+  unit("agent-access-broker", "/checkout/crates/agent-access-broker"),
+  unit("agent-access-broker-host", "/checkout/crates/agent-access-broker-host"),
+  unit("agent-access-provider", "/checkout/crates/agent-access-provider"),
+  unit("agent-access-jira", "/checkout/crates/agent-access-jira"),
+  "",
+  unit("agent-access", "/checkout/crates/agent-access"),
+  `${unit("agent-access-provider", "/checkout/crates/agent-access-provider")} (*)`,
+].join("\n");
+const withJira = (source) => `${RELEASE_TREE}\n${unit("agent-access-jira", source)}`;
+
+function stampedStatus() {
+  const status = releaseStatus();
+  status.modules = [status.modules[1]];
+  return status;
+}
+
+const sources = (tracked = TRACKED) => ({ root: ROOT, tracked, realpath: (file) => file });
+
+test("stamped packages resolving to committed path packages in the checkout are accepted", () => {
+  const origins = releasePackageOrigins(RELEASE_TREE);
+  assert.deepEqual([...origins.keys()].sort(), ["agent-access 0.1.0", "agent-access-broker 0.1.0",
+    "agent-access-broker-host 0.1.0", "agent-access-jira 0.1.0", "agent-access-provider 0.1.0"]);
+  assert.equal(origins.get("agent-access-provider 0.1.0").length, 1, "repeated units are one origin");
+  assert.doesNotThrow(() => assertStampedSources(stampedStatus(), origins, sources()));
+});
+
+test("a same-version module from another source cannot carry the qualified commit", () => {
+  const tree = (source) => RELEASE_TREE.replace(unit("agent-access-jira", "/checkout/crates/agent-access-jira"),
+    unit("agent-access-jira", source));
+  for (const source of ["https://example.test/other.git?rev=v0.1.0#ffffffff", null, "registry `internal`",
+    "/elsewhere/agent-access-jira"]) {
+    assert.throws(() => assertStampedSources(stampedStatus(), releasePackageOrigins(tree(source)), sources()), (error) => {
+      assert.ok(error instanceof StatusMetadataMismatch);
+      assert.match(error.message, /agent-access-jira 0\.1\.0 resolves to .*, not a committed path package in the qualified checkout/);
+      return true;
+    });
+  }
+  // A path package inside the checkout that Git does not track is not committed.
+  const untracked = new Set([...TRACKED].filter((file) => !file.includes("jira")));
+  assert.throws(() => assertStampedSources(stampedStatus(), releasePackageOrigins(RELEASE_TREE), sources(untracked)),
+    /agent-access-jira 0\.1\.0 resolves to \/checkout\/crates\/agent-access-jira, not a committed path package/);
+});
+
+test("two selected origins sharing a stamped module key are rejected, never merged", () => {
+  const origins = releasePackageOrigins(withJira("https://example.test/other.git?rev=v0.1.0#ffffffff"));
+  assert.equal(origins.get("agent-access-jira 0.1.0").length, 2);
+  assert.throws(() => assertStampedSources(stampedStatus(), origins, sources()), (error) => {
+    assert.ok(error instanceof StatusMetadataMismatch);
+    assert.match(error.message, /agent-access-jira 0\.1\.0 resolves to 2 source origins \(\/checkout\/crates\/agent-access-jira, https:\/\/example\.test\/other\.git\?rev=v0\.1\.0#ffffffff\)/);
+    return true;
+  });
+});
+
+test("stamped packages must be among the selected release units", () => {
+  const status = stampedStatus();
+  status.modules.push({ crate: "agent-access-teams", version: "0.1.0", roles: [], source: status.host.source });
+  assert.throws(() => assertStampedSources(status, releasePackageOrigins(RELEASE_TREE), sources()),
+    /agent-access-teams 0\.1\.0 is not in the resolved release graph/);
+});
+
+// A real workspace whose stamped Jira module is a tracked path member. A second
+// `agent-access-jira 0.1.0`, from a local Git repository, is an optional normal
+// dependency of the SDK behind its `alt` feature. The CLI enables `alt` only
+// through a dev-dependency, unless `brokerAlt` makes the broker enable it too.
+function originFixture(t, { brokerAlt }) {
+  const root = temporary(t);
+  const write = (file, contents) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), contents);
+  };
+  const manifest = (name, body = "") => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${body}`;
+  const env = { ...process.env };
+  delete env.CARGO_TARGET_DIR;
+  const run = (command, args, cwd) => execFileSync(command, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  write("other/agent-access-jira/Cargo.toml", manifest("agent-access-jira"));
+  write("other/agent-access-jira/src/lib.rs", "");
+  const other = path.join(root, "other", "agent-access-jira");
+  run("git", ["init", "--quiet"], other);
+  run("git", ["add", "."], other);
+  run("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--quiet", "-m", "other"], other);
+  const sdk = 'agent-access-provider = { path = "../agent-access-provider" }';
+  write("ws/Cargo.toml", '[workspace]\nmembers = ["agent-access-broker", "agent-access", "agent-access-broker-host", '
+    + '"agent-access-provider", "agent-access-jira"]\nresolver = "2"\n');
+  write("ws/agent-access-broker/Cargo.toml", manifest("agent-access-broker", `\n[dependencies]\n${sdk}\n`
+    + 'agent-access-broker-host = { path = "../agent-access-broker-host" }\n'
+    + 'agent-access-jira = { path = "../agent-access-jira" }\n'
+    + (brokerAlt ? '\n[features]\ndefault = ["agent-access-provider/alt"]\n' : "")));
+  write("ws/agent-access/Cargo.toml", manifest("agent-access", `\n[dependencies]\n${sdk}\n\n[dev-dependencies]\n`
+    + 'agent-access-provider = { path = "../agent-access-provider", features = ["alt"] }\n'));
+  write("ws/agent-access-broker-host/Cargo.toml", manifest("agent-access-broker-host"));
+  write("ws/agent-access-jira/Cargo.toml", manifest("agent-access-jira"));
+  write("ws/agent-access-provider/Cargo.toml", manifest("agent-access-provider",
+    `\n[dependencies]\njira-alt = { package = "agent-access-jira", git = "${pathToFileURL(other).href}", optional = true }\n`
+    + '\n[features]\nalt = ["dep:jira-alt"]\n'));
+  for (const crate of ["agent-access-broker", "agent-access", "agent-access-broker-host", "agent-access-provider", "agent-access-jira"]) {
+    write(`ws/${crate}/src/lib.rs`, "");
+  }
+  const workspace = path.join(root, "ws");
+  run("cargo", ["generate-lockfile"], workspace);
+  const host = /^host: (\S+)$/m.exec(run("rustc", ["-vV"], workspace))[1];
+  const output = run("cargo", releaseFeatureTreeArgs(host), workspace);
+  const tracked = new Set(["agent-access-broker", "agent-access", "agent-access-broker-host", "agent-access-provider",
+    "agent-access-jira"].map((crate) => `${crate}/Cargo.toml`));
+  const status = releaseStatus();
+  status.modules = [{ ...status.modules[1], crate: "agent-access-jira" }];
+  const metadata = JSON.parse(run("cargo", ["metadata", "--locked", "--format-version", "1", "--filter-platform", host], workspace));
+  return {
+    check: () => assertStampedSources(status, releasePackageOrigins(output), { root: workspace, tracked }),
+    metadataJiraOrigins: metadata.packages.filter((pkg) => pkg.name === "agent-access-jira").length,
+  };
+}
+
+test("real cargo tree: a second module origin that only a dev feature activates is not selected", (t) => {
+  const fixture = originFixture(t, { brokerAlt: false });
+  // Cargo metadata's feature-enabled workspace graph still lists both origins.
+  assert.equal(fixture.metadataJiraOrigins, 2);
+  assert.doesNotThrow(fixture.check);
+});
+
+test("real cargo tree: two module origins selected for production are rejected", (t) => {
+  assert.throws(originFixture(t, { brokerAlt: true }).check,
+    /agent-access-jira 0\.1\.0 resolves to 2 source origins \(\/.*\/ws\/agent-access-jira, file:\/\/.*\/other\/agent-access-jira#[0-9a-f]{8}\)/);
 });

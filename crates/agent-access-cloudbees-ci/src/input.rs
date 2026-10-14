@@ -684,7 +684,8 @@ pub(crate) fn job_action_inputs(
             let controller = value.split('/').next().filter(|alias| !alias.is_empty())?;
             inputs.insert("controller".into(), json!(controller));
         }
-        ResourceSelector::All => return None,
+        // All jobs, or a selector form this build does not know, maps to no inputs.
+        _ => return None,
     }
     Some(inputs)
 }
@@ -821,7 +822,7 @@ mod tests {
             base_url: base.into(),
             web_base_url: web.map(str::to_owned),
         };
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([
@@ -855,14 +856,12 @@ mod tests {
                 ],
             },
             ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
     }
 
     fn category(error: &ProviderError) -> (&str, Option<&str>) {
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{error:?}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{error:?}");
         let result = error.result.as_deref().expect("input error result");
         (
             result["inputCategory"].as_str().unwrap(),
@@ -1067,8 +1066,7 @@ mod tests {
         let ci = provider();
         let url = "https://ci.example.com/team-ci/job/payments/job/build-api/42/console";
         assert_eq!(
-            ci.resolve_scopes("build.view", &json!({"url": url}))
-                .unwrap()["job"],
+            ci.local_scopes("build.view", &json!({"url": url})).unwrap()["job"],
             vec!["team-ci/payments/build-api"]
         );
         let input_value = json!({"url": url});
@@ -1391,7 +1389,7 @@ mod tests {
                 "tail",
             ),
         ] {
-            let error = ci.resolve_scopes(action, &inputs).unwrap_err();
+            let error = ci.local_scopes(action, &inputs).unwrap_err();
             assert_eq!(category(&error), expected, "{action} {inputs}");
             assert!(
                 error.message.contains(mention),
@@ -1538,7 +1536,7 @@ mod tests {
 
     #[test]
     fn action_inputs_project_exact_and_namespace_selectors() {
-        let project = |selector| CLOUDBEES_CI_JOB_RESOURCE.action_inputs.unwrap()(&selector);
+        let project = |selector| CLOUDBEES_CI_JOB_RESOURCE.action_inputs(&selector);
         assert_eq!(
             project(ResourceSelector::Exact {
                 value: "team-ci/payments/build-api".into()
@@ -1562,7 +1560,7 @@ mod tests {
     fn resource_roots_are_configured_aliases_for_jobs_only() {
         let ci = provider();
         assert_eq!(
-            ci.resource_roots(&CLOUDBEES_CI_JOB_RESOURCE.id),
+            ci.resource_roots(CLOUDBEES_CI_JOB_RESOURCE.id()),
             ["nested", "root", "team-ci", "twin-a", "twin-b"]
         );
         assert!(
@@ -1573,8 +1571,7 @@ mod tests {
 
     #[test]
     fn schemas_express_locator_and_build_alternatives() {
-        let validator =
-            |action| agent_access_provider::BoundedImportSchema::compile(&schema(action)).unwrap();
+        let validator = |action| jsonschema::validator_for(&schema(action)).unwrap();
         let build = validator("build.view");
         for valid in [
             json!({"controller":"team-ci","job":"a","buildNumber":1}),

@@ -1,10 +1,16 @@
 //! Managed endpoint, real CLI and stdio MCP against an offline Teams transport.
-use agent_access_broker::{backend_registry, build_router};
-use agent_access_core::*;
+use agent_access_broker_host::test_support::{
+    FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
+};
+use agent_access_core::{
+    BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig, ManagedStore,
+    ManagedStoreConfig, ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole,
+    PrincipalWriteRequest,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    fmt::Display,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -105,17 +111,8 @@ impl Drop for Mcp {
         let _ = self.child.wait();
     }
 }
-struct Server(tokio::task::JoinHandle<()>);
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 struct Fixture {
-    _dir: tempfile::TempDir,
-    _server: Server,
-    runtime: BrokerRuntime,
+    broker: RunningBroker,
     agent_config: PathBuf,
     admin_config: PathBuf,
     base: String,
@@ -123,19 +120,16 @@ struct Fixture {
     calls: Arc<Mutex<Vec<Value>>>,
 }
 
-async fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let key = dir.path().join("key");
-    std::fs::write(&key, URL_SAFE_NO_PAD.encode([37_u8; 32])).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let mut config = parse_broker_config_raw(
-        "teams-smoke",
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
+}
+
+/// Managed identity, policy and store with management enabled, the Teams
+/// provider, and HTTP MCP served at `mcp_public_url`.
+fn teams_document(directory: &FixtureDir, mcp_public_url: &str) -> String {
+    let key = directory.join("key");
+    format!(
         r#"
 [identity]
 mode = "required"
@@ -145,56 +139,66 @@ name = "broker"
 type = "broker_tokens"
 header = "Authorization"
 scheme = "Bearer"
+[execution_context]
+allowed_values = ["default"]
+default_context = "default"
+[managed_store]
+type = "sqlite"
+path = {store}
+auto_migrate = true
+[broker_tokens]
+hash_key_ref = {hash_key}
+[credential_encryption]
+active_key = "test"
+[[credential_encryption.keys]]
+id = "test"
+provider = "file"
+path = {key}
+[management]
+enabled = true
 [policy]
 authority = "managed"
 [providers.teams]
 allowed_upstream_hosts = ["https://synthetic.environment.api.powerplatform.com/**"]
+[limits]
+upload_spool_dir = {spool}
+[mcp]
+enabled = true
+public_url = {mcp_public_url}
 "#,
-        &Arc::new(backend_registry()),
+        store = toml_string(directory.join("store.sqlite").display()),
+        hash_key = toml_string(format_args!("file:{}", key.display())),
+        key = toml_string(key.display()),
+        spool = toml_string(directory.join("spool").display()),
+        mcp_public_url = toml_string(mcp_public_url),
+    )
+}
+
+async fn fixture() -> Fixture {
+    let application = IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
     )
     .unwrap();
-    config.identity.sources = vec![IdentitySourceConfig {
-        name: "broker".into(),
-        kind: "broker_tokens".into(),
-        header: "Authorization".into(),
-        scheme: "Bearer".into(),
-        principals: vec![],
-    }];
-    config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
-    config.management.enabled = true;
-    config.mcp.enabled = true;
-    config.mcp.public_url = Some(format!("{base}/mcp"));
-    config.execution_context = Some(ExecutionContextConfig {
-        allowed_values: vec!["default".into()],
-        default_context: Some("default".into()),
-    });
-    config.managed_store = Some(ManagedStoreConfig {
-        kind: "sqlite".into(),
-        path: dir.path().join("store.sqlite").display().to_string(),
-        auto_migrate: true,
-        require_registered_principal_for_invocation: false,
-    });
-    config.broker_tokens = Some(BrokerTokensConfig {
-        hash_key_ref: format!("file:{}", key.display()),
-        ..Default::default()
-    });
-    config.credential_encryption = Some(CredentialEncryptionConfig {
-        active_key: "test".into(),
-        keys: vec![CredentialEncryptionKeyConfig {
-            id: "test".into(),
-            provider: "file".into(),
-            env: None,
-            path: Some(key.display().to_string()),
-        }],
-    });
+    let directory = application.directory().clone();
+    let key = directory
+        .secret_file("key", URL_SAFE_NO_PAD.encode([37_u8; 32]))
+        .unwrap();
+
+    // Seed the managed store before the broker opens and locks it.
     let store = ManagedStore::open(
-        config.managed_store.as_ref().unwrap(),
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: directory.join("store.sqlite").display().to_string(),
+            auto_migrate: true,
+            require_registered_principal_for_invocation: false,
+        },
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
-            role: agent_access_core::PrincipalRole::User,
+            role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
             kind: "user".into(),
@@ -205,85 +209,22 @@ allowed_upstream_hosts = ["https://synthetic.environment.api.powerplatform.com/*
         })
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+        .patch_principal_access(PrincipalAccessPatchRequest {
             principal_id: "alice".into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
+            role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
             actor: "test".into(),
         })
         .unwrap();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let captured = calls.clone();
-    let runtime = BrokerRuntime::with_providers(
-        config,
-        [agent_access_teams::test_support::provider(
-            ORIGIN,
-            Arc::new(move |endpoint, body| {
-                assert_eq!(endpoint, ENDPOINT);
-                captured.lock().unwrap().push(body.clone());
-                202
-            }),
-        )],
-    )
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", key.display()),
+        ..Default::default()
+    })
     .unwrap();
-    for (id, selector, attributes) in [
-        (
-            "destination",
-            ResourceSelector::Exact {
-                value: "release-alerts".into(),
-            },
-            ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())])),
-        ),
-        (
-            "all-destinations",
-            ResourceSelector::All,
-            ResourceAttributes::default(),
-        ),
-    ] {
-        runtime
-            .create_managed_resource(CreateResourceRequest {
-                id: Some(id.into()),
-                display_name: Some("Release announcements".into()),
-                resource_type: agent_access_teams::TEAMS_DESTINATION_RESOURCE.id.clone(),
-                selector,
-                allowed_execution_contexts: vec!["default".into()],
-                enabled: true,
-                attributes,
-                created_by: "test".into(),
-            })
-            .unwrap();
-    }
-    runtime
-        .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
-            grant_id: None,
-            subjects: vec!["user:alice".into()],
-            execution_contexts: vec!["default".into()],
-            service: "teams".into(),
-            actions: vec!["notification.send".into()],
-            resources: ResourceSelection {
-                resource_ids: vec!["all-destinations".into()],
-                resource_group_ids: vec![],
-            },
-            credential_mode: "service".into(),
-            priority: None,
-            status: None,
-            description: None,
-            created_by: "test".into(),
-        })
-        .unwrap();
-    let app = build_router(runtime.clone());
-    let server = Server(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    }));
-    let make_config = |class, name: &str| {
-        let token = store
+    let issue = |class, name: &str| {
+        store
             .issue_broker_token(
-                runtime.broker_token_hasher().unwrap(),
+                &hasher,
                 BrokerTokenIssueRequest {
                     principal_id: "alice".into(),
                     name: name.into(),
@@ -294,19 +235,112 @@ allowed_upstream_hosts = ["https://synthetic.environment.api.powerplatform.com/*
                 },
             )
             .unwrap()
-            .token;
-        let token_file = dir.path().join(format!("{name}-token"));
-        std::fs::write(&token_file, &token).unwrap();
-        let path = dir.path().join(format!("{name}.toml"));
-        std::fs::write(&path, format!("[service]\nurl = {base:?}\n[identity]\nheader = \"Authorization\"\nscheme = \"Bearer\"\ntoken_file = {:?}\n", token_file.display().to_string())).unwrap();
-        (path, token)
+            .token
     };
-    let (agent_config, agent_token) = make_config(BrokerTokenClass::AgentInvoke, "agent");
-    let (admin_config, _) = make_config(BrokerTokenClass::Admin, "admin");
+    let agent_token = issue(BrokerTokenClass::AgentInvoke, "agent");
+    let admin_token = issue(BrokerTokenClass::Admin, "admin");
+    drop(store);
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let captured = calls.clone();
+    let transport = agent_access_teams::test_support::provider(
+        ORIGIN,
+        Arc::new(move |endpoint, body| {
+            assert_eq!(endpoint, ENDPOINT);
+            captured.lock().unwrap().push(body.clone());
+            202
+        }),
+    );
+    // The listener is already bound, so HTTP MCP can name its address.
+    let base = application.public_url();
+    let broker = application
+        .config_document(teams_document(&directory, &format!("{base}/mcp")))
+        .provider_fixture("teams", ProviderFixture::instance(transport))
+        .start()
+        .await
+        .unwrap();
+
+    let make_config = |name: &str, token: &str| {
+        let token_file = directory
+            .secret_file(format!("{name}-token"), token)
+            .unwrap();
+        directory
+            .secret_file(
+                format!("{name}.toml"),
+                format!("[service]\nurl = {base:?}\n[identity]\nheader = \"Authorization\"\nscheme = \"Bearer\"\ntoken_file = {:?}\n", token_file.display().to_string()),
+            )
+            .unwrap()
+    };
+    let agent_config = make_config("agent", &agent_token);
+    let admin_config = make_config("admin", &admin_token);
+
+    // Resources with private attributes and grants are created through the
+    // running broker's management API.
+    let attributes = directory
+        .secret_file(
+            "destination-attributes.json",
+            json!({"webhookUrl":ENDPOINT}).to_string(),
+        )
+        .unwrap();
+    let resource_type = agent_access_teams::TEAMS_DESTINATION_RESOURCE.id().as_str();
+    for (id, selector, attributes) in [
+        (
+            "destination",
+            &[
+                "--selector-kind",
+                "exact",
+                "--selector-value",
+                "release-alerts",
+            ][..],
+            Some(attributes.to_str().unwrap()),
+        ),
+        ("all-destinations", &["--selector-kind", "all"][..], None),
+    ] {
+        let mut args = vec![
+            "admin",
+            "policy",
+            "resources",
+            "create",
+            "--id",
+            id,
+            "--display-name",
+            "Release announcements",
+            "--resource-type",
+            resource_type,
+            "--execution-context",
+            "default",
+            "--enabled",
+            "true",
+        ];
+        args.extend_from_slice(selector);
+        if let Some(attributes) = attributes {
+            args.extend_from_slice(&["--attributes-file", attributes]);
+        }
+        success(run(&admin_config, &args));
+    }
+    success(run(
+        &admin_config,
+        &[
+            "admin",
+            "policy",
+            "grants",
+            "create",
+            "--subject",
+            "user:alice",
+            "--execution-context",
+            "default",
+            "--service",
+            "teams",
+            "--action",
+            "notification.send",
+            "--resource-id",
+            "all-destinations",
+            "--credential-mode",
+            "service",
+        ],
+    ));
     Fixture {
-        _dir: dir,
-        _server: server,
-        runtime,
+        broker,
         agent_config,
         admin_config,
         base,
@@ -353,7 +387,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         "Release"
     );
     let card = json!({"@type":"MessageCard","@context":"http://schema.org/extensions","summary":"Release","themeColor":"008000"});
-    let card_file = f._dir.path().join("card.json");
+    let card_file = f.broker.directory().join("card.json");
     std::fs::write(&card_file, card.to_string()).unwrap();
     success(run(
         &f.agent_config,
@@ -368,7 +402,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
     ));
     assert_eq!(f.calls.lock().unwrap()[1], card);
     let input = json!({"destination":"release-alerts","contentFormat":"microsoft","content":card});
-    let input_file = f._dir.path().join("notification.json");
+    let input_file = f.broker.directory().join("notification.json");
     std::fs::write(&input_file, input.to_string()).unwrap();
     success(run(
         &f.agent_config,
@@ -458,14 +492,14 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
     );
     assert!(!receipt.to_string().contains("SYNTHETIC_SIGNED_SECRET"));
     assert_eq!(f.calls.lock().unwrap().len(), 5);
-    let send_file = f._dir.path().join("send.json");
+    let send_file = f.broker.directory().join("send.json");
     std::fs::write(&send_file, json!({"version":"agent-access.send.v1","kind":"invoke","service":"teams","action":"notification.send","inputs":input}).to_string()).unwrap();
     success(run(
         &f.agent_config,
         &["send", "--request-file", send_file.to_str().unwrap()],
     ));
     assert_eq!(f.calls.lock().unwrap().len(), 6);
-    let destination = f._dir.path().join("accepted.json");
+    let destination = f.broker.directory().join("accepted.json");
     let saved = success(run(
         &f.agent_config,
         &[
@@ -490,7 +524,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         7,
         "saving the response must not duplicate the notification"
     );
-    let failed_destination = f._dir.path().join("missing/accepted.json");
+    let failed_destination = f.broker.directory().join("missing/accepted.json");
     let failed_save = run(
         &f.agent_config,
         &[
@@ -551,19 +585,20 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         assert!(!run(&f.agent_config, &args).status.success());
     }
     assert_eq!(f.calls.lock().unwrap().len(), 8);
-    f.runtime
-        .patch_managed_resource(PatchResourceRequest {
-            id: "destination".into(),
-            expected_version: 1,
-            display_name: None,
-            resource_type: None,
-            selector: None,
-            allowed_execution_contexts: None,
-            enabled: Some(false),
-            attributes: ResourceAttributes::default(),
-            updated_by: "test".into(),
-        })
-        .unwrap();
+    success(run(
+        &f.admin_config,
+        &[
+            "admin",
+            "policy",
+            "resources",
+            "update",
+            "destination",
+            "--expected-version",
+            "1",
+            "--enabled",
+            "false",
+        ],
+    ));
     assert!(
         !run(
             &f.agent_config,
@@ -584,7 +619,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         8,
         "broad grants cannot execute disabled bindings"
     );
-    let attributes = f._dir.path().join("attributes.json");
+    let attributes = f.broker.directory().join("attributes.json");
     std::fs::write(&attributes, json!({"webhookUrl":ENDPOINT}).to_string()).unwrap();
     let created = success(run(
         &f.admin_config,
@@ -637,6 +672,9 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         .status
         .success()
     );
+    drop(mcp);
+    f.broker.shutdown();
+    f.broker.join().await.unwrap();
 }
 
 async fn rpc_response(response: reqwest::Response) -> Value {

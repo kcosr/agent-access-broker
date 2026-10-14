@@ -94,7 +94,12 @@ review; changing classifications affecting existing grants requires confirmation
 
 Descriptions and display labels are metadata. Schema or execution-annotation changes
 are behavioral changes. Disable is reversible. Retirement reserves the service/action
-identity permanently. An administrator cannot recycle a retired name onto a different
+identity permanently. Every retained import, whatever its status or adapter
+availability, must not share its service ID with `broker`, a native provider
+kind the binary selects (configured or not), a gateway, or a configured
+credential. Startup, configuration reload and import writes reject such a
+collision with a diagnostic naming both owners; a failed reload keeps the
+active configuration, and the operator resolves the retained identity first. An administrator cannot recycle a retired name onto a different
 upstream tool.
 
 An upstream tool whose former action is retired can be reviewed under a fresh action
@@ -200,7 +205,16 @@ token work until expiry, then require a new connection. Refresh and MCP tool cal
 are single-attempt operations; an upstream 401 never replays an imported write.
 
 Other authentication adapters may be recorded as unsupported metadata, but cannot
-execute. OpenAPI imports use the same lifecycle with a separate document parser,
+execute. Import administration responses include an `importAuthentication` list
+with one entry per selected import kind that has an OAuth companion: its
+`importKind`, the companion `dialectId`, and the operator `registrations` it
+approves (possibly none), each with `id`, `issuer`, approved `resource` and
+`permissionProfiles`. It contains no secrets, secret references or other
+adapter settings. The portal offers only registrations from the entry for the
+import's kind whose resource equals the endpoint, and copies that entry's
+dialect ID into new bindings. A stored binding naming a dialect that is not the
+kind's current companion, or whose kind is unavailable, stays unchanged and
+unavailable; it is never rewritten to another registration. OpenAPI imports use the same lifecycle with a separate document parser,
 security-scheme picker and HTTP executor; see [OpenAPI setup](imported-openapi.md).
 Upstream stdio process hosting remains outside this release.
 
@@ -245,6 +259,10 @@ select a lifecycle automatically under their existing operation deadline:
 | --- | --- |
 | `2026-07-28` | `server/discover`, then requests with current protocol metadata and headers |
 | `2025-11-25` | `initialize`, validate the selected version and tools capability, then `notifications/initialized` |
+
+Both lifecycles identify the client as the Broker host implementation:
+`clientInfo` is `{"name": "agent-access-broker-host", "version": "<host version>"}`,
+whatever the executable that links the host is called.
 
 Each operation first probes the current version, which is preferred when both
 are available. A valid advertisement supporting only the previous revision, or
@@ -309,6 +327,14 @@ refreshes the tool list. Protocol selection happens only during startup; no tool
 call is replayed after an authentication, session, transport or protocol failure.
 A session-bearing HTTP 404 ends the operation. A future independent operation
 starts with a new lifecycle and session.
+
+Imported actions are held to the same
+[provider reason contract](http-api.md#provider-reported-standard-reasons) as
+native ones, with no domain reasons of their own: an outcome outside it reports
+`broker_provider_contract_failed`. Administrative discovery is checked like a
+credential verification. An import whose settings or document destination
+cannot be prepared reports `config_validation_failed`; other discovery failures
+keep their own decision, such as `error` for an unreachable upstream.
 
 Invocation audit records include the admitted import catalog, service and action
 revisions alongside normal caller, context and outcome fields. These revisions

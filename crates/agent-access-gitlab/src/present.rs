@@ -52,76 +52,76 @@ struct ResultDescriptor {
 
 const NO_BODIES: &[EmbeddedBody] = &[];
 
-const GITLAB_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("issue")],
-    codec: &GitlabMarkdownBody("description"),
-}];
+const GITLAB_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("issue")],
+    &GitlabMarkdownBody("description"),
+)];
 
-const GITLAB_ISSUE_DESCRIPTIONS: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("issues"), BodyPathSegment::Each],
-    codec: &GitlabMarkdownBody("description"),
-}];
+const GITLAB_ISSUE_DESCRIPTIONS: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("issues"), BodyPathSegment::Each],
+    &GitlabMarkdownBody("description"),
+)];
 
-const GITLAB_MERGE_REQUEST_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("mergeRequest")],
-    codec: &GitlabMarkdownBody("description"),
-}];
+const GITLAB_MERGE_REQUEST_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("mergeRequest")],
+    &GitlabMarkdownBody("description"),
+)];
 
-const GITLAB_MERGE_REQUEST_DESCRIPTIONS: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[
+const GITLAB_MERGE_REQUEST_DESCRIPTIONS: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[
         BodyPathSegment::Field("mergeRequests"),
         BodyPathSegment::Each,
     ],
-    codec: &GitlabMarkdownBody("description"),
-}];
+    &GitlabMarkdownBody("description"),
+)];
 
-const GITLAB_NOTE_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("note")],
-    codec: &GitlabMarkdownBody("body"),
-}];
+const GITLAB_NOTE_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("note")],
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("notes"), BodyPathSegment::Each],
-    codec: &GitlabMarkdownBody("body"),
-}];
+const GITLAB_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("notes"), BodyPathSegment::Each],
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_DISCUSSION_NOTES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[
+const GITLAB_DISCUSSION_NOTES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[
         BodyPathSegment::Field("discussion"),
         BodyPathSegment::Field("notes"),
         BodyPathSegment::Each,
     ],
-    codec: &GitlabMarkdownBody("body"),
-}];
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_DISCUSSION_LIST_NOTES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[
+const GITLAB_DISCUSSION_LIST_NOTES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[
         BodyPathSegment::Field("discussions"),
         BodyPathSegment::Each,
         BodyPathSegment::Field("notes"),
         BodyPathSegment::Each,
     ],
-    codec: &GitlabMarkdownBody("body"),
-}];
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_DISCUSSION_VIEW_NOTES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[
+const GITLAB_DISCUSSION_VIEW_NOTES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[
         BodyPathSegment::Field("discussion"),
         BodyPathSegment::Field("notes"),
         BodyPathSegment::Each,
     ],
-    codec: &GitlabMarkdownBody("body"),
-}];
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_DRAFT_NOTE_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("draftNote")],
-    codec: &GitlabMarkdownBody("body"),
-}];
+const GITLAB_DRAFT_NOTE_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("draftNote")],
+    &GitlabMarkdownBody("body"),
+)];
 
-const GITLAB_DRAFT_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("draftNotes"), BodyPathSegment::Each],
-    codec: &GitlabMarkdownBody("body"),
-}];
+const GITLAB_DRAFT_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("draftNotes"), BodyPathSegment::Each],
+    &GitlabMarkdownBody("body"),
+)];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
     ResultDescriptor {
@@ -433,12 +433,14 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
 
 /// The presentation of `action`'s results, if it has one.
 pub(super) fn presentation(action: &str) -> Option<ActionPresentation> {
-    descriptor(action).map(|descriptor| ActionPresentation {
-        embedded_bodies: descriptor.embedded_bodies,
-        whole: descriptor
-            .whole
-            .as_ref()
-            .map(|whole| whole as &'static dyn WholeResultRenderer),
+    descriptor(action).map(|descriptor| {
+        ActionPresentation::new(
+            descriptor.embedded_bodies,
+            descriptor
+                .whole
+                .as_ref()
+                .map(|whole| whole as &'static dyn WholeResultRenderer),
+        )
     })
 }
 
@@ -479,6 +481,7 @@ impl WholeResultRenderer for WholeRenderer {
             out,
             max_body_bytes,
             budget,
+            ..
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
@@ -2519,38 +2522,23 @@ mod tests {
         );
         assert_eq!(
             response_capabilities("issue.view"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), Some(RESPONSE_FORMATS))
         );
         assert_eq!(
             response_capabilities("issue.create"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: None,
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), None)
         );
         assert_eq!(
             response_capabilities("project.view"),
-            ResponseCapabilities {
-                read_content_formats: None,
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(None, Some(RESPONSE_FORMATS))
         );
         assert_eq!(
             response_capabilities("merge_request.draft_note.view"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), Some(RESPONSE_FORMATS))
         );
         assert_eq!(
             response_capabilities("merge_request.draft_note.add"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: None,
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), None)
         );
         for excluded in [
             "file.raw.download",
@@ -2565,10 +2553,7 @@ mod tests {
         ] {
             assert_eq!(
                 response_capabilities(excluded),
-                ResponseCapabilities {
-                    read_content_formats: None,
-                    response_formats: None,
-                }
+                ResponseCapabilities::new(None, None)
             );
         }
         for action in [
@@ -2589,10 +2574,7 @@ mod tests {
             );
             assert_eq!(
                 response_capabilities(action),
-                ResponseCapabilities {
-                    read_content_formats: None,
-                    response_formats: None,
-                }
+                ResponseCapabilities::new(None, None)
             );
         }
     }
@@ -3320,10 +3302,7 @@ mod tests {
         present_provider_result(
             "issue.search",
             &mut issues,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -3337,10 +3316,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.list",
             &mut discussions,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -3361,10 +3337,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.view",
             &mut discussion,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -3387,10 +3360,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut empty,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -3400,10 +3370,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut empty_whole,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -3430,10 +3397,7 @@ mod tests {
                 present_provider_result(
                     action,
                     &mut result,
-                    ResponseOptions {
-                        read_content_format: format,
-                        response_format: ResponseFormat::Json,
-                    },
+                    ResponseOptions::new(format, ResponseFormat::Json),
                     4096,
                     65536,
                 )
@@ -3450,10 +3414,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 65536,
             )
@@ -3491,10 +3452,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.inline.add",
             &mut inline,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             65536,
         )
@@ -3526,10 +3484,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.note.add",
             &mut reply,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             65536,
         )
@@ -3544,10 +3499,7 @@ mod tests {
         present_provider_result(
             "merge_request.draft_note.list",
             &mut drafts,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             65536,
         )
@@ -3563,10 +3515,7 @@ mod tests {
         present_provider_result(
             "merge_request.draft_note.view",
             &mut view,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             65536,
         )
@@ -3594,10 +3543,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Text,
-                    response_format: ResponseFormat::Json,
-                },
+                ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
                 4096,
                 65536,
             )
@@ -3619,10 +3565,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Markdown,
-                    response_format: ResponseFormat::Json,
-                },
+                ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
                 4096,
                 65536,
             )
@@ -3701,7 +3644,7 @@ mod tests {
                 exact - 1,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
         }
     }
@@ -3718,10 +3661,7 @@ mod tests {
             present_provider_result(
                 descriptor.action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 65536,
             )
@@ -3737,10 +3677,7 @@ mod tests {
             present_provider_result(
                 descriptor.action,
                 &mut exactly_bounded,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 exact,
             )
@@ -3755,10 +3692,7 @@ mod tests {
         present_provider_result(
             "file.view",
             &mut file,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -3770,10 +3704,7 @@ mod tests {
         present_provider_result(
             "commit.view",
             &mut commit,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -3797,15 +3728,12 @@ mod tests {
             let error = present_provider_result(
                 action,
                 &mut malformed,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
         }
 
@@ -3813,15 +3741,12 @@ mod tests {
         let error = present_provider_result(
             "issue.view",
             &mut too_large,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 
@@ -3845,10 +3770,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 65536,
             )
@@ -3888,10 +3810,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 max_result_bytes,
                 max_result_bytes,
             )
@@ -3909,10 +3828,7 @@ mod tests {
         present_provider_result(
             "commit.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -3950,10 +3866,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -4041,10 +3954,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -4062,10 +3972,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.list",
             &mut no_notes,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -4079,10 +3986,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4110,10 +4014,7 @@ mod tests {
         present_provider_result(
             "merge_request.diff.list",
             &mut diffs,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4144,10 +4045,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4174,10 +4072,7 @@ mod tests {
         present_provider_result(
             "merge_request.discussion.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4201,10 +4096,7 @@ mod tests {
         present_provider_result(
             "merge_request.draft_note.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4241,10 +4133,7 @@ mod tests {
         present_provider_result(
             "merge_request.draft_note.view",
             &mut nullable,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )
@@ -4261,10 +4150,7 @@ mod tests {
         present_provider_result(
             "merge_request.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             65536,
         )

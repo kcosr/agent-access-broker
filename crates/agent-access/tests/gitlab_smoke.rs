@@ -1,12 +1,10 @@
-mod common;
-
 /// The GitLab provider around `backend`, paired with its configuration's
 /// descriptor.
 fn gitlab_service(
     config: agent_access_gitlab::GitlabProviderConfig,
     backend: Arc<dyn agent_access_gitlab::GitlabBackend>,
-) -> agent_access_core::ServiceProvider {
-    agent_access_core::ServiceProvider::new(
+) -> agent_access_provider::ServiceProvider {
+    agent_access_provider::ServiceProvider::new(
         agent_access_gitlab::gitlab_descriptor(&config),
         Arc::new(GitlabProvider::with_backend(config, backend)),
     )
@@ -14,13 +12,10 @@ fn gitlab_service(
 
 #[path = "gitlab_smoke/provisioning.rs"]
 mod provisioning;
-use common::{resource_catalog, resource_selection};
+use agent_access_provider::test_support::credential_token;
 
-use agent_access_broker::build_router;
-use agent_access_core::{
-    BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, GIT_REPOSITORY_RESOURCE,
-    IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig,
-    ProviderResultStream, ResourceSelector, SearchLimitsConfig, StaticPrincipalConfig,
+use agent_access_broker_host::test_support::{
+    FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
 use agent_access_gitlab::{
     GitlabApprovalMutationRequest, GitlabApprovalRule, GitlabApprovalRuleListRequest,
@@ -50,6 +45,7 @@ use agent_access_gitlab::{
     GitlabWebhookEvent, GitlabWebhookEventListRequest, GitlabWebhookListRequest,
     GitlabWebhookNamedSecret, GitlabWebhookWriteRequest, GitlabWebhooksConfig,
 };
+use agent_access_provider::{GIT_REPOSITORY_RESOURCE, ProviderResultStream, SearchLimitsConfig};
 use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
@@ -57,22 +53,21 @@ use std::sync::{Arc, Mutex};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
-    let audit_path = temp_path("gitlab-upload.audit.jsonl");
     let upload_path = temp_path("session.html");
     let send_path = upload_path.parent().unwrap().join("upload.json");
     let contents = b"<!doctype html><title>private-agent-session-content</title>";
     std::fs::write(&upload_path, contents).unwrap();
     let backend = stub_backend();
-    let mut config = gitlab_per_user_config(&audit_path);
-    for grant in &mut config.policy.grants {
+    let mut document = gitlab_per_user_document();
+    for grant in &mut document.grants {
         grant.credential_mode = "service".to_string();
     }
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     for locator in [
         vec!["sip/service"],
@@ -149,7 +144,7 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
             .iter()
             .all(|entry| entry.token.as_deref() == Some("gitlab-service-token"))
     );
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("project.upload"));
     for secret in [
         "private-agent-session-content",
@@ -161,9 +156,8 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
     ] {
         assert!(!audit.contains(secret), "audit leaked {secret}");
     }
-    server.abort();
+    stop(broker).await;
     std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
-    std::fs::remove_file(audit_path).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -171,12 +165,11 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
     let upload_path = temp_path("session.html");
     std::fs::write(&upload_path, b"<html>private-agent-session-content</html>").unwrap();
     for case in ["repository", "action", "size", "media_type"] {
-        let audit_path = temp_path("gitlab-upload-denied.audit.jsonl");
         let backend = stub_backend();
-        let mut config = gitlab_config(&audit_path);
+        let mut document = gitlab_document();
         let mut provider_config = gitlab_provider_config(2);
         if case == "action" {
-            config.policy.grants[0]
+            document.grants[0]
                 .actions
                 .retain(|action| action != "project.upload");
         } else if case == "size" {
@@ -184,13 +177,10 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
         } else if case == "media_type" {
             provider_config.attachments.media_types = vec!["text/plain".to_string()];
         }
-        config.providers.insert(provider_config.clone());
-        let runtime = agent_access_core::BrokerRuntime::with_providers(
-            config,
-            vec![gitlab_service(provider_config, backend.clone())],
-        )
-        .unwrap();
-        let (base_url, server) = start_broker(runtime).await;
+        document.provider = provider_config.clone();
+        let broker =
+            start_broker(&document, gitlab_service(provider_config, backend.clone())).await;
+        let base_url = broker.public_url();
         let project = if case == "repository" {
             "secret/service"
         } else {
@@ -220,25 +210,25 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             backend.uploaded_projects.lock().unwrap().is_empty(),
             "{case} reached upstream upload"
         );
-        let audit = std::fs::read_to_string(&audit_path).unwrap();
+        let audit = broker.audit().unwrap();
+        audit.require_action("gitlab", "project.upload");
+        let audit = audit.text();
         assert!(!audit.contains("private-agent-session-content"));
         assert!(!audit.contains("gitlab-service-token"));
-        server.abort();
-        std::fs::remove_file(audit_path).unwrap();
+        stop(broker).await;
     }
     std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-read.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let project = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -594,7 +584,7 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert_eq!(denied_json["reasonCode"], "scope_unresolved");
     assert!(!String::from_utf8_lossy(&denied.stdout).contains("secret"));
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"service\":\"gitlab\""));
     assert!(audit.contains("\"action\":\"project.view\""));
     assert!(audit.contains("\"action\":\"issue.view\""));
@@ -603,19 +593,18 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert!(!audit.contains("visible issue"));
     assert!(!audit.contains("visible merge request"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_all_gitlab_webhook_actions_and_preserves_secret_files() {
-    let audit_path = temp_path("gitlab-webhook-cli.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(20), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(20), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let run = |args: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -659,7 +648,7 @@ async fn cli_invokes_all_gitlab_webhook_actions_and_preserves_secret_files() {
         "webhook create failed: stdout={} stderr={} audit={}",
         String::from_utf8_lossy(&create.stdout),
         String::from_utf8_lossy(&create.stderr),
-        std::fs::read_to_string(&audit_path).unwrap_or_default(),
+        broker.audit().unwrap().text(),
     );
     assert!(!String::from_utf8_lossy(&create.stdout).contains("legacy-token"));
     let write = backend.last_webhook_write.lock().unwrap().clone().unwrap();
@@ -720,20 +709,19 @@ async fn cli_invokes_all_gitlab_webhook_actions_and_preserves_secret_files() {
     run(&["delete", "sip/service", "43"]);
     assert!(!backend.webhooks.lock().unwrap().contains_key(&43));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_exposes_gitlab_merge_request_review_reads_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-review-reads.audit.jsonl");
     let raw_diff_path = temp_path("gitlab-review.diff");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let discussion = invoke_gitlab(
@@ -910,7 +898,7 @@ async fn broker_exposes_gitlab_merge_request_review_reads_against_stubbed_backen
     assert_eq!(raw_diff_json["result"]["headShaAtPreflight"], TEST_SHA);
     assert_eq!(raw_diff_json["result"]["contentType"], "text/x-diff");
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     for action in [
         "merge_request.discussion.view",
         "merge_request.reviewer.list",
@@ -929,19 +917,18 @@ async fn broker_exposes_gitlab_merge_request_review_reads_against_stubbed_backen
     assert!(!audit.contains("diff --git a/src/old.rs b/src/new.rs"));
     assert!(!audit.contains(&reviewer_page_token));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_and_http_cover_gitlab_approval_and_suggestion_workflows() {
-    let audit_path = temp_path("gitlab-approval-suggestion.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let approval = gitlab_cli(&base_url)
         .args([
@@ -1199,14 +1186,14 @@ async fn cli_and_http_cover_gitlab_approval_and_suggestion_workflows() {
         serde_json::json!({"suggestionIds":[456]}),
     );
 
-    let approve_audit = provider_gitlab_audit_for_action(&audit_path, "merge_request.approve");
+    let approve_audit = provider_gitlab_audit_for_action(&broker, "merge_request.approve");
     assert_eq!(approve_audit["mergeRequestIid"], 5);
     assert_eq!(approve_audit["userId"], 3);
     assert_eq!(approve_audit["approved"], true);
     assert_eq!(approve_audit["expectedHeadSha"], TEST_SHA);
     assert_eq!(approve_audit["provenHeadSha"], TEST_SHA);
     assert_eq!(approve_audit["diffVersionId"], 77);
-    let unapprove_audit = provider_gitlab_audit_for_action(&audit_path, "merge_request.unapprove");
+    let unapprove_audit = provider_gitlab_audit_for_action(&broker, "merge_request.unapprove");
     assert_eq!(unapprove_audit["mergeRequestIid"], 5);
     assert_eq!(unapprove_audit["userId"], 3);
     assert_eq!(unapprove_audit["approved"], false);
@@ -1214,23 +1201,22 @@ async fn cli_and_http_cover_gitlab_approval_and_suggestion_workflows() {
         assert!(unapprove_audit.get(absent).is_none(), "{unapprove_audit}");
     }
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(!audit.contains("Apply review suggestion"));
     assert!(!audit.contains("safe_call()"));
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_approval_follows_diff_version_pagination_past_page_ten() {
-    let audit_path = temp_path("gitlab-approval-deep-pagination.audit.jsonl");
     let backend = stub_backend();
     *backend.approval_diff_match_page.lock().unwrap() = 11;
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let (status, body) = invoke_gitlab_outcome(
         &reqwest::Client::new(),
         &base_url,
@@ -1251,19 +1237,18 @@ async fn gitlab_approval_follows_diff_version_pagination_past_page_ten() {
         backend_operation_count(&backend, "set_merge_request_approval"),
         1
     );
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_approval_gates_and_ambiguous_readbacks_fail_closed() {
-    let audit_path = temp_path("gitlab-approval-fail-closed.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     for (label, prepared_at, status, diff_state, patch_id) in [
@@ -1393,7 +1378,7 @@ async fn gitlab_approval_gates_and_ambiguous_readbacks_fail_closed() {
             assert_eq!(body["reasonCode"], expected_reason);
         }
     }
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1404,32 +1389,31 @@ async fn gitlab_fork_suggestions_require_one_covering_grant_and_pin_numeric_sour
         "split_grants",
         "covering_grant",
     ] {
-        let audit_path = temp_path(&format!("gitlab-fork-suggestion-{case}.audit.jsonl"));
         let backend = stub_backend();
         *backend.fork_lookup_source_project_id.lock().unwrap() = Some(141);
         *backend.fork_execution_source_project_id.lock().unwrap() = Some(141);
-        let mut config = gitlab_per_user_config(&audit_path);
-        let grant = &mut config.policy.grants[0];
+        let mut document = gitlab_per_user_document();
+        let grant = &mut document.grants[0];
         grant.actions = vec!["merge_request.suggestion.apply".to_string()];
         grant.resources = match case {
-            "target_only" | "split_grants" => resource_selection(&["repository-sip-service"]),
-            "source_only" => resource_selection(&["repository-fork-service"]),
+            "target_only" | "split_grants" => resource_ids(&["repository-sip-service"]),
+            "source_only" => resource_ids(&["repository-fork-service"]),
             "covering_grant" => {
-                resource_selection(&["repository-sip-service", "repository-fork-service"])
+                resource_ids(&["repository-sip-service", "repository-fork-service"])
             }
             _ => unreachable!(),
         };
         if case == "split_grants" {
             let mut source_grant = grant.clone();
-            source_grant.resources = resource_selection(&["repository-fork-service"]);
-            config.policy.grants.push(source_grant);
+            source_grant.resources = resource_ids(&["repository-fork-service"]);
+            document.grants.push(source_grant);
         }
-        let runtime = agent_access_core::BrokerRuntime::with_providers(
-            config,
-            vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+        let broker = start_broker(
+            &document,
+            gitlab_service(gitlab_provider_config(2), backend.clone()),
         )
-        .unwrap();
-        let (base_url, server) = start_broker(runtime).await;
+        .await;
+        let base_url = broker.public_url();
         let (status, body) = invoke_gitlab_outcome(
             &reqwest::Client::new(),
             &base_url,
@@ -1448,7 +1432,7 @@ async fn gitlab_fork_suggestions_require_one_covering_grant_and_pin_numeric_sour
                 serde_json::json!(["fork/service", "sip/service"])
             );
             assert_eq!(backend_operation_count(&backend, "apply_suggestions"), 1);
-            let audit = std::fs::read_to_string(&audit_path).unwrap();
+            let audit = broker.audit().unwrap().text();
             assert!(audit.contains("\"sourceProjectId\":141"));
             assert!(audit.contains(&format!("\"expectedHeadSha\":\"{TEST_SHA}\"")));
             assert!(audit.contains(&format!("\"provenHeadSha\":\"{TEST_SHA}\"")));
@@ -1458,24 +1442,23 @@ async fn gitlab_fork_suggestions_require_one_covering_grant_and_pin_numeric_sour
             assert!(body["resourceScopes"].as_object().unwrap().is_empty());
             assert_eq!(backend_operation_count(&backend, "apply_suggestions"), 0);
         }
-        server.abort();
+        stop(broker).await;
     }
 
-    let audit_path = temp_path("gitlab-fork-suggestion-numeric-drift.audit.jsonl");
     let backend = stub_backend();
     *backend.fork_lookup_source_project_id.lock().unwrap() = Some(141);
     *backend.fork_execution_source_project_id.lock().unwrap() = Some(142);
     *backend.fork_source_drift_after_first_read.lock().unwrap() = true;
-    let mut config = gitlab_per_user_config(&audit_path);
-    config.policy.grants[0].actions = vec!["merge_request.suggestion.apply".to_string()];
-    config.policy.grants[0].resources =
-        resource_selection(&["repository-sip-service", "repository-fork-service"]);
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let mut document = gitlab_per_user_document();
+    document.grants[0].actions = vec!["merge_request.suggestion.apply".to_string()];
+    document.grants[0].resources =
+        resource_ids(&["repository-sip-service", "repository-fork-service"]);
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let (status, body) = invoke_gitlab_outcome(
         &reqwest::Client::new(),
         &base_url,
@@ -1491,24 +1474,23 @@ async fn gitlab_fork_suggestions_require_one_covering_grant_and_pin_numeric_sour
     assert_eq!(body["reasonCode"], "scope_unresolved");
     assert!(body["result"]["hints"].is_null());
     assert_eq!(backend_operation_count(&backend, "apply_suggestions"), 0);
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_merge_request_review_read_catalog_is_policy_narrowed() {
-    let audit_path = temp_path("gitlab-review-catalog.audit.jsonl");
     let backend = stub_backend();
-    let mut config = gitlab_per_user_config(&audit_path);
-    config.policy.grants[0].actions = vec![
+    let mut document = gitlab_per_user_document();
+    document.grants[0].actions = vec![
         "merge_request.reviewer.list".to_string(),
         "merge_request.draft_note.list".to_string(),
     ];
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let response = reqwest::Client::new()
         .get(format!("{base_url}/v1/spec/catalog"))
@@ -1541,19 +1523,18 @@ async fn gitlab_merge_request_review_read_catalog_is_policy_narrowed() {
     assert!(reviewers.get("upstreamResourceOwnership").is_none());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_exposes_gitlab_positioned_discussions_replies_and_verification() {
-    let audit_path = temp_path("gitlab-review-conversation.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let typed = gitlab_cli(&base_url)
@@ -1711,7 +1692,7 @@ async fn broker_exposes_gitlab_positioned_discussions_replies_and_verification()
     assert_eq!(unverified["result"]["mutationStatus"], "applied_unverified");
     assert_eq!(unverified["result"]["retrySafe"], false);
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"merge_request.discussion.inline.add\""));
     assert!(audit.contains("\"action\":\"merge_request.discussion.note.add\""));
     for secret in [
@@ -1724,12 +1705,11 @@ async fn broker_exposes_gitlab_positioned_discussions_replies_and_verification()
         assert!(!audit.contains(secret));
     }
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_callers() {
-    let audit_path = temp_path("gitlab-draft-review.audit.jsonl");
     let backend = stub_backend();
     backend
         .draft_notes
@@ -1737,14 +1717,14 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
         .unwrap()
         .push(draft_note_fixture(802, "second pending draft", None));
     *backend.next_draft_note_id.lock().unwrap() = 803;
-    let mut config = gitlab_per_user_config(&audit_path);
-    config.policy.grants[0].credential_mode = "service".to_string();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(gitlab_provider_config(1), backend.clone())],
+    let mut document = gitlab_per_user_document();
+    document.grants[0].credential_mode = "service".to_string();
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(1), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let first_page = gitlab_cli(&base_url)
@@ -2334,7 +2314,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
             .all(|token| token.as_deref() == Some("gitlab-service-token"))
     );
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     for forbidden in [
         "reviewContext",
         "credentialBinding",
@@ -2355,7 +2335,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     ] {
         assert!(audit.contains(&format!("\"action\":\"{action}\"")));
     }
-    let review_audit = provider_gitlab_audit_for_action(&audit_path, "merge_request.review.submit");
+    let review_audit = provider_gitlab_audit_for_action(&broker, "merge_request.review.submit");
     assert_eq!(review_audit["mergeRequestIid"], 5);
     assert_eq!(review_audit["userId"], 3);
     assert_eq!(review_audit["reviewerState"], "reviewed");
@@ -2381,12 +2361,11 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
         assert!(!audit.contains(secret));
     }
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_catalog() {
-    let audit_path = temp_path("gitlab-review-per-user.audit.jsonl");
     let backend = stub_backend();
     backend.draft_notes.lock().unwrap().push(draft_note_fixture(
         802,
@@ -2394,12 +2373,12 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
         None,
     ));
     *backend.next_draft_note_id.lock().unwrap() = 803;
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let (status, first_page) = invoke_gitlab_outcome(
@@ -2512,24 +2491,23 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
         );
     }
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "merge_request.discussion.note.add");
+    audit.require_action("gitlab", "merge_request.draft_note.add");
+    let audit = audit.text();
     assert!(!audit.contains("per-user reply secret"));
     assert!(!audit.contains("per-user draft secret"));
-    server.abort();
+    stop(broker).await;
 
-    let narrowed_audit_path = temp_path("gitlab-review-write-catalog.audit.jsonl");
     let narrowed_backend = stub_backend();
-    let mut config = gitlab_per_user_config(&narrowed_audit_path);
-    config.policy.grants[0].actions = vec!["merge_request.discussion.inline.add".to_string()];
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(
-            gitlab_provider_config(2),
-            narrowed_backend.clone(),
-        )],
+    let mut document = gitlab_per_user_document();
+    document.grants[0].actions = vec!["merge_request.discussion.inline.add".to_string()];
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), narrowed_backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let catalog = client
         .get(format!("{base_url}/v1/spec/catalog"))
         .header("X-Agent-Access-Request-Id", "gitlab-review-write-catalog")
@@ -2591,22 +2569,27 @@ async fn gitlab_review_mutations_use_per_user_identity_and_policy_narrows_the_ca
             .unwrap()
             .is_empty()
     );
-    let narrowed_audit = std::fs::read_to_string(narrowed_audit_path).unwrap();
+    let narrowed_audit = broker.audit().unwrap();
+    narrowed_audit.require_request(
+        "gitlab-review-policy-denied",
+        "gitlab",
+        "merge_request.draft_note.add",
+    );
+    let narrowed_audit = narrowed_audit.text();
     assert!(!narrowed_audit.contains("policy-denied secret"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_review_preflights_reject_unproven_identity_and_scope_without_writes() {
-    let audit_path = temp_path("gitlab-review-preflight.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let (status, body) = invoke_gitlab_outcome(
@@ -2846,7 +2829,20 @@ async fn gitlab_review_preflights_reject_unproven_identity_and_scope_without_wri
         );
     }
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-wrong-draft-owner",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-invalid-current-user",
+            "merge_request.draft_note.add",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "owner mismatch secret",
         "reply mismatch secret",
@@ -2855,19 +2851,18 @@ async fn gitlab_review_preflights_reject_unproven_identity_and_scope_without_wri
     ] {
         assert!(!audit.contains(secret));
     }
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_review_verification_failures_expose_only_action_specific_safe_state() {
-    let audit_path = temp_path("gitlab-review-verification.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let success = invoke_gitlab(
@@ -3127,7 +3122,36 @@ async fn gitlab_review_verification_failures_expose_only_action_specific_safe_st
         serde_json::json!({"noteId":990,"draftNoteIds":[804]}),
     );
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-verification-success-contract",
+            "merge_request.draft_note.add",
+        ),
+        (
+            "gitlab-inline-readback-stage",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-draft-update-readback-stage",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-draft-position-readback-stage",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-draft-position-replay-preflight",
+            "merge_request.draft_note.update",
+        ),
+        (
+            "gitlab-summary-response-stage",
+            "merge_request.draft_note.publish_all",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "verified success secret",
         "inline verification secret",
@@ -3142,19 +3166,18 @@ async fn gitlab_review_verification_failures_expose_only_action_specific_safe_st
     ] {
         assert!(!audit.contains(secret));
     }
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_draft_publication_enforces_snapshot_bounds_before_and_after_mutation() {
-    let audit_path = temp_path("gitlab-publish-snapshot-bounds.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     for mode in ["too_many", "invalid_next", "endless"] {
@@ -3210,19 +3233,18 @@ async fn single_draft_publication_enforces_snapshot_bounds_before_and_after_muta
         1
     );
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_review_positions_and_write_failures_preserve_retry_contracts() {
-    let audit_path = temp_path("gitlab-review-retry-contract.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let client = reqwest::Client::new();
 
     let inline_writes = backend_operation_count(&backend, "create_merge_request_inline_discussion");
@@ -3387,7 +3409,36 @@ async fn gitlab_review_positions_and_write_failures_preserve_retry_contracts() {
         bulk_writes
     );
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    for (request_id, action) in [
+        (
+            "gitlab-fractional-image-position",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-integer-image-position",
+            "merge_request.discussion.inline.add",
+        ),
+        (
+            "gitlab-normalized-reply-readback",
+            "merge_request.discussion.note.add",
+        ),
+        (
+            "gitlab-normalized-summary-readback",
+            "merge_request.review.submit",
+        ),
+        (
+            "gitlab-reply-upstream-5xx",
+            "merge_request.discussion.note.add",
+        ),
+        (
+            "gitlab-review-quick-action-body",
+            "merge_request.review.submit",
+        ),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         "fractional image secret",
         "integer image secret",
@@ -3400,7 +3451,7 @@ async fn gitlab_review_positions_and_write_failures_preserve_retry_contracts() {
     ] {
         assert!(!audit.contains(secret));
     }
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3412,14 +3463,13 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
     const CREATED_NOTE_BODY: &str = "created issue note";
     const RESOLVED_DISCUSSION_BODY: &str = "state changed discussion";
 
-    let audit_path = temp_path("gitlab-normalized-read.audit.jsonl");
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let native = gitlab_cli(&base_url)
         .args(["gitlab", "issue", "view", "sip/service", "7"])
@@ -3707,7 +3757,26 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         2
     );
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "issue.view");
+    for (request_id, action) in [
+        ("gitlab-direct-merge-request-search", "merge_request.search"),
+        (
+            "gitlab-direct-discussion-list",
+            "merge_request.discussion.list",
+        ),
+        (
+            "gitlab-direct-discussion-resolve",
+            "merge_request.discussion.resolve",
+        ),
+        ("gitlab-direct-note-add", "issue.note.add"),
+        ("gitlab-mutation-markdown-unsupported", "issue.note.add"),
+        ("gitlab-direct-search-native", "issue.search"),
+        ("gitlab-direct-search-markdown", "issue.search"),
+    ] {
+        audit.require_request(request_id, "gitlab", action);
+    }
+    let audit = audit.text();
     for secret in [
         ISSUE_BODY,
         MERGE_REQUEST_BODY,
@@ -3722,7 +3791,7 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         assert!(!audit.contains(secret), "audit leaked {secret}");
     }
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3734,18 +3803,13 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
     const FILE_DECODED_SENTINEL: &str = "file-markdown-sentinel-9f8c2e";
     const FINAL_CAP_SENTINEL: &str = "final-result-cap-sentinel-6a04cd";
 
-    let audit_path = temp_path("gitlab-normalized-read-failures.audit.jsonl");
     let backend = stub_backend();
     let mut provider_config = gitlab_provider_config(2);
     provider_config.content.max_body_bytes = 64;
-    let mut config = gitlab_per_user_config(&audit_path);
-    config.providers.insert(provider_config.clone());
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(provider_config, backend.clone())],
-    )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    let mut document = gitlab_per_user_document();
+    document.provider = provider_config.clone();
+    let broker = start_broker(&document, gitlab_service(provider_config, backend.clone())).await;
+    let base_url = broker.public_url();
 
     *backend.issue_note_body.lock().unwrap() =
         Some(format!("{OVERSIZED_NOTE_SENTINEL}{}", "n".repeat(64)));
@@ -3871,7 +3935,15 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         ["project", "project", "file"]
     );
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap();
+    audit.require_action("gitlab", "issue.note.list");
+    audit.require_request(
+        "gitlab-oversized-discussion-native",
+        "gitlab",
+        "merge_request.discussion.list",
+    );
+    audit.require_action("gitlab", "file.view");
+    let audit = audit.text();
     for sentinel in [
         OVERSIZED_NOTE_SENTINEL,
         OVERSIZED_DISCUSSION_SENTINEL,
@@ -3882,9 +3954,8 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         assert!(!audit.contains(sentinel), "audit leaked {sentinel}");
     }
 
-    server.abort();
+    stop(broker).await;
 
-    let capped_audit_path = temp_path("gitlab-final-result-cap.audit.jsonl");
     let mut capped_backend = stub_backend();
     Arc::get_mut(&mut capped_backend)
         .unwrap()
@@ -3893,14 +3964,14 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         .unwrap()
         .name = Some(FINAL_CAP_SENTINEL.to_string());
     let provider_config = gitlab_provider_config(2);
-    let mut capped_config = gitlab_per_user_config(&capped_audit_path);
-    capped_config.limits.max_upstream_response_bytes = 64;
-    let capped_runtime = agent_access_core::BrokerRuntime::with_providers(
-        capped_config,
-        vec![gitlab_service(provider_config, capped_backend.clone())],
+    let mut capped_document = gitlab_per_user_document();
+    capped_document.max_upstream_response_bytes = Some(64);
+    let capped_broker = start_broker(
+        &capped_document,
+        gitlab_service(provider_config, capped_backend.clone()),
     )
-    .unwrap();
-    let (capped_base_url, capped_server) = start_broker(capped_runtime).await;
+    .await;
+    let capped_base_url = capped_broker.public_url();
     let capped = gitlab_cli(&capped_base_url)
         .args(["gitlab", "project", "view", "sip/service"])
         .output()
@@ -3914,29 +3985,27 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         take_backend_operations(&capped_backend),
         ["project", "project", "project"]
     );
-    assert!(
-        !std::fs::read_to_string(&capped_audit_path)
-            .unwrap()
-            .contains(FINAL_CAP_SENTINEL)
-    );
-    capped_server.abort();
+    // The capped broker has its own audit store.
+    let capped_audit = capped_broker.audit().unwrap();
+    capped_audit.require_action("gitlab", "project.view");
+    assert!(!capped_audit.text().contains(FINAL_CAP_SENTINEL));
+    stop(capped_broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gitlab_inline_file_over_one_mib_works_over_http_and_cli() {
-    let audit_path = temp_path("gitlab-large-inline.audit.jsonl");
     let content_path = temp_path("gitlab-large-inline.txt");
     let content = "x".repeat(1024 * 1024 + 128);
     std::fs::write(&content_path, &content).unwrap();
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let response = reqwest::Client::new().post(format!("{base_url}/v1/invoke/gitlab/file.create"))
-        .header(agent_access_core::REQUEST_ID_HEADER, "large-inline-http")
+        .header(agent_access_provider::REQUEST_ID_HEADER, "large-inline-http")
         .json(&serde_json::json!({"inputs": {"project": "sip/service", "path": "docs/large-http.txt", "branch": "feature/rest", "content": content, "commitMessage": "Add large file"}}))
         .send().await.unwrap();
     let status = response.status();
@@ -3983,13 +4052,12 @@ async fn gitlab_inline_file_over_one_mib_works_over_http_and_cli() {
             .decoded_content_bytes,
         content.len() as u64
     );
-    server.abort();
+    stop(broker).await;
     std::fs::remove_file(content_path).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-repository-writes.audit.jsonl");
     let content_path = temp_path("gitlab-file-content.md");
     let raw_output_path = temp_path("gitlab-raw-readme.txt");
     let actions_path = temp_path("gitlab-commit-actions.json");
@@ -3997,12 +4065,12 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     std::fs::write(&content_path, "file secret content").unwrap();
 
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let branch_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -4476,27 +4544,26 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         serde_json::from_slice(&commit_too_many_actions.stdout).unwrap();
     assert_eq!(too_many_json["reasonCode"], "input_invalid");
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"file.raw.download\""));
     assert!(audit.contains("\"action\":\"commit.create\""));
     assert!(!audit.contains("file secret content"));
     assert!(!audit.contains("readme contents"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-ci.audit.jsonl");
     let trace_output_path = temp_path("gitlab-job-trace.txt");
 
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let pipeline_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -4823,7 +4890,7 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         serde_json::from_slice(&job_play_release.stdout).unwrap();
     assert_eq!(job_play_release_json["reasonCode"], "git_ref_denied");
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"job.trace.download\""));
     assert!(audit.contains("\"pipeline\":\"sip/service:pipeline/321\""));
     assert!(audit.contains("\"pipeline\":\"sip/service:pipeline/322\""));
@@ -4833,24 +4900,23 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     assert!(audit.contains("\"denialReason\":\"protected_branch_rule\""));
     assert!(!audit.contains("job trace contents"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-protected-branch-mr-merge.audit.jsonl");
     let merge_message_path = temp_path("gitlab-merge-message.md");
     let squash_message_path = temp_path("gitlab-squash-message.md");
     std::fs::write(&merge_message_path, "merge secret message").unwrap();
     std::fs::write(&squash_message_path, "squash secret message").unwrap();
 
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     *backend.protected_branch_list_has_next_page.lock().unwrap() = true;
     let protected_branch_list_overflow = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -5115,7 +5181,7 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         serde_json::from_slice(&merge_request_preflight_race.stdout).unwrap();
     assert_eq!(preflight_race_json["reasonCode"], "version_conflict");
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"protected_branch.verify\""));
     assert!(audit.contains("\"action\":\"merge_request.merge\""));
     assert!(audit.contains("\"mergeRequest\":\"sip/service!5\""));
@@ -5123,12 +5189,11 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     assert!(!audit.contains("squash secret message"));
     assert!(!audit.contains(&"x".repeat(4096)));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-collaboration.audit.jsonl");
     let issue_description_path = temp_path("gitlab-issue-description.md");
     let issue_note_path = temp_path("gitlab-issue-note.md");
     let issue_note_update_path = temp_path("gitlab-issue-note-update.md");
@@ -5156,13 +5221,13 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     .unwrap();
 
     let backend = stub_backend();
-    let config = gitlab_config(&audit_path);
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        config,
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let document = gitlab_document();
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let issue_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -5976,7 +6041,7 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         .unwrap();
     assert_eq!(observed.request.page, 2);
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"issue.create\""));
     assert!(audit.contains("\"action\":\"issue.note.add\""));
     assert!(audit.contains("\"action\":\"issue.note.update\""));
@@ -6008,7 +6073,7 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert!(!audit.contains("discussion updated [label](https://example.test)"));
     assert!(!audit.contains("discussion preflight secret body"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[test]
@@ -6100,7 +6165,6 @@ fn cli_gitlab_normalized_content_flags_are_strict() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_per_user_collaboration_writes_against_stubbed_backend() {
-    let audit_path = temp_path("gitlab-per-user-collaboration.audit.jsonl");
     let issue_note_path = temp_path("gitlab-per-user-issue-note.md");
     let issue_note_update_path = temp_path("gitlab-per-user-issue-note-update.md");
     let merge_request_description_path = temp_path("gitlab-per-user-mr-description.md");
@@ -6129,12 +6193,12 @@ async fn cli_invokes_gitlab_per_user_collaboration_writes_against_stubbed_backen
     .unwrap();
 
     let backend = stub_backend();
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        gitlab_per_user_config(&audit_path),
-        vec![gitlab_service(gitlab_provider_config(2), backend.clone())],
+    let broker = start_broker(
+        &gitlab_per_user_document(),
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let issue_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -6532,20 +6596,21 @@ async fn cli_invokes_gitlab_per_user_collaboration_writes_against_stubbed_backen
         reviewer_json["result"]["reviewers"][0]["state"],
         "requested_changes"
     );
-    let reviewer_observations = backend.credential_observations.lock().unwrap();
-    assert!(
-        reviewer_observations
-            .iter()
-            .any(|observation| observation.operation == "merge_request_reviewers")
-    );
-    assert!(
-        reviewer_observations
-            .iter()
-            .all(|observation| { observation.token.as_deref() == Some("gitlab-per-user-token") })
-    );
-    drop(reviewer_observations);
+    {
+        let reviewer_observations = backend.credential_observations.lock().unwrap();
+        assert!(
+            reviewer_observations
+                .iter()
+                .any(|observation| observation.operation == "merge_request_reviewers")
+        );
+        assert!(
+            reviewer_observations.iter().all(|observation| {
+                observation.token.as_deref() == Some("gitlab-per-user-token")
+            })
+        );
+    }
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"credentialMode\":\"per_user\""));
     assert!(!audit.contains("agent-token"));
     assert!(!audit.contains("gitlab-per-user-token"));
@@ -6555,7 +6620,7 @@ async fn cli_invokes_gitlab_per_user_collaboration_writes_against_stubbed_backen
     assert!(!audit.contains("per-user mr updated secret note"));
     assert!(!audit.contains("per-user discussion updated secret note"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 const TEST_BASE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -6739,7 +6804,7 @@ struct CredentialObservation {
 
 struct StubGitlabBackend {
     projects: BTreeMap<String, GitlabProject>,
-    uploaded_projects: Mutex<Vec<(u64, agent_access_core::BrokerBodyPart)>>,
+    uploaded_projects: Mutex<Vec<(u64, agent_access_provider::BrokerBodyPart)>>,
     branches: Mutex<BTreeMap<String, GitlabBranch>>,
     files: Mutex<BTreeMap<(String, String), GitlabFile>>,
     issue_note_body: Mutex<Option<String>>,
@@ -6842,14 +6907,14 @@ impl StubGitlabBackend {
     fn record_credential(
         &self,
         operation: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) {
         self.credential_observations
             .lock()
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.token.clone(),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }
@@ -6859,8 +6924,8 @@ impl GitlabBackend for StubGitlabBackend {
     async fn upload_project(
         &self,
         project_id: u64,
-        mut upload: agent_access_core::BrokerBodyPart,
-        credential: &agent_access_core::ExecutionCredential,
+        mut upload: agent_access_provider::BrokerBodyPart,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabProjectUpload>, GitlabBackendError> {
         self.record_credential("upload_project", credential);
         if let Some(path) = upload.temp_file_path() {
@@ -6888,7 +6953,7 @@ impl GitlabBackend for StubGitlabBackend {
 
     async fn current_user(
         &self,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabUser>, GitlabBackendError> {
         self.record_credential("current_user", credential);
         Ok(GitlabBackendResponse {
@@ -6905,7 +6970,7 @@ impl GitlabBackend for StubGitlabBackend {
     async fn project(
         &self,
         project: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError> {
         self.record_credential("project", credential);
         let project = self
@@ -6924,7 +6989,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookListRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhook>>, GitlabBackendError> {
         let items = self
             .webhooks
@@ -6948,7 +7013,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         webhook_id: u64,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         let value = self
             .webhooks
@@ -6968,7 +7033,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookWriteRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         *self.last_webhook_write.lock().unwrap() = Some(request.clone());
         let mut next_id = self.next_webhook_id.lock().unwrap();
@@ -6988,7 +7053,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         webhook_id: u64,
         request: GitlabWebhookWriteRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         *self.last_webhook_write.lock().unwrap() = Some(request.clone());
         let mut hooks = self.webhooks.lock().unwrap();
@@ -7007,7 +7072,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         webhook_id: u64,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.webhooks.lock().unwrap().remove(&webhook_id);
         Ok(GitlabBackendResponse {
@@ -7022,7 +7087,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         _webhook_id: u64,
         _trigger: &str,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Ok(GitlabBackendResponse {
             value: GitlabWebhookDeliveryAttempt {
@@ -7040,7 +7105,7 @@ impl GitlabBackend for StubGitlabBackend {
         _request: GitlabWebhookEventListRequest,
         _redacted_header_names: &BTreeSet<String>,
         _field_byte_cap: u64,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhookDeliveryEvent>>, GitlabBackendError>
     {
         Ok(GitlabBackendResponse {
@@ -7070,7 +7135,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         _webhook_id: u64,
         _webhook_event_id: u64,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Ok(GitlabBackendResponse {
             value: GitlabWebhookDeliveryAttempt {
@@ -7086,7 +7151,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         *self.last_webhook_header.lock().unwrap() = Some(request.clone());
         if let Some(hook) = self.webhooks.lock().unwrap().get_mut(&request.webhook_id) {
@@ -7108,7 +7173,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        _credential: &agent_access_core::ExecutionCredential,
+        _credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         *self.last_webhook_header.lock().unwrap() = Some(request.clone());
         if let Some(hook) = self.webhooks.lock().unwrap().get_mut(&request.webhook_id)
@@ -7127,7 +7192,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("issue", credential);
         if project_id != 42 || iid != 7 {
@@ -7159,7 +7224,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueSearchRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabIssue>>, GitlabBackendError> {
         self.record_credential("issues", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7196,7 +7261,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("create_issue", credential);
         *self.last_issue_create.lock().unwrap() = Some(ObservedIssueCreate {
@@ -7214,7 +7279,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("update_issue", credential);
         *self.last_issue_update.lock().unwrap() = Some(ObservedIssueUpdate {
@@ -7232,7 +7297,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         self.record_credential("issue_notes", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7262,7 +7327,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueNoteCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_issue_note", credential);
         *self.last_issue_note_add.lock().unwrap() = Some(ObservedIssueNoteAdd {
@@ -7280,7 +7345,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("issue_note", credential);
         if project_id != 42 || request.iid != 7 || request.note_id != 701 {
@@ -7297,7 +7362,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_issue_note", credential);
         *self.last_issue_note_update.lock().unwrap() = Some(ObservedIssueNoteUpdate {
@@ -7315,7 +7380,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_issue_note", credential);
         *self.last_issue_note_delete.lock().unwrap() = Some(ObservedIssueNoteDelete {
@@ -7333,7 +7398,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("merge_request", credential);
         if project_id != 42 || iid != 5 {
@@ -7347,7 +7412,7 @@ impl GitlabBackend for StubGitlabBackend {
             } else {
                 *self.fork_execution_source_project_id.lock().unwrap()
             }
-        } else if credential.token.as_deref() == Some("gitlab-lookup-token") {
+        } else if credential_token(credential) == "gitlab-lookup-token" {
             *self.fork_lookup_source_project_id.lock().unwrap()
         } else {
             *self.fork_execution_source_project_id.lock().unwrap()
@@ -7412,7 +7477,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestSearchRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabMergeRequest>>, GitlabBackendError> {
         self.record_credential("merge_requests", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7474,7 +7539,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("create_merge_request", credential);
         *self.last_merge_request_create.lock().unwrap() = Some(ObservedMergeRequestCreate {
@@ -7492,7 +7557,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("update_merge_request", credential);
         *self.last_merge_request_update.lock().unwrap() = Some(ObservedMergeRequestUpdate {
@@ -7510,7 +7575,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         self.record_credential("merge_request_notes", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7536,7 +7601,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_note", credential);
         *self.last_merge_request_note_add.lock().unwrap() = Some(ObservedMergeRequestNoteAdd {
@@ -7554,7 +7619,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("merge_request_note", credential);
         if project_id != 42 || request.iid != 5 || request.note_id != 501 {
@@ -7575,7 +7640,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_note", credential);
         *self.last_merge_request_note_update.lock().unwrap() =
@@ -7594,7 +7659,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_note", credential);
         *self.last_merge_request_note_delete.lock().unwrap() =
@@ -7613,7 +7678,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiscussion>>, GitlabBackendError> {
         self.record_credential("merge_request_discussions_page", credential);
         *self.last_merge_request_discussion_list.lock().unwrap() =
@@ -7663,7 +7728,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPositionedDiscussionCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("create_merge_request_inline_discussion", credential);
         *self.last_inline_discussion_add.lock().unwrap() = Some(ObservedInlineDiscussionAdd {
@@ -7688,7 +7753,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionReplyRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_discussion_note", credential);
         if *self.fail_discussion_reply_write.lock().unwrap() {
@@ -7712,7 +7777,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDraftNote>>, GitlabBackendError> {
         self.record_credential("merge_request_draft_notes", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7732,7 +7797,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7757,7 +7822,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7782,7 +7847,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7820,7 +7885,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7843,7 +7908,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("publish_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7906,7 +7971,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftBulkPublishRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("bulk_publish_merge_request_draft_notes", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7936,7 +8001,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabReviewSummaryNoteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_review_summary", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7957,7 +8022,7 @@ impl GitlabBackend for StubGitlabBackend {
 
     async fn gitlab_version(
         &self,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabServerVersion>, GitlabBackendError> {
         self.record_credential("gitlab_version", credential);
         if *self.fail_gitlab_version.lock().unwrap() {
@@ -7978,7 +8043,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         self.record_credential("merge_request_approval_summary", credential);
         if project_id != 42 || iid != 5 {
@@ -8025,7 +8090,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalState>, GitlabBackendError> {
         self.record_credential("merge_request_approval_state", credential);
         if project_id != 42 || iid != 5 {
@@ -8045,7 +8110,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalRuleListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabApprovalRule>>, GitlabBackendError> {
         self.record_credential("merge_request_approval_rules", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8066,7 +8131,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         rule_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalRule>, GitlabBackendError> {
         self.record_credential("merge_request_approval_rule", credential);
         if project_id != 42 || iid != 5 || rule_id != 71 {
@@ -8083,7 +8148,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalMutationRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         self.record_credential("set_merge_request_approval", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8123,7 +8188,7 @@ impl GitlabBackend for StubGitlabBackend {
     async fn apply_suggestions(
         &self,
         request: GitlabSuggestionApplyRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<agent_access_gitlab::GitlabSuggestion>>, GitlabBackendError>
     {
         self.record_credential("apply_suggestions", credential);
@@ -8149,7 +8214,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabReviewer>>, GitlabBackendError> {
         self.record_credential("merge_request_reviewers", credential);
         *self.last_merge_request_reviewer_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8181,7 +8246,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabCommit>>, GitlabBackendError> {
         self.record_credential("merge_request_commits", credential);
         *self.last_merge_request_commit_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8202,7 +8267,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabPipeline>>, GitlabBackendError> {
         self.record_credential("merge_request_pipelines", credential);
         *self.last_merge_request_pipeline_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8223,7 +8288,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffFile>>, GitlabBackendError> {
         self.record_credential("merge_request_diffs", credential);
         *self.last_merge_request_diff_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8248,7 +8313,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         _byte_cap: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("merge_request_raw_diffs", credential);
         if project_id != 42 || iid != 5 {
@@ -8270,7 +8335,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffVersionSummary>>, GitlabBackendError>
     {
         self.record_credential("merge_request_diff_versions", credential);
@@ -8299,7 +8364,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestObjectRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiffVersion>, GitlabBackendError> {
         self.record_credential("merge_request_diff_version", credential);
         if project_id != 42 || request.iid != 5 || request.object_id != 77 {
@@ -8321,7 +8386,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("create_merge_request_discussion", credential);
         *self.last_merge_request_discussion_add.lock().unwrap() =
@@ -8341,7 +8406,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         discussion_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("merge_request_discussion", credential);
         if let Some(value) = self
@@ -8401,7 +8466,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_discussion_note", credential);
         *self
@@ -8422,7 +8487,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_discussion_note", credential);
         *self
@@ -8443,7 +8508,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionStateChangeRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("set_merge_request_discussion_resolved", credential);
         *self
@@ -8473,7 +8538,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestMergeRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("merge_merge_request", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8505,7 +8570,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabBranch>>, GitlabBackendError> {
         self.record_credential("branches", credential);
         *self.last_branch_list.lock().unwrap() = Some(ObservedBranchList {
@@ -8530,7 +8595,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         branch: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         self.record_credential("branch", credential);
         let branch = self
@@ -8552,7 +8617,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         self.record_credential("create_branch", credential);
         if project_id != 42 {
@@ -8575,7 +8640,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabProtectedBranchListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabProtectedBranch>>, GitlabBackendError> {
         self.record_credential("protected_branches", credential);
         if project_id != 42 {
@@ -8611,7 +8676,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         name: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabProtectedBranch>, GitlabBackendError> {
         self.record_credential("protected_branch", credential);
         let branch = self
@@ -8633,7 +8698,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabFile>, GitlabBackendError> {
         self.record_credential("file", credential);
         if project_id != 42 {
@@ -8658,7 +8723,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         request: GitlabFileRequest,
         _byte_cap: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("raw_file", credential);
         if project_id != 42 || request.path != "README.md" || request.ref_name != TEST_SHA {
@@ -8679,7 +8744,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("create_file", credential);
         if project_id != 42 {
@@ -8704,7 +8769,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("update_file", credential);
         if project_id != 42 {
@@ -8733,7 +8798,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileDeleteRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("delete_file", credential);
         if project_id != 42 {
@@ -8758,7 +8823,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabCommit>>, GitlabBackendError> {
         self.record_credential("commits", credential);
         *self.last_commit_list.lock().unwrap() = Some(ObservedCommitList {
@@ -8776,7 +8841,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         sha: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         self.record_credential("commit", credential);
         if project_id != 42 || !matches!(sha, TEST_SHA | "01234567") {
@@ -8793,7 +8858,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         self.record_credential("create_commit", credential);
         if project_id != 42 {
@@ -8814,7 +8879,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabPipeline>>, GitlabBackendError> {
         self.record_credential("pipelines", credential);
         *self.last_pipeline_list.lock().unwrap() = Some(ObservedPipelineList {
@@ -8835,7 +8900,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("pipeline", credential);
         if project_id != 42 {
@@ -8859,7 +8924,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineRunRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("run_pipeline", credential);
         if project_id != 42 {
@@ -8877,7 +8942,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("retry_pipeline", credential);
         if project_id != 42 || pipeline_id != 321 {
@@ -8894,7 +8959,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("cancel_pipeline", credential);
         if project_id != 42 || pipeline_id != 321 {
@@ -8911,7 +8976,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabJobListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabJob>>, GitlabBackendError> {
         self.record_credential("jobs", credential);
         *self.last_job_list.lock().unwrap() = Some(ObservedJobList {
@@ -8932,7 +8997,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("job", credential);
         if project_id != 42 {
@@ -8958,7 +9023,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         job_id: u64,
         _byte_cap: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("job_trace", credential);
         if project_id != 42 || job_id != 9001 {
@@ -8982,7 +9047,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("retry_job", credential);
         if project_id != 42 || job_id != 9001 {
@@ -8999,7 +9064,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("cancel_job", credential);
         if project_id != 42 || job_id != 9001 {
@@ -9016,7 +9081,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("play_job", credential);
         if project_id != 42 || job_id != 9002 {
@@ -9517,20 +9582,17 @@ fn assert_review_context(response: &serde_json::Value, mode: &str, binding: &str
     );
 }
 
-fn provider_gitlab_audit_for_action(
-    audit_path: &std::path::Path,
-    action: &str,
-) -> serde_json::Value {
-    agent_access_core::test_support::read_audit_records(
-        agent_access_core::AuditStoreType::Jsonl,
-        audit_path,
-    )
-    .into_iter()
-    .find_map(|record| {
-        (record["action"] == action && record["providerAudit"]["gitlab"].is_object())
-            .then(|| record["providerAudit"]["gitlab"].clone())
-    })
-    .unwrap_or_else(|| panic!("missing GitLab provider audit for {action}"))
+fn provider_gitlab_audit_for_action(broker: &RunningBroker, action: &str) -> serde_json::Value {
+    broker
+        .audit()
+        .unwrap()
+        .records()
+        .into_iter()
+        .find_map(|record| {
+            (record["action"] == action && record["providerAudit"]["gitlab"].is_object())
+                .then(|| record["providerAudit"]["gitlab"].clone())
+        })
+        .unwrap_or_else(|| panic!("missing GitLab provider audit for {action}"))
 }
 
 fn assert_mutation_verification_failure(
@@ -9557,269 +9619,412 @@ fn assert_mutation_verification_failure(
     );
 }
 
+/// Starts the broker assembly on `document`, serving `gitlab` in place of
+/// the GitLab provider its configuration would build.
 async fn start_broker(
-    runtime: agent_access_core::BrokerRuntime,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-    (format!("http://{addr}"), server)
+    document: &GitlabDocument,
+    gitlab: agent_access_provider::ServiceProvider,
+) -> RunningBroker {
+    start_isolated_broker(document, Some(gitlab)).await
 }
 
-fn gitlab_config(audit_path: &std::path::Path) -> BrokerConfig {
-    let service_token_path = temp_path("gitlab-service-token.txt");
-    let lookup_token_path = temp_path("gitlab-lookup-token.txt");
-    std::fs::write(&service_token_path, "gitlab-service-token").unwrap();
-    std::fs::write(&lookup_token_path, "gitlab-lookup-token").unwrap();
-    BrokerConfig {
-        imports: Default::default(),
-        oauth: Default::default(),
-        deployment: DeploymentConfig::default(),
-        network: agent_access_core::NetworkConfig::default(),
-        execution_context: None,
-        identity: agent_access_core::IdentityConfig {
-            trusted_callers: Default::default(),
-            mode: "anonymous".to_string(),
-            authority: "toml".to_string(),
-            sources: vec![],
-            groups: vec![],
-        },
-        credentials: CredentialsConfig {
-            imported_modes: Default::default(),
-            service: BTreeMap::from([(
-                "gitlab".to_string(),
-                CredentialConfig {
-                    kind: "bearer_token".to_string(),
-                    username_ref: None,
-                    token_ref: Some(format!("file:{}", service_token_path.display())),
-                    provider: None,
-                    path: None,
-                    read_only: None,
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-            per_user: BTreeMap::new(),
-            lookup: BTreeMap::from([(
-                "gitlab".to_string(),
-                CredentialConfig {
-                    kind: "bearer_token".to_string(),
-                    username_ref: None,
-                    token_ref: Some(format!("file:{}", lookup_token_path.display())),
-                    provider: None,
-                    path: None,
-                    read_only: Some(true),
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-        },
-        managed_store: None,
-        credential_encryption: None,
-        management: agent_access_core::ManagementConfig::default(),
-        broker_tokens: None,
-        browser_auth: agent_access_core::BrowserAuthConfig::default(),
-        portal: agent_access_core::PortalConfig::default(),
-        mcp: Default::default(),
-        policy: PolicyConfig {
-            resources: resource_catalog(&[
-                (
-                    "repository-sip-service",
-                    GIT_REPOSITORY_RESOURCE.id.clone(),
-                    ResourceSelector::Exact {
-                        value: "sip/service".to_string(),
-                    },
-                ),
-                (
-                    "repository-fork-service",
-                    GIT_REPOSITORY_RESOURCE.id.clone(),
-                    ResourceSelector::Exact {
-                        value: "fork/service".to_string(),
-                    },
-                ),
-            ]),
-            resource_groups: vec![],
-            authority: "toml".to_string(),
-            default_decision: "deny".to_string(),
-            grants: vec![PolicyGrantConfig {
-                execution_contexts: None,
-                subjects: vec!["group:anonymous".to_string()],
-                service: "gitlab".to_string(),
-                actions: vec![
-                    "project.view".to_string(),
-                    "project.upload".to_string(),
-                    "issue.view".to_string(),
-                    "issue.search".to_string(),
-                    "issue.create".to_string(),
-                    "issue.update".to_string(),
-                    "issue.note.list".to_string(),
-                    "issue.note.view".to_string(),
-                    "issue.note.add".to_string(),
-                    "issue.note.update".to_string(),
-                    "issue.note.delete".to_string(),
-                    "merge_request.view".to_string(),
-                    "merge_request.search".to_string(),
-                    "merge_request.create".to_string(),
-                    "merge_request.update".to_string(),
-                    "merge_request.note.list".to_string(),
-                    "merge_request.note.view".to_string(),
-                    "merge_request.note.add".to_string(),
-                    "merge_request.note.update".to_string(),
-                    "merge_request.note.delete".to_string(),
-                    "merge_request.reviewer.list".to_string(),
-                    "merge_request.commit.list".to_string(),
-                    "merge_request.pipeline.list".to_string(),
-                    "merge_request.diff.list".to_string(),
-                    "merge_request.diff.raw.download".to_string(),
-                    "merge_request.diff_version.list".to_string(),
-                    "merge_request.diff_version.view".to_string(),
-                    "merge_request.discussion.list".to_string(),
-                    "merge_request.discussion.view".to_string(),
-                    "merge_request.discussion.add".to_string(),
-                    "merge_request.discussion.inline.add".to_string(),
-                    "merge_request.discussion.note.add".to_string(),
-                    "merge_request.draft_note.list".to_string(),
-                    "merge_request.draft_note.view".to_string(),
-                    "merge_request.draft_note.add".to_string(),
-                    "merge_request.draft_note.update".to_string(),
-                    "merge_request.draft_note.delete".to_string(),
-                    "merge_request.draft_note.publish".to_string(),
-                    "merge_request.draft_note.publish_all".to_string(),
-                    "merge_request.review.submit".to_string(),
-                    "merge_request.approval.view".to_string(),
-                    "merge_request.approval_state.view".to_string(),
-                    "merge_request.approval_rule.list".to_string(),
-                    "merge_request.approval_rule.view".to_string(),
-                    "merge_request.approve".to_string(),
-                    "merge_request.unapprove".to_string(),
-                    "merge_request.suggestion.apply".to_string(),
-                    "merge_request.suggestion.batch_apply".to_string(),
-                    "merge_request.discussion.note.update".to_string(),
-                    "merge_request.discussion.note.delete".to_string(),
-                    "merge_request.discussion.resolve".to_string(),
-                    "merge_request.discussion.reopen".to_string(),
-                    "merge_request.merge".to_string(),
-                    "branch.list".to_string(),
-                    "branch.view".to_string(),
-                    "branch.create".to_string(),
-                    "protected_branch.list".to_string(),
-                    "protected_branch.view".to_string(),
-                    "protected_branch.verify".to_string(),
-                    "file.view".to_string(),
-                    "file.raw.download".to_string(),
-                    "file.create".to_string(),
-                    "file.update".to_string(),
-                    "file.delete".to_string(),
-                    "commit.list".to_string(),
-                    "commit.view".to_string(),
-                    "commit.create".to_string(),
-                    "pipeline.list".to_string(),
-                    "pipeline.view".to_string(),
-                    "pipeline.run".to_string(),
-                    "pipeline.retry".to_string(),
-                    "pipeline.cancel".to_string(),
-                    "job.list".to_string(),
-                    "job.view".to_string(),
-                    "job.trace.download".to_string(),
-                    "job.retry".to_string(),
-                    "job.cancel".to_string(),
-                    "job.play".to_string(),
-                    "webhook.list".to_string(),
-                    "webhook.view".to_string(),
-                    "webhook.create".to_string(),
-                    "webhook.update".to_string(),
-                    "webhook.delete".to_string(),
-                    "webhook.test".to_string(),
-                    "webhook.event.list".to_string(),
-                    "webhook.event.resend".to_string(),
-                    "webhook.custom_header.set".to_string(),
-                    "webhook.custom_header.delete".to_string(),
-                ],
-                resources: resource_selection(&["repository-sip-service"]),
-                credential_mode: "service".to_string(),
-                priority: None,
-            }],
-        },
-        attribution: Default::default(),
-        providers: agent_access_core::ProvidersConfig::new(std::sync::Arc::new(
-            agent_access_broker::backend_registry(),
-        ))
-        .with(gitlab_provider_config(2)),
+/// Starts the broker assembly on `document` with the GitLab provider its
+/// configuration builds.
+async fn start_registered_broker(document: &GitlabDocument) -> RunningBroker {
+    start_isolated_broker(document, None).await
+}
 
-        gateways: BTreeMap::new(),
-        limits: agent_access_core::LimitsConfig {
-            upload_spool_dir: temp_path("upload-spool").display().to_string(),
-            ..agent_access_core::LimitsConfig::default()
-        },
-        audit: Some(agent_access_core::AuditConfig::new(
-            agent_access_core::AuditStoreType::Jsonl,
-            audit_path.display().to_string(),
-        )),
+async fn start_isolated_broker(
+    document: &GitlabDocument,
+    gitlab: Option<agent_access_provider::ServiceProvider>,
+) -> RunningBroker {
+    let application = IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
+    )
+    .unwrap();
+    let config = document.render(application.directory());
+    let application = application.config_document(config);
+    let application = match gitlab {
+        Some(gitlab) => application.provider_fixture("gitlab", ProviderFixture::instance(gitlab)),
+        None => application,
+    };
+    application.start().await.unwrap()
+}
+
+async fn stop(broker: RunningBroker) {
+    broker.shutdown();
+    broker.join().await.unwrap();
+}
+
+/// Who may call the broker.
+#[derive(Clone, Copy, Debug)]
+enum GitlabCallers {
+    /// Anonymous callers.
+    Anonymous,
+    /// The static principal `agent-one`, identified by `agent-token` and a
+    /// member of group `agents`, whose own GitLab credential is
+    /// `gitlab-per-user-token`.
+    AgentOne,
+}
+
+/// One `[[policy.grants]]` entry for the GitLab service.
+#[derive(Clone, Debug)]
+struct GitlabGrant {
+    subjects: Vec<String>,
+    actions: Vec<String>,
+    /// Resource entry IDs.
+    resources: Vec<String>,
+    credential_mode: String,
+}
+
+/// A broker configuration for the GitLab smokes. [`GitlabDocument::render`]
+/// writes it as a TOML document with the GitLab service credential
+/// `gitlab-service-token`, the read-only lookup credential
+/// `gitlab-lookup-token`, the `sip/service` and `fork/service` repository
+/// resources, JSONL audit and an upload spool, all in the fixture directory.
+#[derive(Clone, Debug)]
+struct GitlabDocument {
+    callers: GitlabCallers,
+    /// `[providers.gitlab]`.
+    provider: GitlabProviderConfig,
+    grants: Vec<GitlabGrant>,
+    /// `limits.max_upstream_response_bytes`, when not the default.
+    max_upstream_response_bytes: Option<u64>,
+    /// `limits.invocations.default`: requests per window.
+    default_invocation_limit: Option<(u64, &'static str)>,
+}
+
+/// Anonymous callers use the service credential for every GitLab action on
+/// `sip/service`.
+fn gitlab_document() -> GitlabDocument {
+    GitlabDocument {
+        callers: GitlabCallers::Anonymous,
+        provider: gitlab_provider_config(2),
+        grants: vec![GitlabGrant {
+            subjects: vec!["group:anonymous".to_string()],
+            actions: gitlab_actions(),
+            resources: resource_ids(&["repository-sip-service"]),
+            credential_mode: "service".to_string(),
+        }],
+        max_upstream_response_bytes: None,
+        default_invocation_limit: None,
     }
 }
 
-fn gitlab_per_user_config(audit_path: &std::path::Path) -> BrokerConfig {
-    let agent_token_path = temp_path("gitlab-agent-token.txt");
-    let per_user_token_path = temp_path("gitlab-per-user-token.txt");
-    let per_user_store_path = temp_path("gitlab-per-user-store.json");
-
-    std::fs::write(&agent_token_path, "agent-token").unwrap();
-    std::fs::write(&per_user_token_path, "gitlab-per-user-token").unwrap();
-    std::fs::write(
-        &per_user_store_path,
-        format!(
-            r#"{{"credentials":[{{"principal":"agent-one","type":"bearer_token","token_ref":"file:{}"}}]}}"#,
-            per_user_token_path.display()
-        ),
-    )
-    .unwrap();
-
-    let mut config = gitlab_config(audit_path);
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".to_string(),
-        authority: "toml".to_string(),
-        sources: vec![IdentitySourceConfig {
-            name: "local".to_string(),
-            kind: "static_principals".to_string(),
-            header: "X-Agent-Access-Identity-Token".to_string(),
-            scheme: "raw".to_string(),
-            principals: vec![StaticPrincipalConfig {
-                principal: "agent-one".to_string(),
-                token_refs: vec![format!("file:{}", agent_token_path.display())],
-            }],
-        }],
-        groups: vec![IdentityGroupConfig {
-            id: "agents".to_string(),
-            status: "active".to_string(),
-            members: vec!["agent-one".to_string()],
-        }],
-    };
-    config.credentials.per_user.insert(
-        "gitlab".to_string(),
-        CredentialConfig {
-            kind: "secret_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: Some("local_file".to_string()),
-            path: Some(per_user_store_path.display().to_string()),
-            read_only: None,
-            credential_name: None,
-            profile: None,
-        },
-    );
-    for grant in &mut config.policy.grants {
+/// `agent-one` uses its own credential for every GitLab action on
+/// `sip/service`.
+fn gitlab_per_user_document() -> GitlabDocument {
+    let mut document = gitlab_document();
+    document.callers = GitlabCallers::AgentOne;
+    for grant in &mut document.grants {
         grant.subjects = vec!["user:agent-one".to_string()];
         grant.credential_mode = "per_user".to_string();
     }
-    config
+    document
+}
+
+fn gitlab_actions() -> Vec<String> {
+    [
+        "project.view",
+        "project.upload",
+        "issue.view",
+        "issue.search",
+        "issue.create",
+        "issue.update",
+        "issue.note.list",
+        "issue.note.view",
+        "issue.note.add",
+        "issue.note.update",
+        "issue.note.delete",
+        "merge_request.view",
+        "merge_request.search",
+        "merge_request.create",
+        "merge_request.update",
+        "merge_request.note.list",
+        "merge_request.note.view",
+        "merge_request.note.add",
+        "merge_request.note.update",
+        "merge_request.note.delete",
+        "merge_request.reviewer.list",
+        "merge_request.commit.list",
+        "merge_request.pipeline.list",
+        "merge_request.diff.list",
+        "merge_request.diff.raw.download",
+        "merge_request.diff_version.list",
+        "merge_request.diff_version.view",
+        "merge_request.discussion.list",
+        "merge_request.discussion.view",
+        "merge_request.discussion.add",
+        "merge_request.discussion.inline.add",
+        "merge_request.discussion.note.add",
+        "merge_request.draft_note.list",
+        "merge_request.draft_note.view",
+        "merge_request.draft_note.add",
+        "merge_request.draft_note.update",
+        "merge_request.draft_note.delete",
+        "merge_request.draft_note.publish",
+        "merge_request.draft_note.publish_all",
+        "merge_request.review.submit",
+        "merge_request.approval.view",
+        "merge_request.approval_state.view",
+        "merge_request.approval_rule.list",
+        "merge_request.approval_rule.view",
+        "merge_request.approve",
+        "merge_request.unapprove",
+        "merge_request.suggestion.apply",
+        "merge_request.suggestion.batch_apply",
+        "merge_request.discussion.note.update",
+        "merge_request.discussion.note.delete",
+        "merge_request.discussion.resolve",
+        "merge_request.discussion.reopen",
+        "merge_request.merge",
+        "branch.list",
+        "branch.view",
+        "branch.create",
+        "protected_branch.list",
+        "protected_branch.view",
+        "protected_branch.verify",
+        "file.view",
+        "file.raw.download",
+        "file.create",
+        "file.update",
+        "file.delete",
+        "commit.list",
+        "commit.view",
+        "commit.create",
+        "pipeline.list",
+        "pipeline.view",
+        "pipeline.run",
+        "pipeline.retry",
+        "pipeline.cancel",
+        "job.list",
+        "job.view",
+        "job.trace.download",
+        "job.retry",
+        "job.cancel",
+        "job.play",
+        "webhook.list",
+        "webhook.view",
+        "webhook.create",
+        "webhook.update",
+        "webhook.delete",
+        "webhook.test",
+        "webhook.event.list",
+        "webhook.event.resend",
+        "webhook.custom_header.set",
+        "webhook.custom_header.delete",
+    ]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
+}
+
+fn resource_ids(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(ToString::to_string).collect()
+}
+
+impl GitlabDocument {
+    /// The TOML document, writing its secrets privately to `directory`.
+    fn render(&self, directory: &FixtureDir) -> String {
+        let mut document = format!(
+            r#"
+[credentials.service.gitlab]
+type = "bearer_token"
+token_ref = {service_token}
+
+[credentials.lookup.gitlab]
+type = "bearer_token"
+token_ref = {lookup_token}
+read_only = true
+"#,
+            service_token = secret_ref(
+                directory,
+                "gitlab-service-token.txt",
+                "gitlab-service-token"
+            ),
+            lookup_token = secret_ref(directory, "gitlab-lookup-token.txt", "gitlab-lookup-token"),
+        );
+        match self.callers {
+            GitlabCallers::Anonymous => document.push_str(
+                r#"
+[identity]
+mode = "anonymous"
+authority = "toml"
+"#,
+            ),
+            GitlabCallers::AgentOne => {
+                let token = directory
+                    .secret_file("gitlab-per-user-token.txt", "gitlab-per-user-token")
+                    .unwrap();
+                let credentials = serde_json::json!({"credentials": [{
+                    "principal": "agent-one",
+                    "type": "bearer_token",
+                    "token_ref": format!("file:{}", token.display()),
+                }]});
+                let store = directory
+                    .secret_file("gitlab-per-user-store.json", credentials.to_string())
+                    .unwrap();
+                document.push_str(&format!(
+                    r#"
+[credentials.per_user.gitlab]
+type = "secret_store"
+provider = "local_file"
+path = {store}
+
+[identity]
+mode = "required"
+authority = "toml"
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{agent_token}]
+
+[[identity.groups]]
+id = "agents"
+status = "active"
+members = ["agent-one"]
+"#,
+                    store = toml_string(store.display()),
+                    agent_token = secret_ref(directory, "gitlab-agent-token.txt", "agent-token"),
+                ));
+            }
+        }
+        document.push_str(&gitlab_provider_toml(&self.provider));
+        document.push_str(&format!(
+            r#"
+[limits]
+upload_spool_dir = {spool}
+"#,
+            spool = toml_string(directory.join("upload-spool").display()),
+        ));
+        if let Some(bytes) = self.max_upstream_response_bytes {
+            document.push_str(&format!("max_upstream_response_bytes = {bytes}\n"));
+        }
+        if let Some((requests, window)) = self.default_invocation_limit {
+            document.push_str(&format!(
+                r#"
+[limits.invocations.default]
+requests = {requests}
+window = {window}
+"#,
+                window = toml_string(window),
+            ));
+        }
+        document.push_str(&format!(
+            r#"
+[audit]
+type = "jsonl"
+path = {audit}
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "repository-sip-service"
+resource_type = {resource_type}
+selector = {{ kind = "exact", value = "sip/service" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.resources]]
+id = "repository-fork-service"
+resource_type = {resource_type}
+selector = {{ kind = "exact", value = "fork/service" }}
+allowed_execution_contexts = ["default"]
+"#,
+            audit = toml_string(directory.join("audit.jsonl").display()),
+            resource_type = toml_string(GIT_REPOSITORY_RESOURCE.id().as_str()),
+        ));
+        for grant in &self.grants {
+            document.push_str(&format!(
+                r#"
+[[policy.grants]]
+subjects = {subjects}
+service = "gitlab"
+actions = {actions}
+resources = {{ resource_ids = {resources} }}
+credential_mode = {credential_mode}
+"#,
+                subjects = toml_strings(&grant.subjects),
+                actions = toml_strings(&grant.actions),
+                resources = toml_strings(&grant.resources),
+                credential_mode = toml_string(&grant.credential_mode),
+            ));
+        }
+        document
+    }
+}
+
+/// `[providers.gitlab]` with every setting of `config`.
+fn gitlab_provider_toml(config: &GitlabProviderConfig) -> String {
+    let GitlabProviderConfig {
+        provisioning,
+        attachments,
+        api_base_url,
+        web_base_url,
+        egress_proxy,
+        allowed_upstream_hosts,
+        webhooks,
+        content,
+        search,
+    } = config;
+    assert!(
+        egress_proxy.is_none(),
+        "the GitLab smokes configure no egress proxy"
+    );
+    format!(
+        r#"
+[providers.gitlab]
+api_base_url = {api_base_url}
+web_base_url = {web_base_url}
+allowed_upstream_hosts = {allowed_upstream_hosts}
+provisioning = {{ enabled = {enabled}, max_access_level = {max_access_level}, max_token_lifetime_days = {max_token_lifetime_days}, allowed_token_scopes = {allowed_token_scopes} }}
+attachments = {{ max_bytes = {max_bytes}, max_total_bytes = {max_total_bytes}, media_types = {media_types} }}
+webhooks = {{ allowed_destinations = {allowed_destinations}, allow_disable_ssl_verification = {allow_disable_ssl_verification} }}
+content = {{ max_body_bytes = {max_body_bytes}, max_commit_actions = {max_commit_actions}, max_file_bytes = {max_file_bytes}, max_raw_download_bytes = {max_raw_download_bytes} }}
+search = {{ max_results = {max_results} }}
+"#,
+        api_base_url = toml_string(api_base_url),
+        web_base_url = toml_string(web_base_url),
+        allowed_upstream_hosts = toml_strings(allowed_upstream_hosts),
+        enabled = provisioning.enabled,
+        max_access_level = provisioning.max_access_level,
+        max_token_lifetime_days = provisioning.max_token_lifetime_days,
+        allowed_token_scopes = toml_strings(&provisioning.allowed_token_scopes),
+        max_bytes = attachments.max_bytes,
+        max_total_bytes = attachments.max_total_bytes,
+        media_types = toml_strings(&attachments.media_types),
+        allowed_destinations = toml_strings(&webhooks.allowed_destinations),
+        allow_disable_ssl_verification = webhooks.allow_disable_ssl_verification,
+        max_body_bytes = content.max_body_bytes,
+        max_commit_actions = content.max_commit_actions,
+        max_file_bytes = content.max_file_bytes,
+        max_raw_download_bytes = content.max_raw_download_bytes,
+        max_results = search.max_results,
+    )
+}
+
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl std::fmt::Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
+}
+
+/// A TOML array of basic strings.
+fn toml_strings(values: &[String]) -> String {
+    serde_json::to_string(values).unwrap()
+}
+
+/// A `file:` secret reference to a new private file in `directory`.
+fn secret_ref(directory: &FixtureDir, name: &str, contents: &str) -> String {
+    let path = directory.secret_file(name, contents).unwrap();
+    toml_string(format_args!("file:{}", path.display()))
 }
 
 fn gitlab_provider_config(max_results: u32) -> GitlabProviderConfig {

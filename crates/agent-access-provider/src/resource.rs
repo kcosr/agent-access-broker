@@ -48,7 +48,7 @@ impl<'de> Deserialize<'de> for ResourceType {
     }
 }
 
-pub fn is_resource_type_id(value: &str) -> bool {
+fn is_resource_type_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 64
@@ -60,42 +60,125 @@ pub fn is_resource_type_id(value: &str) -> bool {
 
 /// Defines a resource type: its canonical target grammar, the selector forms
 /// it supports, and the labels clients show. Backends declare these as
-/// statics and a [`ResourceTypeRegistry`] makes them resolvable.
+/// statics with the `const` builder and a [`ResourceTypeRegistry`] makes
+/// them resolvable.
+///
+/// ```
+/// use agent_access_provider::{
+///     NamespaceSelectorDescriptor, ResourceType, ResourceTypeDescriptor,
+/// };
+///
+/// fn is_shelf(value: &str) -> bool {
+///     !value.is_empty() && !value.contains('/')
+/// }
+/// fn is_item(value: &str) -> bool {
+///     value.split_once('/').is_some_and(|(shelf, item)| is_shelf(shelf) && is_shelf(item))
+/// }
+///
+/// pub static ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+///     ResourceType::from_static("example_item"),
+///     "Item",
+///     "Items",
+///     "shelf/item",
+///     is_item,
+/// )
+/// .with_namespace(NamespaceSelectorDescriptor::new(
+///     is_shelf,
+///     "Items on a shelf",
+///     "Items",
+///     "shelf",
+/// ));
+/// assert_eq!(ITEM_RESOURCE.id().as_str(), "example_item");
+/// assert!(ITEM_RESOURCE.is_canonical_target("shelf/item"));
+/// ```
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct ResourceTypeDescriptor {
-    pub id: ResourceType,
-    pub label: &'static str,
-    pub plural_label: &'static str,
-    /// Example canonical target for forms and help text.
-    pub example: &'static str,
-    /// Canonical target grammar. Exact selectors and every resolved target
-    /// of this type must satisfy it, which keeps namespace prefix matching
-    /// sound.
-    pub canonical: fn(&str) -> bool,
-    pub namespace: Option<NamespaceSelectorDescriptor>,
-    /// Private string attributes on exact, managed resources.
-    pub attributes: &'static [ResourceAttributeDescriptor],
-    /// Maps a selector of this type to the action inputs that address it,
-    /// such as a CloudBees CI job's `controller` and `job`. Discovery shows
-    /// these next to resource values so callers need not parse them.
-    pub action_inputs: Option<ResourceActionInputs>,
+    id: ResourceType,
+    label: &'static str,
+    plural_label: &'static str,
+    example: &'static str,
+    canonical: fn(&str) -> bool,
+    namespace: Option<NamespaceSelectorDescriptor>,
+    attributes: &'static [ResourceAttributeDescriptor],
+    action_inputs: Option<ResourceActionInputs>,
 }
 
 /// Projects a selector onto the action inputs that address it.
 pub type ResourceActionInputs =
     fn(&ResourceSelector) -> Option<serde_json::Map<String, serde_json::Value>>;
 
-/// A private string field owned and validated by a resource type.
+/// A private string field owned and validated by a resource type, declared
+/// in its descriptor's `const` attribute list.
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct ResourceAttributeDescriptor {
-    pub name: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
-    pub required: bool,
-    /// Must not expose the supplied value in diagnostics.
-    pub validate: fn(&str) -> bool,
+    name: &'static str,
+    label: &'static str,
+    description: &'static str,
+    required: bool,
+    validate: fn(&str) -> bool,
 }
 
+impl ResourceAttributeDescriptor {
+    /// An attribute every exact resource of the type must carry. `validate`
+    /// must not expose the supplied value in diagnostics.
+    pub const fn required(
+        name: &'static str,
+        label: &'static str,
+        description: &'static str,
+        validate: fn(&str) -> bool,
+    ) -> Self {
+        Self {
+            name,
+            label,
+            description,
+            required: true,
+            validate,
+        }
+    }
+
+    /// An attribute an exact resource of the type may carry. `validate`
+    /// must not expose the supplied value in diagnostics.
+    pub const fn optional(
+        name: &'static str,
+        label: &'static str,
+        description: &'static str,
+        validate: fn(&str) -> bool,
+    ) -> Self {
+        Self {
+            name,
+            label,
+            description,
+            required: false,
+            validate,
+        }
+    }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub const fn label(&self) -> &'static str {
+        self.label
+    }
+
+    pub const fn description(&self) -> &'static str {
+        self.description
+    }
+
+    pub const fn is_required(&self) -> bool {
+        self.required
+    }
+
+    /// Whether `value` passes the attribute's own validation.
+    pub fn is_valid(&self, value: &str) -> bool {
+        (self.validate)(value)
+    }
+}
+
+/// A private resource attribute as clients see it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceAttributeMetadata {
@@ -141,17 +224,139 @@ impl ResourceAttributes {
 
 /// Namespace selector support: a prefix that covers every canonical target
 /// below it (`value/...`).
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct NamespaceSelectorDescriptor {
-    pub valid: fn(&str) -> bool,
-    /// Coverage choice label, such as "Repositories under a namespace".
-    pub label: &'static str,
-    /// Noun for summaries, such as "Repositories" in "Repositories under x".
-    pub members_label: &'static str,
-    pub example: &'static str,
+    valid: fn(&str) -> bool,
+    label: &'static str,
+    members_label: &'static str,
+    example: &'static str,
+}
+
+impl NamespaceSelectorDescriptor {
+    /// Namespace selectors whose values `valid` accepts. `label` names the
+    /// coverage choice, such as "Repositories under a namespace";
+    /// `members_label` is the noun for summaries, such as "Repositories" in
+    /// "Repositories under x"; `example` must be a valid namespace.
+    pub const fn new(
+        valid: fn(&str) -> bool,
+        label: &'static str,
+        members_label: &'static str,
+        example: &'static str,
+    ) -> Self {
+        Self {
+            valid,
+            label,
+            members_label,
+            example,
+        }
+    }
+
+    /// Whether `value` is a valid namespace selector value.
+    pub fn is_valid(&self, value: &str) -> bool {
+        (self.valid)(value)
+    }
+
+    pub const fn label(&self) -> &'static str {
+        self.label
+    }
+
+    pub const fn members_label(&self) -> &'static str {
+        self.members_label
+    }
+
+    pub const fn example(&self) -> &'static str {
+        self.example
+    }
 }
 
 impl ResourceTypeDescriptor {
+    /// A resource type identified by `id`, shown as `label` and
+    /// `plural_label`, whose canonical targets `canonical` accepts. Exact
+    /// selectors and every resolved target of the type must satisfy it,
+    /// which keeps namespace prefix matching sound; `example` must be one.
+    /// The type supports exact and all selectors, has no private attributes
+    /// and maps selectors to no action inputs.
+    pub const fn new(
+        id: ResourceType,
+        label: &'static str,
+        plural_label: &'static str,
+        example: &'static str,
+        canonical: fn(&str) -> bool,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            plural_label,
+            example,
+            canonical,
+            namespace: None,
+            attributes: &[],
+            action_inputs: None,
+        }
+    }
+
+    /// Adds namespace selectors: a prefix that covers every canonical target
+    /// below it.
+    pub const fn with_namespace(mut self, namespace: NamespaceSelectorDescriptor) -> Self {
+        self.namespace = Some(namespace);
+        self
+    }
+
+    /// Declares the private string attributes exact, managed resources of
+    /// the type carry.
+    pub const fn with_attributes(
+        mut self,
+        attributes: &'static [ResourceAttributeDescriptor],
+    ) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    /// Maps a selector of the type to the action inputs that address it,
+    /// such as a CloudBees CI job's `controller` and `job`. Discovery shows
+    /// these next to resource values so callers need not parse them.
+    pub const fn with_action_inputs(mut self, action_inputs: ResourceActionInputs) -> Self {
+        self.action_inputs = Some(action_inputs);
+        self
+    }
+
+    pub const fn id(&self) -> &ResourceType {
+        &self.id
+    }
+
+    pub const fn label(&self) -> &'static str {
+        self.label
+    }
+
+    pub const fn plural_label(&self) -> &'static str {
+        self.plural_label
+    }
+
+    /// Example canonical target for forms and help text.
+    pub const fn example(&self) -> &'static str {
+        self.example
+    }
+
+    pub const fn namespace(&self) -> Option<&NamespaceSelectorDescriptor> {
+        self.namespace.as_ref()
+    }
+
+    /// Private string attributes on exact, managed resources.
+    pub const fn attributes(&self) -> &'static [ResourceAttributeDescriptor] {
+        self.attributes
+    }
+
+    /// The action inputs that address `selector`, when the type maps
+    /// selectors to inputs and this one has a mapping.
+    pub fn action_inputs(
+        &self,
+        selector: &ResourceSelector,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        self.action_inputs
+            .and_then(|action_inputs| action_inputs(selector))
+    }
+
     pub fn validate_attributes(
         &self,
         selector: &ResourceSelector,
@@ -243,6 +448,7 @@ impl ResourceTypeDescriptor {
 }
 
 /// Client-facing description of a registered resource type.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTypeMetadata {
@@ -257,6 +463,8 @@ pub struct ResourceTypeMetadata {
     pub namespace: Option<NamespaceSelectorMetadata>,
 }
 
+/// Namespace selector support as clients see it.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamespaceSelectorMetadata {
@@ -379,21 +587,19 @@ impl ResourceTypeRegistry {
 /// Git repositories are shared by GitLab REST and Git HTTP gateways: one
 /// resource entry authorizes both. Canonical paths have at least two segments
 /// and are not all digits, so they cannot be confused with numeric project IDs.
-pub static GIT_REPOSITORY_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("git_repository"),
-    label: "Git repository",
-    plural_label: "Git repositories",
-    example: "engineering/payments",
-    canonical: is_canonical_repository_path,
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: is_repository_selector_path,
-        label: "Repositories under a namespace",
-        members_label: "Repositories",
-        example: "engineering/platform",
-    }),
-};
+pub static GIT_REPOSITORY_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("git_repository"),
+    "Git repository",
+    "Git repositories",
+    "engineering/payments",
+    is_canonical_repository_path,
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    is_repository_selector_path,
+    "Repositories under a namespace",
+    "Repositories",
+    "engineering/platform",
+));
 
 pub fn is_canonical_repository_path(value: &str) -> bool {
     is_repository_selector_path(value)
@@ -401,6 +607,7 @@ pub fn is_canonical_repository_path(value: &str) -> bool {
         && !value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceSelector {
@@ -483,7 +690,7 @@ pub fn is_repository_selector_path(value: &str) -> bool {
         && !value.contains("//")
 }
 
-pub fn is_repository_selector_segment(segment: &str) -> bool {
+fn is_repository_selector_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
         && segment != ".."

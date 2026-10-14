@@ -1,0 +1,30 @@
+//! The internal import contract: imported-service definitions, bounded
+//! schemas, the protocol adapter seam and the opaque registration an
+//! assembly selects. This is Broker implementation, not a supported
+//! extension interface; only the shipped import adapters implement it.
+mod adapter;
+mod definition;
+mod registration;
+mod schema;
+
+pub use adapter::*;
+pub use definition::*;
+pub use registration::{
+    ImportOAuthCompanion, ImportedAdapterRegistration, imported_adapter_registration,
+};
+pub use schema::*;
+
+/// The implementation an imported protocol client names itself as, such as
+/// an imported MCP connection's `clientInfo`: the Broker host package and
+/// its version, which core shares. It never names the linking assembly or the
+/// adapter package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostImplementation {
+    pub name: &'static str,
+    pub version: &'static str,
+}
+
+pub const HOST_IMPLEMENTATION: HostImplementation = HostImplementation {
+    name: "agent-access-broker-host",
+    version: env!("CARGO_PKG_VERSION"),
+};

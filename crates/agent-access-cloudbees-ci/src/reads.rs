@@ -219,7 +219,7 @@ impl CloudbeesCiProvider {
             response_too_large
         };
         let (data, reply) = self.json_with_size_error(controller, credential, url, size_error).await.map_err(|error| {
-            if error.reason_code == ReasonCode::ResourceNotFound && action != "build.tests.details" {
+            if error.reason_code() == ReasonCode::ResourceNotFound && action != "build.tests.details" {
                 ProviderError::deny(ReasonCode::ResourceNotFound,
                     "Pipeline data is unavailable: the build/node may not exist or the Pipeline REST API plugin may be absent")
                     .with_upstream(error.upstream_status, None)
@@ -291,8 +291,8 @@ impl CloudbeesCiProvider {
                     _ => return Err(protocol_error()),
                 };
                 if text.len() as u64 > LOG_LIMIT {
-                    return Err(ProviderError::deny(
-                        ReasonCode::CloudbeesCiLogChunkExceeded,
+                    return Err(ProviderError::domain(
+                        &CLOUDBEES_CI_LOG_CHUNK_EXCEEDED,
                         "Pipeline node log exceeds the bounded read limit",
                     ));
                 }
@@ -375,7 +375,7 @@ impl CloudbeesCiProvider {
             input,
             value,
             &reply,
-            controller.client.egress_proxy(),
+            controller.client.egress_route(),
         ))
     }
 
@@ -390,19 +390,7 @@ impl CloudbeesCiProvider {
         content_type: &str,
         filename: String,
     ) -> Result<ProviderResult, ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {
@@ -414,16 +402,13 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 url.clone(),
-                RedirectRules {
-                    max_redirects: 0,
-                    deadline: self.request_timeout,
-                    correlate_other_origins: false,
-                    vet: &|candidate| *candidate == url,
-                    decorate: &|request| {
-                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                    },
-                    authorize: &|request| request.basic_auth(username, Some(token)),
-                },
+                RedirectRules::new(0, self.request_timeout, &|request| {
+                    request.basic_auth(username, Some(token))
+                })
+                .with_vet(&|candidate| *candidate == url)
+                .with_decorate(&|request| {
+                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                }),
                 action,
             )
             .await
@@ -488,7 +473,7 @@ impl CloudbeesCiProvider {
             json!({"controller":input.controller,"job":input.job,"buildNumber":input.build_number,
                 "fileName":filename,"contentType":content_type,"size":size}),
             &reply,
-            controller.download_client.egress_proxy(),
+            controller.download_client.egress_route(),
         );
         let cap = self.download_limit;
         let idle = self.download_idle_timeout;
@@ -655,7 +640,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     match status {
                         204 => ReasonCode::UpstreamProtocolFailed,
                         429 => ReasonCode::UpstreamRateLimited,
@@ -754,7 +739,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    result.unwrap_err().reason_code,
+                    result.unwrap_err().reason_code(),
                     ReasonCode::UpstreamProtocolFailed
                 );
             }
@@ -776,10 +761,13 @@ mod tests {
                 assert_eq!(result["log"]["hasMore"], true);
                 assert!(result["log"].get("consoleUrl").is_none());
             } else {
+                let error = result.unwrap_err();
                 assert_eq!(
-                    result.unwrap_err().reason_code,
-                    ReasonCode::CloudbeesCiLogChunkExceeded
+                    error.reason_code(),
+                    agent_access_provider::ProviderReason::from(&CLOUDBEES_CI_LOG_CHUNK_EXCEEDED)
                 );
+                assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+                assert_eq!(error.reason_code().http_status(), 413);
             }
         }
     }
@@ -812,10 +800,7 @@ mod tests {
         for id in ["../secret", "%2f", "0", "123456789012345678901", ""] {
             let mut input = node_inputs();
             input["nodeId"] = json!(id);
-            assert!(
-                ci.resolve_scopes("build.pipeline.node.view", &input)
-                    .is_err()
-            );
+            assert!(ci.local_scopes("build.pipeline.node.view", &input).is_err());
         }
         for (action, _) in ACTIONS {
             let input = if action.starts_with("build.pipeline.node.") {
@@ -824,7 +809,7 @@ mod tests {
                 inputs()
             };
             assert_eq!(
-                ci.resolve_scopes(action, &input).unwrap()["job"],
+                ci.local_scopes(action, &input).unwrap()["job"],
                 vec!["team-ci/payments/build-api"]
             );
         }
@@ -849,7 +834,7 @@ mod tests {
                     socket.write_all(b"4\r\nbody\r\n0\r\n\r\n").await.unwrap();
                 }
             });
-            let ci = CloudbeesCiProvider::new_with_egress(
+            let ci = CloudbeesCiProvider::for_tests(
                 CloudbeesCiProviderConfig {
                     max_log_scan_bytes: logs::default_scan_limit(),
                     controllers: BTreeMap::from([(
@@ -862,13 +847,9 @@ mod tests {
                     egress_proxy: None,
                     allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
                 },
-                ProviderLimits {
-                    max_download_bytes: if mode == "oversize" { 2 } else { 10 },
-                    streaming_idle_timeout_ms: 100,
-                    ..ProviderLimits::default()
-                },
-                &EgressProxyRuntimeConfig::direct(),
-                &agent_access_provider::test_support::test_outbound_tls(),
+                ProviderLimits::default()
+                    .with_max_download_bytes(if mode == "oversize" { 2 } else { 10 })
+                    .with_streaming_idle_timeout_ms(100),
             )
             .unwrap();
             let result = ci
@@ -927,7 +908,7 @@ mod tests {
                 assert_eq!(result["log"]["hasMore"], false);
             } else {
                 assert_eq!(
-                    result.unwrap_err().reason_code,
+                    result.unwrap_err().reason_code(),
                     ReasonCode::UpstreamProtocolFailed
                 );
             }
@@ -981,7 +962,7 @@ mod tests {
                 .invoke(invocation(action, inputs()))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::ResponseFormatUnsupported);
+            assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
             assert_eq!(server.received_requests().await.unwrap().len(), 1);
         }
     }
@@ -996,7 +977,7 @@ mod tests {
             .invoke(invocation("build.tests.details", inputs()))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+        assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
         assert_eq!(
             error.result.unwrap()["downloadAction"],
             "build.tests.download"

@@ -1,11 +1,5 @@
-mod common;
-use common::{resource_catalog, resource_selection};
-
-use agent_access_broker::build_router;
-use agent_access_core::{
-    BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, IdentityConfig,
-    IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig, REQUEST_ID_HEADER,
-    RESULT_METADATA_HEADER, ResourceSelector, SearchLimitsConfig, StaticPrincipalConfig,
+use agent_access_broker_host::test_support::{
+    FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
 use agent_access_jira::{
     JIRA_PROJECT_RESOURCE, JiraAttachment, JiraAttachmentContent, JiraAttachmentUpload,
@@ -18,6 +12,8 @@ use agent_access_jira::{
     JiraPrioritySummary, JiraProvider, JiraProviderConfig, JiraSearchPage, JiraSearchRequest,
     JiraUserSummary,
 };
+use agent_access_provider::test_support::credential_token;
+use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLimitsConfig};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -30,10 +26,10 @@ use std::sync::{Arc, Mutex};
 /// descriptor.
 fn jira_service(
     config: agent_access_jira::JiraProviderConfig,
-    limits: agent_access_core::ProviderLimits,
+    limits: agent_access_provider::ProviderLimits,
     backend: Arc<dyn agent_access_jira::JiraBackend>,
-) -> agent_access_core::ServiceProvider {
-    agent_access_core::ServiceProvider::new(
+) -> agent_access_provider::ServiceProvider {
+    agent_access_provider::ServiceProvider::new(
         agent_access_jira::jira_descriptor(&config),
         Arc::new(JiraProvider::with_backend(config, limits, backend)),
     )
@@ -42,7 +38,6 @@ fn jira_service(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
     use serde_json::json;
-    let audit_path = temp_path("jira-issue-types.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([(
             "PROJ-1".to_string(),
@@ -69,16 +64,12 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
         })),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_required_service_config(&audit_path),
-        vec![jira_service(
-            jira_provider_config(2),
-            Default::default(),
-            backend.clone(),
-        )],
+    let broker = start_broker(
+        JiraAccess::AgentService,
+        jira_service(jira_provider_config(2), Default::default(), backend.clone()),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let run = |args: &[&str]| {
         let output = authenticated_jira_cli(&base_url)
             .args(args)
@@ -269,15 +260,14 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
     ]);
     assert_eq!(created["decision"], "allow");
     assert_eq!(backend.created_issues.lock().unwrap()[0].issue_type_id, id);
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("issue_type.list"));
     assert!(!audit.contains("Work to complete"));
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
-    let audit_path = temp_path("jira-read.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([
             (
@@ -414,16 +404,16 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
         }]),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AnonymousService,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend.clone(),
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -604,7 +594,7 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
         "evidence.txt"
     );
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"service\":\"jira\""));
     assert!(audit.contains("\"action\":\"issue.view\""));
     assert!(audit.contains("\"action\":\"search\""));
@@ -612,7 +602,7 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
     assert!(audit.contains("\"objectIds\""));
     assert!(!audit.contains("visible summary"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -621,7 +611,6 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
     const COMMENT_BODY: &str = "normalizedreadcommentbody";
     const SEARCH_BODY: &str = "bodyfreesearchmustnotrenderthis";
 
-    let audit_path = temp_path("jira-normalized-read.audit.jsonl");
     let issue = JiraIssue {
         id: "10001".to_string(),
         key: "PROJ-1".to_string(),
@@ -653,16 +642,16 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
         })),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_required_service_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AgentService,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend.clone(),
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
     let mut provider_call_cursor = 0;
 
     let native = authenticated_jira_cli(&base_url)
@@ -953,7 +942,7 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
         &["issue_metadata", "issue_metadata", "add_comment"],
     );
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"issue.view\""));
     assert!(audit.contains("\"action\":\"search\""));
     assert!(audit.contains("\"action\":\"comment.add\""));
@@ -961,12 +950,11 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
     assert!(!audit.contains(COMMENT_BODY));
     assert!(!audit.contains(SEARCH_BODY));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jira_moved_issue_denial_does_not_leak_content() {
-    let audit_path = temp_path("jira-moved.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([(
             "PROJ-2".to_string(),
@@ -991,16 +979,16 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
         last_search: Mutex::new(None),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AnonymousService,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend,
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1026,16 +1014,15 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
     assert_eq!(issue_json["reasonCode"], "scope_unresolved");
     assert!(!String::from_utf8_lossy(&issue.stdout).contains("secret moved issue summary"));
 
-    let audit = std::fs::read_to_string(audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
     assert!(!audit.contains("secret moved issue summary"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backend() {
-    let audit_path = temp_path("jira-write.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([
             (
@@ -1160,16 +1147,16 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         )])),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AnonymousService,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend.clone(),
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let issue_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1239,22 +1226,23 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         serde_json::json!(["description"])
     );
     assert_eq!(description_update_json["result"]["notifyUsers"], true);
-    let issue_updates = backend.updated_issues.lock().unwrap();
-    assert_eq!(issue_updates.len(), 2);
-    assert_eq!(issue_updates[0].0, "PROJ-1");
-    assert_eq!(
-        issue_updates[0].1.summary.as_deref(),
-        Some("secret issue summary")
-    );
-    assert!(issue_updates[0].1.description.is_none());
-    assert_eq!(issue_updates[0].1.notify_users, Some(false));
-    assert!(issue_updates[1].1.summary.is_none());
-    assert_eq!(
-        issue_updates[1].1.description.as_ref().unwrap()["content"][0]["content"][0]["text"],
-        "secret issue description"
-    );
-    assert_eq!(issue_updates[1].1.notify_users, Some(true));
-    drop(issue_updates);
+    {
+        let issue_updates = backend.updated_issues.lock().unwrap();
+        assert_eq!(issue_updates.len(), 2);
+        assert_eq!(issue_updates[0].0, "PROJ-1");
+        assert_eq!(
+            issue_updates[0].1.summary.as_deref(),
+            Some("secret issue summary")
+        );
+        assert!(issue_updates[0].1.description.is_none());
+        assert_eq!(issue_updates[0].1.notify_users, Some(false));
+        assert!(issue_updates[1].1.summary.is_none());
+        assert_eq!(
+            issue_updates[1].1.description.as_ref().unwrap()["content"][0]["content"][0]["text"],
+            "secret issue description"
+        );
+        assert_eq!(issue_updates[1].1.notify_users, Some(true));
+    }
 
     let issue_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1283,17 +1271,18 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(issue_create_json["decision"], "allow");
     assert_eq!(issue_create_json["result"]["operation"], "issue.create");
     assert_eq!(issue_create_json["result"]["issue"]["key"], "PROJ-2");
-    let created_issues = backend.created_issues.lock().unwrap();
-    assert_eq!(created_issues.len(), 1);
-    assert_eq!(created_issues[0].project, "PROJ");
-    assert_eq!(created_issues[0].issue_type_id, "10001");
-    assert_eq!(created_issues[0].summary, "secret created summary");
-    assert!(created_issues[0].parent_issue.is_none());
-    assert_eq!(
-        created_issues[0].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
-        "secret issue description"
-    );
-    drop(created_issues);
+    {
+        let created_issues = backend.created_issues.lock().unwrap();
+        assert_eq!(created_issues.len(), 1);
+        assert_eq!(created_issues[0].project, "PROJ");
+        assert_eq!(created_issues[0].issue_type_id, "10001");
+        assert_eq!(created_issues[0].summary, "secret created summary");
+        assert!(created_issues[0].parent_issue.is_none());
+        assert_eq!(
+            created_issues[0].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
+            "secret issue description"
+        );
+    }
 
     let child_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1353,16 +1342,17 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         child_invoke_json["result"]["verification"]["status"],
         "matched"
     );
-    let created_issues = backend.created_issues.lock().unwrap();
-    assert_eq!(created_issues.len(), 3);
-    assert_eq!(created_issues[1].summary, "secret child summary");
-    assert_eq!(created_issues[1].parent_issue.as_deref(), Some("PROJ-1"));
-    assert_eq!(
-        created_issues[1].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
-        "secret child description"
-    );
-    assert_eq!(created_issues[2].parent_issue.as_deref(), Some("PROJ-1"));
-    drop(created_issues);
+    {
+        let created_issues = backend.created_issues.lock().unwrap();
+        assert_eq!(created_issues.len(), 3);
+        assert_eq!(created_issues[1].summary, "secret child summary");
+        assert_eq!(created_issues[1].parent_issue.as_deref(), Some("PROJ-1"));
+        assert_eq!(
+            created_issues[1].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
+            "secret child description"
+        );
+        assert_eq!(created_issues[2].parent_issue.as_deref(), Some("PROJ-1"));
+    }
 
     let parent_set = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1405,11 +1395,12 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         parent_invoke_json["result"]["verification"]["status"],
         "matched"
     );
-    let parent_updates = backend.parent_updates.lock().unwrap();
-    assert_eq!(parent_updates.len(), 2);
-    assert_eq!(parent_updates[0].0, "PROJ-3");
-    assert_eq!(parent_updates[0].1.parent_issue, "PROJ-1");
-    drop(parent_updates);
+    {
+        let parent_updates = backend.parent_updates.lock().unwrap();
+        assert_eq!(parent_updates.len(), 2);
+        assert_eq!(parent_updates[0].0, "PROJ-3");
+        assert_eq!(parent_updates[0].1.parent_issue, "PROJ-1");
+    }
 
     let dependency = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -1457,12 +1448,13 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         dependency_invoke_json["result"]["verification"]["status"],
         "matched"
     );
-    let created_links = backend.created_issue_links.lock().unwrap();
-    assert_eq!(created_links.len(), 2);
-    assert_eq!(created_links[0].link_type, "Blocks");
-    assert_eq!(created_links[0].outward_issue, "PROJ-2");
-    assert_eq!(created_links[0].inward_issue, "PROJ-3");
-    drop(created_links);
+    {
+        let created_links = backend.created_issue_links.lock().unwrap();
+        assert_eq!(created_links.len(), 2);
+        assert_eq!(created_links[0].link_type, "Blocks");
+        assert_eq!(created_links[0].outward_issue, "PROJ-2");
+        assert_eq!(created_links[0].inward_issue, "PROJ-3");
+    }
 
     let body_path = temp_path("jira-comment.md");
     std::fs::write(&body_path, "## secret comment body\n\nMarkdown content.").unwrap();
@@ -1975,7 +1967,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(verify_json["reasonCode"], "verification_mismatch");
     assert_eq!(verify_json["result"]["verification"]["status"], "mismatch");
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"issue.create\""));
     assert!(audit.contains("\"action\":\"issue.child.create\""));
     assert!(audit.contains("\"action\":\"issue.update\""));
@@ -1996,12 +1988,11 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert!(!audit.contains("upload bytes"));
     assert!(!audit.contains("downloaded bytes"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
-    let audit_path = temp_path("jira-send-dependency.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([
             (
@@ -2100,16 +2091,16 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
         ])),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_required_service_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AgentService,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend.clone(),
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let request_path = temp_path("jira-send-dependency.json");
     std::fs::write(
@@ -2138,11 +2129,12 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
     assert_eq!(send_json["decision"], "allow");
     assert_eq!(send_json["result"]["operation"], "issue.dependency.add");
     assert_eq!(send_json["result"]["verification"]["status"], "matched");
-    let created_links = backend.created_issue_links.lock().unwrap();
-    assert_eq!(created_links.len(), 1);
-    assert_eq!(created_links[0].outward_issue, "PROJ-2");
-    assert_eq!(created_links[0].inward_issue, "PROJ-3");
-    drop(created_links);
+    {
+        let created_links = backend.created_issue_links.lock().unwrap();
+        assert_eq!(created_links.len(), 1);
+        assert_eq!(created_links[0].outward_issue, "PROJ-2");
+        assert_eq!(created_links[0].inward_issue, "PROJ-3");
+    }
 
     let parent_request_path = temp_path("jira-send-parent.json");
     std::fs::write(
@@ -2174,11 +2166,12 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
         parent_send_json["result"]["verification"]["status"],
         "matched"
     );
-    let parent_updates = backend.parent_updates.lock().unwrap();
-    assert_eq!(parent_updates.len(), 1);
-    assert_eq!(parent_updates[0].0, "PROJ-3");
-    assert_eq!(parent_updates[0].1.parent_issue, "PROJ-1");
-    drop(parent_updates);
+    {
+        let parent_updates = backend.parent_updates.lock().unwrap();
+        assert_eq!(parent_updates.len(), 1);
+        assert_eq!(parent_updates[0].0, "PROJ-3");
+        assert_eq!(parent_updates[0].1.parent_issue, "PROJ-1");
+    }
 
     let child_request_path = temp_path("jira-send-child.json");
     std::fs::write(
@@ -2210,20 +2203,20 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
         child_send_json["result"]["verification"]["status"],
         "matched"
     );
-    let created_issues = backend.created_issues.lock().unwrap();
-    assert_eq!(created_issues.len(), 1);
-    assert_eq!(created_issues[0].parent_issue.as_deref(), Some("PROJ-1"));
-    drop(created_issues);
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    {
+        let created_issues = backend.created_issues.lock().unwrap();
+        assert_eq!(created_issues.len(), 1);
+        assert_eq!(created_issues[0].parent_issue.as_deref(), Some("PROJ-1"));
+    }
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"issue.child.create\""));
     assert!(!audit.contains("send child summary"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_jira_per_user_actions_against_stubbed_backend() {
-    let audit_path = temp_path("jira-per-user.audit.jsonl");
     let backend = Arc::new(StubJiraBackend {
         issues: BTreeMap::from([
             (
@@ -2308,16 +2301,16 @@ async fn cli_invokes_jira_per_user_actions_against_stubbed_backend() {
         )])),
         ..StubJiraBackend::default()
     });
-    let runtime = agent_access_core::BrokerRuntime::with_providers(
-        jira_per_user_config(&audit_path),
-        vec![jira_service(
+    let broker = start_broker(
+        JiraAccess::AgentPerUser,
+        jira_service(
             jira_provider_config(2),
-            agent_access_core::ProviderLimits::default(),
+            agent_access_provider::ProviderLimits::default(),
             backend.clone(),
-        )],
+        ),
     )
-    .unwrap();
-    let (base_url, server) = start_broker(runtime).await;
+    .await;
+    let base_url = broker.public_url();
 
     let service_issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -2571,13 +2564,13 @@ async fn cli_invokes_jira_per_user_actions_against_stubbed_backend() {
         ],
     );
 
-    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"credentialMode\":\"per_user\""));
     assert!(!audit.contains("agent-token"));
     assert!(!audit.contains("jira-per-user-token"));
     assert!(!audit.contains("per-user secret body"));
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[test]
@@ -2847,14 +2840,14 @@ impl StubJiraBackend {
     fn record_credential(
         &self,
         operation: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) {
         self.credential_observations
             .lock()
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.token.clone(),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }
@@ -2865,7 +2858,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         project: &str,
         request: JiraIssueTypeListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraIssueTypePage>, JiraBackendError> {
         self.record_credential("issue_types", credential);
         let start_at = request.start_at;
@@ -2907,7 +2900,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_metadata(
         &self,
         issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<agent_access_jira::JiraIssueMetadata>, JiraBackendError> {
         self.record_credential("issue_metadata", credential);
         let issue = self
@@ -2929,7 +2922,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue(
         &self,
         issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError> {
         self.record_credential("issue", credential);
         Ok(JiraBackendResponse {
@@ -2946,7 +2939,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue(
         &self,
         request: JiraIssueCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraCreatedIssue>, JiraBackendError> {
         self.record_credential("create_issue", credential);
         self.created_issues.lock().unwrap().push(request);
@@ -2969,7 +2962,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("update_issue", credential);
         self.updated_issues
@@ -2987,7 +2980,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueParentSetRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_issue_parent", credential);
         self.parent_updates
@@ -3004,7 +2997,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_parent(
         &self,
         issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraIssueParentReadback>, JiraBackendError> {
         self.record_credential("issue_parent", credential);
         Ok(JiraBackendResponse {
@@ -3022,7 +3015,7 @@ impl JiraBackend for StubJiraBackend {
 
     async fn issue_link_types(
         &self,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraIssueLinkType>>, JiraBackendError> {
         self.record_credential("issue_link_types", credential);
         Ok(JiraBackendResponse {
@@ -3035,7 +3028,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue_link(
         &self,
         request: JiraIssueLinkCreateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("create_issue_link", credential);
         self.created_issue_links.lock().unwrap().push(request);
@@ -3049,7 +3042,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_links(
         &self,
         issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraIssueLinks>, JiraBackendError> {
         self.record_credential("issue_links", credential);
         Ok(JiraBackendResponse {
@@ -3068,7 +3061,7 @@ impl JiraBackend for StubJiraBackend {
     async fn search(
         &self,
         request: JiraSearchRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraSearchPage>, JiraBackendError> {
         self.record_credential("search", credential);
         *self.last_search.lock().unwrap() = Some(request);
@@ -3083,7 +3076,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraCommentListRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.record_credential("comments", credential);
         *self.last_comment_list.lock().unwrap() = Some(request.clone());
@@ -3135,7 +3128,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         request: JiraCommentAddRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("add_comment", credential);
         self.added_comments.lock().unwrap().push(request.clone());
@@ -3155,7 +3148,7 @@ impl JiraBackend for StubJiraBackend {
         _issue_key: &str,
         comment_id: &str,
         request: JiraCommentUpdateRequest,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("update_comment", credential);
         self.updated_comments
@@ -3176,7 +3169,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         comment_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment", credential);
         self.deleted_comments
@@ -3194,7 +3187,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         attachment: JiraAttachmentUpload,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, JiraBackendError> {
         self.record_credential("add_attachment", credential);
         let mut attachment = attachment;
@@ -3219,7 +3212,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_metadata(
         &self,
         _issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraAttachment>>, JiraBackendError> {
         self.record_credential("issue_attachment_metadata", credential);
         Ok(JiraBackendResponse {
@@ -3232,7 +3225,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_list(
         &self,
         issue_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraIssueAttachmentList>, JiraBackendError> {
         self.record_credential("issue_attachment_list", credential);
         let issue = self
@@ -3257,7 +3250,7 @@ impl JiraBackend for StubJiraBackend {
     async fn attachment_content(
         &self,
         attachment_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraAttachmentContent>, JiraBackendError> {
         self.record_credential("attachment_content", credential);
         Ok(JiraBackendResponse {
@@ -3277,7 +3270,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("comment", credential);
         let comment = self
@@ -3306,7 +3299,7 @@ impl JiraBackend for StubJiraBackend {
     async fn comment_property_keys(
         &self,
         _comment_id: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPropertyKeys>, JiraBackendError> {
         self.record_credential("comment_property_keys", credential);
         Ok(JiraBackendResponse {
@@ -3322,7 +3315,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
         self.record_credential("comment_property", credential);
         Ok(JiraBackendResponse {
@@ -3343,7 +3336,7 @@ impl JiraBackend for StubJiraBackend {
         _comment_id: &str,
         property_key: &str,
         value: serde_json::Value,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_comment_property", credential);
         self.set_properties
@@ -3361,7 +3354,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &agent_access_core::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment_property", credential);
         self.deleted_properties
@@ -3376,230 +3369,187 @@ impl JiraBackend for StubJiraBackend {
     }
 }
 
+/// Starts the broker assembly on `access`'s configuration, serving `jira` in
+/// place of the Jira provider its configuration would build.
 async fn start_broker(
-    runtime: agent_access_core::BrokerRuntime,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-    (format!("http://{addr}"), server)
-}
-
-fn jira_config(audit_path: &std::path::Path) -> BrokerConfig {
-    let username_path = temp_path("jira-username.txt");
-    let token_path = temp_path("jira-token.txt");
-    let lookup_username_path = temp_path("jira-lookup-username.txt");
-    let lookup_token_path = temp_path("jira-lookup-token.txt");
-    std::fs::write(&username_path, "service@example.com").unwrap();
-    std::fs::write(&token_path, "jira-token").unwrap();
-    std::fs::write(&lookup_username_path, "lookup@example.com").unwrap();
-    std::fs::write(&lookup_token_path, "jira-lookup-token").unwrap();
-    BrokerConfig {
-        imports: Default::default(),
-        oauth: Default::default(),
-        deployment: DeploymentConfig::default(),
-        network: agent_access_core::NetworkConfig::default(),
-        execution_context: None,
-        identity: agent_access_core::IdentityConfig {
-            trusted_callers: Default::default(),
-            mode: "anonymous".to_string(),
-            authority: "toml".to_string(),
-            sources: vec![],
-            groups: vec![],
-        },
-        credentials: CredentialsConfig {
-            imported_modes: Default::default(),
-            service: BTreeMap::from([(
-                "jira".to_string(),
-                CredentialConfig {
-                    kind: "basic_api_token".to_string(),
-                    username_ref: Some(format!("file:{}", username_path.display())),
-                    token_ref: Some(format!("file:{}", token_path.display())),
-                    provider: None,
-                    path: None,
-                    read_only: None,
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-            per_user: BTreeMap::new(),
-            lookup: BTreeMap::from([(
-                "jira".to_string(),
-                CredentialConfig {
-                    kind: "basic_api_token".to_string(),
-                    username_ref: Some(format!("file:{}", lookup_username_path.display())),
-                    token_ref: Some(format!("file:{}", lookup_token_path.display())),
-                    provider: None,
-                    path: None,
-                    read_only: Some(true),
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-        },
-        managed_store: None,
-        credential_encryption: None,
-        management: agent_access_core::ManagementConfig::default(),
-        broker_tokens: None,
-        browser_auth: agent_access_core::BrowserAuthConfig::default(),
-        portal: agent_access_core::PortalConfig::default(),
-        mcp: Default::default(),
-        policy: PolicyConfig {
-            resources: resource_catalog(&[
-                (
-                    "project-proj",
-                    JIRA_PROJECT_RESOURCE.id.clone(),
-                    ResourceSelector::Exact {
-                        value: "PROJ".to_string(),
-                    },
-                ),
-                (
-                    "all-projects",
-                    JIRA_PROJECT_RESOURCE.id.clone(),
-                    ResourceSelector::All,
-                ),
-            ]),
-            resource_groups: vec![],
-            authority: "toml".to_string(),
-            default_decision: "deny".to_string(),
-            grants: vec![PolicyGrantConfig {
-                execution_contexts: None,
-                subjects: vec!["group:anonymous".to_string()],
-                service: "jira".to_string(),
-                actions: jira_actions(),
-                resources: resource_selection(&["project-proj"]),
-                credential_mode: "service".to_string(),
-                priority: None,
-            }],
-        },
-        attribution: Default::default(),
-        providers: agent_access_core::ProvidersConfig::new(std::sync::Arc::new(
-            agent_access_broker::backend_registry(),
-        ))
-        .with(jira_provider_config(2)),
-
-        gateways: BTreeMap::new(),
-        limits: agent_access_core::LimitsConfig {
-            upload_spool_dir: temp_path("upload-spool").display().to_string(),
-            ..agent_access_core::LimitsConfig::default()
-        },
-        audit: Some(agent_access_core::AuditConfig::new(
-            agent_access_core::AuditStoreType::Jsonl,
-            audit_path.display().to_string(),
-        )),
-    }
-}
-
-fn jira_required_service_config(audit_path: &std::path::Path) -> BrokerConfig {
-    let agent_token_path = temp_path("jira-agent-token.txt");
-    std::fs::write(&agent_token_path, "agent-token").unwrap();
-
-    let mut config = jira_config(audit_path);
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".to_string(),
-        authority: "toml".to_string(),
-        sources: vec![IdentitySourceConfig {
-            name: "local".to_string(),
-            kind: "static_principals".to_string(),
-            header: "X-Agent-Access-Identity-Token".to_string(),
-            scheme: "raw".to_string(),
-            principals: vec![StaticPrincipalConfig {
-                principal: "agent-one".to_string(),
-                token_refs: vec![format!("file:{}", agent_token_path.display())],
-            }],
-        }],
-        groups: vec![IdentityGroupConfig {
-            id: "agents".to_string(),
-            status: "active".to_string(),
-            members: vec!["agent-one".to_string()],
-        }],
-    };
-    config.policy.grants[0].subjects = vec!["group:agents".to_string()];
-    config
-}
-
-fn jira_per_user_config(audit_path: &std::path::Path) -> BrokerConfig {
-    let agent_token_path = temp_path("agent-token.txt");
-    let per_user_username_path = temp_path("jira-per-user-username.txt");
-    let per_user_token_path = temp_path("jira-per-user-token.txt");
-    let per_user_store_path = temp_path("jira-per-user-store.json");
-
-    std::fs::write(&agent_token_path, "agent-token").unwrap();
-    std::fs::write(&per_user_username_path, "agent-one@example.com").unwrap();
-    std::fs::write(&per_user_token_path, "jira-per-user-token").unwrap();
-    std::fs::write(
-        &per_user_store_path,
-        format!(
-            r#"{{"credentials":[{{"principal":"agent-one","type":"basic_api_token","username_ref":"file:{}","token_ref":"file:{}"}}]}}"#,
-            per_user_username_path.display(),
-            per_user_token_path.display()
-        ),
+    access: JiraAccess,
+    jira: agent_access_provider::ServiceProvider,
+) -> RunningBroker {
+    let application = IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
     )
     .unwrap();
+    let document = jira_document(application.directory(), access);
+    application
+        .config_document(document)
+        .provider_fixture("jira", ProviderFixture::instance(jira))
+        .start()
+        .await
+        .unwrap()
+}
 
-    let mut config = jira_config(audit_path);
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".to_string(),
-        authority: "toml".to_string(),
-        sources: vec![IdentitySourceConfig {
-            name: "local".to_string(),
-            kind: "static_principals".to_string(),
-            header: "X-Agent-Access-Identity-Token".to_string(),
-            scheme: "raw".to_string(),
-            principals: vec![StaticPrincipalConfig {
-                principal: "agent-one".to_string(),
-                token_refs: vec![format!("file:{}", agent_token_path.display())],
-            }],
-        }],
-        groups: vec![IdentityGroupConfig {
-            id: "agents".to_string(),
-            status: "active".to_string(),
-            members: vec!["agent-one".to_string()],
-        }],
-    };
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "secret_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: Some("local_file".to_string()),
-            path: Some(per_user_store_path.display().to_string()),
-            read_only: None,
-            credential_name: None,
-            profile: None,
-        },
+async fn stop(broker: RunningBroker) {
+    broker.shutdown();
+    broker.join().await.unwrap();
+}
+
+/// Who may call the broker, and with which Jira grants.
+#[derive(Clone, Copy, Debug)]
+enum JiraAccess {
+    /// Anonymous callers use the service credential on project PROJ.
+    AnonymousService,
+    /// The static principal `agent-one`, a member of group `agents`, uses the
+    /// service credential on PROJ.
+    AgentService,
+    /// As [`Self::AgentService`], and `agent-one` also uses its own
+    /// credential on every project.
+    AgentPerUser,
+}
+
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl std::fmt::Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
+}
+
+/// A `file:` secret reference to a new private file in `directory`.
+fn secret_ref(directory: &FixtureDir, name: &str, contents: &str) -> String {
+    let path = directory.secret_file(name, contents).unwrap();
+    toml_string(format_args!("file:{}", path.display()))
+}
+
+/// The Jira provider (`jira_provider_config(2)`), its service and read-only
+/// lookup credentials, the PROJ and all-projects resources, JSONL audit in
+/// `audit.jsonl`, and `access`'s identity and grants.
+fn jira_document(directory: &FixtureDir, access: JiraAccess) -> String {
+    let actions = serde_json::to_string(&jira_actions()).unwrap();
+    let mut document = format!(
+        r#"
+[credentials.service.jira]
+type = "basic_api_token"
+username_ref = {service_username}
+token_ref = {service_token}
+
+[credentials.lookup.jira]
+type = "basic_api_token"
+username_ref = {lookup_username}
+token_ref = {lookup_token}
+read_only = true
+
+[providers.jira]
+tenant_host = "example.atlassian.net"
+allowed_upstream_hosts = ["https://example.atlassian.net/rest/api/3/**"]
+attachments = {{ media_types = ["text/plain"] }}
+content = {{ comment_formats = ["adf"] }}
+search = {{ max_results = 2 }}
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "project-proj"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "PROJ" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.resources]]
+id = "all-projects"
+resource_type = "{resource_type}"
+selector = {{ kind = "all" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.grants]]
+subjects = [{service_subject}]
+service = "jira"
+actions = {actions}
+resources = {{ resource_ids = ["project-proj"] }}
+credential_mode = "service"
+
+[limits]
+upload_spool_dir = {spool}
+
+[audit]
+type = "jsonl"
+path = {audit}
+"#,
+        service_username = secret_ref(directory, "jira-username.txt", "service@example.com"),
+        service_token = secret_ref(directory, "jira-token.txt", "jira-token"),
+        lookup_username = secret_ref(directory, "jira-lookup-username.txt", "lookup@example.com"),
+        lookup_token = secret_ref(directory, "jira-lookup-token.txt", "jira-lookup-token"),
+        resource_type = JIRA_PROJECT_RESOURCE.id().as_str(),
+        service_subject = toml_string(match access {
+            JiraAccess::AnonymousService => "group:anonymous",
+            JiraAccess::AgentService | JiraAccess::AgentPerUser => "group:agents",
+        }),
+        spool = toml_string(directory.join("upload-spool").display()),
+        audit = toml_string(directory.join("audit.jsonl").display()),
     );
-    config.policy.grants = vec![
-        PolicyGrantConfig {
-            execution_contexts: None,
-            subjects: vec!["group:agents".to_string()],
-            service: "jira".to_string(),
-            actions: jira_actions(),
-            resources: resource_selection(&["project-proj"]),
-            credential_mode: "service".to_string(),
-            priority: None,
-        },
-        PolicyGrantConfig {
-            execution_contexts: None,
-            subjects: vec!["user:agent-one".to_string()],
-            service: "jira".to_string(),
-            actions: jira_actions(),
-            resources: resource_selection(&["all-projects"]),
-            credential_mode: "per_user".to_string(),
-            priority: None,
-        },
-    ];
-    config
+    document.push_str(&match access {
+        JiraAccess::AnonymousService => r#"
+[identity]
+mode = "anonymous"
+authority = "toml"
+"#
+        .to_string(),
+        JiraAccess::AgentService | JiraAccess::AgentPerUser => format!(
+            r#"
+[identity]
+mode = "required"
+authority = "toml"
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{agent_token}]
+
+[[identity.groups]]
+id = "agents"
+status = "active"
+members = ["agent-one"]
+"#,
+            agent_token = secret_ref(directory, "agent-token.txt", "agent-token"),
+        ),
+    });
+    if let JiraAccess::AgentPerUser = access {
+        let username = directory
+            .secret_file("jira-per-user-username.txt", "agent-one@example.com")
+            .unwrap();
+        let token = directory
+            .secret_file("jira-per-user-token.txt", "jira-per-user-token")
+            .unwrap();
+        let credentials = serde_json::json!({"credentials": [{
+            "principal": "agent-one",
+            "type": "basic_api_token",
+            "username_ref": format!("file:{}", username.display()),
+            "token_ref": format!("file:{}", token.display()),
+        }]});
+        let store = directory
+            .secret_file("jira-per-user-store.json", credentials.to_string())
+            .unwrap();
+        document.push_str(&format!(
+            r#"
+[credentials.per_user.jira]
+type = "secret_store"
+provider = "local_file"
+path = {store}
+
+[[policy.grants]]
+subjects = ["user:agent-one"]
+service = "jira"
+actions = {actions}
+resources = {{ resource_ids = ["all-projects"] }}
+credential_mode = "per_user"
+"#,
+            store = toml_string(store.display()),
+        ));
+    }
+    document
 }
 
 fn jira_actions() -> Vec<String> {
@@ -3703,9 +3653,9 @@ fn jira_provider_config(max_results: u32) -> JiraProviderConfig {
         cloud_id: None,
         egress_proxy: None,
         allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-        attachments: agent_access_core::AttachmentLimitsConfig {
+        attachments: agent_access_provider::AttachmentLimitsConfig {
             media_types: vec!["text/plain".to_string()],
-            ..agent_access_core::AttachmentLimitsConfig::default()
+            ..agent_access_provider::AttachmentLimitsConfig::default()
         },
         content: agent_access_jira::JiraContentConfig {
             comment_formats: vec!["adf".to_string()],

@@ -2,6 +2,8 @@
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
+#[cfg(test)]
+mod authentication_tests;
 mod mcp_names;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
@@ -163,17 +165,17 @@ pub(super) fn descriptor(
             action
         })
         .collect();
-    ServiceDescriptor {
-        service: record.definition.service.clone(),
-        display_name: record.definition.display_name.clone(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: if record
+    ServiceDescriptor::new(
+        record.definition.service.clone(),
+        record.definition.display_name.clone(),
+    )
+    .with_actions(actions)
+    .with_credentials(
+        if record
             .definition
             .execution_bindings
             .iter()
-            .any(|b| b.mechanism == crate::ImportedAuthMechanism::Oauth)
+            .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
         {
             CredentialDescriptor::default()
                 .profile("token", "bearer_token")
@@ -183,8 +185,7 @@ pub(super) fn descriptor(
         } else {
             CredentialDescriptor::default().profile("token", "bearer_token")
         },
-        presentation_body_limit: None,
-    }
+    )
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {
@@ -220,14 +221,27 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
             })
 }
 
+/// Whether `binding` may authenticate `definition`. An OAuth binding needs
+/// the OAuth companion that the selected adapter for its import kind declares:
+/// the binding, the operator registration and that companion name the same
+/// dialect, and the registration's approved resource, the profile's target
+/// and its audience all equal the import endpoint exactly. Selecting a
+/// dialect without such an import role never makes it eligible.
 fn oauth_binding_allowed(
     config: &BrokerConfig,
     definition: &ImportedServiceDefinition,
-    binding: &crate::ImportedCredentialBinding,
+    binding: &ImportedCredentialBinding,
 ) -> bool {
-    if binding.mechanism != crate::ImportedAuthMechanism::Oauth {
+    if binding.mechanism != ImportedAuthMechanism::Oauth {
         return true;
     }
+    let Some(companion) = config
+        .providers
+        .registry()
+        .import_authentication(&definition.adapter_kind)
+    else {
+        return false;
+    };
     let Some(registration) = binding
         .registration_id
         .as_ref()
@@ -242,15 +256,59 @@ fn oauth_binding_allowed(
     else {
         return false;
     };
-    binding.adapter_id.as_deref() == Some(registration.adapter.as_str())
-        && config
-            .providers
-            .registry()
-            .oauth_dialect(registration.adapter.as_str())
-            .is_some()
+    binding.adapter_id.as_deref() == Some(companion.dialect.id())
+        && registration.adapter.as_str() == companion.dialect.id()
         && profile.target == definition.endpoint
         && profile.audience == definition.endpoint
-        && registration.adapter_settings.get("resource") == Some(&definition.endpoint)
+        && (companion.approved_resource)(registration).as_deref()
+            == Some(definition.endpoint.as_str())
+}
+
+/// The safe import-authentication projection: one group per selected import
+/// kind whose adapter declares an OAuth companion, with that companion's
+/// dialect and every operator registration it approves (possibly none). Each
+/// registration carries its issuer, approved resource and permission
+/// profiles, never secrets, secret references or other adapter settings.
+fn import_authentication(config: &BrokerConfig) -> serde_json::Value {
+    let groups = config
+        .providers
+        .registry()
+        .import_authentications()
+        .map(|(kind, companion)| {
+            let registrations = config
+                .oauth
+                .registrations
+                .iter()
+                .filter(|(_, registration)| registration.adapter.as_str() == companion.dialect.id())
+                .filter_map(|(id, registration)| {
+                    let resource = (companion.approved_resource)(registration)?;
+                    let profiles = registration
+                        .permission_profiles
+                        .iter()
+                        .map(|(id, profile)| {
+                            json!({
+                                "id": id,
+                                "scopeMode": profile.scope_mode,
+                                "scopes": profile.requested_scopes(),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    Some(json!({
+                        "id": id,
+                        "issuer": registration.base_url,
+                        "resource": resource,
+                        "permissionProfiles": profiles,
+                    }))
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "importKind": kind,
+                "dialectId": companion.dialect.id(),
+                "registrations": registrations,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(groups)
 }
 
 pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &ImportedCatalog) {
@@ -279,7 +337,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
                 .expect("selected mode");
-            let oauth = binding.mechanism == crate::ImportedAuthMechanism::Oauth;
+            let oauth = binding.mechanism == ImportedAuthMechanism::Oauth;
             config.credentials.per_user.insert(
                 service.clone(),
                 CredentialConfig {
@@ -523,18 +581,10 @@ impl BrokerRuntime {
         }
         for record in &catalog.services {
             let name = &record.definition.service;
-            if services.contains_key(name)
-                || config.gateways.contains_key(name)
-                || config.providers.registry().get(name).is_some()
-                || matches!(name.as_str(), "oauth_stub" | "broker")
-                || config.credentials.service.contains_key(name)
-                || config.credentials.lookup.contains_key(name)
-                || config.credentials.per_user.contains_key(name)
-            {
-                return Err(ManagedStoreError::InputInvalid(
-                    "imported service identity collides with a configured service or credential"
-                        .into(),
-                ));
+            if let Some(owner) = imported_service_collision(&config, &services, name) {
+                return Err(ManagedStoreError::InputInvalid(format!(
+                    "imported service {name} collides with {owner}"
+                )));
             }
             let old = self.imported_catalog.service(name);
             let newly_enabled = record.status == ImportedServiceStatus::Enabled
@@ -720,14 +770,8 @@ pub(super) fn build_providers(
     catalog: &ImportedCatalog,
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
-    egress_environment: &Arc<EgressProxyEnvironment>,
-    outbound_tls: &crate::PreparedOutboundTls,
+    network: &HostNetwork,
 ) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
-    let egress = EgressProxyRuntimeConfig::new(
-        egress_environment.clone(),
-        config.network.egress_proxy.clone(),
-    );
-    let limits = ProviderLimits::from(&config.limits);
     let mut providers = BTreeMap::new();
     for record in &catalog.services {
         let definition = &record.definition;
@@ -783,13 +827,15 @@ pub(super) fn build_providers(
             .filter(|action| action.status == ImportedActionStatus::Enabled)
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
-        let host = BuildContext {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls,
-            attribution: ProviderAttributionConfig::default(),
-            stable_signing_key: None,
-        };
+        let clients = network.client_factory(ClientCaller::ImportAdapter {
+            kind: adapter.kind(),
+        });
+        let host = agent_access_provider::host::build_context(
+            network.limits(),
+            &clients,
+            ProviderAttributionConfig::default(),
+            None,
+        );
         if actions.iter().any(|action| {
             adapter.validate_action(action).is_err() || adapter.scoped_mcp_name(action).is_err()
         }) {
@@ -803,14 +849,10 @@ pub(super) fn build_providers(
 }
 
 impl BrokerRuntime {
-    /// Only operator-approved, linked OAuth profiles are offered by import administration.
-    pub fn imported_oauth_registrations(&self) -> serde_json::Value {
-        serde_json::Value::Array(self.config.oauth.registrations.iter().filter_map(|(id, r)| {
-            if r.adapter.as_str() != "mcp_oauth" || self.config.providers.registry().oauth_dialect(r.adapter.as_str()).is_none() { return None; }
-            Some(serde_json::json!({"id":id,"adapterId":r.adapter.as_str(),"issuer":r.base_url,
-                "resource":r.adapter_settings.get("resource"),"permissionProfiles":r.permission_profiles.iter()
-                    .map(|(id,p)| serde_json::json!({"id":id,"scopeMode":p.scope_mode,"scopes":p.requested_scopes()})).collect::<Vec<_>>()}))
-        }).collect())
+    /// The safe import-authentication projection offered by import
+    /// administration; see [`import_authentication`].
+    pub fn import_authentication(&self) -> serde_json::Value {
+        import_authentication(&self.config)
     }
 
     /// Validate new or changed bindings. Retained unavailable bindings must not
@@ -833,7 +875,7 @@ impl BrokerRuntime {
     pub fn import_binding_available(
         &self,
         definition: &ImportedServiceDefinition,
-        binding: &crate::ImportedCredentialBinding,
+        binding: &ImportedCredentialBinding,
     ) -> bool {
         binding.is_supported() && oauth_binding_allowed(&self.config, definition, binding)
     }
@@ -903,10 +945,9 @@ impl BrokerRuntime {
             ),
             Some(None) => PreparedTransport::Deleted,
             Some(Some(credential)) => {
-                if credential.kind != "bearer_token" || credential.username.is_some() {
+                let CredentialView::Bearer { token } = credential.view() else {
                     return Err(preparation_mismatch());
-                }
-                let token = credential.token.as_ref().ok_or_else(preparation_mismatch)?;
+                };
                 PreparedTransport::ReplacementPending(Sha256::digest(token.as_bytes()).into())
             }
         };
@@ -980,18 +1021,15 @@ impl BrokerRuntime {
                 .scoped_mcp_name(action)
                 .map_err(ManagedStoreError::InputInvalid)?;
         }
-        let limits = ProviderLimits::from(&self.config.limits);
-        let egress = EgressProxyRuntimeConfig::new(
-            self.egress_proxy_environment.clone(),
-            self.config.network.egress_proxy.clone(),
+        let clients = self.network.client_factory(ClientCaller::ImportAdapter {
+            kind: adapter.kind(),
+        });
+        let host = agent_access_provider::host::build_context(
+            self.network.limits(),
+            &clients,
+            ProviderAttributionConfig::default(),
+            None,
         );
-        let host = BuildContext {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls: &self.outbound_tls,
-            attribution: ProviderAttributionConfig::default(),
-            stable_signing_key: None,
-        };
         let provider = adapter
             .build(definition, &actions, transport, &host)
             .map_err(|_| {

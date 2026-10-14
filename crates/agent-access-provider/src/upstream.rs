@@ -1,15 +1,17 @@
 //! Outbound HTTP to an upstream service under the broker's common rules:
-//! outbound TLS trust, the selected egress proxy, no automatic redirects,
-//! allowlisted destinations, correlation headers and credentials only toward
-//! the service's own origin, and one trace event per upstream request.
+//! clients the host constructs (outbound TLS trust, the selected egress route,
+//! the requested time profile and no automatic redirects), allowlisted
+//! destinations, correlation headers and credentials only toward the
+//! service's own origin, and one trace event per upstream request.
 //!
 //! Backends own their protocol (URLs, authentication scheme, status and body
 //! handling); they build clients and send requests through this module.
+use crate::correlation::apply_current_correlation_headers;
+use crate::host::{ClientTransportSpec, UpstreamClientFactory};
+use crate::trace::{checked_trace_reason, emit_upstream_request_completed_for};
 use crate::{
-    ConfigError, EgressProxyConfig, EgressProxyRuntimeConfig, EgressProxySelection, HostError,
-    PreparedOutboundTls, ProviderLimits, ReasonCode, UpstreamTrace,
-    apply_current_correlation_headers, apply_reqwest_proxy, current_provider_action,
-    emit_upstream_request_completed_for, same_origin, url_allowed_by_patterns,
+    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode, UpstreamTrace,
+    current_provider_action, same_origin, url_allowed_by_patterns,
 };
 use futures_util::TryStreamExt;
 use reqwest::{Method, RequestBuilder, Response};
@@ -20,8 +22,10 @@ use thiserror::Error;
 use tokio::sync::watch;
 use url::Url;
 
-/// How a client bounds time and retries. Every profile applies the broker's outbound TLS
-/// trust and egress proxy and never follows redirects on its own.
+/// How a client bounds time and retries. Every profile uses the broker's
+/// outbound TLS trust and the host's egress route, and never follows redirects
+/// on its own.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientProfile {
     /// Each request must complete within `ProviderLimits::request_timeout_ms`.
@@ -41,34 +45,64 @@ pub enum ClientProfile {
     Bounded { total: Duration, connect: Duration },
 }
 
-/// What a backend declares about one upstream client.
+/// What a backend declares about one upstream client, which
+/// [`UpstreamClient::build`] reads.
+#[non_exhaustive]
 pub struct UpstreamClientSpec<'a> {
-    /// Configuration path naming the client in errors and proxy resolution,
-    /// such as `providers.jira`.
-    pub label: &'a str,
-    /// The `provider` recorded on trace events.
-    pub provider: &'static str,
-    /// The service's base URL. Its origin is the only one that receives
-    /// correlation headers and credentials.
-    pub base: &'a Url,
-    pub egress_proxy: Option<&'a EgressProxyConfig>,
-    /// URL patterns every request, including each redirect hop, must match.
-    pub allowed_upstream_hosts: &'a [String],
-    pub profile: ClientProfile,
-    /// Reason codes a trace records for these statuses when the caller
-    /// classifies the response with none, such as 409 for a version conflict.
-    pub status_reasons: &'static [(u16, ReasonCode)],
+    label: &'a str,
+    provider: &'static str,
+    base: &'a Url,
+    egress: EgressDeclaration<'a>,
+    allowed_upstream_hosts: &'a [String],
+    profile: ClientProfile,
+    status_reasons: &'static [(u16, ReasonCode)],
 }
 
-/// The host's network settings a client is built from.
-#[derive(Clone, Copy)]
-pub struct UpstreamNetwork<'a> {
-    pub limits: &'a ProviderLimits,
-    pub egress: &'a EgressProxyRuntimeConfig,
-    pub outbound_tls: &'a PreparedOutboundTls,
+impl<'a> UpstreamClientSpec<'a> {
+    /// A client for the service at `base`:
+    ///
+    /// - `label` is the configuration path naming the client in
+    ///   diagnostics, such as `providers.jira.egress_proxy`;
+    /// - `provider` is recorded on trace events;
+    /// - `base`'s origin is the only one that receives correlation headers
+    ///   and credentials;
+    /// - `egress` is the route the client needs, which the host selects and
+    ///   may deny;
+    /// - every request, including each redirect hop, must match one of
+    ///   `allowed_upstream_hosts`;
+    /// - `profile` bounds time and retries.
+    ///
+    /// Its traces record no reason for an unclassified status until
+    /// [`Self::with_status_reasons`] declares some.
+    pub fn new(
+        label: &'a str,
+        provider: &'static str,
+        base: &'a Url,
+        egress: EgressDeclaration<'a>,
+        allowed_upstream_hosts: &'a [String],
+        profile: ClientProfile,
+    ) -> Self {
+        Self {
+            label,
+            provider,
+            base,
+            egress,
+            allowed_upstream_hosts,
+            profile,
+            status_reasons: &[],
+        }
+    }
+
+    /// Reason codes a trace records for these statuses when the caller
+    /// classifies the response with none, such as 409 for a version conflict.
+    pub fn with_status_reasons(mut self, status_reasons: &'static [(u16, ReasonCode)]) -> Self {
+        self.status_reasons = status_reasons;
+        self
+    }
 }
 
 /// Why an upstream request produced no usable response.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UpstreamError {
     #[error("upstream URL is not allowlisted")]
@@ -100,6 +134,7 @@ impl UpstreamError {
 }
 
 /// Names one upstream request in its trace event.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct UpstreamCall<'a> {
     pub operation: &'a str,
@@ -108,11 +143,19 @@ pub struct UpstreamCall<'a> {
 }
 
 impl<'a> UpstreamCall<'a> {
+    /// The first attempt of `operation`.
     pub fn new(operation: &'a str) -> Self {
         Self {
             operation,
             attempt: 1,
         }
+    }
+
+    /// A later attempt: 1 is the first request, and redirect hops and
+    /// retries count up.
+    pub fn with_attempt(mut self, attempt: u32) -> Self {
+        self.attempt = attempt;
+        self
     }
 }
 
@@ -120,28 +163,77 @@ impl<'a> UpstreamCall<'a> {
 pub type UploadProgress = watch::Receiver<tokio::time::Instant>;
 
 /// How [`UpstreamClient::get_following_redirects`] walks a redirect chain.
+#[non_exhaustive]
 pub struct RedirectRules<'a> {
-    /// Redirects followed after the first request; one more is an error.
-    pub max_redirects: u32,
-    /// Deadline for each hop's response headers.
-    pub deadline: Duration,
-    /// Whether hops to other origins carry the invocation's correlation
+    max_redirects: u32,
+    deadline: Duration,
+    correlate_other_origins: bool,
+    vet: &'a (dyn Fn(&Url) -> bool + Sync),
+    decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+}
+
+impl<'a> RedirectRules<'a> {
+    /// Follows at most `max_redirects` redirects after the first request
+    /// (one more is an error), waits at most `deadline` for each hop's
+    /// response headers, and applies `authorize`'s credentials only to hops
+    /// on the service's own origin.
+    ///
+    /// Hops to other origins carry no correlation headers, every hop is
+    /// sent as built, and the chain needs only the allowlist and the absence
+    /// of embedded credentials, until the builders below change that.
+    pub fn new(
+        max_redirects: u32,
+        deadline: Duration,
+        authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    ) -> Self {
+        Self {
+            max_redirects,
+            deadline,
+            correlate_other_origins: false,
+            vet: &accept_every_hop,
+            decorate: &undecorated_hop,
+            authorize,
+        }
+    }
+
+    /// Hops to other origins also carry the invocation's correlation
     /// headers. Hops to the service's own origin always do.
-    pub correlate_other_origins: bool,
-    /// Additional backend checks each URL in the chain must pass, on top of
-    /// the allowlist and the absence of embedded credentials.
-    pub vet: &'a (dyn Fn(&Url) -> bool + Sync),
+    pub fn correlating_other_origins(mut self) -> Self {
+        self.correlate_other_origins = true;
+        self
+    }
+
+    /// An additional backend check each URL in the chain must pass, on top
+    /// of the allowlist and the absence of embedded credentials.
+    pub fn with_vet(mut self, vet: &'a (dyn Fn(&Url) -> bool + Sync)) -> Self {
+        self.vet = vet;
+        self
+    }
+
     /// Headers every hop carries.
-    pub decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
-    /// Credentials, applied only to hops on the service's own origin.
-    pub authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    pub fn with_decorate(
+        mut self,
+        decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    ) -> Self {
+        self.decorate = decorate;
+        self
+    }
+}
+
+fn accept_every_hop(_: &Url) -> bool {
+    true
+}
+
+fn undecorated_hop(request: RequestBuilder) -> RequestBuilder {
+    request
 }
 
 /// An HTTP client for one upstream service.
 #[derive(Clone)]
 pub struct UpstreamClient {
     client: reqwest::Client,
-    egress_proxy: EgressProxySelection,
+    route: EgressRoute,
     provider: &'static str,
     base: Url,
     allowed_upstream_hosts: Arc<[String]>,
@@ -154,44 +246,31 @@ impl std::fmt::Debug for UpstreamClient {
             .debug_struct("UpstreamClient")
             .field("provider", &self.provider)
             .field("base", &self.base.as_str())
-            .field("egress_proxy", &self.egress_proxy)
+            .field("route", &self.route)
             .finish_non_exhaustive()
     }
 }
 
 impl UpstreamClient {
+    /// Builds a client through the host's factory, which applies the
+    /// profile, TLS trust and route.
     pub fn build(
         spec: UpstreamClientSpec<'_>,
-        network: UpstreamNetwork<'_>,
-    ) -> Result<Self, HostError> {
-        let egress_proxy = network
-            .egress
-            .resolve(spec.label, spec.base, spec.egress_proxy)?;
-        let timeout = Duration::from_millis(network.limits.request_timeout_ms);
-        let builder = network
-            .outbound_tls
-            .apply(reqwest::Client::builder())
-            .redirect(reqwest::redirect::Policy::none());
-        let builder = match spec.profile {
-            ClientProfile::Request => builder.timeout(timeout),
-            ClientProfile::SingleAttempt => builder.timeout(timeout).retry(reqwest::retry::never()),
-            ClientProfile::Stream => builder,
-            ClientProfile::Upload => builder.connect_timeout(timeout),
-            ClientProfile::Bounded { total, connect } => builder
-                .timeout(total)
-                .connect_timeout(connect)
-                .retry(reqwest::retry::never()),
-        };
-        let client = apply_reqwest_proxy(builder, &egress_proxy)?
-            .build()
-            .map_err(|error| {
-                HostError::Config(ConfigError::Invalid {
-                    errors: vec![format!("{} HTTP client: {error}", spec.label)],
-                })
-            })?;
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
+        let (client, route) = clients
+            .build_client(&ClientTransportSpec::new(
+                spec.label,
+                spec.provider,
+                spec.base,
+                spec.egress,
+                spec.profile,
+            ))
+            .map_err(|error| ProviderBuildError::client(spec.label, error))?
+            .into_parts();
         Ok(Self {
             client,
-            egress_proxy,
+            route,
             provider: spec.provider,
             base: spec.base.clone(),
             allowed_upstream_hosts: spec.allowed_upstream_hosts.into(),
@@ -203,9 +282,9 @@ impl UpstreamClient {
         &self.base
     }
 
-    /// The egress proxy route, for audit.
-    pub fn egress_proxy(&self) -> &EgressProxySelection {
-        &self.egress_proxy
+    /// The route the host selected, for audit.
+    pub fn egress_route(&self) -> &EgressRoute {
+        &self.route
     }
 
     /// Starts a request. Requests to the service's own origin carry the
@@ -318,10 +397,7 @@ impl UpstreamClient {
                 .send_with_deadline(
                     request,
                     rules.deadline,
-                    UpstreamCall {
-                        operation,
-                        attempt: hop + 1,
-                    },
+                    UpstreamCall::new(operation).with_attempt(hop + 1),
                 )
                 .await?;
             if !response.status().is_redirection() {
@@ -332,7 +408,10 @@ impl UpstreamClient {
                 .flatten()
                 .filter(|next| self.redirect_target_allowed(next, &rules));
             let Some(next) = next else {
-                complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamProtocolFailed));
+                complete_upstream_trace(
+                    &mut response,
+                    Some(ReasonCode::UpstreamProtocolFailed.into()),
+                );
                 return Err(UpstreamError::Redirect);
             };
             complete_upstream_trace(&mut response, None);
@@ -396,15 +475,12 @@ impl UpstreamClient {
     }
 
     fn trace(&self, call: UpstreamCall<'_>, origin: String, method: &str) -> TraceEvent {
-        let egress_proxy_mode = self.egress_proxy.audit_value()["mode"]
-            .as_str()
-            .unwrap_or("direct")
-            .to_string();
         let (service, action) = current_provider_action().unwrap_or_default();
         TraceEvent {
             status_reasons: self.status_reasons,
             service,
             action,
+            hook: crate::correlation::current_hook_context(),
             span: tracing::Span::current(),
             provider: self.provider,
             operation: call.operation.to_string(),
@@ -412,7 +488,7 @@ impl UpstreamClient {
             method: method.to_string(),
             status: None,
             attempt: call.attempt,
-            egress_proxy_mode,
+            egress_proxy_mode: self.route.mode(),
             started: Instant::now(),
         }
     }
@@ -429,8 +505,8 @@ pub async fn file_upload_body(path: &Path) -> std::io::Result<(reqwest::Body, Up
 }
 
 /// Records the trace [`UpstreamClient`] attached to `response`, with the
-/// reason code the caller classified it with. Later calls do nothing.
-pub fn complete_upstream_trace(response: &mut Response, reason_code: Option<ReasonCode>) {
+/// reason the caller classified it with. Later calls do nothing.
+pub fn complete_upstream_trace(response: &mut Response, reason_code: Option<ProviderReason>) {
     if let Some(pending) = take_upstream_trace(response) {
         pending.complete(reason_code);
     }
@@ -451,13 +527,15 @@ fn redirect_location(response: &Response, base: &Url) -> Option<Url> {
     base.join(location).ok()
 }
 
-/// One request's trace. It keeps the invocation and span that sent the
-/// request, so a trace recorded after the invocation's scope ended, or while
-/// another invocation runs, is still attributed to its own.
+/// One request's trace. It keeps the invocation, provider hook and span that
+/// sent the request, so a trace recorded after the invocation's scope ended,
+/// or while another invocation runs, is still attributed to and checked
+/// against its own.
 struct TraceEvent {
     status_reasons: &'static [(u16, ReasonCode)],
     service: String,
     action: String,
+    hook: Option<crate::contract::HookContext>,
     span: tracing::Span,
     provider: &'static str,
     operation: String,
@@ -465,31 +543,42 @@ struct TraceEvent {
     method: String,
     status: Option<u16>,
     attempt: u32,
-    egress_proxy_mode: String,
+    egress_proxy_mode: &'static str,
     started: Instant,
 }
 
 impl TraceEvent {
-    fn emit(&self, reason_code: Option<ReasonCode>) {
-        let reason_code = reason_code.or_else(|| {
-            let status = self.status?;
-            self.status_reasons
-                .iter()
-                .find(|(code, _)| *code == status)
-                .map(|(_, reason)| *reason)
-        });
-        let trace = UpstreamTrace {
-            provider: self.provider,
-            upstream_operation: &self.operation,
-            upstream_origin: &self.origin,
-            method: &self.method,
-            status: self.status,
-            duration_ms: self.started.elapsed().as_millis() as u64,
-            attempt: self.attempt,
-            egress_proxy_mode: &self.egress_proxy_mode,
-            reason_code,
-            path_template: None,
-        };
+    /// Records the trace with the provider's classification, or the one its
+    /// client declared for the status; both are checked against the hook
+    /// that sent the request.
+    fn emit(&self, reason_code: Option<ProviderReason>) {
+        let reason_code = reason_code
+            .or_else(|| {
+                let status = self.status?;
+                self.status_reasons
+                    .iter()
+                    .find(|(code, _)| *code == status)
+                    .map(|(_, reason)| ProviderReason::from(*reason))
+            })
+            .map(|reason| {
+                checked_trace_reason(reason, &self.service, &self.action, self.hook.as_ref())
+            });
+        self.emit_classified(reason_code);
+    }
+
+    /// Records the trace with a classification this crate made itself, such
+    /// as a transport failure's.
+    fn emit_classified(&self, reason_code: Option<ProviderReason>) {
+        let trace = UpstreamTrace::new(
+            self.provider,
+            UpstreamCall::new(&self.operation).with_attempt(self.attempt),
+            &self.origin,
+            &self.method,
+            self.egress_proxy_mode,
+            self.started.elapsed().as_millis() as u64,
+        )
+        .with_status(self.status)
+        .with_reason_code(reason_code);
         self.span.in_scope(|| {
             emit_upstream_request_completed_for(trace, &self.service, &self.action);
         });
@@ -526,7 +615,7 @@ impl TraceEvent {
     }
 
     fn fail(self, error: UpstreamError) -> UpstreamError {
-        self.emit(Some(error.reason_code()));
+        self.emit_classified(Some(error.reason_code().into()));
         error
     }
 }
@@ -544,7 +633,7 @@ impl PendingUpstreamTrace {
         &self.0.operation
     }
 
-    pub fn complete(self, reason_code: Option<ReasonCode>) {
+    pub fn complete(self, reason_code: Option<ProviderReason>) {
         if let Some(event) = self.0.event.lock().ok().and_then(|mut event| event.take()) {
             event.emit(reason_code);
         }
@@ -576,26 +665,23 @@ impl Drop for PendingTraceState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CorrelationContext, REQUEST_ID_HEADER, with_correlation_context};
+    use crate::host::with_correlation_context;
+    use crate::{CorrelationContext, REQUEST_ID_HEADER};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client(base: &str, allowed: &[String], profile: ClientProfile) -> UpstreamClient {
         UpstreamClient::build(
-            UpstreamClientSpec {
-                label: "providers.example",
-                provider: "example",
-                base: &Url::parse(base).unwrap(),
-                egress_proxy: None,
-                allowed_upstream_hosts: allowed,
+            UpstreamClientSpec::new(
+                "providers.example",
+                "example",
+                &Url::parse(base).unwrap(),
+                EgressDeclaration::Ordinary(None),
+                allowed,
                 profile,
-                status_reasons: &[(409, ReasonCode::VersionConflict)],
-            },
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &crate::test_support::test_outbound_tls(),
-            },
+            )
+            .with_status_reasons(&[(409, ReasonCode::VersionConflict)]),
+            &crate::test_support::TestHost::default(),
         )
         .unwrap()
     }
@@ -608,14 +694,11 @@ mod tests {
     }
 
     fn rules<'a>(max_redirects: u32, vet: &'a (dyn Fn(&Url) -> bool + Sync)) -> RedirectRules<'a> {
-        RedirectRules {
-            max_redirects,
-            deadline: Duration::from_secs(5),
-            correlate_other_origins: false,
-            vet,
-            decorate: &|request| request.header("X-Every-Hop", "yes"),
-            authorize: &|request| request.bearer_auth("service-secret"),
-        }
+        RedirectRules::new(max_redirects, Duration::from_secs(5), &|request| {
+            request.bearer_auth("service-secret")
+        })
+        .with_vet(vet)
+        .with_decorate(&|request| request.header("X-Every-Hop", "yes"))
     }
 
     #[tokio::test]
@@ -841,19 +924,23 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/page", service.uri())).unwrap();
-        for reason in [None, Some(ReasonCode::UpstreamProtocolFailed)] {
-            let mut response = client
-                .send(
-                    client.request(Method::PUT, url.clone()),
-                    UpstreamCall::new("page.update"),
-                )
+        for reason in [None, Some(ReasonCode::UpstreamProtocolFailed.into())] {
+            let mut response = capture
+                .run(crate::test_support::in_invocation_hook(
+                    "example",
+                    "page.update",
+                    client.send(
+                        client.request(Method::PUT, url.clone()),
+                        UpstreamCall::new("page.update"),
+                    ),
+                ))
                 .await
                 .unwrap();
-            complete_upstream_trace(&mut response, reason);
+            capture.in_scope(|| complete_upstream_trace(&mut response, reason));
         }
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events[0]["reasonCode"], "version_conflict");
         assert_eq!(events[1]["reasonCode"], "upstream_protocol_failed");
     }
@@ -862,15 +949,15 @@ mod tests {
     async fn requests_that_cannot_be_built_are_traced_as_failures() {
         let service = MockServer::start().await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let request = client
             .request(
                 Method::GET,
                 Url::parse(&format!("{}/item", service.uri())).unwrap(),
             )
             .bearer_auth("token\r\ninjected: header");
-        let error = client
-            .send(request, UpstreamCall::new("item.view"))
+        let error = capture
+            .run(client.send(request, UpstreamCall::new("item.view")))
             .await
             .unwrap_err();
         assert!(
@@ -883,7 +970,7 @@ mod tests {
             ),
             "{error:?}"
         );
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0]["upstreamOperation"], "item.view");
         assert_eq!(events[0]["reasonCode"], "upstream_connection_failed");
@@ -955,7 +1042,7 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
         let send = || async {
             client
@@ -967,7 +1054,7 @@ mod tests {
                 .unwrap()
         };
         let in_scope = |action: &'static str| {
-            crate::with_provider_context(
+            crate::host::with_provider_context(
                 crate::CorrelationContext::for_tests(),
                 "example".to_string(),
                 action.to_string(),
@@ -975,22 +1062,26 @@ mod tests {
             )
         };
 
-        let outlived = in_scope("item.view").await;
-        drop(outlived);
-        let retained = in_scope("item.view").await;
-        let extensions = retained.extensions().clone();
-        crate::with_provider_context(
-            crate::CorrelationContext::for_tests(),
-            "other".to_string(),
-            "other.action".to_string(),
-            async move {
-                drop(retained);
-                drop(extensions);
-            },
-        )
-        .await;
+        capture
+            .run(async {
+                let outlived = in_scope("item.view").await;
+                drop(outlived);
+                let retained = in_scope("item.view").await;
+                let extensions = retained.extensions().clone();
+                crate::host::with_provider_context(
+                    crate::CorrelationContext::for_tests(),
+                    "other".to_string(),
+                    "other.action".to_string(),
+                    async move {
+                        drop(retained);
+                        drop(extensions);
+                    },
+                )
+                .await;
+            })
+            .await;
 
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 2, "{events:?}");
         for event in &events {
             assert_eq!(event["service"], "example");
@@ -1006,44 +1097,58 @@ mod tests {
             .mount(&service)
             .await;
         let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
-        crate::test_support::start_capturing_events();
+        let capture = crate::test_support::install_trace_capture().start();
         let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
 
-        let mut classified = client
-            .send(
-                client.request(Method::GET, url.clone()),
-                UpstreamCall::new("item.view"),
-            )
-            .await
-            .unwrap();
-        complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamFailed));
-        complete_upstream_trace(&mut classified, Some(ReasonCode::UpstreamTimeout));
-        drop(classified);
-        let dropped = client
-            .send(
-                client.request(Method::GET, url),
-                UpstreamCall::new("item.list"),
-            )
-            .await
-            .unwrap();
-        drop(dropped);
+        capture
+            .run(crate::test_support::in_invocation_hook(
+                "example",
+                "item.view",
+                async {
+                    let mut classified = client
+                        .send(
+                            client.request(Method::GET, url.clone()),
+                            UpstreamCall::new("item.view"),
+                        )
+                        .await
+                        .unwrap();
+                    complete_upstream_trace(
+                        &mut classified,
+                        Some(ReasonCode::UpstreamFailed.into()),
+                    );
+                    complete_upstream_trace(
+                        &mut classified,
+                        Some(ReasonCode::UpstreamTimeout.into()),
+                    );
+                    drop(classified);
+                    let dropped = client
+                        .send(
+                            client.request(Method::GET, url),
+                            UpstreamCall::new("item.list"),
+                        )
+                        .await
+                        .unwrap();
+                    drop(dropped);
 
-        let mut detached = client
-            .send(
-                client.request(
-                    Method::GET,
-                    Url::parse(&format!("{}/item", service.uri())).unwrap(),
-                ),
-                UpstreamCall::new("item.update"),
-            )
-            .await
-            .unwrap();
-        let trace = take_upstream_trace(&mut detached).unwrap();
-        assert_eq!(trace.operation(), "item.update");
-        drop(detached);
-        trace.complete(Some(ReasonCode::UpstreamProtocolFailed));
+                    let mut detached = client
+                        .send(
+                            client.request(
+                                Method::GET,
+                                Url::parse(&format!("{}/item", service.uri())).unwrap(),
+                            ),
+                            UpstreamCall::new("item.update"),
+                        )
+                        .await
+                        .unwrap();
+                    let trace = take_upstream_trace(&mut detached).unwrap();
+                    assert_eq!(trace.operation(), "item.update");
+                    drop(detached);
+                    trace.complete(Some(ReasonCode::UpstreamProtocolFailed.into()));
+                },
+            ))
+            .await;
 
-        let events = crate::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         assert_eq!(events.len(), 3, "{events:?}");
         assert_eq!(events[0]["upstreamOperation"], "item.view");
         assert_eq!(events[0]["reasonCode"], "upstream_failed");
@@ -1052,5 +1157,164 @@ mod tests {
         assert_eq!(events[1]["provider"], "example");
         assert_eq!(events[2]["upstreamOperation"], "item.update");
         assert_eq!(events[2]["reasonCode"], "upstream_protocol_failed");
+    }
+
+    static ITEM_LOCKED: crate::ProviderReasonDefinition = crate::ProviderReasonDefinition::deny(
+        "example_item_locked",
+        crate::ProviderFailureStatus::Conflict,
+    );
+    static ITEM_REASONS: [&crate::ProviderReasonDefinition; 1] = [&ITEM_LOCKED];
+    static OTHER_LOCKED: crate::ProviderReasonDefinition = crate::ProviderReasonDefinition::deny(
+        "other_item_locked",
+        crate::ProviderFailureStatus::Conflict,
+    );
+
+    /// Classifications are checked against the hook that sent the request,
+    /// captured at send time: its phase, its backend's domain reasons and its
+    /// service. A rejected or unattributable one is recorded as
+    /// `broker_provider_contract_failed`; the transport's own classification
+    /// is not the provider's and needs no hook.
+    #[tokio::test]
+    async fn trace_classifications_are_checked_against_the_sending_hook() {
+        use crate::HookPhase;
+        use crate::host::{hook_context, with_hook_context};
+        let service = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(409))
+            .mount(&service)
+            .await;
+        let client = client(&service.uri(), &allow(&[&service]), ClientProfile::Request);
+        let url = Url::parse(&format!("{}/item", service.uri())).unwrap();
+        let capture = crate::test_support::install_trace_capture().start();
+        let send = || {
+            client.send(
+                client.request(Method::GET, url.clone()),
+                UpstreamCall::new("item.view"),
+            )
+        };
+        let cases: Vec<(
+            Option<crate::contract::HookContext>,
+            Option<ProviderReason>,
+            &str,
+        )> = vec![
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &ITEM_REASONS,
+                )),
+                Some((&ITEM_LOCKED).into()),
+                "example_item_locked",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &ITEM_REASONS,
+                )),
+                Some((&OTHER_LOCKED).into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &[],
+                )),
+                Some(ReasonCode::RateLimited.into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::CredentialVerification,
+                    &[],
+                )),
+                Some(ReasonCode::MutationVerificationFailed.into()),
+                "broker_provider_contract_failed",
+            ),
+            (
+                Some(hook_context(
+                    "example",
+                    "item.view",
+                    HookPhase::Invocation,
+                    &[],
+                )),
+                Some(ReasonCode::MutationVerificationFailed.into()),
+                "mutation_verification_failed",
+            ),
+            (
+                None,
+                Some(ReasonCode::UpstreamFailed.into()),
+                "broker_provider_contract_failed",
+            ),
+            // The client's declared status reason (409) is the provider's
+            // classification too, so it needs a hook.
+            (None, None, "broker_provider_contract_failed"),
+        ];
+        for (hook, reason, expected) in cases {
+            let mut response = match hook {
+                Some(hook) => capture.run(with_hook_context(hook, send())).await,
+                None => capture.run(send()).await,
+            }
+            .unwrap();
+            capture.in_scope(|| complete_upstream_trace(&mut response, reason));
+            let events = capture.take_upstream_requests();
+            assert_eq!(events.len(), 1, "{events:?}");
+            assert_eq!(events[0]["reasonCode"], expected, "{reason:?}");
+        }
+
+        // A hook nested under another service's provider action cannot
+        // attribute the trace consistently.
+        let mut response = capture
+            .run(with_hook_context(
+                hook_context("example", "item.view", HookPhase::Invocation, &[]),
+                crate::host::with_provider_context(
+                    crate::CorrelationContext::for_tests(),
+                    "other".to_owned(),
+                    "item.view".to_owned(),
+                    send(),
+                ),
+            ))
+            .await
+            .unwrap();
+        capture.in_scope(|| {
+            complete_upstream_trace(&mut response, Some(ReasonCode::UpstreamFailed.into()))
+        });
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "broker_provider_contract_failed");
+
+        // The provider's classification made after its hook returned is
+        // still checked against that hook, which the trace captured.
+        let mut response = capture
+            .run(with_hook_context(
+                hook_context("example", "item.view", HookPhase::Invocation, &ITEM_REASONS),
+                send(),
+            ))
+            .await
+            .unwrap();
+        capture.in_scope(|| complete_upstream_trace(&mut response, Some((&ITEM_LOCKED).into())));
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "example_item_locked");
+
+        // A transport failure's classification is the client's own.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let unreachable =
+            super::tests::client(&base, &[format!("{base}/**")], ClientProfile::Request);
+        let _ = capture
+            .run(unreachable.send(
+                unreachable.request(Method::GET, Url::parse(&format!("{base}/item")).unwrap()),
+                UpstreamCall::new("item.view"),
+            ))
+            .await
+            .unwrap_err();
+        let events = capture.take_upstream_requests();
+        assert_eq!(events[0]["reasonCode"], "upstream_connection_failed");
     }
 }

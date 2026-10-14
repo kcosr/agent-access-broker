@@ -11,7 +11,6 @@ pub use google::{GMAIL_AUDIENCE, GMAIL_SCOPE, GMAIL_TARGET, GOOGLE_OAUTH_DIALECT
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -23,12 +22,11 @@ const DEADLINE: Duration = Duration::from_secs(30);
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GmailConfig {}
-pub static GMAIL_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "gmail",
-    resource_types: &[],
-    parse: parse_backend_config::<GmailConfig>,
-    development_only: false,
-};
+pub static GMAIL_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "gmail",
+    parse_backend_config::<GmailConfig>,
+);
 impl BackendConfig for GmailConfig {
     fn kind(&self) -> &'static str {
         "gmail"
@@ -44,10 +42,11 @@ impl BackendConfig for GmailConfig {
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]
     }
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(GmailProvider::new(
             Url::parse(API).unwrap(),
-            host.network(),
+            host.clients(),
+            host.limits(),
         )?))
     }
 }
@@ -114,17 +113,9 @@ pub fn descriptor() -> ServiceDescriptor {
             );
         }
     }
-    ServiceDescriptor {
-        service: "gmail".into(),
-        display_name: "Gmail".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: CredentialDescriptor::default().delegated(
+    ServiceDescriptor::new("gmail", "Gmail").with_actions(actions).with_credentials(CredentialDescriptor::default().delegated(
             "Lets agents read, search, archive, move mail to Trash and restore it. Agent access is limited by your Broker grants. Google’s consent screen describes the broader Gmail permission.",
-        ),
-        presentation_body_limit: None,
-    }
+        ))
 }
 
 struct GmailProvider {
@@ -136,21 +127,24 @@ struct RequestBudget {
     last_status: Option<u16>,
 }
 impl GmailProvider {
-    fn new(base: Url, network: UpstreamNetwork<'_>) -> Result<Self, HostError> {
+    fn new(
+        base: Url,
+        clients: &dyn host::UpstreamClientFactory,
+        limits: &ProviderLimits,
+    ) -> Result<Self, ProviderBuildError> {
         Ok(Self {
             client: UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.gmail",
-                    provider: "gmail",
-                    base: &base,
-                    egress_proxy: None,
-                    allowed_upstream_hosts: &[format!("{base}**")],
-                    profile: ClientProfile::Request,
-                    status_reasons: &[],
-                },
-                network,
+                UpstreamClientSpec::new(
+                    "providers.gmail",
+                    "gmail",
+                    &base,
+                    EgressDeclaration::Ordinary(None),
+                    &[format!("{base}**")],
+                    ClientProfile::Request,
+                ),
+                clients,
             )?,
-            max_bytes: network.limits.max_upstream_response_bytes.min(MAX_BYTES),
+            max_bytes: limits.max_upstream_response_bytes.min(MAX_BYTES),
         })
     }
     async fn request(
@@ -166,7 +160,7 @@ impl GmailProvider {
             // Every page/detail call rechecks the original account and consent.
             credential.revalidate().await?;
             let access = credential.access();
-            if access.target != GMAIL_TARGET || access.audience != GMAIL_AUDIENCE {
+            if access.target() != GMAIL_TARGET || access.audience() != GMAIL_AUDIENCE {
                 return Err(ProviderError::deny(
                     ReasonCode::CredentialInvalid,
                     "Gmail needs an account-bound Gmail OAuth connection",
@@ -175,7 +169,7 @@ impl GmailProvider {
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
-                .bearer_auth(&access.token);
+                .bearer_auth(access.token());
             if let Some(body) = &body {
                 request = request.json(body);
             }
@@ -184,10 +178,7 @@ impl GmailProvider {
                 .client
                 .send(
                     request,
-                    UpstreamCall {
-                        operation: action,
-                        attempt,
-                    },
+                    UpstreamCall::new(action).with_attempt(attempt),
                 )
                 .await
                 .map_err(|e| {
@@ -200,7 +191,7 @@ impl GmailProvider {
             // A 401 explicitly rejected authentication. Only that response may
             // repeat an operation; transport errors, 403, 429 and 5xx never do.
             if response.status().as_u16() == 401 && attempt == 1 {
-                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid));
+                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
                 credential.recover_after_unauthorized().await?;
                 continue;
             }
@@ -237,7 +228,7 @@ impl GmailProvider {
                     })
             };
             if let Some(trace) = trace {
-                trace.complete(result.as_ref().err().map(|e| e.reason_code));
+                trace.complete(result.as_ref().err().map(|e| e.reason_code()));
             }
             return result;
         }
@@ -254,13 +245,13 @@ impl GmailProvider {
         invocation: &ProviderInvocation,
         budget: &mut RequestBudget,
     ) -> Result<Value, ProviderError> {
-        let credential = invocation.delegated_credential.as_ref().ok_or_else(|| {
+        let credential = invocation.execution().delegated().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "Connect your Gmail account first",
             )
         })?;
-        let action = invocation.action.as_str();
+        let action = invocation.action();
         match action {
             "account.view" => {
                 let v = self
@@ -300,7 +291,7 @@ impl GmailProvider {
                 )
             }
             "message.search" => {
-                let inputs = &invocation.inputs;
+                let inputs = invocation.inputs();
                 let limit = inputs["maxResults"].as_u64().unwrap_or(20);
                 let mut url = self.url("messages");
                 url.query_pairs_mut()
@@ -356,7 +347,7 @@ impl GmailProvider {
             }
             _ => {
                 let (entity, verb) = action.split_once('.').ok_or_else(invalid)?;
-                let id = invocation.inputs["id"].as_str().ok_or_else(invalid)?;
+                let id = invocation.inputs()["id"].as_str().ok_or_else(invalid)?;
                 let path = format!("{}s/{id}", entity);
                 let (method, mut url, body) = match verb {
                     "view" => (Method::GET, self.url(&path), None),
@@ -394,36 +385,35 @@ impl GmailProvider {
 }
 #[async_trait]
 impl Provider for GmailProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        validate_inputs(action, inputs)?;
-        Ok(BTreeMap::new())
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        validate_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
     async fn invoke(
         &self,
         invocation: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&invocation.action, &invocation.inputs)?;
+        validate_inputs(invocation.action(), invocation.inputs())?;
         let started = Instant::now();
         let mut budget = RequestBudget {
             remaining: self.max_bytes,
             last_status: None,
         };
-        let audit = json!({"provider":"gmail","operation":invocation.action});
-        let object_ids = invocation.inputs["id"].as_str().map(|id| {
+        let audit = json!({"provider":"gmail","operation":invocation.action()});
+        let object_ids = invocation.inputs()["id"].as_str().map(|id| {
             let entity = invocation
-                .action
+                .action()
                 .split_once('.')
                 .expect("validated action")
                 .0;
             json!({entity:id})
         });
-        let mutation = invocation.action.ends_with(".archive")
-            || invocation.action.ends_with(".trash")
-            || invocation.action.ends_with(".restore");
+        let mutation = invocation.action().ends_with(".archive")
+            || invocation.action().ends_with(".trash")
+            || invocation.action().ends_with(".restore");
         let result = tokio::time::timeout(DEADLINE, self.execute(&invocation, &mut budget))
             .await
             .unwrap_or_else(|_| Err(ProviderError::error(
@@ -437,14 +427,12 @@ impl Provider for GmailProvider {
                 error.upstream_duration_ms = Some(started.elapsed().as_millis() as u64);
                 error
             })?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: budget.last_status,
-            upstream_duration_ms: Some(started.elapsed().as_millis() as u64),
-            object_ids,
-        })
+        let mut provider_result = ProviderResult::new(result).with_audit(audit).with_upstream(
+            budget.last_status,
+            Some(started.elapsed().as_millis() as u64),
+        );
+        provider_result.object_ids = object_ids;
+        Ok(provider_result)
     }
 }
 fn valid_id(s: &str) -> bool {
@@ -562,14 +550,11 @@ pub mod test_support {
         google::test_dialect(base)
     }
     pub fn provider(base: &str) -> ServiceProvider {
-        let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
+        let host = agent_access_provider::test_support::TestHost::default();
         let provider = GmailProvider::new(
             Url::parse(&format!("{base}/gmail/v1/users/me/")).unwrap(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &tls,
-            },
+            &host,
+            &host.limits,
         )
         .unwrap();
         ServiceProvider::new(descriptor(), Arc::new(provider))

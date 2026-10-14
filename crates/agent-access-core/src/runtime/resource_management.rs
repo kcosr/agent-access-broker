@@ -197,10 +197,10 @@ pub(super) fn validate_attribute_bindings(
             }
             continue;
         }
-        if descriptor.attributes.iter().any(|attribute| {
-            attribute.required
+        if descriptor.attributes().iter().any(|attribute| {
+            attribute.is_required()
                 && !binding
-                    .is_some_and(|binding| binding.material_versions.contains_key(attribute.name))
+                    .is_some_and(|binding| binding.material_versions.contains_key(attribute.name()))
         }) {
             return Err(ManagedStoreError::InputInvalid(
                 "required resource attributes are missing".into(),
@@ -209,9 +209,9 @@ pub(super) fn validate_attribute_bindings(
         if binding.is_some_and(|binding| {
             binding.material_versions.keys().any(|name| {
                 !descriptor
-                    .attributes
+                    .attributes()
                     .iter()
-                    .any(|attribute| attribute.name == name)
+                    .any(|attribute| attribute.name() == name)
             })
         }) {
             return Err(ManagedStoreError::InputInvalid(
@@ -242,27 +242,17 @@ mod tests {
 
     #[async_trait]
     impl Provider for HoldingProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
-        }
-        async fn resolve_scopes_with_lookup_context(
-            &self,
-            action: &str,
-            inputs: &Value,
-            _credential: Option<&ExecutionCredential>,
-        ) -> Result<ProviderScopeResolution, ProviderError> {
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
             if self.hold_once.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
-            Ok(ProviderScopeResolution {
-                resource_scopes: self.resolve_scopes(action, inputs)?,
-                provider_preflight: None,
-            })
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
         async fn invoke(
             &self,
@@ -295,7 +285,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some(id.into()),
                 display_name: None,
-                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone(),
+                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact { value: key.into() },
                 allowed_execution_contexts: vec!["default".into()],
                 enabled: true,
@@ -584,7 +574,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some("all".into()),
                 display_name: None,
-                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone(),
+                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::All,
                 allowed_execution_contexts: vec!["default".into()],
                 enabled: true,
@@ -596,7 +586,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some("private".into()),
                 display_name: None,
-                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone(),
+                resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact {
                     value: "PRIVATE".into(),
                 },

@@ -1,5 +1,6 @@
 use super::*;
 use crate::{ActionIo, Decision, raw_download_io};
+use agent_access_provider::test_support::{InvocationBuilder, basic_credential, credential_token};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,11 +21,8 @@ fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
                 .map(|capability| (action.action.as_str(), capability))
         })
         .collect::<BTreeMap<_, _>>();
-    let body = |verb| AttributionCapability {
-        verb,
-        target: "body",
-        representation: AttributionRepresentation::ConfluenceStorage,
-        required: true,
+    let body = |verb| {
+        AttributionCapability::required(verb, "body", AttributionRepresentation::ConfluenceStorage)
     };
     let expected = BTreeMap::from([
         ("page.create", body(AttributionVerb::Add)),
@@ -265,7 +263,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let create_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.create",
             &json!({
                 "space": "ENG", "title": "Child", "parentPageId": "200",
@@ -279,7 +277,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert!(!create_scopes.contains_key("page"));
 
     let append_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
@@ -289,7 +287,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert_eq!(append_scopes["space"], vec!["ENG"]);
     assert!(!append_scopes.contains_key("page"));
     let before_scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&credential()),
@@ -311,7 +309,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         Arc::new(target_under_folder),
     );
     let append_scopes = target_under_folder_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
@@ -320,14 +318,14 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .unwrap();
     assert!(!append_scopes.contains_key("page"));
     let error = target_under_folder_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&credential()),
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut cross_space = PageMoveTestBackend::new();
     cross_space.pages.get_mut("200").unwrap().space = "OPS".to_string();
@@ -337,14 +335,14 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         Arc::new(cross_space),
     );
     let error = cross_space_provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&credential()),
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -367,8 +365,12 @@ async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readba
             inputs["parentPageId"] = json!(parent_page_id);
         }
         let mut request = invocation("page.create", inputs);
-        request.resource_scopes =
-            ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+        request = InvocationBuilder::from(request)
+            .resources(ResourceScopes::from([(
+                "space".to_string(),
+                vec!["ENG".to_string()],
+            )]))
+            .build();
 
         let result = provider.invoke(request).await.unwrap();
 
@@ -456,7 +458,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         .invoke(page_move_invocation())
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(cycle_backend.moves.lock().unwrap().is_empty());
 
     let mismatch_backend = Arc::new(PageMoveTestBackend {
@@ -472,7 +474,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         .invoke(page_move_invocation())
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["mutationPhase"],
         "post_move_hierarchy_readback"
@@ -530,7 +532,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         .invoke(sibling_page_move_invocation("before"))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["mutationPhase"],
         "post_move_order_readback"
@@ -540,8 +542,8 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         mutation_unverified_after_throttling_message("confluence")
@@ -582,7 +584,9 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
                 "content": "<p>body</p>"
             }),
         );
-        request.resource_scopes = space_scopes.clone();
+        request = InvocationBuilder::from(request)
+            .resources(space_scopes.clone())
+            .build();
         let error = ConfluenceProvider::with_backend(
             confluence_config(),
             ProviderLimits::default(),
@@ -655,12 +659,16 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
             "content": "<p>body</p>"
         }),
     );
-    create_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    create_request = InvocationBuilder::from(create_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let create_error = create_provider.invoke(create_request).await.unwrap_err();
 
-    assert_eq!(create_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         create_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
@@ -696,12 +704,16 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
             "content": "<p>body</p>"
         }),
     );
-    draft_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    draft_request = InvocationBuilder::from(draft_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let draft_error = draft_provider.invoke(draft_request).await.unwrap_err();
 
-    assert_eq!(draft_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(draft_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         draft_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
@@ -734,7 +746,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         .await
         .unwrap_err();
 
-    assert_eq!(move_error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(move_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
         move_error.audit.as_ref().unwrap()["mutationPhase"],
         "move_mutation"
@@ -780,7 +792,7 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.view",
             &json!({
                 "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
@@ -819,15 +831,15 @@ async fn page_view_rejects_legacy_space_input() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.view",
             &json!({ "pageId": "123456", "space": "OPS" }),
             Some(&credential()),
         )
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -856,7 +868,7 @@ async fn verify_scope_resolution_uses_lookup_for_existing_pages_in_requested_spa
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -896,7 +908,7 @@ async fn verify_scope_resolution_uses_authoritative_space_from_lookup() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -967,7 +979,7 @@ async fn comment_scope_resolution_walks_nested_parent_chain_with_lookup() {
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "page.inline_comment.reply.add",
             &json!({
                 "commentId": "6003",
@@ -998,10 +1010,20 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
             "bodyFormat": "storage"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.credential = Some(credential_with_token("execute-token"));
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "execute-token",
+        )))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1052,12 +1074,18 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
             "content": "<p>comment before attribution</p>"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1095,12 +1123,18 @@ async fn page_create_applies_configured_adf_attribution_footer_and_dedupes() {
             ),
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(request).await.unwrap();
 
@@ -1144,16 +1178,22 @@ async fn page_update_enforces_adf_body_cap_after_attribution() {
             "content": body,
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(request).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.page_update_requests.lock().unwrap().is_empty());
 }
@@ -1182,12 +1222,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    page_create.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_create.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_create = InvocationBuilder::from(page_create)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_create = InvocationBuilder::from(page_create)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let page_create_result = provider.invoke(page_create).await.unwrap();
 
     let mut page_update = invocation(
@@ -1203,12 +1249,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    page_update.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_update.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_update = InvocationBuilder::from(page_update)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_update = InvocationBuilder::from(page_update)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let page_update_result = provider.invoke(page_update).await.unwrap();
 
     let mut blog_create = invocation(
@@ -1224,12 +1276,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    blog_create.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    blog_create.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_create = InvocationBuilder::from(blog_create)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    blog_create = InvocationBuilder::from(blog_create)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let blog_create_result = provider.invoke(blog_create).await.unwrap();
 
     let mut blog_update = invocation(
@@ -1245,14 +1303,18 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             ),
         }),
     );
-    blog_update.resource_scopes = ResourceScopes::from([
-        ("space".to_string(), vec!["ENG".to_string()]),
-        ("blog".to_string(), vec!["7777".to_string()]),
-    ]);
-    blog_update.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_update = InvocationBuilder::from(blog_update)
+        .resources(ResourceScopes::from([
+            ("space".to_string(), vec!["ENG".to_string()]),
+            ("blog".to_string(), vec!["7777".to_string()]),
+        ]))
+        .build();
+    blog_update = InvocationBuilder::from(blog_update)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     let blog_update_result = provider.invoke(blog_update).await.unwrap();
 
     assert_storage_attribution_audit(&page_create_result, "add");
@@ -1313,12 +1375,18 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "## Converted\n\n**body**"
         }),
     );
-    page_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    page_request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    page_request = InvocationBuilder::from(page_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    page_request = InvocationBuilder::from(page_request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     provider.invoke(page_request).await.unwrap();
 
     let mut blog_request = invocation(
@@ -1330,12 +1398,18 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "*literal*\nsecond"
         }),
     );
-    blog_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    blog_request.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    blog_request = InvocationBuilder::from(blog_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    blog_request = InvocationBuilder::from(blog_request)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
     provider.invoke(blog_request).await.unwrap();
 
     let page_body = backend.page_create_requests.lock().unwrap()[0]
@@ -1376,10 +1450,14 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             "content": "body"
         }),
     );
-    capped_request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    capped_request = InvocationBuilder::from(capped_request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = capped_provider.invoke(capped_request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(
         capped_backend
@@ -1441,14 +1519,24 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
             "bodyFormat": "storage"
         }),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
-    request.credential = Some(credential_with_token("execute-token"));
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "execute-token",
+        )))
+        .build();
 
     let error = provider.invoke(request).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -1465,9 +1553,14 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    denied.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["OPS".to_string()])]);
+    denied = InvocationBuilder::from(denied)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["OPS".to_string()],
+        )]))
+        .build();
     assert_eq!(
-        provider.invoke(denied).await.unwrap_err().reason_code,
+        provider.invoke(denied).await.unwrap_err().reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1513,14 +1606,18 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    wrong_container.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    wrong_container = InvocationBuilder::from(wrong_container)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
         provider
             .invoke(wrong_container)
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1538,10 +1635,18 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             "bodyFormat": "storage"
         }),
     );
-    non_current.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    non_current = InvocationBuilder::from(non_current)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
-        provider.invoke(non_current).await.unwrap_err().reason_code,
+        provider
+            .invoke(non_current)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 }
@@ -1565,7 +1670,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             ))
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -1577,10 +1682,14 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             "content": "x".repeat(2048)
         }),
     );
-    body_cap.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    body_cap = InvocationBuilder::from(body_cap)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     assert_eq!(
-        provider.invoke(body_cap).await.unwrap_err().reason_code,
+        provider.invoke(body_cap).await.unwrap_err().reason_code(),
         ReasonCode::BodySizeDenied
     );
 
@@ -1597,7 +1706,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -1607,7 +1716,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             )
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1624,7 +1733,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -1634,7 +1743,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
             )
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 }
@@ -1679,7 +1788,7 @@ fn comment_protocol_checks_reject_unsupported_containers_and_overreturns() {
     assert_eq!(
         validate_comment_page(&comments, action, &container, true, 1, None)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
 }
@@ -1716,102 +1825,111 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
         &inputs,
         2,
     );
-    let token =
-        encode_confluence_comment_list_token(&signer, &binding, &request, "cursor-2".into())
-            .unwrap();
+    let token = encode_confluence_comment_list_token(
+        &signer,
+        &binding,
+        request.admitted(),
+        "cursor-2".into(),
+    )
+    .unwrap();
 
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &request).unwrap(),
+        decode_confluence_comment_list_token(&signer, &token, &binding, request.admitted())
+            .unwrap(),
         "cursor-2"
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.action = "page.footer_comment.list".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.kind = ConfluenceCommentKind::Footer;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.container_id = "654321".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.space = "OPS".to_string();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.body_format = None;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.resolution_status = Some("resolved".to_string());
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.sort = Some("created-date".to_string());
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_binding = binding.clone();
     changed_binding.max_results = 1;
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &changed_binding, &request)
+        decode_confluence_comment_list_token(&signer, &token, &changed_binding, request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_request = request.clone();
-    changed_request.identity.principal = "bob".to_string();
+    changed_request = InvocationBuilder::from(changed_request)
+        .principal("bob")
+        .build();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &changed_request)
+        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut changed_request = request.clone();
-    changed_request.credential_mode = "user".to_string();
+    changed_request = InvocationBuilder::from(changed_request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert_eq!(
-        decode_confluence_comment_list_token(&signer, &token, &binding, &changed_request)
+        decode_confluence_comment_list_token(&signer, &token, &binding, changed_request.admitted())
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -1920,7 +2038,7 @@ fn cql_accepts_bounded_title_search_and_rejects_mixed_precedence() {
 
     let error =
         parse_cql_spaces(r#"space = ENG and title ~ "runbook" or space = OPS"#).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let spaces =
         parse_cql_spaces(r#"(space = ENG and title ~ "runbook") or (space = OPS and type = page)"#)
@@ -1934,7 +2052,7 @@ fn cql_accepts_bounded_title_search_and_rejects_mixed_precedence() {
 #[test]
 fn cql_rejects_non_ascii_unsupported_predicates_without_panicking() {
     let error = parse_cql_spaces(r#"space = ENG and type = page and résumé = true"#).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -1998,7 +2116,7 @@ fn raw_cql_is_reemitted_and_rejects_unsafe_literals() {
         "title ~ \"runbook\")",
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 }
 
@@ -2022,7 +2140,7 @@ fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
         "label IS NOT EMPTY",
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{raw}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
     }
 }
 
@@ -2051,7 +2169,7 @@ fn blog_cql_composes_blogpost_type_and_rejects_page_hierarchy_fields() {
             &SearchLimitsConfig::default(),
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{raw}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
     }
 }
 
@@ -2102,13 +2220,12 @@ fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
         blog.cql
             .contains("space NOT IN (\"IN\", PRIVATE) AND type = blogpost")
     );
-    let authorization = SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::AllExcept {
+    let authorization = SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-        credential_mode: "service".to_string(),
-    };
+    );
     assert!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()])).is_err()
     );
@@ -2139,17 +2256,18 @@ async fn all_except_confluence_search_checks_returned_containment() {
             "search",
             json!({"query":{"type":"cql","value":"title ~ \"runbook\""},"maxResults":1}),
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "space".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: vec!["PRIVATE".to_string()],
-            },
-            credential_mode: "service".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization::new(
+                "space".to_string(),
+                SearchAuthorizationScope::AllExcept {
+                    excluded_values: vec!["PRIVATE".to_string()],
+                },
+            ))
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
     }
 }
@@ -2161,28 +2279,28 @@ fn raw_cql_rejects_length_token_list_string_depth_and_sort_caps() {
         " ".repeat(MAX_CONFLUENCE_RAW_QUERY_BYTES + 1)
     );
     let error = parse_cql_query(&long).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let token_heavy = (0..=MAX_CONFLUENCE_QUERY_TOKENS)
         .map(|_| "title")
         .collect::<Vec<_>>()
         .join(" ");
     let error = parse_cql_query(&token_heavy).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let in_values = (0..=MAX_CONFLUENCE_IN_LIST_VALUES)
         .map(|index| format!("ENG{index}"))
         .collect::<Vec<_>>()
         .join(", ");
     let error = parse_cql_query(&format!("space IN ({in_values})")).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let string_too_large = format!(
         "title ~ \"{}\"",
         "x".repeat(MAX_CONFLUENCE_STRING_LITERAL_BYTES + 1)
     );
     let error = parse_cql_query(&string_too_large).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let deep = format!(
         "{}title ~ \"runbook\"{}",
@@ -2190,12 +2308,12 @@ fn raw_cql_rejects_length_token_list_string_depth_and_sort_caps() {
         ")".repeat(MAX_CONFLUENCE_QUERY_DEPTH + 1)
     );
     let error = parse_cql_query(&deep).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let sort_heavy =
         "title ~ \"runbook\" ORDER BY title, created, lastModified, title, created, lastModified";
     let error = parse_cql_query(sort_heavy).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -2272,7 +2390,7 @@ fn search_inputs_reject_unknown_nested_query_fields() {
         }
     }))
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -2382,13 +2500,13 @@ fn confluence_write_formats_and_generated_storage_validation_are_strict() {
     .unwrap();
     let error =
         validate_generated_confluence_storage("<p onclick=\"bad\">unsafe</p>", false).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
     let error = validate_generated_confluence_storage(
         "<p><a href=\"javascript:bad\">unsafe</a></p>",
         false,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 #[test]
@@ -2418,7 +2536,7 @@ fn confluence_write_content_rejects_empty_and_whitespace_strings_consistently() 
                     .prepare_write_content("test.action", target, format, &json!(source), &request)
                     .unwrap_err();
                 assert_eq!(
-                    error.reason_code,
+                    error.reason_code(),
                     ReasonCode::BodyMalformed,
                     "target={target:?} format={format} source={source:?}"
                 );
@@ -2530,8 +2648,12 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
 
     let page_draft = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut page_binding = invocation("page.draft.update", json!({}));
-    page_binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    page_binding = InvocationBuilder::from(page_binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let page_handle = provider
         .mint_draft_handle(
             ConfluenceDraftContentType::Page,
@@ -2550,16 +2672,26 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
             "content": "x".repeat(17)
         }),
     );
-    page_request.resource_scopes = page_binding.resource_scopes;
+    page_request = InvocationBuilder::from(page_request)
+        .resources(page_binding.resource_scopes().unwrap().clone())
+        .build();
     assert_eq!(
-        provider.invoke(page_request).await.unwrap_err().reason_code,
+        provider
+            .invoke(page_request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodySizeDenied
     );
 
     let blog_draft = draft_content("7777", ConfluenceDraftContentType::Blog);
     let mut blog_binding = invocation("blog.draft.update", json!({}));
-    blog_binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    blog_binding = InvocationBuilder::from(blog_binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let blog_handle = provider
         .mint_draft_handle(
             ConfluenceDraftContentType::Blog,
@@ -2578,9 +2710,15 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
             "content": { "type": "doc", "version": 1, "content": [] }
         }),
     );
-    blog_request.resource_scopes = blog_binding.resource_scopes;
+    blog_request = InvocationBuilder::from(blog_request)
+        .resources(blog_binding.resource_scopes().unwrap().clone())
+        .build();
     assert_eq!(
-        provider.invoke(blog_request).await.unwrap_err().reason_code,
+        provider
+            .invoke(blog_request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodyFormatUnsupported
     );
     assert_eq!(*backend.backend_calls.lock().unwrap(), 0);
@@ -2593,15 +2731,19 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     ));
     let content = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut request = invocation("page.draft.view", json!({}));
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
 
     let service_payload = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(service_payload.base_version, None);
@@ -2609,13 +2751,15 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     assert!(service_payload.principal.is_none());
     let service_token = encode_confluence_draft_handle(&signer, &service_payload).unwrap();
     let mut other_service_request = request.clone();
-    other_service_request.identity.principal = "other-agent".to_string();
+    other_service_request = InvocationBuilder::from(other_service_request)
+        .principal("other-agent")
+        .build();
     let service_handle = decode_confluence_draft_handle(
         &signer,
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
@@ -2624,7 +2768,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     reparented_content.parent_page_id = Some("66666".to_string());
     let error =
         ensure_draft_content_matches_handle(&reparented_content, &service_handle).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     let mut wrong_service_payload = service_payload.clone();
     wrong_service_payload.service = "jira".to_string();
@@ -2635,7 +2779,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &wrong_service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2643,7 +2787,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "other.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2651,7 +2795,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Blog,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     assert_invalid_draft_handle(decode_confluence_draft_handle(
@@ -2659,7 +2803,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "654321",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     let rotated_signer = ConfluenceTokenSigner::new(Some(
@@ -2670,7 +2814,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &service_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     ));
     let mut wrong_space_payload = service_payload.clone();
@@ -2681,30 +2825,34 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &wrong_space_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_service_request,
+        other_service_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
     assert_invalid_draft_handle(ensure_authorized_draft_handle(
         &wrong_space_handle,
-        &request.resource_scopes,
+        request.resource_scopes().unwrap(),
     ));
-    let error = ensure_authorized_space(&request.resource_scopes, "OPS").unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    let error = ensure_authorized_space(request.resource_scopes().unwrap(), "OPS").unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.message,
         "Confluence content no longer matches the authorized space"
     );
 
     let mut per_user_request = request.clone();
-    per_user_request.credential_mode = "per_user".to_string();
-    per_user_request.identity = identity("agent-one");
+    per_user_request = InvocationBuilder::from(per_user_request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    per_user_request = InvocationBuilder::from(per_user_request)
+        .identity(identity("agent-one"))
+        .build();
     let per_user_payload = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &per_user_request,
+        per_user_request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(per_user_payload.principal.as_deref(), Some("agent-one"));
@@ -2714,7 +2862,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &per_user_request,
+        per_user_request.admitted(),
         "example.atlassian.net",
     )
     .unwrap();
@@ -2723,23 +2871,25 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     ));
     let mut other_per_user_request = per_user_request.clone();
-    other_per_user_request.identity = identity("agent-two");
+    other_per_user_request = InvocationBuilder::from(other_per_user_request)
+        .identity(identity("agent-two"))
+        .build();
     assert_invalid_draft_handle(decode_confluence_draft_handle(
         &signer,
         &per_user_token,
         ConfluenceDraftContentType::Page,
         "123456",
-        &other_per_user_request,
+        other_per_user_request.admitted(),
         "example.atlassian.net",
     ));
 
     let process_local = ConfluenceTokenSigner::new(None);
     let error = encode_confluence_draft_handle(&process_local, &service_payload).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -2749,40 +2899,51 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
     ));
     let content = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut request = invocation("page.draft.attachment.list", json!({}));
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let handle = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::New,
         None,
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     let token = encode_confluence_draft_attachment_list_token(
         &signer,
         &handle,
-        &request,
+        request.admitted(),
         "cursor=next".to_string(),
     )
     .unwrap();
     assert_eq!(
-        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, &request).unwrap(),
+        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, request.admitted())
+            .unwrap(),
         "cursor=next"
     );
     let mut wrong_action = request.clone();
-    wrong_action.action = "page.draft.attachment.download".to_string();
-    let error =
-        decode_confluence_draft_attachment_list_token(&signer, &token, &handle, &wrong_action)
-            .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    wrong_action = InvocationBuilder::from(wrong_action)
+        .action("page.draft.attachment.download")
+        .build();
+    let error = decode_confluence_draft_attachment_list_token(
+        &signer,
+        &token,
+        &handle,
+        wrong_action.admitted(),
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let staged = ConfluenceDraftHandlePayload::new(
         ConfluenceDraftContentType::Page,
         &content,
         ConfluenceDraftOrigin::Staged,
         Some(7),
-        &request,
+        request.admitted(),
         "example.atlassian.net",
     );
     assert_eq!(staged.base_version, Some(7));
@@ -2792,7 +2953,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         reject_staged_draft_attachment_add(&staged).unwrap_err(),
         reject_staged_draft_attachment_read(&staged).unwrap_err(),
     ] {
-        assert_eq!(error.reason_code, ReasonCode::ServiceActionDenied);
+        assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
     }
     assert!(reject_staged_draft_discard(&handle).is_ok());
     assert!(reject_staged_draft_attachment_add(&handle).is_ok());
@@ -2855,13 +3016,12 @@ fn confluence_attachment_upload_validation_rejects_limit_and_integrity_mismatche
         size: 4,
         sha256: sha256_hex(b"data"),
     };
-    let part = BrokerBodyPart {
-        name: "file".to_string(),
-        file_name: Some("diagram.txt".to_string()),
-        content_type: Some("text/plain".to_string()),
-        bytes: b"data".to_vec(),
-        temp_file: None,
-    };
+    let part = BrokerBodyPart::in_memory(
+        "file".to_string(),
+        Some("diagram.txt".to_string()),
+        Some("text/plain".to_string()),
+        b"data".to_vec(),
+    );
     assert!(
         prepare_attachment_uploads(
             std::slice::from_ref(&input),
@@ -2875,31 +3035,31 @@ fn confluence_attachment_upload_validation_rejects_limit_and_integrity_mismatche
     oversized.size = 5;
     let error =
         validate_attachment_metadata_inputs(std::slice::from_ref(&oversized), &limits).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let mut unsupported_type = input.clone();
     unsupported_type.content_type = "image/png".to_string();
     let error =
         validate_attachment_metadata_inputs(std::slice::from_ref(&unsupported_type), &limits)
             .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut wrong_size = input.clone();
     wrong_size.size = 3;
     let error = prepare_attachment_uploads(&[wrong_size], std::slice::from_ref(&part), &limits)
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let mut wrong_hash = input.clone();
     wrong_hash.sha256 = sha256_hex(b"other");
     let error = prepare_attachment_uploads(&[wrong_hash], std::slice::from_ref(&part), &limits)
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let mut wrong_content_type = part;
     wrong_content_type.content_type = Some("application/json".to_string());
     let error = prepare_attachment_uploads(&[input], &[wrong_content_type], &limits).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 }
 
 #[test]
@@ -3308,7 +3468,7 @@ fn confluence_browser_url_normalization_accepts_safe_links_and_fallbacks() {
     )
     .unwrap_err();
     assert_eq!(
-        invalid_date_blog_url.reason_code,
+        invalid_date_blog_url.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
 
@@ -3360,7 +3520,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
             &config,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     let error = content_browser_url(
@@ -3371,7 +3531,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     let error = content_browser_url(
         Some("/wiki/spaces/ENG/blog/2026/06/27/1234/222222/Weekly"),
@@ -3381,7 +3541,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     for raw in [
         "https://example.atlassian.net/wiki/spaces/OPS",
@@ -3393,7 +3553,7 @@ fn confluence_browser_url_normalization_rejects_unsafe_links() {
         "https:whatever",
     ] {
         let error = space_browser_url(Some(raw), "ENG", &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 }
 
@@ -3571,7 +3731,7 @@ fn confluence_result_urls_fail_closed_on_hostile_upstream_links() {
         next_page_token: None,
     };
     let error = search_result(&page, &config).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -3598,7 +3758,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     assert_eq!(modern.locator.candidate_space.as_deref(), Some("ENG"));
     assert!(validate_blog_locator_space(&modern.locator, "ENG").is_ok());
     let mismatch = validate_blog_locator_space(&modern.locator, "OPS").unwrap_err();
-    assert_eq!(mismatch.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(mismatch.reason_code(), ReasonCode::LocatorInvalid);
 
     let numeric_title_slug = parse_blog_view_inputs(
         &json!({
@@ -3620,7 +3780,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(invalid_date_slug.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(invalid_date_slug.reason_code(), ReasonCode::LocatorInvalid);
     assert!(invalid_date_slug.message.contains("date prefix"));
 
     let list = parse_blog_attachment_list_inputs(
@@ -3643,7 +3803,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let error = parse_blog_view_inputs(
         &json!({
@@ -3652,7 +3812,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("first path segment"));
 
     let error = parse_blog_view_inputs(
@@ -3662,7 +3822,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("numeric content ID"));
 
     let error = parse_blog_view_inputs(
@@ -3672,7 +3832,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     assert!(error.message.contains("first path segment"));
 
     for raw in [
@@ -3682,7 +3842,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
         "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/06/27/222222/Weekly?foo=bar",
     ] {
         let error = parse_blog_view_inputs(&json!({ "url": raw }), &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     }
 }
 
@@ -3719,7 +3879,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
             backend,
         );
         let scopes = provider
-            .resolve_scopes_with_lookup(
+            .lookup_scopes(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
                 Some(&credential()),
@@ -3739,7 +3899,7 @@ async fn attachment_download_scope_lookup_defers_membership_checks() {
         backend.clone(),
     );
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "attachment.download",
             &json!({
                 "pageId": "123456",
@@ -3786,7 +3946,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "blog.attachment.download",
             &json!({
                 "blogId": "123456",
@@ -3880,8 +4040,8 @@ async fn verify_missing_page_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -3904,8 +4064,8 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_config(),
@@ -3925,8 +4085,8 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Allow);
-    assert_eq!(error.reason_code, ReasonCode::VerificationMismatch);
+    assert_eq!(error.decision(), Decision::Allow);
+    assert_eq!(error.reason_code(), ReasonCode::VerificationMismatch);
 }
 
 #[tokio::test]
@@ -4014,7 +4174,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(zero.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(zero.reason_code(), ReasonCode::InputInvalid);
 
     let tampered = format!("{token}x");
     let error = provider
@@ -4027,7 +4187,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -4036,16 +4196,21 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
     let page = attachment_list_page();
     let request = invocation("attachment.list", json!({"pageId": "123456"}));
 
-    let valid =
-        encode_confluence_attachment_list_token(&signer, &page, &request, "start=1".to_string())
-            .unwrap();
+    let valid = encode_confluence_attachment_list_token(
+        &signer,
+        &page,
+        request.admitted(),
+        "start=1".to_string(),
+    )
+    .unwrap();
     assert_eq!(
-        decode_confluence_attachment_list_token(&signer, &valid, &page, &request).unwrap(),
+        decode_confluence_attachment_list_token(&signer, &valid, &page, request.admitted())
+            .unwrap(),
         "start=1"
     );
 
     let mut expired =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     expired.expires_at =
         (Utc::now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
     assert_eq!(
@@ -4053,70 +4218,70 @@ fn attachment_list_tokens_reject_expired_cross_bound_and_unsupported_positions()
             &signer,
             &signed_attachment_list_token(&signer, &expired),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut cross_page =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_page.page_id = "654321".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_page),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut cross_principal =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_principal.principal = "user:alice@example.com".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_principal),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut cross_credential_mode =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     cross_credential_mode.credential_mode = "per_user".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &cross_credential_mode),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let mut unsupported_position =
-        ConfluenceAttachmentListTokenPayload::new(&page, &request, "start=1".to_string());
+        ConfluenceAttachmentListTokenPayload::new(&page, request.admitted(), "start=1".to_string());
     unsupported_position.next_position = "start=1&limit=1".to_string();
     assert_eq!(
         decode_confluence_attachment_list_token(
             &signer,
             &signed_attachment_list_token(&signer, &unsupported_position),
             &page,
-            &request,
+            request.admitted(),
         )
         .unwrap_err()
-        .reason_code,
+        .reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -4185,7 +4350,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -4197,9 +4362,17 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
         backend.clone(),
     );
     let mut request = invocation("attachment.list", json!({"pageId": "123456"}));
-    request.credential_mode = "per_user".to_string();
-    request.credential = Some(credential_with_token("per-user-token"));
-    request.lookup_credential = Some(credential_with_token("lookup-token"));
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Static(credential_with_token(
+            "per-user-token",
+        )))
+        .build();
+    request = InvocationBuilder::from(request)
+        .lookup_credential(credential_with_token("lookup-token"))
+        .build();
 
     provider.invoke(request).await.unwrap();
 
@@ -4267,7 +4440,7 @@ async fn search_rejects_pages_outside_requested_space() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -4326,16 +4499,13 @@ async fn search_rejects_non_current_pages() {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     }
 }
 
 #[tokio::test]
 async fn page_view_enforces_response_byte_cap() {
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
     let backend = Arc::new(StubConfluenceBackend {
         page: ConfluencePage {
             id: "123456".to_string(),
@@ -4362,7 +4532,7 @@ async fn page_view_enforces_response_byte_cap() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -4395,7 +4565,7 @@ async fn page_view_enforces_configured_body_byte_cap() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -4427,7 +4597,7 @@ async fn page_view_rejects_body_response_outside_authorized_scope() {
         .invoke(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
 
 #[tokio::test]
@@ -4462,15 +4632,43 @@ async fn blog_view_rejects_non_current_execution_response() {
         .invoke(invocation("blog.view", json!({ "blogId": "123456" })))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, Decision::Deny);
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+}
+
+#[test]
+fn build_creates_request_and_stream_clients_for_each_api_base() {
+    let cloud_id = "00000000-0000-0000-0000-000000000000";
+    let mut config = confluence_config();
+    config.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/**"
+    ));
+    let host = agent_access_provider::test_support::TestHost::default();
+    config.build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.confluence.egress_proxy".to_string();
+    let tenant = "https://example.atlassian.net/wiki/rest/api/".to_string();
+    let gateway = format!("https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/");
+    assert_eq!(
+        built,
+        [
+            (label.clone(), tenant.clone(), ClientProfile::Request),
+            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Request),
+            (label, gateway, ClientProfile::Stream),
+        ]
+    );
 }
 
 #[tokio::test]
 async fn http_backend_rejects_unallowlisted_confluence_api_url_before_request() {
     let mut config = confluence_config();
     config.allowed_upstream_hosts = vec!["https://other.example/wiki/rest/api/**".to_string()];
-    let backend = HttpConfluenceBackend::new(config, ProviderLimits::default());
+    let backend = HttpConfluenceBackend::for_tests(config, ProviderLimits::default());
     let error = backend
         .page_metadata("123456", &credential())
         .await
@@ -4696,7 +4894,7 @@ async fn http_backend_search_requests_bounded_page_metadata() {
         .await;
 
     let backend = http_confluence_backend_for_server(&server);
-    let page = crate::with_correlation_context(
+    let page = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.search(
             ConfluenceSearchRequest {
@@ -5331,7 +5529,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
                 content_type: "text/plain".to_string(),
                 size: upload_bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     upload_bytes.len() as u64,
                     sha256_hex(upload_bytes),
@@ -5352,7 +5550,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
     assert_eq!(attachments.value.len(), 1);
     assert_eq!(attachments.value[0].id, "att123");
 
-    let downloaded = crate::with_correlation_context(
+    let downloaded = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.attachment_content("123456", "att123", &credential()),
     )
@@ -5470,10 +5668,7 @@ async fn http_backend_streams_confluence_attachment_upload_from_file() {
     config.allowed_upstream_hosts = vec![format!("{}/wiki/rest/api/**", api.uri())];
     let backend = HttpConfluenceBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_request_timeout_ms(1),
         Url::parse(&format!("{}/wiki/rest/api/", api.uri())).unwrap(),
     );
     let upload_path = std::env::temp_dir().join(format!(
@@ -5490,7 +5685,7 @@ async fn http_backend_streams_confluence_attachment_upload_from_file() {
                 content_type: "text/plain".to_string(),
                 size: upload_bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     upload_bytes.len() as u64,
                     sha256_hex(upload_bytes),
@@ -5533,7 +5728,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(32),
@@ -5553,7 +5748,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = confluence_download_config(32);
     config.attachments.media_types = vec![
@@ -5587,7 +5782,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(4),
@@ -5607,16 +5802,14 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let large_bytes = vec![b'x'; 80];
     let provider = ConfluenceProvider::with_backend(
         confluence_download_config(128),
-        ProviderLimits {
-            max_upstream_response_bytes: 64,
-            max_download_bytes: 128,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(64)
+            .with_max_download_bytes(128),
         Arc::new(AttachmentDownloadBackend {
             attachment: confluence_attachment("att123", large_bytes.len() as u64, "text/plain"),
             content: confluence_attachment_content(&large_bytes, "text/plain"),
@@ -5692,7 +5885,7 @@ fn locator_rejects_untrusted_or_ambiguous_url_shapes() {
         "https://example.atlassian.net/wiki/x/abcd",
     ] {
         let error = page_locator_from_inputs(&json!({ "url": url }), &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::LocatorInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
     }
 }
 
@@ -5710,7 +5903,7 @@ fn confluence_protocol_error_message_is_sanitized() {
         "missing field `id` at line 1 column 42".to_string(),
     ));
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.message, "Confluence response protocol error");
     assert!(!error.message.contains("missing field"));
 }
@@ -5722,7 +5915,7 @@ fn confluence_validation_error_is_actionable_and_bounded_to_the_upstream_status(
         message: "body: storage is malformed".to_string(),
     });
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(
         error.message,
         "Confluence rejected the request: body: storage is malformed"
@@ -5921,9 +6114,7 @@ impl CommentStubConfluenceBackend {
         &self,
         credential: &ExecutionCredential,
     ) -> &BTreeMap<String, ConfluenceComment> {
-        credential
-            .token
-            .as_deref()
+        Some(credential_token(credential))
             .and_then(|token| self.comments_by_token.get(token))
             .unwrap_or(&self.comments)
     }
@@ -5940,7 +6131,7 @@ impl CommentStubConfluenceBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential_token: credential.token.clone(),
+                credential_token: Some(credential_token(credential).to_owned()),
                 object_id,
                 body_format,
             });
@@ -6688,7 +6879,7 @@ impl AttachmentListBackend {
     fn record_credential(&self, operation: &str, credential: &ExecutionCredential) {
         self.credential_observations.lock().unwrap().push((
             operation.to_string(),
-            credential.token.clone().unwrap_or_default(),
+            credential_token(credential).to_owned(),
         ));
     }
 }
@@ -7556,37 +7747,26 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     if matches!(action, "page.view" | "blog.view") {
         resource_scopes.insert("space".to_string(), vec!["ENG".to_string()]);
     }
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity::anonymous(),
-        service: "confluence".to_string(),
-        action: action.to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes,
-        credential_mode: "service".to_string(),
-        credential: Some(credential()),
-        lookup_credential: Some(credential()),
-        provider_preflight: None,
-        search_authorization: (action == "search")
-            .then(|| confluence_search_preflight(["ENG"], "service")),
-        delegated_credential: None,
+    let builder = InvocationBuilder::new("confluence", action)
+        .inputs(inputs)
+        .resources(resource_scopes)
+        .credential(credential())
+        .lookup_credential(credential());
+    if action == "search" {
+        builder.search(confluence_search_preflight(["ENG"]))
+    } else {
+        builder
     }
+    .build()
 }
 
-fn confluence_search_preflight<const N: usize>(
-    spaces: [&str; N],
-    credential_mode: &str,
-) -> SearchAuthorization {
-    SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+fn confluence_search_preflight<const N: usize>(spaces: [&str; N]) -> SearchAuthorization {
+    SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::Finite {
             values: spaces.into_iter().map(ToString::to_string).collect(),
         },
-        credential_mode: credential_mode.to_string(),
-    }
+    )
 }
 
 #[test]
@@ -7597,13 +7777,11 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse("https://example.atlassian.net/wiki/rest/api/").unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let audit = backend.egress_proxy_for_test(&credential());
     assert_eq!(audit["mode"], json!("service"));
@@ -7628,13 +7806,11 @@ async fn http_backend_routes_page_requests_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/wiki/rest/api/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend.page("123456", &credential()).await.unwrap();
 
@@ -7667,13 +7843,11 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpConfluenceBackend::new_with_api_base_and_egress(
+    let backend = HttpConfluenceBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/wiki/rest/api/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend
         .attachment_content("123456", "att123", &credential())
@@ -7727,10 +7901,7 @@ async fn stream_bytes(stream: ProviderResultStream) -> Vec<u8> {
 }
 
 fn identity(principal: &str) -> crate::InvocationIdentity {
-    crate::InvocationIdentity {
-        principal: principal.to_string(),
-        authenticated: true,
-    }
+    crate::InvocationIdentity::new(principal.to_string(), true)
 }
 
 fn confluence_attribution_provider(
@@ -7857,11 +8028,7 @@ fn credential() -> ExecutionCredential {
 }
 
 fn credential_with_token(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("user@example.com".to_string()),
-        token: Some(token.to_string()),
-    }
+    basic_credential("user@example.com", token)
 }
 
 fn attachment_list_page() -> ConfluencePage {
@@ -7914,8 +8081,12 @@ fn page_move_invocation() -> ProviderInvocation {
         "page.move",
         json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -7924,8 +8095,12 @@ fn sibling_page_move_invocation(position: &str) -> ProviderInvocation {
         "page.move",
         json!({"pageId": "100", "position": position, "targetPageId": "200"}),
     );
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -7964,7 +8139,7 @@ fn signed_attachment_list_token(
 
 fn assert_invalid_draft_handle<T: std::fmt::Debug>(result: Result<T, ProviderError>) {
     let error = result.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InvalidDraftHandle);
+    assert_eq!(error.reason_code(), ReasonCode::InvalidDraftHandle);
 }
 
 fn confluence_config() -> ConfluenceProviderConfig {
@@ -8072,8 +8247,8 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
     };
     assert!((88..=91).contains(&wait.seconds()), "{}", wait.seconds());
     let error = confluence_backend_error(upload_error);
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert!(!error.message.contains("secret"));
     assert_eq!(
         error.message,
@@ -8150,52 +8325,51 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         bodies: BTreeMap::new(),
     };
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "confluence".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "pageId": "123456",
-                "attachments": names.iter().enumerate().map(|(index, name)| json!({
-                    "field": format!("file{index}"),
-                    "filename": format!("{name}.txt"),
-                    "contentType": "text/plain",
-                    "size": name.len(),
-                    "sha256": sha256_hex(name.as_bytes()),
-                })).collect::<Vec<_>>(),
-            }),
-            body_parts: names
-                .iter()
-                .enumerate()
-                .map(|(index, name)| BrokerBodyPart {
-                    name: format!("file{index}"),
-                    file_name: Some(format!("{name}.txt")),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: name.as_bytes().to_vec(),
-                    temp_file: None,
-                })
-                .collect(),
-            resource_scopes: BTreeMap::from([("space".to_string(), vec!["ENG".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(credential()),
-            lookup_credential: Some(credential()),
-            provider_preflight: Some(json!(ConfluencePagePreflight {
-                page,
-                upstream_status: 200,
-                upstream_duration_ms: 1,
-            })),
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("confluence", "attachment.add")
+                .inputs(json!({
+                    "pageId": "123456",
+                    "attachments": names.iter().enumerate().map(|(index, name)| json!({
+                        "field": format!("file{index}"),
+                        "filename": format!("{name}.txt"),
+                        "contentType": "text/plain",
+                        "size": name.len(),
+                        "sha256": sha256_hex(name.as_bytes()),
+                    })).collect::<Vec<_>>(),
+                }))
+                .resources(BTreeMap::from([(
+                    "space".to_string(),
+                    vec!["ENG".to_string()],
+                )]))
+                .credential(credential())
+                .lookup_credential(credential())
+                .body_parts(
+                    names
+                        .iter()
+                        .enumerate()
+                        .map(|(index, name)| {
+                            BrokerBodyPart::in_memory(
+                                format!("file{index}"),
+                                Some(format!("{name}.txt")),
+                                Some("text/plain".to_string()),
+                                name.as_bytes().to_vec(),
+                            )
+                        })
+                        .collect(),
+                )
+                .state(ProviderState::new(ConfluencePagePreflight {
+                    page,
+                    upstream_status: 200,
+                    upstream_duration_ms: 1,
+                }))
+                .build(),
+        )
         .await
         .unwrap_err();
     // att1 applied before the second upload was throttled: repeating the
     // batch after a wait would upload it again, so this is not a rate limit.
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         "Confluence attachment upload partially failed: part of the batch was applied before \
@@ -8592,8 +8766,12 @@ fn draft_throttle_provider(
         agent_access_provider::test_support::test_signing_key(7),
     );
     let mut binding = invocation("draft.binding", json!({}));
-    binding.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    binding = InvocationBuilder::from(binding)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let handle = provider
         .mint_draft_handle(
             backend.content_type,
@@ -8608,8 +8786,12 @@ fn draft_throttle_provider(
 
 fn draft_invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let mut request = invocation(action, inputs);
-    request.resource_scopes =
-        ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    request = InvocationBuilder::from(request)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     request
 }
 
@@ -8678,17 +8860,22 @@ fn draft_attachment_add_invocation(
             })).collect::<Vec<_>>(),
         }),
     );
-    request.body_parts = names
-        .iter()
-        .enumerate()
-        .map(|(index, name)| BrokerBodyPart {
-            name: format!("file{index}"),
-            file_name: Some(format!("{name}.txt")),
-            content_type: Some("text/plain".to_string()),
-            bytes: name.as_bytes().to_vec(),
-            temp_file: None,
-        })
-        .collect();
+    request = InvocationBuilder::from(request)
+        .body_parts(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    BrokerBodyPart::in_memory(
+                        format!("file{index}"),
+                        Some(format!("{name}.txt")),
+                        Some("text/plain".to_string()),
+                        name.as_bytes().to_vec(),
+                    )
+                })
+                .collect(),
+        )
+        .build();
     request
 }
 
@@ -8711,7 +8898,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert!(
             error
                 .message
@@ -8746,7 +8933,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["retryAfterSeconds"], 30);
         assert!(result["attachments"].as_array().unwrap().is_empty());
@@ -8818,7 +9005,12 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             "content": "<p>reply</p>"
         }),
     );
-    reply.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    reply = InvocationBuilder::from(reply)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = provider.invoke(reply).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
@@ -8845,7 +9037,12 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             "content": "<p>updated</p>"
         }),
     );
-    update.resource_scopes = ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
+    update = InvocationBuilder::from(update)
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .build();
     let error = provider.invoke(update).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
@@ -8907,7 +9104,7 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
         "()",
     ] {
         assert_eq!(
-            parse_cql_query(raw).unwrap_err().reason_code,
+            parse_cql_query(raw).unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -8916,13 +9113,12 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
 #[test]
 fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     let inputs = parse_search_inputs(&json!({"query": {"type": "cql", "value": ""}})).unwrap();
-    let authorization = SearchAuthorization {
-        scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+    let authorization = SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::Finite {
             values: vec!["ENG".to_string(), "OPS".to_string()],
         },
-        credential_mode: "per_user".to_string(),
-    };
+    );
     let scope =
         effective_search_scope(&authorization, &requested_spaces(&inputs).unwrap()).unwrap();
     let query =
@@ -8932,7 +9128,7 @@ fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     assert_eq!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()]))
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -8950,7 +9146,7 @@ fn cql_grammar_errors_are_actionable_and_do_not_echo_operands() {
         ("type = sensitive-value", "type must equal page"),
     ] {
         let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(expected), "{}", error.message);
         assert!(error.message.contains("actions_describe"));
         assert!(!error.message.contains("sensitive-value"));

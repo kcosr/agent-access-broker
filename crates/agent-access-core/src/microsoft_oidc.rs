@@ -24,9 +24,9 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{
-    MicrosoftOidcConfig, is_loopback_or_localhost, load_secret_ref_value, parse_ttl_seconds,
-};
+use crate::load_secret_ref_value;
+use crate::{MicrosoftOidcConfig, parse_ttl_seconds};
+use agent_access_provider::is_loopback_or_localhost;
 
 pub const MICROSOFT_OIDC_PROVIDER_ID: &str = "microsoft";
 pub const MICROSOFT_OIDC_HOST: &str = "login.microsoftonline.com";

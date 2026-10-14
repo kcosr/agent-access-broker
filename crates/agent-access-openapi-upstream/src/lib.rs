@@ -4,6 +4,7 @@ mod document;
 mod refs;
 mod transport;
 
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use config::Settings;
@@ -17,12 +18,25 @@ use std::time::{Duration, Instant};
 use transport::*;
 use url::Url;
 
+/// The `openapi_http` import selection. OpenAPI imports use static
+/// credentials only, so it declares no OAuth companion.
+pub fn registration() -> ImportedAdapterRegistration {
+    imported_adapter_registration(
+        agent_access_provider::module_metadata!(),
+        &OpenApiAdapter,
+        None,
+    )
+}
+
 #[derive(Debug)]
-pub struct OpenApiAdapter;
+struct OpenApiAdapter;
 #[async_trait]
 impl ImportedAdapter for OpenApiAdapter {
     fn kind(&self) -> &'static str {
         "openapi_http"
+    }
+    fn development_only(&self) -> bool {
+        false
     }
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         Settings::parse(definition).map(|_| ())
@@ -76,23 +90,24 @@ impl ImportedAdapter for OpenApiAdapter {
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError> {
-        let settings = Settings::parse(definition).map_err(HostError::invalid)?;
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let settings = Settings::parse(definition).map_err(ProviderBuildError::invalid)?;
         if transport_credential.is_some() {
-            return Err(HostError::invalid(
+            return Err(ProviderBuildError::invalid(
                 "OpenAPI imports do not use transport credentials",
             ));
         }
         let mut compiled = BTreeMap::new();
         for action in actions {
-            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
-            let action = CompiledAction::new(action).map_err(HostError::invalid)?;
+            self.scoped_mcp_name(action)
+                .map_err(ProviderBuildError::invalid)?;
+            let action = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
             if settings.scheme.as_deref() != Some(action.plan.security.scheme.as_str())
                 || definition.execution_bindings.iter().any(|binding| {
                     action.plan.security.delivery().ok().as_ref() != Some(&binding.delivery)
                 })
             {
-                return Err(HostError::invalid(
+                return Err(ProviderBuildError::invalid(
                     "accepted operation security no longer matches service credentials",
                 ));
             }
@@ -100,18 +115,19 @@ impl ImportedAdapter for OpenApiAdapter {
                 .insert(action.definition.action.clone(), action)
                 .is_some()
             {
-                return Err(HostError::invalid("duplicate action name"));
+                return Err(ProviderBuildError::invalid("duplicate action name"));
             }
         }
-        let endpoint = config::endpoint(&definition.endpoint).map_err(HostError::invalid)?;
+        let endpoint =
+            config::endpoint(&definition.endpoint).map_err(ProviderBuildError::invalid)?;
         let allowed = [format!("{}/**", endpoint.as_str().trim_end_matches('/'))];
         Ok(Arc::new(OpenApiProvider {
             client: client(&endpoint, &allowed, host)?,
             endpoint,
             definition: definition.clone(),
             actions: compiled,
-            max_bytes: host.limits.max_upstream_response_bytes as usize,
-            timeout: Duration::from_millis(host.limits.request_timeout_ms),
+            max_bytes: host.limits().max_upstream_response_bytes as usize,
+            timeout: Duration::from_millis(host.limits().request_timeout_ms),
         }))
     }
     async fn discover(
@@ -120,34 +136,30 @@ impl ImportedAdapter for OpenApiAdapter {
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let settings = Settings::parse(definition).map_err(|reason| {
-            ProviderError::deny(
-                ReasonCode::ConfigValidationFailed,
-                format!(
-                    "OpenAPI configuration is invalid: {}",
-                    reason.chars().take(512).collect::<String>()
-                ),
-            )
+            AdapterDiscoveryError::Configuration(format!(
+                "OpenAPI configuration is invalid: {}",
+                reason.chars().take(512).collect::<String>()
+            ))
         })?;
         if transport_credential.is_some() {
-            return Err(credential_error());
+            return Err(credential_error().into());
         }
         let headers = match (&settings.document_delivery, authentication) {
             (None, ImportedDiscoveryAuthentication::Anonymous) => HeaderMap::new(),
             (Some(delivery), ImportedDiscoveryAuthentication::Static(credential)) => {
                 auth(delivery, credential)?
             }
-            _ => return Err(credential_error()),
+            _ => return Err(credential_error().into()),
         };
         let client =
             client(&settings.document, &[settings.document.to_string()], host).map_err(|_| {
-                ProviderError::deny(
-                    ReasonCode::ConfigValidationFailed,
-                    "OpenAPI document destination is invalid",
+                AdapterDiscoveryError::Configuration(
+                    "OpenAPI document destination is invalid".to_owned(),
                 )
             })?;
-        let limit = MAX_DOCUMENT_BYTES.min(host.limits.max_upstream_response_bytes as usize);
+        let limit = MAX_DOCUMENT_BYTES.min(host.limits().max_upstream_response_bytes as usize);
         let operation = async {
             let mut response = client
                 .send(
@@ -166,6 +178,15 @@ impl ImportedAdapter for OpenApiAdapter {
                 })?;
             let status = response.status().as_u16();
             complete_upstream_trace(&mut response, None);
+            if status == 429 {
+                // Throttling by the document server is the upstream's rate
+                // limit for this imported service, with its bounded wait.
+                return Err(upstream_rate_limited(
+                    &definition.service,
+                    UpstreamRetryAfter::from_headers(response.headers()),
+                )
+                .with_upstream(Some(status), None));
+            }
             if status != 200 {
                 return Err(ProviderError::error(
                     status_reason(status),
@@ -226,14 +247,14 @@ impl ImportedAdapter for OpenApiAdapter {
                 tools,
             })
         };
-        tokio::time::timeout(Duration::from_secs(60), operation)
+        Ok(tokio::time::timeout(Duration::from_secs(60), operation)
             .await
             .map_err(|_| {
                 ProviderError::error(
                     ReasonCode::UpstreamTimeout,
                     "OpenAPI discovery exceeded its deadline",
                 )
-            })?
+            })??)
     }
 }
 
@@ -245,42 +266,52 @@ struct OpenApiProvider {
     max_bytes: usize,
     timeout: Duration,
 }
-#[async_trait]
-impl Provider for OpenApiProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl OpenApiProvider {
+    /// Imported actions are action-only; their inputs must still plan a request.
+    fn validate_action_inputs(&self, action: &str, inputs: &Value) -> Result<(), ProviderError> {
         self.actions
             .get(action)
             .ok_or_else(input_error)?
             .request(&self.endpoint, inputs)?;
-        Ok(BTreeMap::new())
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for OpenApiProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if request.service != self.definition.service
-            || !request.resource_scopes.is_empty()
-            || !request.body_parts.is_empty()
-            || request.delegated_credential.is_some()
+        if request.service() != self.definition.service
+            || !matches!(request.authority(), InvocationAuthority::ActionOnly)
+            || !request.body_parts().is_empty()
+            || request.execution().delegated().is_some()
         {
             return Err(input_error());
         }
-        let action = self.actions.get(&request.action).ok_or_else(input_error)?;
-        let (url, mut headers) = action.request(&self.endpoint, &request.inputs)?;
+        let action = self.actions.get(request.action()).ok_or_else(input_error)?;
+        let (url, mut headers) = action.request(&self.endpoint, request.inputs())?;
         let binding = self
             .definition
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode
+                binding.owner_mode.as_str() == request.credential_mode().as_str()
                     && binding.is_supported()
                     && binding.mechanism == ImportedAuthMechanism::StaticToken
             })
             .ok_or_else(credential_error)?;
         headers.extend(auth(
             &binding.delivery,
-            request.credential.as_ref().ok_or_else(credential_error)?,
+            request
+                .execution()
+                .static_credential()
+                .ok_or_else(credential_error)?,
         )?);
         let mut upstream = self
             .client
@@ -298,7 +329,7 @@ impl Provider for OpenApiProvider {
         if !accepted_media.is_empty() {
             upstream = upstream.header("Accept", accepted_media);
         }
-        if let Some(body) = request.inputs.get("body") {
+        if let Some(body) = request.inputs().get("body") {
             upstream = upstream.json(body);
         }
         let started = Instant::now();
@@ -348,7 +379,7 @@ impl Provider for OpenApiProvider {
                 .to_ascii_lowercase();
             complete_upstream_trace(
                 &mut response,
-                (!(200..300).contains(&code)).then(|| status_reason(code)),
+                (!(200..300).contains(&code)).then(|| status_reason(code).into()),
             );
             let bytes = read_body(response, self.max_bytes).await?;
             let decoded = (|| {
@@ -398,21 +429,16 @@ impl Provider for OpenApiProvider {
                 ))
             });
         let elapsed = started.elapsed().as_millis() as u64;
-        let audit = json!({"adapterKind":"openapi_http","method":action.plan.method,"pathTemplate":action.plan.path,"credentialMode":request.credential_mode,"operationDispatched":dispatched});
+        let audit = json!({"adapterKind":"openapi_http","method":action.plan.method,"pathTemplate":action.plan.path,"credentialMode":request.credential_mode(),"operationDispatched":dispatched});
         match outcome {
             Ok(mut result) => {
                 if !action.definition.read_only {
                     result["mutationStatus"] = json!("applied_unverified");
                     result["retrySafe"] = json!(false);
                 }
-                Ok(ProviderResult {
-                    result,
-                    stream: None,
-                    audit: Some(audit),
-                    upstream_status: status,
-                    upstream_duration_ms: Some(elapsed),
-                    object_ids: None,
-                })
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(status, Some(elapsed)))
             }
             Err(mut error) => {
                 if !action.definition.read_only {

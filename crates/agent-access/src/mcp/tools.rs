@@ -2,7 +2,8 @@
 use agent_access_core::mcp::{
     McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry, ToolTarget,
 };
-use agent_access_core::{ActionIo, ApiActionSpec, ApiCatalog, InvokeRequest, ResponseOptions};
+use agent_access_core::{ApiActionSpec, ApiCatalog, InvokeRequest};
+use agent_access_provider::{ActionIo, presentation::ResponseOptions};
 use anyhow::{Context, Result, bail};
 use rmcp::model::{CallToolResult, Tool};
 use serde::Deserialize;
@@ -67,8 +68,8 @@ struct Arguments {
     output_path: Option<PathBuf>,
     #[serde(default)]
     secret_sources: Vec<crate::SecretSourceBinding>,
-    read_content_format: Option<agent_access_core::ReadContentFormat>,
-    response_format: Option<agent_access_core::ResponseFormat>,
+    read_content_format: Option<agent_access_provider::presentation::ReadContentFormat>,
+    response_format: Option<agent_access_provider::presentation::ResponseFormat>,
 }
 
 #[derive(Debug)]
@@ -278,6 +279,7 @@ pub(super) async fn call_tool(
                 )
             }
         }
+        _ => bail!("this client does not support the action's input and output kind"),
     };
     let is_error = status >= 400 || value.get("decision").and_then(Value::as_str) != Some("allow");
     let file_receipt = args.output_path.is_some() && !is_error;
@@ -288,7 +290,8 @@ pub(super) async fn call_tool(
             &action.rendered_body_owners,
         )
         .map_err(|_| anyhow::anyhow!("broker response has an invalid rendered body"))?;
-        if options.response_format == agent_access_core::ResponseFormat::Markdown {
+        if options.response_format == agent_access_provider::presentation::ResponseFormat::Markdown
+        {
             crate::markdown_result_value(&value)
                 .map_err(|_| anyhow::anyhow!("broker response has an invalid Markdown result"))?;
         }
@@ -341,14 +344,30 @@ fn response_options(
     action: &ApiActionSpec,
 ) -> Result<ResponseOptions> {
     let explicit_read = args.read_content_format.map(|format| match format {
-        agent_access_core::ReadContentFormat::Native => crate::ReadContentFormatArg::Native,
-        agent_access_core::ReadContentFormat::Markdown => crate::ReadContentFormatArg::Markdown,
-        agent_access_core::ReadContentFormat::Text => crate::ReadContentFormatArg::Text,
+        agent_access_provider::presentation::ReadContentFormat::Native => {
+            crate::ReadContentFormatArg::Native
+        }
+        agent_access_provider::presentation::ReadContentFormat::Markdown => {
+            crate::ReadContentFormatArg::Markdown
+        }
+        agent_access_provider::presentation::ReadContentFormat::Text => {
+            crate::ReadContentFormatArg::Text
+        }
     });
-    let explicit_output = args.response_format.map(|format| match format {
-        agent_access_core::ResponseFormat::Json => crate::OutputFormatArg::Json,
-        agent_access_core::ResponseFormat::Markdown => crate::OutputFormatArg::Markdown,
-    });
+    let explicit_output = args
+        .response_format
+        .map(|format| match format {
+            agent_access_provider::presentation::ResponseFormat::Json => {
+                Ok(crate::OutputFormatArg::Json)
+            }
+            agent_access_provider::presentation::ResponseFormat::Markdown => {
+                Ok(crate::OutputFormatArg::Markdown)
+            }
+            _ => Err(anyhow::anyhow!(
+                "this client does not support the responseFormat"
+            )),
+        })
+        .transpose()?;
     let options = crate::resolve_response_options(
         settings,
         explicit_read,
@@ -369,7 +388,7 @@ fn response_options(
                 .replace("read-content default", "readContentFormat default"),
         )
     })?;
-    if options.read_content_format != agent_access_core::ReadContentFormat::Native
+    if options.read_content_format != agent_access_provider::presentation::ReadContentFormat::Native
         && !action
             .read_content_formats
             .iter()
@@ -377,7 +396,7 @@ fn response_options(
     {
         bail!("readContentFormat is unsupported for this action");
     }
-    if options.response_format != agent_access_core::ResponseFormat::Json
+    if options.response_format != agent_access_provider::presentation::ResponseFormat::Json
         && !action
             .response_formats
             .iter()
@@ -501,7 +520,7 @@ struct PreparedUpload {
 
 fn prepare_upload(
     files: &[crate::SendFileDescriptor],
-    plan: &agent_access_core::MultipartUploadSpec,
+    plan: &agent_access_provider::MultipartUploadSpec,
     inputs: &mut Value,
 ) -> Result<Vec<PreparedUpload>> {
     let mut prepared = Vec::new();
@@ -696,7 +715,7 @@ mod tests {
     async fn presentation_options_preserve_cli_default_and_conflict_rules() {
         let server = MockServer::start().await;
         let mut settings = settings(&server);
-        settings.read_content_format = agent_access_core::ReadContentFormat::Text;
+        settings.read_content_format = agent_access_provider::presentation::ReadContentFormat::Text;
         let mut action = action();
         action.read_content_formats = vec!["native".into(), "markdown".into(), "text".into()];
         action.response_formats = vec!["json".into(), "markdown".into()];
@@ -708,11 +727,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             selected.read_content_format,
-            agent_access_core::ReadContentFormat::Native
+            agent_access_provider::presentation::ReadContentFormat::Native
         );
         assert_eq!(
             selected.response_format,
-            agent_access_core::ResponseFormat::Markdown
+            agent_access_provider::presentation::ResponseFormat::Markdown
         );
         let explicit_error = response_options(
             &settings,
@@ -724,7 +743,7 @@ mod tests {
         assert!(explicit_error.contains("responseFormat"));
         assert!(explicit_error.contains("readContentFormat"));
         assert!(!explicit_error.contains("--"), "{explicit_error}");
-        settings.output_format = agent_access_core::ResponseFormat::Markdown;
+        settings.output_format = agent_access_provider::presentation::ResponseFormat::Markdown;
         let ambient_error = response_options(&settings, &args(json!({"inputs":{}})), &action)
             .unwrap_err()
             .to_string();
@@ -1515,7 +1534,7 @@ mod tests {
                 action.read_only = raw;
                 action.sensitive_output_pointers = vec!["/result/issuedToken".into()];
                 if raw {
-                    action.io = agent_access_core::raw_download_io();
+                    action.io = agent_access_provider::raw_download_io();
                 }
                 serve_catalog(&server, action).await;
                 Mock::given(method("POST"))
@@ -1840,8 +1859,8 @@ mod tests {
         let server = MockServer::start().await;
         let mut action = action();
         action.io = ActionIo::RawDownload {
-            metadata_header: agent_access_core::RESULT_METADATA_HEADER.into(),
-            metadata_encoding: agent_access_core::HeaderEncoding::Base64Json,
+            metadata_header: agent_access_provider::RESULT_METADATA_HEADER.into(),
+            metadata_encoding: agent_access_provider::HeaderEncoding::Base64Json,
         };
         serve_catalog(&server, action).await;
         let metadata = allow(json!({"size":3,"sha256":"0".repeat(64)}));
@@ -1850,7 +1869,7 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header(
-                        agent_access_core::RESULT_METADATA_HEADER,
+                        agent_access_provider::RESULT_METADATA_HEADER,
                         base64::engine::general_purpose::STANDARD
                             .encode(serde_json::to_vec(&metadata).unwrap()),
                     )
@@ -1881,8 +1900,8 @@ mod tests {
         let server = MockServer::start().await;
         let mut action = action();
         action.io = ActionIo::RawDownload {
-            metadata_header: agent_access_core::RESULT_METADATA_HEADER.into(),
-            metadata_encoding: agent_access_core::HeaderEncoding::Base64Json,
+            metadata_header: agent_access_provider::RESULT_METADATA_HEADER.into(),
+            metadata_encoding: agent_access_provider::HeaderEncoding::Base64Json,
         };
         serve_catalog(&server, action).await;
         let metadata = allow(
@@ -1892,7 +1911,7 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header(
-                        agent_access_core::RESULT_METADATA_HEADER,
+                        agent_access_provider::RESULT_METADATA_HEADER,
                         base64::engine::general_purpose::STANDARD
                             .encode(serde_json::to_vec(&metadata).unwrap()),
                     )
@@ -1944,7 +1963,7 @@ mod tests {
             },
             "additionalProperties":false
         });
-        action.io = agent_access_core::raw_download_io();
+        action.io = agent_access_provider::raw_download_io();
         assert!(matches!(action.io, ActionIo::RawDownload { .. }));
 
         let mut catalog = catalog(action.clone());
@@ -1976,21 +1995,18 @@ mod tests {
         let mut action = action();
         action.read_only = false;
         action.io = ActionIo::MultipartUpload {
-            plan: agent_access_core::MultipartUploadSpec {
-                role: "attachment".into(),
-                metadata_pointer: "/attachments".into(),
-                field_name_prefix: "upload".into(),
-                min_files: 1,
-                max_files: Some(1),
-                locator_inputs: vec![],
-                metadata_fields: vec![
-                    "field".into(),
-                    "size".into(),
-                    "sha256".into(),
-                    "filename".into(),
-                ],
-                caller_content_type_allowed: false,
-            },
+            plan: agent_access_provider::MultipartUploadSpec::new(
+                "attachment",
+                "/attachments",
+                "upload",
+            )
+            .with_file_count(1, Some(1))
+            .with_metadata_fields(vec![
+                "field".into(),
+                "size".into(),
+                "sha256".into(),
+                "filename".into(),
+            ]),
         };
         serve_catalog(&server, action).await;
         Mock::given(method("POST"))
@@ -2038,16 +2054,9 @@ mod tests {
 
     #[test]
     fn upload_metadata_is_from_stable_snapshot_and_sensitive_requirements_are_optional() {
-        let plan = agent_access_core::MultipartUploadSpec {
-            role: "attachment".into(),
-            metadata_pointer: "/files".into(),
-            field_name_prefix: "file".into(),
-            min_files: 1,
-            max_files: Some(1),
-            locator_inputs: vec![],
-            metadata_fields: vec!["field".into(), "size".into(), "sha256".into()],
-            caller_content_type_allowed: false,
-        };
+        let plan = agent_access_provider::MultipartUploadSpec::new("attachment", "/files", "file")
+            .with_file_count(1, Some(1))
+            .with_metadata_fields(vec!["field".into(), "size".into(), "sha256".into()]);
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("file.txt");
         std::fs::write(&path, "first").unwrap();

@@ -19,7 +19,9 @@ configuration keys are in [docs/configuration.md](configuration.md); per-provide
 behavior is in [docs/providers.md](providers.md); the broader agent containment
 and egress-boundary rationale is in [docs/security-model.md](security-model.md);
 managed-store database, encryption, and audit database details are in
-[docs/database.md](database.md).
+[docs/database.md](database.md). Writing a native provider is covered by the
+[provider SDK guide](provider-sdk.md), and building another distribution from
+the host by the [downstream assembly guide](downstream-assembly.md).
 
 ## MCP connection views
 
@@ -77,10 +79,10 @@ as Git smart HTTP and classifies it into the same service/action/scope policy
 model before upstream credentials are selected.
 
 The execution credential exists only inside the `ProviderInvocation` handed to a
-provider for a single call. It is never placed in the response to the caller, and
-its `Debug` representation redacts the username and token (`ExecutionCredential`
-prints `username` and `token` as `<redacted>`). The same redaction applies to
-proxy credentials (`EgressProxyConfig`).
+provider for a single call. It is never placed in the response to the caller,
+never serializes, and its `Debug` representation shows only the credential kind
+(`ExecutionCredential { kind: "bearer_token", .. }`). The same redaction applies
+to proxy credentials (`EgressProxyConfig`).
 
 Execution credentials are resolved only **after** identity admission, scope
 resolution, deny-by-default policy authorization, and credential-mode selection
@@ -98,22 +100,49 @@ also includes a same-origin browser portal frontend:
 
 - **`agent-access-provider`** — the backend contract: service descriptors
   (`descriptor.rs`), resource types (`resource.rs`), the `Provider` trait and
-  its invocation, result, and error types, reason codes (`reason.rs`),
+  its invocation, result, and error types, standard reason codes and the subset
+  providers may report (`reason.rs`), provider-owned domain reasons and the
+  reason handles errors, streams, and traces carry (`domain_reason.rs`), the
+  hook contract the host checks provider outcomes against (`contract.rs`),
   upstream throttling (`upstream_rate_limit.rs`: bounded `Retry-After` parsing,
   the shared `upstream_rate_limited` error, and the applied-unverified
   `mutation_verification_failed` for throttling after an applied write), the
   OAuth dialect contract (`oauth_dialect.rs`), delegated credentials
-  (`delegated.rs`), and the host services backends use: upstream HTTP clients (`upstream.rs`), the
-  egress-proxy resolver (`egress_proxy.rs`), outbound TLS trust, upstream
-  allowlists, correlation headers, upstream trace events (`trace.rs`), and
-  opaque token signing (`signing.rs`).
+  (`delegated.rs`), and the host services backends use: upstream HTTP clients
+  (`upstream.rs`), egress declarations and sanitized routes
+  (`egress_config.rs`), upstream allowlists, correlation headers, upstream
+  trace events (`trace.rs`), and opaque token signing (`signing.rs`). Its
+  crate root exports every supported item explicitly, with presentation items
+  only under `presentation`. Its public `host` module (`host.rs`) holds the
+  host cooperation ports: the upstream client factory contract and the build
+  context, the values only the host constructs for providers (scope requests,
+  static execution credentials, admitted requests, spooled body parts and the
+  final invocation), the initial correlation, hook and deadline scopes,
+  service-scoped signer wrapping, delegated-lease wrapping and the host-origin
+  failure port. `deps` re-exports the third-party types and macros those
+  signatures name. The SDK resolves no secret references, loads no TLS files
+  and reads no process environment.
 - **`agent-access-core`** — the library: the request runtime
   (`runtime.rs`), the audit writer and its storage backends
   (`runtime/audit_jsonl.rs`, `runtime/audit_sqlite/`), audit queries
   (`audit_query.rs`), the backend registry (`backends.rs`), the managed
-  credential store (`managed_store.rs`), config parsing and validation, and the
-  response envelope types (`lib.rs`). It contains no backend and re-exports the
-  backend contract.
+  credential store (`managed_store.rs`), config parsing and validation, host
+  secret-reference resolution (`config_error.rs`), host network construction
+  (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
+  upstream client factories), and the response envelope types (`lib.rs`). It
+  contains no backend and does not re-export the backend contract; the host,
+  the binary, and the CLI depend on `agent-access-provider` directly. Its
+  internal `imports` module owns the import adapter contract: imported
+  service/action definitions, bounded import schemas, the `ImportedAdapter`
+  seam, and the opaque `ImportedAdapterRegistration` that the shipped adapter
+  crates build with an internal free function. That contract is Broker
+  implementation, not a provider-author interface.
+- **Import adapter crates** — `agent-access-mcp-upstream` and
+  `agent-access-openapi-upstream` implement the internal import contract and
+  depend on core. Each exports `registration()`; the binary selects imports
+  only through it. The MCP registration contributes its `mcp_oauth` companion
+  dialect as the import-authentication role, and selecting that dialect again
+  is rejected as a duplicate. OpenAPI declares no companion.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.
@@ -126,27 +155,82 @@ also includes a same-origin browser portal frontend:
 - **`agent-access-conformance`** — a test-only backend (not published, not
   linked by the broker binary) that uses every extension point of the backend
   contract; broker acceptance tests register it to prove a backend needs no
-  host changes. See [Adding a backend](#adding-a-backend).
+  host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules and request authorization.
-- **`agent-access-broker`** — the service binary: HTTP listeners, request
-  decoding, host-matched gateway dispatch, source/proxy-chain derivation,
-  dynamic config reload, and management routing (`main.rs` plus broker modules
-  under `src/`).
+- **`agent-access-broker-host`** — the broker host library: module
+  composition (`BrokerComposition`), the application (`BrokerApplication`:
+  command parsing, configuration validation, audit verification, and the
+  `serve` lifecycle with listeners, signals, reload, and bounded shutdown), HTTP
+  routers, request decoding, host-matched gateway dispatch, source/proxy-chain
+  derivation, dynamic config reload, management routing, and HTTP MCP serving.
+  It depends on core and never on a backend or import adapter. Its public API
+  is the composition, the application, the assembly identity and the build
+  status; its routers and reload and runtime state are private, so other
+  crates, including their tests, start a broker only through the application.
+  The `test-support` feature adds `test_support::IsolatedBroker`, which runs a
+  composition through that same startup, reload and drain for acceptance
+  tests.
+- **`agent-access-broker`** — the service binary: a thin assembly that selects
+  the modules it links (`composition()` in `backends.rs`), stamps its assembly
+  identity and the release commit of its workspace modules (`build_identity()`
+  in `build_info.rs`), and runs the host application (`main.rs`). Its library
+  exports only those two functions, which the binary and the acceptance tests
+  pass to the host. The host checks that identity against the composition and
+  derives the build status served at `/v1/broker/status`.
 - **`agent-access`** — the CLI binary that lowers commands to broker HTTP calls
   (`main.rs` plus integration tests under `tests/`).
 - **`apps/portal`** — the React browser management portal built into static
   assets and served from the broker public listener when `[portal]` is enabled.
 
-Core owns the engine and the conceptual contract. The broker binary owns the
-network surface and process lifecycle. The CLI never sees broker-held execution
+Core owns the engine and the conceptual contract. The host owns the network
+surface and the process lifecycle; the broker binary selects the modules it links. The CLI never sees broker-held execution
 credentials and never makes authorization decisions; it is a thin client over the broker's HTTP API.
+
+Crate dependencies follow those roles. An assembly, upstream or downstream,
+links the host and the modules it selects; providers depend only on the SDK and
+ordinary helper libraries:
+
+```mermaid
+flowchart TD
+    Assembly[agent-access-broker assembly] --> Host[agent-access-broker-host]
+    Downstream[Downstream assembly] --> Host
+    Assembly --> Natives[Native provider crates]
+    Downstream --> Natives
+    Downstream --> Own[Downstream provider crates]
+    Assembly --> Adapters[Import adapters: MCP and OpenAPI]
+    Downstream --> Adapters
+    Host --> Core[agent-access-core]
+    Host --> SDK[agent-access-provider SDK]
+    Adapters --> Core
+    Core --> SDK
+    Natives --> SDK
+    Own --> SDK
+    Natives --> Helpers[Helpers: content and Atlassian]
+    Helpers --> SDK
+    Reference[Conformance reference, tests only] --> SDK
+    CLI[agent-access CLI] --> Core
+    CLI --> SDK
+```
+
+Every workspace crate declares one role (`sdk`, `core`, `host`, `assembly`,
+`cli`, `native`, `reference`, `adapter`, or `helper`), and
+`node scripts/check-crate-boundaries.mjs` rejects dependency edges that cross
+them: the SDK depends on no workspace crate, natives, the reference and helpers
+never reach core, the host, an assembly, the CLI or an adapter, and the
+production closures of core and the host contain no native, adapter or
+reference crate. See [testing](testing.md) for the exact rules, the
+[provider SDK guide](provider-sdk.md) for the supported provider surface, and
+the [downstream assembly guide](downstream-assembly.md) for building another
+distribution.
+
+At run time, requests flow through those components:
 
 ```mermaid
 flowchart LR
     Agent[Agent or user] --> CLI[agent-access CLI]
     Agent --> Http[Direct broker HTTP client]
-    CLI --> Broker[agent-access-broker]
+    CLI --> Broker[Broker host application]
     Http --> Broker
     Broker --> Core[agent-access-core runtime]
     Core --> Jira[Jira provider]
@@ -160,6 +244,27 @@ flowchart LR
     HttpSvc --> Upstream3[Operator-approved upstream]
     Gateway --> Upstream4[Git upstream]
 ```
+
+### Composition and process lifecycle
+
+An assembly builds one `BrokerComposition` from the native registrations,
+OAuth dialects and import adapter registrations it links. Building validates the
+selections together and produces an immutable registry that every command and
+runtime generation shares; nothing rebuilds it later. `BrokerApplication::new`
+checks the assembly's [identity](#assembly-identity) against the composition
+and derives the build status. `run_from_env` then owns command parsing,
+logging, the Tokio runtime, `config validate`, `audit verify` and `serve`, and
+returns an exit status instead of exiting: `3` for an invalid composition,
+identity or configuration.
+
+`serve` loads and validates the configuration through the selected parsers,
+acquires the state locks, builds the first runtime generation (each configured
+provider is built for it), then binds the listeners and starts serving. A
+[reload](#dynamic-config-reload) validates a candidate configuration and builds
+a new generation within the same composition; operations keep the generation
+that admitted them. Changing what is linked requires a new build and a restart.
+[Shutdown](#process-shutdown) drains listeners, operations and audit within a
+bounded budget.
 
 ### Core vs provider responsibilities
 
@@ -201,85 +306,182 @@ policy, then asks the provider to execute.
 
 ### Backend registration
 
-The broker binary lists the backends it links (`backend_registry()` in the
-broker crate). Each `BackendRegistration` names a kind, the resource types the
+The broker binary selects the modules it links through `composition()` in the
+broker crate: native backends, OAuth dialects, and import adapters (as the
+opaque registrations their crates' `registration()` returns), validated once
+into an immutable `BrokerComposition` that every command and runtime
+generation shares. Building it rejects invalid identifiers and duplicate
+backend kinds, resource types, dialects, and adapters; an import's companion
+dialect counts as selected, so selecting it again with `.oauth(..)` is a
+duplicate. Each `BackendRegistration` is a `static` built with its `const`
+constructor and builder methods. It names the declaring package (name and
+version, captured with `module_metadata!()`), a kind, the resource types the
 backend defines, a strict parser for its `[providers.<kind>]` table, and whether
-it is a development fixture. Parsing a configuration routes each provider table
+it is a development fixture. OAuth dialect and import adapter registrations
+carry the same package metadata. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
-supplies the resource type registry (the broker's own `git_repository` and
-`oauth_collection` types plus every backend's types, in registration order).
+supplies the resource type registry (the broker's own `git_repository` type
+plus every backend's types, in registration order). Development fixtures are
+ordinary registrations: the binary selects the `oauth_stub` records backend
+last, so its `oauth_collection` type lists last, and selects the `stub` OAuth
+dialect alongside the production dialects. An empty registry has neither.
 A parsed table is a `BackendConfig`: it validates itself against a narrow view
 of the rest of the configuration (deployment environment, broker limits, and
 the credential kinds configured for its service), derives its service
 descriptor, lists its egress proxies for startup preflight, and builds its
-provider from host services (limits, egress selection, outbound TLS,
+provider from a `BuildContext`: limits, the host's upstream client factory,
 attribution, and the optional stable signing key, scoped to the backend's
-service so one backend's tokens never verify for another). Configuration parsing,
-validation, and provider construction never name a backend kind; development
-fixtures additionally require `deployment.enable_fake_service`.
+service so one backend's tokens never verify for another. Building is
+synchronous and offline: it prepares clients and capabilities but never
+contacts an upstream, verifies a credential or refreshes OAuth. A failure is a
+`ProviderBuildError` carrying safe configuration diagnostics; when the host's
+own network construction failed, the host keeps its cause, such as a missing
+proxy credential reference. Configuration parsing, validation, and provider
+construction never name a backend kind; development fixtures additionally
+require `deployment.enable_fake_service`.
 
-Backends reach their upstream through `UpstreamClient`s built from those host
-services, which apply the rules every backend shares. Each client uses the
-broker's outbound TLS trust and the backend's resolved egress proxy, never
+Backends reach their upstream through `UpstreamClient`s built through that
+factory, which apply the rules every backend shares. A backend declares each
+client's label, base URL, egress declaration (ordinary routing with its
+configured service proxy, or the literal-loopback request described under
+[Egress proxy model](#egress-proxy-model)) and profile; core constructs the
+client with the generation's outbound TLS trust and selected route, never
 follows redirects on its own, and bounds time by profile: a whole-request
-timeout for ordinary requests, none for streamed downloads (the backend bounds
-each chunk), and a connect timeout for uploads, whose bodies fail after the
-streaming idle timeout without progress. Every request, including each hop of
+timeout for ordinary requests (with automatic retries disabled for
+single-attempt and explicitly bounded clients), none for streamed downloads
+(the backend bounds each chunk), and a connect timeout for uploads, whose
+bodies fail after the streaming idle timeout without progress. Backends see
+only the sanitized route (mode and proxy origin) for audit, never proxy
+credentials. Every request sent through the client, including each hop of
 a redirect chain followed with `get_following_redirects`, must match the
-backend's `allowed_upstream_hosts`. Credentials go only to the service's own
-origin; redirect hops to other origins carry correlation headers only when the
-backend opts in (Jira does, for Atlassian media hosts; CloudBees CI does not,
-for artifact storage). Each request records one
+backend's `allowed_upstream_hosts`. The redirect helper applies the backend's
+credentials only to hops on the service's own origin; on ordinary requests the
+backend attaches credentials itself and must check the origin first (see
+[credentials and origins](provider-sdk.md#credentials-and-origins)). Redirect
+hops to other origins carry correlation headers only when the backend opts in
+(Jira does, for Atlassian media hosts; CloudBees CI does not, for artifact
+storage). Each request records one
 `upstream_request_completed` trace, either when the backend has classified the
-response or when the response is dropped. Backends keep their own protocol:
+response or when the response is dropped. The trace captures the provider hook
+that sent the request, including from work moved onto other tasks with
+`InvocationScope`. The backend's classification, or a status reason its client
+declared, must be one that hook may report, a registered domain reason, or a
+host port's failure; any other, or one made outside a provider hook, is
+recorded as `broker_provider_contract_failed`. A transport failure's
+classification is the client's own. Backends keep their own protocol:
 URLs, authentication schemes, status and body handling, and any extra checks
 on redirect targets.
+
+### Continuation tokens
+
+The SDK provides a continuation envelope (`ContinuationFamily`,
+`ContinuationBinding`, `ContinuationSigner`) for native actions that return a
+resumable cursor, page token or handle. CloudBees CI log cursors and GitLab REST
+page tokens use it; other native providers keep their own token handling, which
+is described in each provider's documentation. A provider that uses the
+envelope declares each token family once: its service and purpose, a version, an explicit payload cap, an
+optional expiry, and a signing lifetime:
+
+- **generation**: a key generated with the provider instance, so a reload or
+  restart invalidates the tokens even when a stable key is configured;
+- **stable when configured**: the service-scoped stable key derived from
+  `broker_tokens.hash_key_ref` when one is configured, otherwise the
+  generation key;
+- **durable**: only the stable key; sealing or opening fails without one.
+
+A token is bound to the admitted service and action (a handle family may span
+the service's actions), the host-selected execution context, the credential
+mode, the principal (a family that deliberately shares service-mode tokens
+binds it only in per-user mode), the provider's configuration fingerprint, and
+the resource identifiers and normalized query, filter and output settings the
+provider adds. Delegated families also bind the lease's `DelegatedBindingId`,
+target and audience, which routine token refresh keeps. The binding is a
+canonical, length-delimited encoding whose digest enters the HMAC context with
+the service, purpose and version; the token itself carries only the version,
+the expiry, the provider payload and the MAC. Any other binding, purpose, key
+or version rejects the token, and obsolete versions are never decoded. The
+encoded size cap is derived exactly from the payload cap; an oversized payload
+or token is an error, never truncated. The effective grant boundary is not
+bound: the host authorizes every continuation under current policy and the
+provider re-applies its containment and result checks. Each provider's
+documentation states its families' bindings and lifetimes.
+
+### Assembly identity
+
+The executable supplies an `AssemblyIdentity` with its composition to
+`BrokerApplication::new`: its name, version and command description, a
+bounded qualification label (`unqualified` unless the assembler declares one),
+the source revisions it supplies for itself, the host and the SDK, and a module
+provenance map keyed by registered crate name and version. Each revision is a
+full Git object ID marked as declared or backed by the assembler's build
+evidence; an omitted revision is reported as unavailable, never inferred. The
+host rejects, as a composition error that exits `3`, malformed fields, map
+entries naming a package that registers no module (including the host or SDK
+themselves), repeated entries, and conflicting revisions. It derives the build
+status served at `/v1/broker/status`: the assembly, the host and SDK packages,
+and the compiled module inventory with every role each package registers, in
+canonical order, plus an inventory fingerprint over the host, SDK and modules
+with their revisions and provenance. The status lists what is compiled in, not
+what is configured, and no reload changes it. The `broker_starting` event
+carries the assembly identity and that fingerprint.
+
+The assembly identity names the aggregate HTTP MCP server and the program in
+state-lock holder metadata. Lock file names, the configuration path, state and
+keys never depend on it. Imported MCP connections identify the client as the
+host implementation (`agent-access-broker-host` and its version), not the
+assembly or the adapter package. The upstream `agent-access-broker` stamps a
+release build's verified commit, from `AGENT_ACCESS_BUILD_COMMIT`, as
+evidence-backed for itself, the host, the SDK and each of its workspace modules.
 
 ### Adding a backend
 
 A backend is a crate that depends only on `agent-access-provider` and exports
-one `BackendRegistration`; adding it to the broker's `backend_registry()` is the
-only host change. The crate supplies:
+one `BackendRegistration`; selecting it in an assembly's composition is the only
+host change. The [provider SDK guide](provider-sdk.md) is the provider-author
+reference: the supported surface and trust model, registration and
+configuration, descriptors and typed resources, scope resolution and provider
+state, admitted authority and credentials, governed HTTP, continuation tokens,
+reasons and outcomes, testing with the SDK test support and the conformance
+reference, the compatibility policy, and a worked example.
 
-- **Resource types**: `ResourceTypeDescriptor` statics with a canonical target
-  grammar and, optionally, namespace selectors and private attributes (secret
-  values on exact managed entries, such as a Teams webhook URL, which the host
-  encrypts and resolves only for an authorized invocation of that entry).
-  Policy validation, resource management, discovery, and the portal read the
-  published metadata.
-- **Typed configuration**: a strict `[providers.<kind>]` struct implementing
-  `BackendConfig` (validation messages under `providers.<kind>`, egress proxies
-  for preflight, and provider construction from host services).
-- **A service descriptor**: actions with input schemas, resource scopes,
-  credential modes and lookups, explicit read-only classification,
-  raw-download or multipart-upload I/O,
-  sensitive outputs, attribution, presentation (embedded bodies and a
-  whole-result Markdown renderer), credential kinds and managed profiles, and,
-  for services that accept delegated (OAuth) credentials, a description of
-  what connecting an account allows.
-  Descriptor validation rejects inconsistent declarations at startup; the
-  catalog, OpenAPI, send schema, MCP tools, and managed credential forms are
-  projected from it.
-- **A provider**: scope resolution, optional body-part admission, and
-  invocation through `UpstreamClient`s, returning JSON or a bounded stream.
+A backend builds SDK values through constructors and builders, not struct
+literals: registrations, resource types, reason definitions and presentations
+are `const` statics, and results, descriptors and OAuth values use `new` with
+`with_*` builders. Only the shared configuration tables, such as
+`AttachmentLimitsConfig`, are deserialized or built from `Default` with struct
+update syntax. Extendable SDK enums are non-exhaustive, so a backend's matches
+end with a fallback arm that rejects what it does not support, such as an
+unknown credential view. The policy and the intentionally exhaustive items are
+listed in the [inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
 
-`crates/agent-access-conformance` is the reference: a test-only backend with a
-namespace-capable resource type, typed configuration, a managed profile, JSON,
-raw-download, and upload actions, a presenter, and (with `endpoints = true`)
-an endpoint type whose private key a single-attempt action consumes. The
-broker's `tests::conformance` suite registers it beside the linked backends and
-drives configuration and validation, discovery, runtime specs, every invocation
-shape, MCP, and the private-attribute lifecycle under managed policy (create,
-encrypted storage, admin reveal, replacement, and resolution only for the
-authorized endpoint); it also generates the fixture the portal's unit tests
-use, so the portal is checked against a backend it was not written for.
+### Provider hook contract
+
+The runtime runs each provider hook (scope resolution including lookup, body
+admission, invocation, credential verification) under a host-supplied
+`HookContext`: service, action, phase, and the domain reasons pinned with the
+prepared operation's provider. It checks only the hook's own future, not host
+work around it such as lease revalidation or attribute decryption. A failure
+passes when it is a registered domain definition (compared by value), a host
+port's failure within that port's allowlist (the delegated lease, or the SDK's
+admitted-operation accessors), or a provider-reportable standard reason for
+the phase and decision, with `upstream_rate_limited` carrying its rate-limit
+result and allow limited to an invocation's `verification_mismatch` with its
+result. Anything else becomes `broker_provider_contract_failed` with a fixed
+message and an internal diagnostic code; an invocation's failure adds an
+unknown, not retry-safe execution state, and lookup concealment still applies.
+Late result-stream failures are checked against the code-only subset and the
+domain reasons, never a host port's reason. Imported services have no domain
+reasons. Their adapters' administrative discovery runs as a
+credential-verification hook of the imported service; an adapter reports
+invalid settings or document destinations as a typed configuration failure,
+which the host reports as `config_validation_failed`.
 
 ### Service descriptors
 
 Each service has one authoritative `ServiceDescriptor`. A built-in backend
 derives it from its typed configuration alone (`jira_descriptor`,
-`confluence_descriptor`, `gitlab_descriptor`, `cloudbees_ci_descriptor`,
-`oauth_records_descriptor`, and the development fake provider); configured
+`confluence_descriptor`, `gitlab_descriptor`, `cloudbees_ci_descriptor`, and
+the development `fake` and `oauth_stub` backends); configured
 Git gateways get a descriptor from their gateway configuration. Providers do
 not describe themselves: the runtime pairs each provider it builds with its
 configuration's descriptor (a `ServiceProvider`), so offline configuration
@@ -483,6 +685,11 @@ existence, ownership of a particular object, or an authorization outcome.
   and eligible rejected-probe sessions within a shared two-second budget and
   the parent deadline. Cleanup never changes a known outcome or rejects an OAuth
   token. Existing imports and OAuth connections require no migration or consent.
+  Import eligibility for personal OAuth comes from the selected import kind's
+  companion: the binding must name that companion's dialect, and the companion
+  supplies each registration's validated approved resource, which must equal
+  the endpoint along with the profile's target and audience. Selecting another
+  dialect never makes it eligible for an import.
   The adapter supports bounded JSON and finite SSE responses; server requests
   (including legacy `ping`), stream resumption and tool replay are unsupported.
   A legacy disconnect does not prove upstream cancellation. Redirects are
@@ -621,13 +828,21 @@ sequenceDiagram
    `credentials.lookup.<service>` credential for the pre-authorization metadata
    lookup.
 8. **Scope resolution.** For search-contained actions, the runtime builds the
-   search boundary from policy and hands it to the provider as the typed
-   `ProviderInvocation.search_authorization` field (scope type, finite or
-   all-except scope, and credential mode). The matched grants stay with the
-   broker and appear only in the audit record's `searchAuthorization`. For
-   other actions, the provider resolves scopes using the lookup credential;
-   `provider_preflight` carries only provider-owned state from scope
-   resolution or body-part admission to dispatch.
+   search boundary from policy and skips provider scope lookup; the provider
+   receives the complete boundary (scope type and finite or all-except scope)
+   as its admitted `InvocationAuthority::Search`, never the envelope's lossy
+   `["*"]` summary. The matched grants stay with the broker and appear only in
+   the audit record's `searchAuthorization`. For
+   other actions, the provider's single `resolve_scopes` hook receives the
+   action, validated inputs, host-selected execution context, minimal caller
+   identity, correlation, and only the lookup credential the runtime selected;
+   it never receives execution authority or an execution credential. It
+   returns canonical scopes and optional in-process `ProviderState`. That state
+   stays with the prepared operation, which pins the provider instance, so it
+   never reaches another generation's provider. Body-part admission explicitly
+   keeps, replaces, or clears it; the runtime never inspects, serializes, or
+   merges it. A provider whose own required state is missing or of another type
+   fails closed with a `broker_provider_contract_failed` error.
 9. **Deny-by-default policy selection.** The resolved scope set is authorized;
    the credential mode is selected from the surviving grant.
 10. **Execution-credential resolution.** The credential for the selected mode is
@@ -636,7 +851,20 @@ sequenceDiagram
    provider-side execution-time confirmation uses the caller's per-user
    credential. If final policy selects `service`, it uses the shared lookup
    credential.
-12. **Provider invoke**, then **finalize/audit**.
+12. **Admitted request.** The runtime builds one read-only, shared admitted
+   context: service and action, execution context, minimal identity,
+   correlation, the typed credential mode, and the exact authority from the
+   action's validated contract (`ActionOnly`, `Resources` with the resolved
+   canonical scopes, or `Search` with the complete boundary). Ordinary scoped
+   actions never receive empty resource authority and action-only actions never
+   receive resources. A provider asking for an authority its action was not
+   admitted with fails closed with a `broker_provider_contract_failed` error.
+   Multipart admission sees this context with the inputs and selected
+   credentials, but no body data or decrypted private attributes.
+13. **Provider invoke**, then **finalize/audit**. The final invocation is built
+   only after staging: the body is consumed, the revision fences run, and only
+   the admitted resource's private attributes are decrypted. Its fields are
+   private and read through accessors, and it never serializes.
 
 The lookup credential is never returned to the caller; the execution credential
 is placed only into the `ProviderInvocation`.
@@ -955,7 +1183,15 @@ this path with its admitted resource's signed endpoint.
 
 - `basic_api_token` loads `username_ref` + `token_ref`.
 - `bearer_token` loads `token_ref` only.
-- `ExecutionCredential` redacts both username and token in `Debug`.
+- The runtime and test support are the only constructors of
+  `ExecutionCredential`, so each kind always carries its required material.
+  Providers read it through a typed view (`Basic { username, token }` or
+  `Bearer { token }`); `Debug` shows only the kind, and it never serializes.
+- A provider receives `ExecutionAccess`: `None` (a backend declaring no
+  execution credential), `Static`, or `Delegated`. Static and delegated material
+  never coexist, and the separate lookup credential is static only and never
+  stands in for execution material. The selected credential mode reaches the
+  provider as the typed `CredentialMode` (`service` or `per_user` on the wire).
 
 **`per_user` `secret_store`** (provider `local_file`) requires an authenticated
 identity and matches the exact principal first, then the exact
@@ -976,7 +1212,7 @@ it under the service's display name, so it names no service itself. After policy
 admits the invocation, the runtime acquires the caller's current access from
 the OAuth manager (refreshing it when due) inside the invocation's correlation
 context, so a denied invocation never obtains or refreshes upstream access. The
-provider receives it as `ProviderInvocation::delegated_credential`, a lease it
+provider receives it as `ExecutionAccess::Delegated`, a lease it
 can read (`access()`: token, target, audience, version, expiry) and, after an
 upstream 401, replace once (`recover_after_unauthorized`). Immediately before
 dispatch the runtime revalidates the lease: access revoked, disconnected, or
@@ -1250,8 +1486,8 @@ the JSONL backend writes the line.
 raw token values are never logged.
 
 **Outcome records.** Normal operations write one record per outcome. An allow is
-recorded at status 200; a deny or error is recorded at
-`reasonCode.http_status`. Identity failures are recorded with
+recorded at status 200; a deny or error is recorded at its reason's HTTP
+status: a standard reason's fixed status or a domain reason's declared one. Identity failures are recorded with
 `principal = "unknown"`. A failed `auth.local.login` records the submitted
 principal ID only when it passes the principal key check; otherwise `principal`
 is `anonymous`, `providerAudit.auth.claimedPrincipalInvalid` is `true`, and the
@@ -1445,7 +1681,7 @@ The production service observability surface is structured JSON tracing plus the
 audit store. Only `agent-access-broker serve` installs the JSON subscriber;
 CLI validation commands keep their human command-line output. The default
 service filter is
-`agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn`, and
+`agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn`, and
 `RUST_LOG` can override it without adding broker config keys.
 
 Every public and gateway HTTP request receives an `http.request` span. The span
@@ -1682,7 +1918,10 @@ identities, and acquires non-blocking exclusive advisory locks for every
 configured managed store, the configured audit path (JSONL file or SQLite audit
 database), and the upload spool directory. Lock identity is based on canonical
 local paths, not config string spelling, and stale unlocked lock files left by
-dead processes are reused. Lock holder metadata includes the node ID. The
+dead processes are reused. Lock holder metadata includes the holding
+executable's assembly name and version and the node ID; lock file names never
+depend on the executable, so differently named executables still exclude each
+other on one state set. The
 offline `agent-access-broker audit verify` command takes the same audit lock,
 so it runs only while no broker owns that database.
 
@@ -1721,6 +1960,22 @@ The egress proxy is applied to Jira, Confluence, GitLab REST, CloudBees CI, atta
 streaming, Git HTTP gateways, and the
 `api.atlassian.com` gateway.
 The audit `egressProxy` value records the mode plus a sanitized origin.
+
+Core owns route selection. Every client a provider, import adapter or the OAuth
+manager uses comes from a client factory that core constructs for one caller
+category and runtime generation: the host's OAuth manager, a particular native
+registration together with its development-only marker, or an import adapter.
+A client's label or provider identity never changes its category. A client
+declares either ordinary routing (the precedence above, with its configured
+service proxy) or a request for a direct route to a literal IPv4/IPv6 loopback
+base URL. Core grants that request only to OAuth clients and to development-only
+native registrations the deployment enables (`deployment.enable_fake_service`
+outside production), and only for a literal loopback IP address; it fails the
+client's construction otherwise. Production native providers and shipped import
+adapters therefore use ordinary proxy and `NO_PROXY` selection even for loopback
+destinations, and host names such as `localhost` never receive the exception.
+Startup preflights every configured proxy, including credential references,
+even when a captured environment proxy would take precedence.
 
 ## Outbound TLS trust
 
@@ -1783,12 +2038,13 @@ Audit queries use the reader pool of the generation that admitted the request.
 On `SIGTERM` or `SIGINT`, the broker enters a single graceful shutdown path. The
 public listener stops accepting new connections, in-flight HTTP work drains
 within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. If listener
-drain exceeds the timeout, the remaining listener tasks are aborted and open
-streaming downloads are marked
-canceled so their writer-backed terminal audit records are queued when the
-stream wrappers drop. The audit writer registry then receives the remaining
-shutdown budget to drain and join its writer threads; terminal audit durability
-after a forced timeout is best-effort if that final writer drain also expires.
+drain exceeds the timeout, open streaming downloads are marked canceled so their
+writer-backed terminal audit records are queued when the stream wrappers drop,
+and the connections still open are cut off: each listener cancels its connection
+tasks and waits for them to end. The audit writer registry then receives the
+remaining shutdown budget to drain and join its writer threads; terminal audit
+durability after a forced timeout is best-effort if that final writer drain also
+expires.
 The JSON-operation supervisor preserves admission for requests accepted before
 shutdown while the listeners drain, including requests still reading their bodies.
 It closes operation admission after listener drain, or when the shutdown budget
@@ -1868,13 +2124,15 @@ refresh, identity and target discovery, sending each request at most once and
 classifying failures. The manager's fences rely on that classification: a
 dialect reports a retry-after, permission, or request rejection only when the
 authorization server guarantees the grant was not consumed. Dialects register
-with the binary through the backend registry, like backends; the host registers
-the development-only `stub` dialect, and this binary links `google` and
-`mcp_oauth`. Dialect requests go through an
+with the binary through the backend registry, like backends; core registers
+none of its own, and this binary selects `google`, `mcp_oauth` and the
+development-only `stub` dialect from `agent-access-fake`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
-connect), the registration's allowlist, and upstream traces. Egress proxy
-resolution is independent for each approved destination origin; loopback IPs and
-`localhost` destinations connect directly without affecting other hosts. The manager
+connect), the registration's allowlist, and upstream traces. The manager
+builds them through its host OAuth client factory, one client per approved
+destination origin, so egress proxy resolution is independent for each origin;
+only literal loopback IP destinations connect directly, without affecting other
+hosts. Host names, including `localhost`, never receive that exception. The manager
 validates every grant's bounds, scopes and targets regardless of dialect.
 
 The Gmail backend is a separately linked provider crate. Its Google OAuth dialect

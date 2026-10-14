@@ -1,4 +1,5 @@
-use agent_access_core::{ResourceDefinition, ResourceSelection, ResourceSelector, ResourceType};
+use agent_access_core::{ResourceDefinition, ResourceSelection};
+use agent_access_provider::{ResourceSelector, ResourceType};
 
 pub fn resource_selection(ids: &[&str]) -> ResourceSelection {
     ResourceSelection {

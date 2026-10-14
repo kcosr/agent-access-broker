@@ -37,6 +37,10 @@ actions and exposes typed wrappers for supported services.
   `docs/system-overview.html` presentation is the one tracked exception: keep it
   consistent with the Markdown docs when the behavior it describes changes.
 - Keep sample configs in sync with the config schema and tests.
+- Stored credential rows, their AAD inputs, the `basic_api_token`/`bearer_token`
+  and profile spellings, and persisted import JSON are durable data contracts.
+  Core golden tests freeze rows written by an earlier release; never regenerate
+  them to make a refactor pass.
 - Update `README.md` for user-facing behavior, config, or workflow changes.
 - Service policy grants use the canonical plural `subjects` field everywhere;
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
@@ -61,8 +65,9 @@ actions and exposes typed wrappers for supported services.
   or record credential use/verification. Keep management and setup previews
   independent so missing credentials cannot prevent onboarding.
 - Backend invocation context comes from the host-authorized execution context,
-  never a tool input. Bind resumable provider cursors to that context and current
-  principal/resource/query settings; reauthorize every continuation.
+  never a tool input. Seal resumable provider cursors with the SDK continuation
+  envelope, bound to that context and current principal/resource/query settings;
+  reauthorize every continuation.
 - Backend actions default to `read_only = false`; explicitly opt reviewed reads
   in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
   classifies upstream effects for grant selection; it does not gate local output.
@@ -141,7 +146,33 @@ cargo fmt --check
 cargo test --locked
 cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
+node scripts/check-crate-boundaries.mjs
+node scripts/public-api.mjs check
 ```
+
+Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
+`core`, `host`, `assembly`, `cli`, `native`, `reference`, `adapter`, or
+`helper`); declare one when adding a crate. The boundary check rejects an
+undeclared role and dependency edges that cross the roles, such as any
+production path from core or the host to a backend or import adapter. See
+`docs/testing.md` for the rules.
+
+`api/` holds the checked-in supported public API inventory: the SDK and host
+with and without `test-support`, the assembly library, the reviewed selection
+entry points of linked native and adapter crates (`SELECTION_ENTRY_POINTS` in
+`scripts/public-api.mjs`), and the types their signatures expose. The public API
+check fails when the candidate's API differs. For an intended change, run
+`node scripts/public-api.mjs update`, review the diff against the rules in
+`api/README.md`, and commit it with the change. The check needs the
+`nightly-2026-07-13` toolchain and `cargo-public-api` 0.52.0; set
+`AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is in another rustup home.
+
+Supported SDK types follow the construction policy in `api/README.md`: build
+them through constructors and builders (`const` ones for statics), keep new
+data types non-exhaustive or private-field, and make extendable enums
+non-exhaustive. Matches on them end with a fallback arm that fails closed,
+never treating an unsupported variant as success or as another variant. Record
+any intentionally exhaustive shape in its rustdoc and in that list.
 
 Use these for offline config validation:
 
@@ -154,19 +185,29 @@ cargo run --locked -p agent-access -- --config agent-access.sample.toml config v
 On Unix, also run the isolated real-signal parent fixture explicitly:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 It requires no live credentials and starts its own guarded child fixtures; do
 not run the ignored child directly or use a broad `-- --ignored`. Record it as
 not applicable on non-Unix platforms. See `docs/testing.md` for the full suite.
 
-The fake-provider vertical smoke is included in `cargo test`; it starts an
-in-process broker and invokes it through the real `agent-access` binary.
+Tests outside the host, including the CLI smokes, start in-process brokers
+only through the host's `test-support` feature: `test_support::IsolatedBroker`
+runs the assembly's `composition()` and `build_identity()` on a real
+configuration file through the production startup, reload and drain, and
+`ProviderFixture` serves stub providers for configured native kinds. The host exports no router or
+reload state and the assembly library exports only those two functions, so do
+not add a raw construction path for tests. Host unit tests under
+`crates/agent-access-broker-host/src/tests/` may use the crate's internals.
 
-The Jira read smoke is also included in `cargo test`; it injects a stubbed Jira
-backend into the broker and drives typed `agent-access jira issue view/search`,
-project issue-type discovery and its create workflow, and issue comment commands.
+The fake-provider vertical smoke is included in `cargo test`; it starts an
+isolated broker and invokes it through the real `agent-access` binary.
+
+The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
+backend as a provider fixture and drives typed `agent-access jira issue
+view/search`, project issue-type discovery and its create workflow, and issue
+comment commands.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
 
@@ -176,11 +217,11 @@ also require the documented confirmation sentinels and an explicitly throwaway
 MR/source branch. Never run that binary with a broad `-- --ignored`; use only
 the individually named exact commands in `docs/testing.md`.
 
-The GitLab REST smoke is included in `cargo test`; it injects a stubbed GitLab
-backend into the broker and drives typed `agent-access gitlab` read, mutation,
-repository, and CI commands.
+The GitLab REST smoke is included in `cargo test`; it serves a stubbed GitLab
+backend as a provider fixture and drives typed `agent-access gitlab` read,
+mutation, repository, and CI commands.
 
-The CloudBees CI smoke is included in `cargo test`; it runs an in-process
+The CloudBees CI smoke is included in `cargo test`; it runs an isolated
 broker against a stubbed controller and drives typed and JSON-send downloads,
 stdio MCP output, bounded reads, build triggers, redirect rejection,
 and audit checks through the real `agent-access` binary.
@@ -189,11 +230,31 @@ and audit checks through the real `agent-access` binary.
 
 - `crates/agent-access-provider`: the backend contract: service descriptors,
   resource types, the `Provider` trait and its invocation/result/error types,
-  reason codes, the OAuth dialect and delegated-credential contracts, and the
-  host services backends use (upstream HTTP clients, egress proxy, outbound
-  TLS, upstream allowlists, correlation, upstream trace events, token signing).
+  reason codes and the hook contract the host checks provider failures, late
+  streams and upstream traces against (`contract.rs`), the OAuth dialect and
+  delegated-credential contracts, and the host services backends use
+  (upstream HTTP clients built through the host's client factory, egress
+  declarations and sanitized routes, upstream allowlists, correlation,
+  upstream trace events, token signing and continuation envelopes). `lib.rs`
+  lists every supported export explicitly, one path per item; never add a
+  wildcard re-export. Presentation items are reachable only through
+  `presentation`. The supported `host` module holds the host cooperation ports:
+  the client factory contract and `build_context`, the constructors of
+  host-owned request values (scope requests, static credentials, admitted
+  requests, spooled body parts, final invocations), the initial correlation,
+  hook (`HookContext`) and deadline scopes, service-scoped signer wrapping,
+  delegated-lease wrapping and the host-origin failure port. `deps` re-exports
+  the third-party types and macros supported signatures name. The SDK resolves
+  no secrets, loads no TLS files and reads no process environment.
+  `docs/provider-sdk.md` documents its supported surface for provider authors.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
-  runtime; contains no backend. Re-exports the backend contract.
+  runtime, host secret-reference resolution, and host network construction
+  (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
+  upstream client factories); contains no backend. Its internal `imports`
+  module owns the import adapter contract (`ImportedAdapter`, imported
+  definitions, bounded import schemas) and the opaque
+  `ImportedAdapterRegistration`. Crates that use backend-contract items import
+  them from `agent_access_provider` directly, not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
@@ -208,18 +269,43 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and
-  single-attempt execution over the host transport with the pinned SDK.
+  single-attempt execution over the host transport with the pinned SDK. Its
+  `registration()` selects the `mcp_http` adapter together with its `mcp_oauth`
+  companion dialect; the dialect has no separate export.
 - `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
-  bounded operation plans and single-attempt HTTP execution.
+  bounded operation plans and single-attempt HTTP execution; `registration()`
+  selects it, with no OAuth companion.
 - `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
-- `crates/agent-access-fake`: the development `fake` backend used by smoke
-  tests and fixtures.
+- `crates/agent-access-fake`: development fixtures, each selected separately:
+  the `fake` backend used by smoke tests and fixtures, the `oauth_stub`
+  records backend (`[providers.oauth_stub]`) and the `stub` OAuth dialect for
+  the external OAuth test server. Core defines no fixture of its own.
 - `crates/agent-access-conformance`: a test-only backend using every backend
-  contract extension point; the broker's `tests::conformance` acceptance suite
+  contract extension point; the host's `tests::conformance` acceptance suite
   registers it and generates `apps/portal/unit/conformance.fixture.json`
   (regenerate with `UPDATE_PORTAL_FIXTURES=1`).
-- `crates/agent-access-broker`: HTTP service binary and broker runtime wiring;
-  `src/backends.rs` lists the backends the binary registers.
+- `crates/agent-access-broker-host`: the broker host library: module
+  composition (`src/composition.rs`), the assembly identity it checks against
+  that composition (`src/identity.rs`) and the build status derived from both
+  (`src/build_status.rs`), the broker application (`src/application.rs`:
+  command parsing, `config validate`, `audit verify`, exit statuses) and its
+  `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
+  bounded shutdown; `src/http_server.rs` serves each listener's connections and
+  owns their tasks), HTTP routers and handlers, management, HTTP MCP serving,
+  portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
+  broker unit-test tree
+  (`src/tests/`). Its production code depends on no backend or import adapter;
+  tests link the real backends through `src/test_composition.rs`. Its public
+  API is the composition, the application, the assembly identity and the build
+  status; routers, reload and runtime state stay crate-private. The
+  `test-support` feature adds `src/test_support.rs`: isolated broker
+  applications for acceptance tests, with provider fixtures and read-only store
+  views. Release builds never enable it.
+- `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
+  assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
+  in `src/backends.rs` selects the modules it links and `build_identity()` in
+  `src/build_info.rs` stamps its identity, including the release commit for its
+  workspace modules. Its library exports only those two functions.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.
@@ -259,16 +345,22 @@ and audit checks through the real `agent-access` binary.
   `demo/seed-guide-accounts.mjs` adds an actual auditor and a temporary-password
   onboarding identity to the loopback demo for role-accurate captures; keep its
   private credential handoff in the disposable demo directory.
-- `docs/`: implemented architecture, reference, security, operator, and user docs.
+- `docs/`: implemented architecture, reference, security, operator, and user
+  docs, plus the provider-author guide (`docs/provider-sdk.md`) and the
+  downstream assembly guide (`docs/downstream-assembly.md`).
 - `schemas/`: published versioned JSON Schemas for runtime and contract
   surfaces.
+- `api/`: generated supported public API inventories, one file per surface,
+  maintained by `scripts/public-api.mjs`; `api/README.md` describes the surfaces,
+  prerequisites, and review rules.
 
 ## Documentation Map
 
 - `README.md`: project framing, quickstart, high-level architecture, and the
   top-level documentation index.
-- `CONTRIBUTING.md`: focused bug reports and fixes, feature proposals, and
-  contributor expectations for issues and pull requests.
+- `CONTRIBUTING.md`: focused bug reports and fixes, feature proposals,
+  where provider contributions go, and contributor expectations for issues and
+  pull requests.
 - `assets/screenshots/`: permanent copies of selected README showcase images.
   Keep README image sources and full-size links relative, with file checksums in
   the adjacent manifest. Keep unused selection images and review galleries
@@ -289,7 +381,8 @@ and audit checks through the real `agent-access` binary.
   offboarding.
 - `docs/release-readiness.md`: candidate validation, distribution contents,
   administrator acceptance, and publishing checklist.
-- `docs/design.md`: implemented architecture and conceptual contract for request lifecycle,
+- `docs/design.md`: implemented architecture and conceptual contract for crate
+  layout, composition and process lifecycle, request lifecycle,
   identity, policy, credential selection, audit, observability/correlation,
   limits, egress proxy, reloads, and security posture.
 - `docs/system-overview.html`: self-contained, hand-authored architecture
@@ -319,6 +412,18 @@ and audit checks through the real `agent-access` binary.
   administration.
 - `docs/providers.md`: provider overview, shared concepts, and links to the
   provider-specific docs.
+- `docs/provider-sdk.md`: provider-author guide: supported SDK surface, trust
+  model, registration and configuration, descriptors and scope resolution,
+  provider state, admitted authority and static/delegated credential
+  obligations, governed HTTP and the loopback rule, continuation tokens,
+  standard and domain reasons, outcomes, test support, the compatibility policy
+  and a worked example. Every `rust` block must compile against the current SDK;
+  update the guide with SDK changes.
+- `docs/downstream-assembly.md`: building another distribution from the host:
+  composition, application lifecycle and exit statuses, assembly identity and
+  module provenance, canonical Git pins, coordinated upgrades, source overrides,
+  lockfile review, CLI/portal assets and notices, the release-feature check, and
+  what qualification covers. Keep its `rust` blocks compiling against the host.
 - `docs/imported-services.md`: generic MCP import setup, administrator review,
   credential ownership, refresh, limits, and invocation outcomes.
 - `docs/imported-openapi.md`: OpenAPI document/API destination setup, discovery
@@ -342,7 +447,7 @@ and audit checks through the real `agent-access` binary.
   `[gateways] kind = "git_http"`.
 - `docs/security-model.md`: rationale for the broker, agent containment model,
   egress boundary, direct-token comparison, credential boundary, authorization
-  ownership, and residual risks.
+  ownership, linked-module trust, and residual risks.
 - `docs/end-user-guide.md`: user sign-in, personal credential/OAuth setup,
   separate setup/invocation client configuration, agent token issuance,
   CLI/MCP connections, and troubleshooting.
@@ -418,14 +523,21 @@ empty evidence directory outside the checkout:
 node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
-The driver runs the required standalone Rust, portal, script, documentation,
-sample-config, Unix signal, native release-provenance, and notice checks. It
+The driver runs the required standalone Rust, crate-boundary, public API, portal,
+script, documentation, sample-config, Unix signal, native release-provenance, and
+notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
-`contentless_delete`, and rejects Cargo target runners, including through
-configuration includes. See the [full prerequisites](docs/release-readiness.md#qualify-the-candidate).
+`contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
+0.52.0 for the public API gate, and rejects Cargo target runners, including
+through configuration includes. The public API gate checks the candidate
+against its own `api/` inventory; for a release on an existing compatible line,
+also review `git diff <previous-release-tag> -- api/`, where a patch release
+may not remove or change any line. See the
+[full prerequisites](docs/release-readiness.md#qualify-the-candidate) and
+[public API compatibility](docs/release-readiness.md#public-api-compatibility).
 
 Qualification accepts any clean branch or detached commit for PR validation and
 rechecks that `HEAD` stays clean and unchanged. A merge that changes the SHA
@@ -463,8 +575,11 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
 The verifier checks the exact pinned local compiler/Cargo versions and physical
-paths, rejects ambient compiler/flag/profile overrides, and uses locked
-dependencies with required source provenance. It builds native executables under
+paths, rejects ambient compiler/flag/profile overrides, rejects a release
+dependency graph whose resolved features include `test-support` or that links a
+`reference` crate, and uses locked dependencies with required source provenance;
+the stamped host, SDK and module packages must resolve to tracked path packages
+in the checkout. It builds native executables under
 `target/<host-triple>/release`, checks CLI startup and authenticated Broker
 status, and records discovered Cargo configuration digests. It is not a hermetic
 build; see the [provenance boundaries](docs/operator-guide.md#build-provenance-and-deployed-status).

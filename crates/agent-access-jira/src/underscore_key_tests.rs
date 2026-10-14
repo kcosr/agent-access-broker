@@ -18,7 +18,10 @@ fn underscore_project_keys_are_canonical_and_match_discovery_schema() {
     )
     .unwrap();
     for project in ["OPS_TOOLS", "A_B2", "OPS__TOOLS", "OPS_"] {
-        assert!((JIRA_PROJECT_RESOURCE.canonical)(project), "{project}");
+        assert!(
+            JIRA_PROJECT_RESOURCE.is_canonical_target(project),
+            "{project}"
+        );
         assert!(pattern.is_match(project), "{project}");
         assert_eq!(validate_project_key(project).unwrap(), project);
         assert!(is_issue_key(&format!("{project}-12345")));
@@ -34,7 +37,10 @@ fn underscore_project_keys_are_canonical_and_match_discovery_schema() {
         "O",
         "OPS_TOOLS\n",
     ] {
-        assert!(!(JIRA_PROJECT_RESOURCE.canonical)(project), "{project:?}");
+        assert!(
+            !JIRA_PROJECT_RESOURCE.is_canonical_target(project),
+            "{project:?}"
+        );
         assert!(!pattern.is_match(project), "{project:?}");
         assert!(validate_project_key(project).is_err(), "{project:?}");
     }
@@ -85,7 +91,7 @@ fn underscore_issue_locators_and_jql_preserve_project_identity() {
         },
         &EffectiveSearchScope::Finite(set(["OPS_TOOLS"])),
         &SearchLimitsConfig::default(),
-        "per_user",
+        CredentialMode::PerUser,
     )
     .unwrap();
     assert!(query.jql.contains("project IN (OPS_TOOLS)"));
@@ -96,7 +102,7 @@ fn underscore_issue_locators_and_jql_preserve_project_identity() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "per_user",
+        CredentialMode::PerUser,
     )
     .unwrap();
     assert_eq!(text.jql, "key = OPS_TOOLS-12345");
@@ -110,13 +116,16 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
     });
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let mut request = search_request(vec![], Some("next-page-fixture"));
-    request.search_authorization.as_mut().unwrap().scope = SearchAuthorizationScope::Finite {
-        values: vec!["PROJ".to_string()],
-    };
-    request.resource_scopes = BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]);
+    let request = InvocationBuilder::from(search_request(vec![], Some("next-page-fixture")))
+        .search(SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::Finite {
+                values: vec!["PROJ".to_string()],
+            },
+        ))
+        .build();
     let error = provider.invoke(request).await.unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.internal_diagnostic_code,
         Some("jira_search_project_unauthorized")
@@ -142,16 +151,14 @@ fn search_request(excluded: Vec<String>, token: Option<&str>) -> ProviderInvocat
     if let Some(token) = token {
         inputs["nextPageToken"] = json!(token);
     }
-    let mut request = per_user_invocation("search", inputs, vec![]);
-    request.resource_scopes = BTreeMap::from([("project".to_string(), vec!["*".to_string()])]);
-    request.search_authorization = Some(SearchAuthorization {
-        scope_type: "project".to_string(),
-        scope: SearchAuthorizationScope::AllExcept {
-            excluded_values: excluded,
-        },
-        credential_mode: "per_user".to_string(),
-    });
-    request
+    InvocationBuilder::from(per_user_invocation("search", inputs, vec![]))
+        .search(SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
+                excluded_values: excluded,
+            },
+        ))
+        .build()
 }
 
 fn search_page_with_issue(project: &str, key: &str) -> JiraSearchPage {
@@ -267,8 +274,8 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
             .invoke(search_request(excluded.clone(), Some("next-page-fixture")))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
-        assert_eq!(error.decision, Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(error.decision(), Decision::Deny);
         assert_eq!(error.internal_diagnostic_code, Some(code));
         assert!(error.result.is_none());
         assert!(error.object_ids.is_none());

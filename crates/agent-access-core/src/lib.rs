@@ -1,3 +1,11 @@
+use agent_access_provider::{
+    BackendConfig, CredentialDescriptor, Decision, EgressProxyConfig, OAuthScopeMode,
+    ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector, ResourceTypeRegistry,
+    ServiceCredentialKinds, ServiceDescriptor, ValidationContext, default_download_max_bytes,
+    is_action_name, is_env_name, is_loopback_or_localhost, is_secret_ref, is_service_name,
+    presentation::{ReadContentFormat, ResponseFormat},
+    validate_egress_proxy_config, validate_upstream_allowlist,
+};
 use attribution::validate_attribution_config;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -14,17 +22,19 @@ mod api;
 mod attribution;
 mod audit_query;
 mod backends;
+mod config_error;
 mod fs_permissions;
 mod import_names;
+pub mod imports;
 mod imports_config;
 mod invocation_limits;
 mod managed_store;
 pub mod mcp;
 mod mcp_config;
 pub mod microsoft_oidc;
+mod network;
 mod node_identity;
 pub mod oauth;
-mod oauth_records;
 mod resource_policy;
 mod runtime;
 mod sqlite_support;
@@ -32,16 +42,20 @@ mod state_lock;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use agent_access_provider::*;
 pub use api::*;
 pub use attribution::AttributionConfig;
 pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
+pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
 pub use import_names::*;
 pub use imports_config::*;
 pub use invocation_limits::*;
 pub use managed_store::*;
 pub use mcp_config::*;
+pub use network::{
+    OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls,
+    parse_strict_certificate_pem_bundle,
+};
 pub use node_identity::*;
 pub use oauth::*;
 pub use resource_policy::*;
@@ -498,7 +512,7 @@ pub struct ResponseEnvelope<T> {
     pub action: String,
     pub resource_scopes: ResourceScopes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<ReasonCode>,
+    pub reason_code: Option<ReasonCodeId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1223,13 +1237,12 @@ impl Default for LimitsConfig {
 
 impl From<&LimitsConfig> for ProviderLimits {
     fn from(limits: &LimitsConfig) -> Self {
-        Self {
-            max_http_body_bytes: limits.max_http_body_bytes,
-            max_download_bytes: limits.max_download_bytes,
-            max_upstream_response_bytes: limits.max_upstream_response_bytes,
-            request_timeout_ms: limits.request_timeout_ms,
-            streaming_idle_timeout_ms: limits.streaming_idle_timeout_ms,
-        }
+        Self::default()
+            .with_max_http_body_bytes(limits.max_http_body_bytes)
+            .with_max_download_bytes(limits.max_download_bytes)
+            .with_max_upstream_response_bytes(limits.max_upstream_response_bytes)
+            .with_request_timeout_ms(limits.request_timeout_ms)
+            .with_streaming_idle_timeout_ms(limits.streaming_idle_timeout_ms)
     }
 }
 
@@ -1246,19 +1259,19 @@ fn default_max_concurrent_per_principal() -> u32 {
     10
 }
 fn default_max_http_body_bytes() -> u64 {
-    DEFAULT_MAX_HTTP_BODY_BYTES
+    ProviderLimits::default().max_http_body_bytes
 }
 fn default_max_upstream_response_bytes() -> u64 {
-    DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES
+    ProviderLimits::default().max_upstream_response_bytes
 }
 fn default_request_body_timeout_ms() -> u64 {
     300_000
 }
 fn default_request_timeout_ms() -> u64 {
-    DEFAULT_REQUEST_TIMEOUT_MS
+    ProviderLimits::default().request_timeout_ms
 }
 fn default_streaming_idle_timeout_ms() -> u64 {
-    DEFAULT_STREAMING_IDLE_TIMEOUT_MS
+    ProviderLimits::default().streaming_idle_timeout_ms
 }
 fn default_upload_spool_dir() -> String {
     std::env::current_dir()
@@ -1550,7 +1563,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
             ));
             continue;
         };
-        if !dialect.dialect.supports_server_default_scopes()
+        if !dialect.dialect().supports_server_default_scopes()
             && registration
                 .permission_profiles
                 .values()
@@ -1560,12 +1573,12 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
                 "oauth.registrations.{name}: {adapter} does not support server_default scope mode"
             ));
         }
-        if let Err(reason) = dialect.dialect.validate_registration(registration) {
+        if let Err(reason) = dialect.dialect().validate_registration(registration) {
             errors.push(format!(
                 "oauth.registrations.{name} is not a valid {adapter} registration: {reason}"
             ));
         }
-        if dialect.development_only && !development_fixtures_enabled {
+        if dialect.is_development_only() && !development_fixtures_enabled {
             errors.push(format!(
                 "oauth.registrations.{name} uses the development-only {adapter} dialect, which requires non-production deployment.enable_fake_service"
             ));
@@ -3207,16 +3220,15 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
         if service == "broker" || !is_service_name(service) {
             errors.push(format!("gateways.{service} uses an invalid service name"));
         }
-        // Development backends stay reserved even while unconfigured, so
-        // enabling one never renames a gateway's service.
-        let development_kind = config
-            .providers
-            .registry()
-            .get(service)
-            .is_some_and(|registration| registration.development_only);
-        if development_kind || provider_services.contains(service) {
+        // Every selected native kind stays reserved even while unconfigured,
+        // so configuring its provider never renames a gateway's service.
+        if config.providers.registry().get(service).is_some() {
             errors.push(format!(
-                "gateways.{service} must not collide with a provider service"
+                "gateways.{service} collides with the selected native provider kind {service}"
+            ));
+        } else if provider_services.contains(service) {
+            errors.push(format!(
+                "gateways.{service} collides with the configured provider service {service}"
             ));
         }
         if gateway.display_name.trim().is_empty() {
@@ -4278,17 +4290,11 @@ pub(crate) fn configured_service_descriptors(
 }
 
 fn configured_provider_descriptors(config: &BrokerConfig) -> Vec<ServiceDescriptor> {
-    let mut descriptors = Vec::new();
-    if config
-        .credentials
-        .per_user
-        .get("oauth_stub")
-        .is_some_and(|c| c.kind == "oauth")
-    {
-        descriptors.push(oauth_records::oauth_records_descriptor());
-    }
-    descriptors.extend(config.providers.iter().map(BackendConfig::descriptor));
-    descriptors
+    config
+        .providers
+        .iter()
+        .map(BackendConfig::descriptor)
+        .collect()
 }
 
 /// Checks each `[providers.<kind>]` table: its backend is registered, its
@@ -4303,28 +4309,28 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
             ));
             continue;
         };
-        if registration.development_only && !config.deployment.enable_fake_service {
+        if registration.is_development_only() && !config.deployment.enable_fake_service {
             errors.push(format!(
                 "providers.{kind} is a development backend and requires deployment.enable_fake_service"
             ));
         }
-        let context = ValidationContext {
-            policy_authority: &config.policy.authority,
-            environment: &config.deployment.environment,
-            limits: &limits,
-            credentials: ServiceCredentialKinds {
-                service: config
+        let context = ValidationContext::new(
+            &config.deployment.environment,
+            &config.policy.authority,
+            &limits,
+            ServiceCredentialKinds::new(
+                config
                     .credentials
                     .service
                     .get(kind)
                     .map(|credential| credential.kind.as_str()),
-                per_user: config
+                config
                     .credentials
                     .per_user
                     .get(kind)
                     .map(|credential| credential.kind.as_str()),
-            },
-        };
+            ),
+        );
         backend.validate(&context, errors);
     }
 }
@@ -4367,7 +4373,7 @@ fn validate_private_resource_consumers(
                     && registry
                         .resource_types()
                         .get(resource_type)
-                        .is_some_and(|ty| !ty.attributes.is_empty())
+                        .is_some_and(|ty| !ty.attributes().is_empty())
             }) {
                 errors.push(format!(
                     "{}.{} must consume private attributes of its defining backend's resource type",
@@ -4387,7 +4393,7 @@ fn validate_private_resource_consumers(
             registry
                 .resource_types()
                 .get(&resource.resource_type)
-                .is_some_and(|ty| !ty.attributes.is_empty())
+                .is_some_and(|ty| !ty.attributes().is_empty())
                 && matches!(resource.selector, ResourceSelector::Exact { .. })
         })
     {

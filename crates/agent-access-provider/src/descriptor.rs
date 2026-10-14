@@ -5,8 +5,8 @@
 //! projection, and credential management all read this one definition instead
 //! of keeping parallel per-service tables.
 
-use crate::ActionPresentation;
 use crate::attribution::AttributionCapability;
+use crate::presentation::ActionPresentation;
 use crate::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
 };
@@ -14,6 +14,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The definition of one service: its actions, resource scopes and
+/// credentials. The public fields are what the host reads; a backend builds
+/// one with [`Self::new`] and the `with_*` builders.
+///
+/// ```
+/// use agent_access_provider::{ActionDescriptor, CredentialDescriptor, ServiceDescriptor};
+/// use serde_json::json;
+///
+/// let descriptor = ServiceDescriptor::new("example", "Example")
+///     .with_actions(vec![
+///         ActionDescriptor::new("item.view", "View an item", json!({"type": "object"}))
+///             .credential_modes(["service"])
+///             .read_only(),
+///     ])
+///     .with_credentials(CredentialDescriptor::default().profile("api_token", "bearer_token"));
+/// descriptor.validate().unwrap();
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServiceDescriptor {
     pub service: String,
@@ -27,6 +45,7 @@ pub struct ServiceDescriptor {
     pub presentation_body_limit: Option<u64>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceSurface {
     Invoke,
@@ -36,6 +55,9 @@ pub enum ServiceSurface {
     },
 }
 
+/// One action of a service. The public fields are what the host reads; a
+/// backend builds one with [`Self::new`] and the builders.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionDescriptor {
     pub action: String,
@@ -72,6 +94,7 @@ pub struct ActionDescriptor {
 }
 
 /// Imported source names cannot fall back to a built-in canonical action name.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopedMcpNameSource {
     CanonicalAction,
@@ -79,6 +102,7 @@ pub enum ScopedMcpNameSource {
 }
 
 /// When a provider needs the broker's lookup credential for an action.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LookupRequirement {
     None,
@@ -99,13 +123,17 @@ impl LookupRequirement {
     }
 }
 
+/// The credentials a service's invocations use. Build it from
+/// [`Default`] (a required execution credential of any generally supported
+/// kind) or [`Self::without_execution_credential`] with the builders.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDescriptor {
     /// Whether invocations need a broker-selected execution credential.
     pub execution_required: bool,
     /// Set when `credentials.per_user.<service>` may be a delegated (`oauth`)
     /// credential, which reaches the provider as
-    /// `ProviderInvocation::delegated_credential` instead of `credential`.
+    /// `ExecutionAccess::Delegated` instead of a static credential.
     pub delegated: Option<DelegatedConnection>,
     /// Credential kinds accepted for `credentials.service.<service>`; empty
     /// means every generally supported kind.
@@ -151,7 +179,9 @@ impl CredentialDescriptor {
 }
 
 /// How a service that accepts delegated credentials presents the account
-/// connection a person makes for it.
+/// connection a person makes for it, declared with
+/// [`CredentialDescriptor::delegated`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DelegatedConnection {
     /// What connecting allows, shown where the person connects the account.
@@ -170,6 +200,8 @@ impl Default for CredentialDescriptor {
     }
 }
 
+/// A managed-store credential profile and the credential kind it stores.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialProfile {
     pub name: String,
@@ -354,6 +386,52 @@ pub fn attachment_upload_plan(
 }
 
 impl ServiceDescriptor {
+    /// An invoke service named `service`, shown as `display_name`, with no
+    /// resource scopes or actions. Its invocations need a broker-selected
+    /// execution credential of any generally supported kind, and it renders
+    /// embedded bodies without a service-specific limit.
+    pub fn new(service: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+            display_name: display_name.into(),
+            surface: ServiceSurface::Invoke,
+            resource_scopes: BTreeMap::new(),
+            actions: Vec::new(),
+            credentials: CredentialDescriptor::default(),
+            presentation_body_limit: None,
+        }
+    }
+
+    pub fn with_surface(mut self, surface: ServiceSurface) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    /// Resource scope names mapped to the resource type each one authorizes.
+    pub fn with_resource_scopes(
+        mut self,
+        resource_scopes: BTreeMap<String, ResourceScopeCapabilities>,
+    ) -> Self {
+        self.resource_scopes = resource_scopes;
+        self
+    }
+
+    pub fn with_actions(mut self, actions: Vec<ActionDescriptor>) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    pub fn with_credentials(mut self, credentials: CredentialDescriptor) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    /// Largest embedded upstream body the broker renders for this service.
+    pub fn with_presentation_body_limit(mut self, bytes: u64) -> Self {
+        self.presentation_body_limit = Some(bytes);
+        self
+    }
+
     /// Built-in registrations may not claim imported naming provenance.
     pub fn validate_builtin_mcp_names(&self) -> Result<(), Vec<String>> {
         let errors: Vec<_> = self
@@ -628,6 +706,7 @@ pub const RESULT_METADATA_HEADER: &str = "X-Agent-Access-Result-Metadata";
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[non_exhaustive]
 pub enum ActionIo {
     Json,
     MultipartUpload {
@@ -639,6 +718,10 @@ pub enum ActionIo {
     },
 }
 
+/// How a multipart upload action receives its files: the form fields that
+/// carry them and the JSON metadata that describes them. See
+/// [`attachment_upload_plan`] for the standard attachment plan.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MultipartUploadSpec {
@@ -653,6 +736,55 @@ pub struct MultipartUploadSpec {
     pub caller_content_type_allowed: bool,
 }
 
+impl MultipartUploadSpec {
+    /// One or more `role` files in form fields named from
+    /// `field_name_prefix`, described by the metadata at `metadata_pointer`.
+    /// It has no locator inputs or metadata fields and the broker sets each
+    /// part's content type, until the builders change that.
+    pub fn new(
+        role: impl Into<String>,
+        metadata_pointer: impl Into<String>,
+        field_name_prefix: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: role.into(),
+            metadata_pointer: metadata_pointer.into(),
+            field_name_prefix: field_name_prefix.into(),
+            min_files: 1,
+            max_files: None,
+            locator_inputs: Vec::new(),
+            metadata_fields: Vec::new(),
+            caller_content_type_allowed: false,
+        }
+    }
+
+    /// At least `min_files` and, when bounded, at most `max_files` files.
+    pub fn with_file_count(mut self, min_files: usize, max_files: Option<usize>) -> Self {
+        self.min_files = min_files;
+        self.max_files = max_files;
+        self
+    }
+
+    /// Action inputs that locate where the files go.
+    pub fn with_locator_inputs(mut self, locator_inputs: Vec<String>) -> Self {
+        self.locator_inputs = locator_inputs;
+        self
+    }
+
+    /// Fields each file's metadata entry carries.
+    pub fn with_metadata_fields(mut self, metadata_fields: Vec<String>) -> Self {
+        self.metadata_fields = metadata_fields;
+        self
+    }
+
+    /// Callers may set each part's content type.
+    pub fn allowing_caller_content_type(mut self) -> Self {
+        self.caller_content_type_allowed = true;
+        self
+    }
+}
+
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HeaderEncoding {
@@ -781,13 +913,9 @@ mod tests {
     fn impossible_combinations_are_rejected() {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
         unscoped_lookup.resource_scope = None;
-        let presented_download =
-            action("item.download")
-                .raw_download()
-                .presentation(Some(crate::ActionPresentation {
-                    embedded_bodies: &[],
-                    whole: None,
-                }));
+        let presented_download = action("item.download").raw_download().presentation(Some(
+            crate::presentation::ActionPresentation::new(&[], None),
+        ));
         let malformed_pointer = action("item.token").sensitive_output("/result/~2");
         assert_eq!(
             errors(vec![unscoped_lookup, presented_download, malformed_pointer,]),

@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { accessSync, chmodSync, constants, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CARGO_TARGET_DIRECTORY, parseRustcHost, repositoryBinaries } from "./portal-binaries.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
@@ -151,15 +151,130 @@ export class StatusMetadataMismatch extends Error {
   }
 }
 
+const RELEASE_ASSEMBLY = "agent-access-broker";
+
+// A release build records its one commit, backed by this verifier's clean
+// checkout, for the assembly, the host, the SDK and every compiled module.
 export function assertReleaseStatus(status, expected) {
+  const evidence = (source) => source?.revision === expected.commit && source?.provenance === "evidence";
+  const packages = [status?.host, status?.sdk, ...(Array.isArray(status?.modules) ? status.modules : [])];
   if (
-    status.brokerVersion !== expected.version ||
-    status.buildCommit !== expected.commit ||
-    status.buildProvenance !== "release"
+    status?.assembly?.name !== RELEASE_ASSEMBLY ||
+    status.assembly.version !== expected.version ||
+    !evidence(status.assembly.source) ||
+    status.host?.crate !== "agent-access-broker-host" ||
+    status.sdk?.crate !== "agent-access-provider" ||
+    !Array.isArray(status.modules) || status.modules.length === 0 ||
+    !packages.every((entry) => entry?.version === expected.version && evidence(entry.source))
   ) {
     throw new StatusMetadataMismatch(
-      `status mismatch: expected version=${expected.version} commit=${expected.commit} provenance=release; received ${JSON.stringify(status)}`,
+      `status mismatch: expected ${RELEASE_ASSEMBLY} version=${expected.version} with evidence-backed commit=${expected.commit} for the assembly, host, SDK and every module; received ${JSON.stringify(status)}`,
     );
+  }
+}
+
+const RELEASE_PACKAGES = ["agent-access-broker", "agent-access"];
+const FORBIDDEN_RELEASE_FEATURE = "test-support";
+
+// Resolves features for the normal and build units of a release build of both
+// packages: without dev edges Cargo resolves no dev units. `{f}` is each unit's
+// resolved feature set, which includes features enabled by a root's defaults
+// that a feature-edge traversal does not display.
+export function releaseFeatureTreeArgs(host) {
+  return ["tree", "--locked", "--target", host,
+    ...RELEASE_PACKAGES.flatMap((name) => ["-p", name]),
+    "-e", "normal,build", "--prefix", "none", "--format", "{p}\t{f}"];
+}
+
+// Parses `releaseFeatureTreeArgs` output, one `<package>\t<features>` line per
+// unit, into packages with the union of their resolved features. A package is
+// its `{p}` identity: name, version and, outside crates.io, the source Cargo
+// displays (an absolute directory for a path package, `url#<short commit>` for
+// Git), so two origins of one name and version stay distinct. Headings, blank
+// lines and `(*)` repeat markers name no unit.
+export function parseCargoTree(output) {
+  const packages = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const [unit, features = ""] = line.split("\t");
+    const pkg = /^(\S+) v(\S+)(?: \(proc-macro\))?(?: \((.*)\))?$/.exec(unit.trim());
+    if (!pkg) continue;
+    const identity = unit.trim();
+    const entry = packages.get(identity)
+      ?? { name: pkg[1], version: pkg[2], source: pkg[3] ?? null, features: new Set() };
+    for (const feature of features.replace(/ \(\*\)$/, "").split(",")) {
+      if (feature.trim()) entry.features.add(feature.trim());
+    }
+    packages.set(identity, entry);
+  }
+  return [...packages.values()].map((entry) => ({ ...entry, features: [...entry.features].sort() }));
+}
+
+// Workspace members whose `[package.metadata.agent-access] role` is `reference`.
+export function referenceCrates(metadata) {
+  const members = new Set(metadata.workspace_members ?? []);
+  return (metadata.packages ?? [])
+    .filter((pkg) => members.has(pkg.id) && pkg.metadata?.["agent-access"]?.role === "reference")
+    .map((pkg) => pkg.name)
+    .sort();
+}
+
+// Release executables must not enable a test-support feature or link a
+// reference crate through normal or build edges.
+export function assertReleaseFeatureGraph(output, references) {
+  const packages = parseCargoTree(output);
+  const missing = RELEASE_PACKAGES.filter((name) => !packages.some((pkg) => pkg.name === name));
+  if (missing.length) {
+    throw new Error(`cargo tree output omits release package ${missing.join(", ")}`);
+  }
+  const problems = [
+    ...packages.filter((pkg) => pkg.features.includes(FORBIDDEN_RELEASE_FEATURE))
+      .map((pkg) => `test feature ${pkg.name}/${FORBIDDEN_RELEASE_FEATURE}`),
+    ...packages.filter((pkg) => references.includes(pkg.name)).map((pkg) => `reference crate ${pkg.name}`),
+  ];
+  if (problems.length) {
+    throw new Error(`Release dependency graph enables test-only code: ${[...new Set(problems)].sort().join(", ")}`);
+  }
+}
+
+// The source origins of each `name version` among the units a release build
+// selects, from the same no-dev resolution as the feature check. Optional
+// dependencies that only development features activate are not selected, and
+// origins are never merged.
+export function releasePackageOrigins(output) {
+  const origins = new Map();
+  for (const pkg of parseCargoTree(output)) {
+    const key = `${pkg.name} ${pkg.version}`;
+    origins.set(key, [...(origins.get(key) ?? []), { source: pkg.source }]);
+  }
+  return origins;
+}
+
+// The upstream release stamps the qualified commit on the host, the SDK and
+// every module, so each must resolve to exactly one origin: a path package
+// whose manifest Git tracks inside the qualified checkout. A same-version
+// package from another source, or two origins sharing a key, is rejected.
+export function assertStampedSources(status, origins, { root, tracked, realpath = realpathSync }) {
+  const checkout = realpath(root);
+  const problems = [];
+  for (const entry of [status.host, status.sdk, ...status.modules]) {
+    const key = `${entry.crate} ${entry.version}`;
+    const resolved = origins.get(key) ?? [];
+    if (resolved.length !== 1) {
+      problems.push(resolved.length
+        ? `${key} resolves to ${resolved.length} source origins (${resolved.map((origin) => origin.source ?? "crates.io").sort().join(", ")})`
+        : `${key} is not in the resolved release graph`);
+      continue;
+    }
+    const [{ source }] = resolved;
+    const manifest = source !== null && isAbsolute(source)
+      ? relative(checkout, realpath(join(source, "Cargo.toml"))).split(sep).join("/")
+      : null;
+    if (manifest === null || manifest.startsWith("../") || isAbsolute(manifest) || !tracked.has(manifest)) {
+      problems.push(`${key} resolves to ${source ?? "crates.io"}, not a committed path package in the qualified checkout`);
+    }
+  }
+  if (problems.length) {
+    throw new StatusMetadataMismatch(`status provenance does not match resolved sources: ${problems.join("; ")}`);
   }
 }
 
@@ -168,17 +283,22 @@ function fail(message) {
   process.exit(1);
 }
 
+// Resolved dependency trees and metadata can exceed the default 1 MiB.
+const CAPTURE_MAX_BYTES = 256 * 1024 * 1024;
+
 function capture(command, args, env = process.env) {
   try {
     return execFileSync(command, args, {
       cwd: ROOT,
       env,
       encoding: "utf8",
+      maxBuffer: CAPTURE_MAX_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   } catch (error) {
     const stderr = error.stderr?.toString().trim();
-    fail(`${command} ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
+    const detail = stderr || (error.code ? String(error.code) : "");
+    fail(`${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
   }
 }
 
@@ -213,15 +333,31 @@ export function assertCleanAt(commit, stage, { root = ROOT, env = process.env } 
   }
 }
 
-function packageVersion(toolchain, env) {
-  const metadata = JSON.parse(
-    capture(toolchain.cargoPath, ["metadata", "--locked", "--no-deps", "--format-version", "1"], env),
-  );
+// The validated local Cargo and compiler, which resolve the host target's
+// configuration for metadata and tree queries in either build mode.
+function localCargoEnv(toolchain, env) {
+  return { ...env, CARGO: toolchain.cargoPath, RUSTC: toolchain.rustcPath, CARGO_BUILD_RUSTC: toolchain.rustcPath };
+}
+
+function workspaceMetadata(toolchain, env) {
+  const metadata = JSON.parse(capture(toolchain.cargoPath,
+    ["metadata", "--locked", "--no-deps", "--format-version", "1"], localCargoEnv(toolchain, env)));
   const broker = metadata.packages.find((entry) => entry.name === "agent-access-broker");
   if (!broker) {
     fail("agent-access-broker package was not found in cargo metadata");
   }
-  return broker.version;
+  return { version: broker.version, references: referenceCrates(metadata) };
+}
+
+// Checks the release units' features and returns their source origins.
+function verifyReleaseFeatures(toolchain, env, references) {
+  const output = capture(toolchain.cargoPath, releaseFeatureTreeArgs(toolchain.host), localCargoEnv(toolchain, env));
+  assertReleaseFeatureGraph(output, references);
+  return releasePackageOrigins(output);
+}
+
+function trackedFiles() {
+  return new Set(capture("git", ["ls-files", "-z"]).split("\0").filter(Boolean));
 }
 
 function buildBinaries(plan) {
@@ -279,7 +415,7 @@ async function stopChild(child) {
   }
 }
 
-async function verifyRunningBinary(binary, commit, version) {
+async function verifyRunningBinary(binary, commit, version, sources) {
   const temporary = mkdtempSync(join(tmpdir(), "agent-access-provenance-"));
   chmodSync(temporary, 0o700);
   const configPath = join(temporary, "broker.toml");
@@ -352,6 +488,7 @@ default_decision = "deny"
         if (response.ok) {
           const status = await response.json();
           assertReleaseStatus(status, { commit, version });
+          assertStampedSources(status, sources.origins, { root: ROOT, tracked: sources.tracked });
           return;
         }
         lastError = `status returned HTTP ${response.status}`;
@@ -382,7 +519,10 @@ async function main() {
     assertCleanAt(commit, "before build");
     const toolchain = inspectLocalToolchain();
     const plan = provenanceBuildPlan(commit, { ...options, toolchain });
-    const version = packageVersion(toolchain, plan.env);
+    const { version, references } = workspaceMetadata(toolchain, plan.env);
+    const tracked = trackedFiles();
+    const origins = verifyReleaseFeatures(toolchain, plan.env, references);
+    console.log(`Release feature check: no ${FORBIDDEN_RELEASE_FEATURE} feature or reference crate (${references.join(", ") || "none declared"}) in the normal/build graph of ${RELEASE_PACKAGES.join(" and ")}`);
     console.log(`Toolchain verification: ${JSON.stringify({
       ...toolchain,
       buildToolchain: options.buildService ? "Remote compiler and Cargo are unverified; local toolchain supplies metadata and native target only" : "Validated local compiler and Cargo; explicit compiler path, no wrappers or extra Rust flags",
@@ -392,7 +532,7 @@ async function main() {
     await buildBinaries(plan);
     assertCleanAt(commit, "after build");
     capture(plan.cliBinary, ["--help"]);
-    await verifyRunningBinary(plan.brokerBinary, commit, version);
+    await verifyRunningBinary(plan.brokerBinary, commit, version, { origins, tracked });
     assertCleanAt(commit, "after status verification");
     console.log(`Verified release provenance: version=${version} commit=${commit}`);
   } catch (error) {

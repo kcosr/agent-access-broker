@@ -4,8 +4,7 @@ mod protocol;
 mod schema;
 mod transport;
 
-pub use oauth::MCP_OAUTH_DIALECT;
-
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use base64::{Engine, prelude::BASE64_STANDARD};
@@ -31,13 +30,28 @@ use url::Url;
 
 pub use transport::PROTOCOL_VERSION;
 
+/// The `mcp_http` import selection, with its `mcp_oauth` companion dialect
+/// as the import-authentication role. Selecting it registers that dialect;
+/// an assembly must not select the dialect separately.
+pub fn registration() -> ImportedAdapterRegistration {
+    imported_adapter_registration(
+        agent_access_provider::module_metadata!(),
+        &McpAdapter,
+        Some(oauth::IMPORT_AUTHENTICATION),
+    )
+}
+
 #[derive(Debug)]
-pub struct McpAdapter;
+struct McpAdapter;
 
 #[async_trait]
 impl ImportedAdapter for McpAdapter {
     fn kind(&self) -> &'static str {
         "mcp_http"
+    }
+
+    fn development_only(&self) -> bool {
+        false
     }
 
     fn sensitive_output_pointers(&self) -> &'static [&'static str] {
@@ -58,13 +72,14 @@ impl ImportedAdapter for McpAdapter {
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, HostError> {
+    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         let mut compiled = BTreeMap::new();
         for action in actions {
-            self.scoped_mcp_name(action).map_err(HostError::invalid)?;
-            let value = CompiledAction::new(action).map_err(HostError::invalid)?;
+            self.scoped_mcp_name(action)
+                .map_err(ProviderBuildError::invalid)?;
+            let value = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
             if compiled.insert(action.action.clone(), value).is_some() {
-                return Err(HostError::invalid("duplicate imported action"));
+                return Err(ProviderBuildError::invalid("duplicate imported action"));
             }
         }
         Ok(Arc::new(McpProvider {
@@ -72,7 +87,7 @@ impl ImportedAdapter for McpAdapter {
             definition: definition.clone(),
             actions: compiled,
             transport_credential,
-            timeout: Duration::from_millis(host.limits.request_timeout_ms),
+            timeout: Duration::from_millis(host.limits().request_timeout_ms),
         }))
     }
 
@@ -82,11 +97,10 @@ impl ImportedAdapter for McpAdapter {
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
         host: &BuildContext<'_>,
-    ) -> Result<ImportedDiscovery, ProviderError> {
+    ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let wire = make_wire(definition, host).map_err(|_| {
-            ProviderError::deny(
-                ReasonCode::ConfigValidationFailed,
-                "imported MCP endpoint could not be prepared",
+            AdapterDiscoveryError::Configuration(
+                "imported MCP endpoint could not be prepared".to_owned(),
             )
         })?;
         let delivery = &definition
@@ -118,41 +132,42 @@ impl ImportedAdapter for McpAdapter {
             {
                 (HeaderMap::new(), Some(credential.clone()))
             }
-            _ => return Err(credential_error()),
+            _ => return Err(credential_error().into()),
         };
-        discover(wire, auth, delegated, &definition.endpoint).await
+        Ok(discover(wire, auth, delegated, &definition.endpoint).await?)
     }
 }
 
 fn make_wire(
     definition: &ImportedServiceDefinition,
     host: &BuildContext<'_>,
-) -> Result<WireClient, HostError> {
+) -> Result<WireClient, ProviderBuildError> {
     McpAdapter
         .validate_definition(definition)
-        .map_err(HostError::invalid)?;
+        .map_err(ProviderBuildError::invalid)?;
     if definition.adapter_kind != "mcp_http" {
-        return Err(HostError::invalid("incorrect imported adapter kind"));
+        return Err(ProviderBuildError::invalid(
+            "incorrect imported adapter kind",
+        ));
     }
     let endpoint = Url::parse(&definition.endpoint)
-        .map_err(|_| HostError::invalid("invalid imported endpoint"))?;
+        .map_err(|_| ProviderBuildError::invalid("invalid imported endpoint"))?;
     let client = UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "imports.mcp_http",
-            provider: "mcp_http",
-            base: &endpoint,
-            egress_proxy: None,
-            allowed_upstream_hosts: std::slice::from_ref(&definition.endpoint),
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
-        host.network(),
+        UpstreamClientSpec::new(
+            "imports.mcp_http",
+            "mcp_http",
+            &endpoint,
+            EgressDeclaration::Ordinary(None),
+            std::slice::from_ref(&definition.endpoint),
+            ClientProfile::SingleAttempt,
+        ),
+        host.clients(),
     )?;
     Ok(WireClient {
         client: Arc::new(client),
         endpoint,
         service: definition.service.clone(),
-        max_bytes: host.limits.max_upstream_response_bytes,
+        max_bytes: host.limits().max_upstream_response_bytes,
     })
 }
 
@@ -212,19 +227,26 @@ struct McpProvider {
     timeout: Duration,
 }
 
-#[async_trait]
-impl Provider for McpProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl McpProvider {
+    /// Imported actions are action-only; their inputs must match the tool schema.
+    fn validate_action_inputs(&self, action: &str, inputs: &Value) -> Result<(), ProviderError> {
         let action = self.actions.get(action).ok_or_else(input_error)?;
         if !action.input.valid(inputs) {
             return Err(input_error());
         }
         action.input.headers(inputs).map_err(|_| input_error())?;
-        Ok(BTreeMap::new())
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for McpProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        Ok(ScopeResolution::no_resources())
     }
 
     async fn verify_execution_credential(
@@ -245,22 +267,23 @@ impl Provider for McpProvider {
             credential,
             self.transport_credential.as_ref(),
         )?;
-        with_correlation_context(correlation.clone(), async {
-            let discovered = discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
-            Ok(Some(ProviderCredentialVerification {
-                upstream_status: 200,
-                upstream_duration_ms: started.elapsed().as_millis() as u64,
-                audit: json!({"adapterKind":"mcp_http", "protocolVersion":discovered.protocol_version}),
-            }))
+        agent_access_provider::host::with_correlation_context(correlation.clone(), async {
+            let discovered =
+                discover(self.wire.clone(), auth, None, &self.definition.endpoint).await?;
+            Ok(Some(ProviderCredentialVerification::new(
+                200,
+                started.elapsed().as_millis() as u64,
+                json!({"adapterKind":"mcp_http", "protocolVersion":discovered.protocol_version}),
+            )))
         })
         .await
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.resolve_scopes(&request.action, &request.inputs)?;
-        if request.service != self.definition.service
-            || !request.resource_scopes.is_empty()
-            || !request.body_parts.is_empty()
+        self.validate_action_inputs(request.action(), request.inputs())?;
+        if request.service() != self.definition.service
+            || !matches!(request.authority(), InvocationAuthority::ActionOnly)
+            || !request.body_parts().is_empty()
         {
             return Err(input_error());
         }
@@ -269,22 +292,25 @@ impl Provider for McpProvider {
             .execution_bindings
             .iter()
             .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode && binding.is_supported()
+                binding.owner_mode.as_str() == request.credential_mode().as_str()
+                    && binding.is_supported()
             })
             .ok_or_else(credential_error)?;
-        let action = self.actions.get(&request.action).ok_or_else(input_error)?;
+        let action = self.actions.get(request.action()).ok_or_else(input_error)?;
         let auth = match binding.mechanism {
-            ImportedAuthMechanism::StaticToken if request.delegated_credential.is_none() => {
+            ImportedAuthMechanism::StaticToken if request.execution().delegated().is_none() => {
                 auth_headers(
                     &self.definition,
                     &binding.delivery,
-                    request.credential.as_ref().ok_or_else(credential_error)?,
+                    request
+                        .execution()
+                        .static_credential()
+                        .ok_or_else(credential_error)?,
                     self.transport_credential.as_ref(),
                 )?
             }
             ImportedAuthMechanism::Oauth
-                if request.credential.is_none()
-                    && request.delegated_credential.is_some()
+                if request.execution().delegated().is_some()
                     && binding.owner_mode == ImportedCredentialMode::PerUser
                     && binding.delivery == ImportedCredentialDelivery::Bearer
                     && !self.definition.transport_auth =>
@@ -295,11 +321,11 @@ impl Provider for McpProvider {
         };
         let (modern_arguments, headers) = action
             .input
-            .arguments_and_headers(&request.inputs)
+            .arguments_and_headers(request.inputs())
             .map_err(|_| input_error())?;
         let call = CallArguments {
             name: action.name.clone(),
-            arguments: request.inputs.clone(),
+            arguments: request.inputs().clone(),
             modern_arguments,
             headers,
         };
@@ -307,8 +333,9 @@ impl Provider for McpProvider {
             self.wire.clone(),
             auth,
             request
-                .delegated_credential
-                .clone()
+                .execution()
+                .delegated()
+                .cloned()
                 .map(|credential| (credential, self.definition.endpoint.clone())),
             Some(call),
             self.timeout,
@@ -338,7 +365,7 @@ impl Provider for McpProvider {
         let state = state.lock().expect("wire state");
         let elapsed = started.elapsed().as_millis() as u64;
         let mut audit = json!({"adapterKind":"mcp_http", "upstreamTool":action.name,
-            "credentialMode":request.credential_mode,
+            "credentialMode":request.credential_mode(),
             "toolDispatched":state.call_dispatched});
         if let Some(version) = state.protocol_version {
             audit["protocolVersion"] = json!(version);
@@ -349,14 +376,9 @@ impl Provider for McpProvider {
                     result["mutationStatus"] = json!("applied_unverified");
                     result["retrySafe"] = json!(false);
                 }
-                Ok(ProviderResult {
-                    result,
-                    stream: None,
-                    audit: Some(audit),
-                    upstream_status: state.status,
-                    upstream_duration_ms: Some(elapsed),
-                    object_ids: None,
-                })
+                Ok(ProviderResult::new(result)
+                    .with_audit(audit)
+                    .with_upstream(state.status, Some(elapsed)))
             }
             Err(mut error) => {
                 if !action.definition.read_only {
@@ -398,16 +420,9 @@ fn auth_headers(
     transport: Option<&ExecutionCredential>,
 ) -> Result<HeaderMap, ProviderError> {
     delivery.validate().map_err(|_| credential_error())?;
-    let token = |credential: &ExecutionCredential| {
-        if credential.kind != "bearer_token" || credential.username.is_some() {
-            return Err(credential_error());
-        }
-        credential
-            .token
-            .as_ref()
-            .filter(|value| valid_token(value))
-            .cloned()
-            .ok_or_else(credential_error)
+    let token = |credential: &ExecutionCredential| match credential.view() {
+        CredentialView::Bearer { token } if valid_token(token) => Ok(token.to_owned()),
+        _ => Err(credential_error()),
     };
     let mut auth = HeaderMap::new();
     let token = token(execution)?;
@@ -428,15 +443,10 @@ fn auth_headers(
         if matches!(delivery, ImportedCredentialDelivery::Bearer) {
             return Err(credential_error());
         }
-        let transport = transport.ok_or_else(credential_error)?;
-        if transport.kind != "bearer_token" || transport.username.is_some() {
-            return Err(credential_error());
-        }
-        let token = transport
-            .token
-            .as_ref()
-            .filter(|v| valid_token(v))
-            .ok_or_else(credential_error)?;
+        let token = match transport.map(ExecutionCredential::view) {
+            Some(CredentialView::Bearer { token }) if valid_token(token) => token,
+            _ => return Err(credential_error()),
+        };
         let mut value =
             HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| credential_error())?;
         value.set_sensitive(true);
@@ -457,7 +467,7 @@ async fn connect(
     let info = |version| {
         ClientConfig::new(
             ClientCapabilities::default(),
-            Implementation::new("agent-access-broker", env!("CARGO_PKG_VERSION")),
+            Implementation::new(HOST_IMPLEMENTATION.name, HOST_IMPLEMENTATION.version),
         )
         .with_protocol_version(version)
     };

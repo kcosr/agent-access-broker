@@ -4,9 +4,10 @@
 //! the authorization URL, token requests, identity and target discovery, and
 //! how failures classify. Dialects register with the broker binary, so an
 //! authorization server family can live outside core.
+use crate::host::UpstreamClientFactory;
 use crate::{
-    ClientProfile, HostError, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    UpstreamNetwork, complete_upstream_trace,
+    ClientProfile, EgressDeclaration, ModuleMetadata, ProviderBuildError, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -32,8 +33,6 @@ const OAUTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct OAuthAdapter(Cow<'static, str>);
 
 impl OAuthAdapter {
-    pub const STUB: Self = Self(Cow::Borrowed("stub"));
-
     pub fn new(id: impl Into<String>) -> Self {
         Self(Cow::Owned(id.into()))
     }
@@ -43,6 +42,12 @@ impl OAuthAdapter {
     }
 }
 
+/// One `[oauth.registrations.<id>]` configuration table.
+///
+/// Configuration schema is intentionally exhaustive: its fields are the
+/// documented keys of a table that rejects unknown keys, so adding one is a
+/// configuration contract change that every consumer rendering or validating
+/// the table must handle. Dialects only read it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthRegistrationConfig {
@@ -66,6 +71,7 @@ pub struct OAuthRegistrationConfig {
     pub permission_profiles: BTreeMap<String, OAuthPermissionProfile>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthClientAuth {
@@ -75,6 +81,7 @@ pub enum OAuthClientAuth {
     ClientSecretBasic,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthTokenEncoding {
@@ -83,6 +90,7 @@ pub enum OAuthTokenEncoding {
     Json,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthRotation {
@@ -94,6 +102,7 @@ pub enum OAuthRotation {
 
 /// Whether a permission profile requests configured scopes or leaves the
 /// resource-bound authorization decision to the authorization server.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthScopeMode {
@@ -108,6 +117,10 @@ impl OAuthScopeMode {
     }
 }
 
+/// One permission profile of an OAuth registration's configuration.
+///
+/// Configuration schema is intentionally exhaustive, like
+/// [`OAuthRegistrationConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthPermissionProfile {
@@ -141,6 +154,7 @@ where
 
 /// A resource the authorization server lets a connection reach, with the
 /// scopes it grants there.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthTarget {
     pub id: String,
@@ -150,31 +164,112 @@ pub struct OAuthTarget {
     pub scopes: BTreeSet<String>,
 }
 
+impl OAuthTarget {
+    /// The resource `id` for the API `audience`, granting `scopes` there. It
+    /// has an empty display name until [`Self::with_name`] sets one.
+    pub fn new(
+        id: impl Into<String>,
+        audience: impl Into<String>,
+        scopes: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: String::new(),
+            audience: audience.into(),
+            scopes,
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+}
+
 /// A dialect the broker binary links, under the `adapter` name registrations
-/// select it by.
+/// select it by. Declare it as a `static` with the `const` builder.
+#[non_exhaustive]
 pub struct OAuthDialectRegistration {
-    pub id: &'static str,
-    /// Allowed only in non-production deployments with the development
-    /// fixtures enabled.
-    pub development_only: bool,
-    pub dialect: &'static dyn OAuthDialect,
+    module: ModuleMetadata,
+    id: &'static str,
+    development_only: bool,
+    dialect: &'static dyn OAuthDialect,
+}
+
+impl OAuthDialectRegistration {
+    /// `dialect` from `module`, selected by the adapter name `id`. It is not
+    /// a development fixture.
+    pub const fn new(
+        module: ModuleMetadata,
+        id: &'static str,
+        dialect: &'static dyn OAuthDialect,
+    ) -> Self {
+        Self {
+            module,
+            id,
+            development_only: false,
+            dialect,
+        }
+    }
+
+    /// Marks the dialect as a development fixture: allowed only in
+    /// non-production deployments with the development fixtures enabled.
+    pub const fn development_only(mut self) -> Self {
+        self.development_only = true;
+        self
+    }
+
+    /// The package that declares this dialect.
+    pub const fn module(&self) -> ModuleMetadata {
+        self.module
+    }
+
+    /// The `adapter` name OAuth registrations select the dialect by.
+    pub const fn id(&self) -> &'static str {
+        self.id
+    }
+
+    pub const fn is_development_only(&self) -> bool {
+        self.development_only
+    }
+
+    pub const fn dialect(&self) -> &'static dyn OAuthDialect {
+        self.dialect
+    }
 }
 
 impl std::fmt::Debug for OAuthDialectRegistration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OAuthDialectRegistration")
+            .field("module", &self.module)
             .field("id", &self.id)
             .field("development_only", &self.development_only)
             .finish_non_exhaustive()
     }
 }
 
-/// One registration as its dialect sees it.
+/// One registration as its dialect sees it. The host creates it; dialect
+/// tests build one with [`Self::new`].
+#[non_exhaustive]
 pub struct OAuthClient<'a> {
     pub registration_id: &'a str,
     pub config: &'a OAuthRegistrationConfig,
     pub client_secret: &'a str,
+}
+
+impl<'a> OAuthClient<'a> {
+    pub fn new(
+        registration_id: &'a str,
+        config: &'a OAuthRegistrationConfig,
+        client_secret: &'a str,
+    ) -> Self {
+        Self {
+            registration_id,
+            config,
+            client_secret,
+        }
+    }
 }
 
 impl std::fmt::Debug for OAuthClient<'_> {
@@ -186,7 +281,9 @@ impl std::fmt::Debug for OAuthClient<'_> {
     }
 }
 
-/// What the authorization URL carries for one consent flow.
+/// What the authorization URL carries for one consent flow. The host
+/// creates it; dialect tests build one with [`Self::new`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct AuthorizationRequest<'a> {
     pub state: &'a str,
@@ -194,7 +291,18 @@ pub struct AuthorizationRequest<'a> {
     pub code_challenge_s256: &'a str,
 }
 
-/// An authorization code to exchange, with its PKCE verifier.
+impl<'a> AuthorizationRequest<'a> {
+    pub fn new(state: &'a str, code_challenge_s256: &'a str) -> Self {
+        Self {
+            state,
+            code_challenge_s256,
+        }
+    }
+}
+
+/// An authorization code to exchange, with its PKCE verifier. The host
+/// creates it; dialect tests build one with [`Self::new`].
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct CodeExchange<'a> {
     pub code: &'a str,
@@ -202,7 +310,21 @@ pub struct CodeExchange<'a> {
     pub profile: &'a OAuthPermissionProfile,
 }
 
+impl<'a> CodeExchange<'a> {
+    pub fn new(code: &'a str, code_verifier: &'a str, profile: &'a OAuthPermissionProfile) -> Self {
+        Self {
+            code,
+            code_verifier,
+            profile,
+        }
+    }
+}
+
 /// What a token response says about the refresh token.
+///
+/// Intentionally exhaustive: a response issues a new refresh token, keeps the
+/// old one valid or issues none, and the manager's refresh fences depend on
+/// handling each of them.
 pub enum IssuedRefreshToken {
     /// A new refresh token replaces the old one.
     Issued(String),
@@ -213,6 +335,10 @@ pub enum IssuedRefreshToken {
 }
 
 /// A token response. The manager validates its bounds.
+///
+/// The public fields are what the manager reads. A dialect builds a grant
+/// with [`Self::new`] and the `with_*` builders.
+#[non_exhaustive]
 pub struct TokenGrant {
     pub access_token: String,
     pub token_type: String,
@@ -226,13 +352,66 @@ pub struct TokenGrant {
     pub supersedes_other_access: bool,
 }
 
+impl TokenGrant {
+    /// An access token of `token_type` that expires `expires_in` seconds
+    /// after issue. Its scopes are unknown until [`Self::with_scopes`]
+    /// records them, and it supersedes no other access.
+    pub fn new(
+        access_token: impl Into<String>,
+        token_type: impl Into<String>,
+        expires_in: u64,
+        refresh_token: IssuedRefreshToken,
+    ) -> Self {
+        Self {
+            access_token: access_token.into(),
+            token_type: token_type.into(),
+            expires_in,
+            scopes: Vec::new(),
+            refresh_token,
+            supersedes_other_access: false,
+        }
+    }
+
+    /// Known access-token scopes, from the response or protocol-defined
+    /// inference. Empty represents unknown server-default permissions.
+    pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// Whether this grant invalidates access tokens issued earlier for other
+    /// permission profiles of the same connection.
+    pub fn with_supersedes_other_access(mut self, supersedes_other_access: bool) -> Self {
+        self.supersedes_other_access = supersedes_other_access;
+        self
+    }
+}
+
 /// Optional upstream account evidence. When present, the subject must be stable
 /// across code exchange and later consent revalidation. Authorization-only
 /// protocols must leave it absent instead of inventing an upstream user.
+#[non_exhaustive]
 pub struct ConnectedIdentity {
     /// None means the grant authorizes a resource but proves no upstream account identity.
     pub subject: Option<String>,
     pub display_name: String,
+}
+
+impl ConnectedIdentity {
+    /// A connection shown as `display_name` that proves no upstream account
+    /// identity until [`Self::with_subject`] records one.
+    pub fn new(display_name: impl Into<String>) -> Self {
+        Self {
+            subject: None,
+            display_name: display_name.into(),
+        }
+    }
+
+    /// The stable upstream account the grant proves.
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
 }
 
 /// How an OAuth request failed. The manager's refresh fences depend on the
@@ -240,6 +419,7 @@ pub struct ConnectedIdentity {
 /// that might have consumed it: a dialect must report `RetryAfter`,
 /// `PermissionRejected`, and `RequestRejected` only when the authorization
 /// server guarantees the grant was not consumed.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OAuthDialectError {
     #[error("OAuth request was not sent")]
@@ -267,24 +447,48 @@ pub enum OAuthDialectError {
 
 /// Whether an uncertain refresh exchange may safely reuse its input material.
 /// This is a provider guarantee, independent of successful-response rotation.
+///
+/// Intentionally exhaustive: an exchange either consumes its input or may
+/// reuse it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshReplay {
     Consuming,
     Reusable,
 }
 
+/// The `iss` a consent callback carries: `value`, and whether the callback
+/// must carry it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCallbackIssuer {
     pub value: String,
     pub required: bool,
 }
 
+/// An authorization URL and the issuer its consent callback must carry.
+#[non_exhaustive]
 pub struct PreparedAuthorization {
     pub url: Url,
     pub callback_issuer: OAuthCallbackIssuer,
 }
 
+impl PreparedAuthorization {
+    pub fn new(url: Url, callback_issuer: OAuthCallbackIssuer) -> Self {
+        Self {
+            url,
+            callback_issuer,
+        }
+    }
+}
+
 impl OAuthCallbackIssuer {
+    pub fn new(value: impl Into<String>, required: bool) -> Self {
+        Self {
+            value: value.into(),
+            required,
+        }
+    }
+
     pub fn accepts(&self, actual: Option<&str>) -> bool {
         match actual {
             Some(value) => value == self.value,
@@ -329,10 +533,10 @@ pub trait OAuthDialect: Send + Sync + 'static {
         profile: &OAuthPermissionProfile,
         request: AuthorizationRequest<'_>,
     ) -> Result<PreparedAuthorization, OAuthDialectError> {
-        Ok(PreparedAuthorization {
-            url: self.authorization_url(client, profile, request)?,
-            callback_issuer: self.callback_issuer(client.config),
-        })
+        Ok(PreparedAuthorization::new(
+            self.authorization_url(client, profile, request)?,
+            self.callback_issuer(client.config),
+        ))
     }
 
     /// The `iss` a consent callback must carry, when the dialect requires one.
@@ -385,58 +589,56 @@ pub struct OAuthHttp {
 }
 
 impl OAuthHttp {
+    /// Builds one client per approved destination origin through the host's
+    /// OAuth client factory, each routed on its own. A literal IPv4/IPv6
+    /// loopback origin asks for the direct loopback route; every other origin,
+    /// including `localhost`, takes the host's ordinary route, so a loopback
+    /// issuer never exempts another destination. Plain HTTP is accepted only
+    /// for literal loopback origins.
     pub fn build(
         label: &str,
         provider: &'static str,
         base: &Url,
         allowed_upstream_hosts: &[String],
-        network: UpstreamNetwork<'_>,
-    ) -> Result<Self, HostError> {
-        let direct = crate::EgressProxyRuntimeConfig::direct();
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let build = |base: &Url| {
-            // Loopback test servers remain direct, but never determine the
-            // route of another host in the registration's allowlist.
-            let loopback = base.host_str().is_some_and(|host| {
-                host == "localhost"
-                    || host
-                        .trim_matches(['[', ']'])
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|ip| ip.is_loopback())
-            });
+            let loopback = crate::is_literal_loopback(base);
+            if base.scheme() != "https" && !(loopback && base.scheme() == "http") {
+                return Err(ProviderBuildError::invalid(
+                    "OAuth destinations require HTTPS; plain HTTP is limited to literal loopback IP addresses",
+                ));
+            }
             UpstreamClient::build(
-                UpstreamClientSpec {
+                UpstreamClientSpec::new(
                     label,
                     provider,
                     base,
-                    egress_proxy: None,
+                    if loopback {
+                        EgressDeclaration::LiteralLoopback
+                    } else {
+                        EgressDeclaration::Ordinary(None)
+                    },
                     allowed_upstream_hosts,
-                    profile: ClientProfile::Bounded {
+                    ClientProfile::Bounded {
                         total: OAUTH_REQUEST_TIMEOUT,
                         connect: OAUTH_CONNECT_TIMEOUT,
                     },
-                    status_reasons: &[],
-                },
-                if loopback {
-                    UpstreamNetwork {
-                        egress: &direct,
-                        ..network
-                    }
-                } else {
-                    network
-                },
+                ),
+                clients,
             )
         };
         let client = build(base)?;
         let mut destinations = BTreeMap::new();
         for pattern in allowed_upstream_hosts {
-            let endpoint = Url::parse(pattern)
-                .map_err(|_| HostError::invalid("OAuth allowlist requires URL destinations"))?;
-            if !matches!(endpoint.scheme(), "http" | "https")
-                || endpoint.host_str().is_none_or(|host| host.contains('*'))
+            let endpoint = Url::parse(pattern).map_err(|_| {
+                ProviderBuildError::invalid("OAuth allowlist requires URL destinations")
+            })?;
+            if endpoint.host_str().is_none_or(|host| host.contains('*'))
                 || !endpoint.username().is_empty()
                 || endpoint.password().is_some()
             {
-                return Err(HostError::invalid(
+                return Err(ProviderBuildError::invalid(
                     "OAuth allowlist requires fixed HTTP(S) destination origins",
                 ));
             }
@@ -532,9 +734,7 @@ impl OAuthResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EgressProxyEnvironment, EgressProxyRuntimeConfig, ProviderLimits, test_support};
-    use std::sync::Arc;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    use crate::test_support;
 
     #[test]
     fn permission_profiles_preserve_explicit_serialization_and_reject_null_scopes() {
@@ -568,73 +768,96 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn oauth_routes_each_destination_by_host_scheme_and_loopback() {
-        let proxy = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})))
-            .expect(1)
-            .mount(&proxy)
-            .await;
-        let environment = EgressProxyEnvironment::from_lookup(|key| {
-            Ok(match key {
-                "HTTP_PROXY" => Some(proxy.uri()),
-                "HTTPS_PROXY" => Some("http://https-proxy.invalid:8080".into()),
-                "NO_PROXY" => Some("issuer.internal".into()),
-                _ => None,
-            })
-        })
-        .unwrap();
-        let egress = EgressProxyRuntimeConfig::new(Arc::new(environment), None);
+    fn build(base: &str, allowlist: &[String]) -> Result<OAuthHttp, ProviderBuildError> {
+        OAuthHttp::build(
+            "oauth.test",
+            "oauth",
+            &Url::parse(base).unwrap(),
+            allowlist,
+            &test_support::TestHost::default(),
+        )
+    }
+
+    #[test]
+    fn oauth_requests_the_loopback_route_only_for_literal_loopback_origins() {
+        let host = test_support::TestHost::default();
         let urls = [
-            "https://issuer.internal/metadata",
-            "https://resource.external/metadata",
-            "http://token.external/token",
-            "http://127.0.0.1:8787/token",
+            "https://issuer.example/metadata".to_owned(),
+            "https://localhost:9/token".to_owned(),
+            "https://127.0.0.2:9443/token".to_owned(),
+            "http://[::1]:8787/token".to_owned(),
         ];
-        for base in ["https://issuer.internal/", "http://127.0.0.1:8787/"] {
-            let http = OAuthHttp::build(
-                "oauth.test",
-                "oauth",
-                &Url::parse(base).unwrap(),
-                &urls.iter().map(|url| (*url).to_owned()).collect::<Vec<_>>(),
-                UpstreamNetwork {
-                    limits: &ProviderLimits::default(),
-                    egress: &egress,
-                    outbound_tls: &test_support::test_outbound_tls(),
-                },
-            )
-            .unwrap();
-            let route = |origin: &str| http.destinations[origin].egress_proxy().audit_value();
-            assert_eq!(route("https://issuer.internal")["mode"], "direct");
-            assert_eq!(route("http://127.0.0.1:8787")["mode"], "direct");
-            assert_eq!(
-                route("https://resource.external")["proxy"],
-                "http://https-proxy.invalid:8080"
+        OAuthHttp::build(
+            "oauth.test",
+            "oauth",
+            &Url::parse("http://127.0.0.1:8787/").unwrap(),
+            &urls,
+            &host,
+        )
+        .unwrap();
+        let requested = host
+            .built_clients()
+            .into_iter()
+            .map(|client| {
+                (
+                    client.base.origin().ascii_serialization(),
+                    client.literal_loopback,
+                    client.profile,
+                )
+            })
+            .collect::<Vec<_>>();
+        let profile = ClientProfile::Bounded {
+            total: OAUTH_REQUEST_TIMEOUT,
+            connect: OAUTH_CONNECT_TIMEOUT,
+        };
+        assert_eq!(
+            requested,
+            [
+                ("http://127.0.0.1:8787".to_owned(), true, profile),
+                ("https://issuer.example".to_owned(), false, profile),
+                ("https://localhost:9".to_owned(), false, profile),
+                ("https://127.0.0.2:9443".to_owned(), true, profile),
+                ("http://[::1]:8787".to_owned(), true, profile),
+            ]
+        );
+    }
+
+    #[test]
+    fn oauth_plain_http_requires_a_literal_loopback_address() {
+        for base in ["http://127.0.0.1:8787/", "http://[::1]:8787/"] {
+            build(base, &[format!("{base}token")]).unwrap();
+        }
+        for insecure in [
+            "http://localhost:8787/",
+            "http://LOCALHOST:8787/",
+            "http://token.example/",
+            "http://[::ffff:127.0.0.1]:8787/",
+        ] {
+            // Rejected as the base and as any allowlisted destination, even
+            // beside an approved loopback issuer.
+            assert!(build(insecure, &[]).is_err(), "{insecure}");
+            assert!(
+                build(
+                    "http://127.0.0.1:8787/",
+                    &[
+                        "http://127.0.0.1:8787/token".into(),
+                        format!("{insecure}token")
+                    ],
+                )
+                .is_err(),
+                "{insecure}"
             );
-            assert_eq!(route("http://token.external")["proxy"], proxy.uri());
-            if base.starts_with("http:") {
-                let response = http
-                    .send(
-                        http.request(Method::POST, Url::parse(urls[2]).unwrap())
-                            .form(&[("code", "synthetic-code")]),
-                        "oauth.token",
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), 200);
-                assert!(matches!(
-                    http.send(
-                        http.request(
-                            Method::GET,
-                            Url::parse("http://not-approved.invalid/token").unwrap()
-                        ),
-                        "oauth.token"
-                    )
-                    .await,
-                    Err(OAuthDialectError::NotSent)
-                ));
-            }
+        }
+        for invalid in [
+            "ftp://127.0.0.1/token",
+            "https://*.example/token",
+            "https://user:pass@token.example/token",
+            "token.example/token",
+        ] {
+            assert!(
+                build("https://issuer.example/", &[invalid.into()]).is_err(),
+                "{invalid}"
+            );
         }
     }
 }

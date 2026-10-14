@@ -1,4 +1,7 @@
 use super::*;
+use agent_access_provider::test_support::{
+    InvocationBuilder, basic_credential, bearer_credential, credential_token, credential_username,
+};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
@@ -23,7 +26,7 @@ fn parses_issue_keys_and_rejects_lowercase_or_zero_numbers() {
     assert!(!is_issue_key("PROJ-0"));
     assert!(!is_issue_key("P-1"));
     assert_eq!(
-        issue_locator_from_key("proj-1").unwrap_err().reason_code,
+        issue_locator_from_key("proj-1").unwrap_err().reason_code(),
         ReasonCode::LocatorInvalid
     );
 }
@@ -45,7 +48,7 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
     assert_eq!(
         issue_locator_from_url("https://other.atlassian.net/browse/PROJ-123", &config)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::LocatorInvalid
     );
     for raw in [
@@ -58,7 +61,7 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
         assert_eq!(
             issue_locator_from_url(raw, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::LocatorInvalid
         );
     }
@@ -165,10 +168,11 @@ fn expanded_jql_accepts_field_operator_groups_and_ordering() {
 
 #[test]
 fn current_user_function_requires_per_user_credential_mode() {
-    let service_error = parse_jql_query("assignee = currentUser()", "service").unwrap_err();
-    assert_eq!(service_error.reason_code, ReasonCode::InputInvalid);
+    let service_error =
+        parse_jql_query("assignee = currentUser()", CredentialMode::Service).unwrap_err();
+    assert_eq!(service_error.reason_code(), ReasonCode::InputInvalid);
 
-    let per_user = parse_jql_query("assignee = currentUser()", "per_user").unwrap();
+    let per_user = parse_jql_query("assignee = currentUser()", CredentialMode::PerUser).unwrap();
     assert_eq!(per_user.emit(), "assignee = currentUser()");
 }
 
@@ -179,13 +183,17 @@ fn rejects_expanded_jql_caps_and_function_edges() {
         "a".repeat(MAX_JIRA_STRING_LITERAL_BYTES + 1)
     );
     assert_eq!(
-        parse_jql_expression(&long_string).unwrap_err().reason_code,
+        parse_jql_expression(&long_string)
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
     let long_tokens = "A ".repeat(MAX_JIRA_QUERY_TOKENS + 1);
     assert_eq!(
-        parse_jql_expression(&long_tokens).unwrap_err().reason_code,
+        parse_jql_expression(&long_tokens)
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
 
@@ -215,7 +223,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     let bare = build_jira_search_query(
@@ -224,7 +232,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -241,7 +249,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     let bare_reserved = build_jira_search_query(
@@ -250,7 +258,7 @@ fn canonical_hash_is_stable_across_equivalent_quote_styles() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -272,7 +280,7 @@ fn search_inputs_reject_unknown_nested_query_fields() {
         }
     }))
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[test]
@@ -289,7 +297,7 @@ fn jira_protocol_error_message_is_sanitized() {
         "missing field `id` at line 1 column 42".to_string(),
     ));
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.message, "Jira response protocol error");
     assert!(!error.message.contains("missing field"));
 }
@@ -311,7 +319,7 @@ fn comment_parser_preserves_body_and_id_mismatches_fail_closed() {
     assert_eq!(comment_result(&comment)["parentCommentId"], "10041");
 
     let error = validate_returned_comment_id("99999", Some("10042")).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -326,8 +334,11 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
     validate_returned_issue_description(&issue, &config).unwrap();
     config.content.max_body_bytes = exact_size - 1;
     let issue_error = validate_returned_issue_description(&issue, &config).unwrap_err();
-    assert_eq!(issue_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(issue_error.reason_code.http_status(), 502);
+    assert_eq!(
+        issue_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(issue_error.reason_code().http_status(), 502);
     assert_eq!(
         issue_error.message,
         "Jira issue description response was invalid"
@@ -342,10 +353,10 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
     validate_returned_comment_body(&comment, exact_size).unwrap();
     let comment_error = validate_returned_comment_body(&comment, exact_size - 1).unwrap_err();
     assert_eq!(
-        comment_error.reason_code,
+        comment_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(comment_error.reason_code.http_status(), 502);
+    assert_eq!(comment_error.reason_code().http_status(), 502);
     assert_eq!(
         comment_error.message,
         "Jira comment response body was invalid"
@@ -356,7 +367,7 @@ fn returned_body_validation_has_exact_serialized_caps_and_sanitized_failures() {
 
     comment.body = Some(json!({"type": "doc", "version": 1, "content": "sentinel"}));
     let malformed = validate_returned_comment_body(&comment, u64::MAX).unwrap_err();
-    assert_eq!(malformed.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(malformed.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(malformed.message, "Jira comment response body was invalid");
     assert!(!malformed.message.contains("sentinel"));
 }
@@ -366,7 +377,9 @@ fn projects(jql: &str) -> BTreeSet<String> {
 }
 
 fn canonical_jql(jql: &str) -> String {
-    parse_jql_query(jql, "service").unwrap().emit()
+    parse_jql_query(jql, CredentialMode::Service)
+        .unwrap()
+        .emit()
 }
 
 fn set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
@@ -433,9 +446,9 @@ impl StubJiraBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                kind: credential.kind.clone(),
-                username: credential.username.clone(),
-                token: credential.token.clone(),
+                kind: credential.kind().as_str().to_owned(),
+                username: credential_username(credential).map(str::to_owned),
+                token: Some(credential_token(credential).to_owned()),
             });
     }
 }
@@ -1022,25 +1035,14 @@ async fn issue_view_returns_generated_browser_url() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
+        .invoke(InvocationBuilder::new("jira", "issue.view")
+            .inputs(json!({
                 "url": "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/PROJ-1"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+            }))
+            .resources(BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]))
+            .credential(test_credential())
+            .lookup_credential(test_lookup_credential())
+            .build())
         .await
         .unwrap();
 
@@ -1073,23 +1075,17 @@ async fn issue_view_returns_null_description_when_jira_omits_description() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -1138,29 +1134,22 @@ async fn issue_create_uses_authorized_project_and_returns_readback_issue() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "Created issue",
-                "contentFormat": "adf",
-                "content": adf_text("create body")
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "Created issue",
+                    "contentFormat": "adf",
+                    "content": adf_text("create body")
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -1229,31 +1218,24 @@ async fn issue_create_fails_closed_when_created_key_leaves_requested_project() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "Created issue"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "Created issue"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     let audit = error.audit.unwrap();
     assert_eq!(audit["failurePhase"], "create_response_validation");
     assert_eq!(audit["issueId"], "10002");
@@ -1275,33 +1257,26 @@ async fn issue_create_malformed_response_emits_side_effect_failure_audit() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "Created issue",
-                "contentFormat": "adf",
-                "content": adf_text("created body")
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "Created issue",
+                    "contentFormat": "adf",
+                    "content": adf_text("created body")
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(error.upstream_duration_ms, Some(11));
     assert_eq!(
@@ -1343,7 +1318,7 @@ async fn issue_create_non_201_success_emits_side_effect_failure_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     assert_eq!(
         error.object_ids,
@@ -1377,7 +1352,7 @@ async fn issue_create_readback_failure_emits_reconciliation_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -1423,7 +1398,7 @@ async fn issue_create_readback_invalid_key_or_project_fails_protocol() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
         "post_create_readback"
@@ -1459,7 +1434,7 @@ async fn issue_create_readback_mismatch_fails_scope_unresolved() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
         "post_create_readback"
@@ -1486,10 +1461,7 @@ async fn issue_create_result_size_failure_keeps_side_effect_audit() {
         .lock()
         .unwrap()
         .insert("PROJ-2".to_string(), readback);
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        ..Default::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
 
     let error = provider
@@ -1501,7 +1473,7 @@ async fn issue_create_result_size_failure_keeps_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.audit.as_ref().unwrap()["failurePhase"],
@@ -1518,18 +1490,20 @@ async fn issue_create_rejects_project_scope_mismatch_before_backend() {
     let backend = Arc::new(StubJiraBackend::default());
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let mut invocation = issue_create_invocation(json!({
+    let invocation = InvocationBuilder::from(issue_create_invocation(json!({
         "project": "PROJ",
         "issueTypeId": "10001",
         "summary": "Created issue"
-    }));
-    invocation
-        .resource_scopes
-        .insert("project".to_string(), vec!["OTHER".to_string()]);
+    })))
+    .resources(BTreeMap::from([(
+        "project".to_string(),
+        vec!["OTHER".to_string()],
+    )]))
+    .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 }
@@ -1571,10 +1545,12 @@ async fn issue_create_attribution_is_applied_to_description() {
         "contentFormat": "adf",
         "content": adf_text("description before attribution")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let response = provider.invoke(invocation).await.unwrap();
 
@@ -1659,14 +1635,16 @@ async fn issue_create_enforces_description_body_cap_after_attribution() {
         "contentFormat": "adf",
         "content": adf_text("x")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
@@ -1697,10 +1675,12 @@ async fn issue_child_create_attribution_is_applied_to_description() {
         "contentFormat": "adf",
         "content": adf_text("description before attribution")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let response = provider.invoke(invocation).await.unwrap();
 
@@ -1778,14 +1758,16 @@ async fn issue_child_create_enforces_description_body_cap_after_attribution() {
         "contentFormat": "adf",
         "content": adf_text("x")
     }));
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
@@ -1819,7 +1801,7 @@ async fn issue_child_create_capability_and_scope_resolution_use_lookup_metadata(
     );
 
     let local_scopes = provider
-        .resolve_scopes(
+        .local_scopes(
             "issue.child.create",
             &json!({
                 "project": "ENG",
@@ -1836,7 +1818,7 @@ async fn issue_child_create_capability_and_scope_resolution_use_lookup_metadata(
     assert!(!local_scopes.contains_key("issue"));
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.child.create",
             &json!({
                 "project": "ENG",
@@ -1885,30 +1867,24 @@ async fn issue_child_create_uses_authorized_parent_and_verifies_readback() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.child.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "Child issue",
-                "parentIssue": "PROJ-1",
-                "contentFormat": "adf",
-                "content": adf_text("child body")
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.child.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "Child issue",
+                    "parentIssue": "PROJ-1",
+                    "contentFormat": "adf",
+                    "content": adf_text("child body")
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -1970,8 +1946,8 @@ async fn issue_child_create_rejects_oversize_returned_description_after_one_muta
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira issue description response was invalid");
     assert!(!error.message.contains(&sentinel));
     assert_eq!(backend.created_issues.lock().unwrap().len(), 1);
@@ -1992,34 +1968,28 @@ async fn issue_child_create_requires_target_and_parent_scope_before_mutation() {
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.child.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "ENG",
-                "issueTypeId": "10001",
-                "summary": "Child issue",
-                "parentIssue": "OPS-100",
-                "contentFormat": "markdown",
-                "content": "content that exceeds the configured cap"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["ENG".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.child.create")
+                .inputs(json!({
+                    "project": "ENG",
+                    "issueTypeId": "10001",
+                    "summary": "Child issue",
+                    "parentIssue": "OPS-100",
+                    "contentFormat": "markdown",
+                    "content": "content that exceeds the configured cap"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["ENG".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2037,32 +2007,26 @@ async fn issue_child_create_requires_target_project_scope_before_mutation() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.child.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "ENG",
-                "issueTypeId": "10001",
-                "summary": "Child issue",
-                "parentIssue": "OPS-100"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["OPS".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.child.create")
+                .inputs(json!({
+                    "project": "ENG",
+                    "issueTypeId": "10001",
+                    "summary": "Child issue",
+                    "parentIssue": "OPS-100"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["OPS".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2115,32 +2079,26 @@ async fn issue_child_create_parent_readback_failure_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.child.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "Child issue",
-                "parentIssue": "PROJ-1"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.child.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "Child issue",
+                    "parentIssue": "PROJ-1"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2190,8 +2148,8 @@ async fn issue_create_rejects_oversize_returned_description_after_one_mutation()
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira issue description response was invalid");
     assert!(!error.message.contains(&sentinel));
     assert_eq!(backend.created_issues.lock().unwrap().len(), 1);
@@ -2220,7 +2178,7 @@ async fn issue_child_create_created_project_mismatch_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2261,7 +2219,7 @@ async fn issue_child_create_readback_failure_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2312,7 +2270,7 @@ async fn issue_child_create_readback_mismatch_fails_scope_unresolved() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -2443,23 +2401,17 @@ async fn issue_view_validates_returned_description_without_write_allowlist() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2483,27 +2435,21 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         Arc::new(malformed_backend),
     );
     let malformed_error = malformed_provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
     assert_eq!(
-        malformed_error.reason_code,
+        malformed_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!malformed_error.message.contains("bad"));
@@ -2522,30 +2468,24 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         Arc::new(oversize_backend),
     );
     let oversize_error = oversize_provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
     assert_eq!(
-        oversize_error.reason_code,
+        oversize_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(oversize_error.reason_code.http_status(), 502);
+    assert_eq!(oversize_error.reason_code().http_status(), 502);
     assert!(!oversize_error.message.contains(&"x".repeat(16)));
 }
 
@@ -2575,27 +2515,21 @@ async fn issue_view_confirms_authoritative_project_before_returning_content() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(response.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(response.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!response.message.contains("must not leak"));
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
 }
@@ -2634,7 +2568,7 @@ async fn issue_update_capability_and_scope_resolution_use_lookup_metadata() {
     assert!(capability.lookup.credential_required());
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.update",
             &json!({"issue": "OLD-1", "summary": "Updated summary"}),
             Some(&test_lookup_credential()),
@@ -2674,7 +2608,7 @@ async fn issue_dependency_add_capability_and_scope_resolution_use_lookup_metadat
     );
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.dependency.add",
             &json!({
                 "blockingIssue": "OLD-101",
@@ -2716,29 +2650,21 @@ async fn issue_dependency_add_creates_cross_project_outward_link_and_verifies_re
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.dependency.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "blockingIssue": "ENG-1",
-                "blockedIssue": "OPS-2"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([(
-                "project".to_string(),
-                vec!["ENG".to_string(), "OPS".to_string()],
-            )]),
-            credential_mode: "per_user".to_string(),
-            credential: Some(test_per_user_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.dependency.add")
+                .inputs(json!({
+                    "blockingIssue": "ENG-1",
+                    "blockedIssue": "OPS-2"
+                }))
+                .credential_mode(CredentialMode::PerUser)
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["ENG".to_string(), "OPS".to_string()],
+                )]))
+                .credential(test_per_user_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2810,30 +2736,24 @@ async fn issue_dependency_add_requires_both_projects_in_authorized_scope_before_
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.dependency.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "blockingIssue": "ENG-1",
-                "blockedIssue": "OPS-2"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["ENG".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.dependency.add")
+                .inputs(json!({
+                    "blockingIssue": "ENG-1",
+                    "blockedIssue": "OPS-2"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["ENG".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -2878,7 +2798,7 @@ async fn issue_dependency_add_rejects_same_canonical_issue_after_lookup() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.dependency.add",
             &json!({"blockingIssue": "OLD-1", "blockedIssue": "PROJ-1"}),
             Some(&test_lookup_credential()),
@@ -2886,7 +2806,7 @@ async fn issue_dependency_add_rejects_same_canonical_issue_after_lookup() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
 }
 
@@ -2908,27 +2828,21 @@ async fn issue_dependency_add_rejects_link_direction_mismatch_before_mutation() 
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.dependency.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.dependency.add")
+                .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -2958,27 +2872,21 @@ async fn issue_dependency_add_rejects_unavailable_link_type_before_mutation() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.dependency.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.dependency.add")
+                .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(backend.created_issue_links.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -3005,27 +2913,21 @@ async fn issue_dependency_add_readback_failure_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.dependency.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.dependency.add")
+                .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -3082,33 +2984,24 @@ async fn issue_dependency_add_readback_mismatch_fails_closed() {
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
         let error = provider
-            .invoke(ProviderInvocation {
-                execution_context: "internal".to_string(),
-                resource_attributes: Default::default(),
-                identity: crate::InvocationIdentity::anonymous(),
-                service: "jira".to_string(),
-                action: "issue.dependency.add".to_string(),
-                correlation: crate::CorrelationContext::for_tests(),
-                inputs: json!({
-                    "blockingIssue": "ENG-1",
-                    "blockedIssue": "OPS-2"
-                }),
-                body_parts: vec![],
-                resource_scopes: BTreeMap::from([(
-                    "project".to_string(),
-                    vec!["ENG".to_string(), "OPS".to_string()],
-                )]),
-                credential_mode: "service".to_string(),
-                credential: Some(test_credential()),
-                lookup_credential: Some(test_lookup_credential()),
-                provider_preflight: None,
-                search_authorization: None,
-                delegated_credential: None,
-            })
+            .invoke(
+                InvocationBuilder::new("jira", "issue.dependency.add")
+                    .inputs(json!({
+                        "blockingIssue": "ENG-1",
+                        "blockedIssue": "OPS-2"
+                    }))
+                    .resources(BTreeMap::from([(
+                        "project".to_string(),
+                        vec!["ENG".to_string(), "OPS".to_string()],
+                    )]))
+                    .credential(test_credential())
+                    .lookup_credential(test_lookup_credential())
+                    .build(),
+            )
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert_eq!(error.upstream_status, Some(201));
         assert_eq!(
             error.audit.as_ref().unwrap()["failurePhase"],
@@ -3146,7 +3039,7 @@ async fn issue_parent_set_capability_and_scope_resolution_use_lookup_metadata() 
     );
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.parent.set",
             &json!({
                 "issue": "OLD-102",
@@ -3189,29 +3082,21 @@ async fn issue_parent_set_creates_cross_project_parent_and_verifies_readback() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.parent.set".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "ENG-2",
-                "parentIssue": "OPS-100"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([(
-                "project".to_string(),
-                vec!["ENG".to_string(), "OPS".to_string()],
-            )]),
-            credential_mode: "per_user".to_string(),
-            credential: Some(test_per_user_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.parent.set")
+                .inputs(json!({
+                    "issue": "ENG-2",
+                    "parentIssue": "OPS-100"
+                }))
+                .credential_mode(CredentialMode::PerUser)
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["ENG".to_string(), "OPS".to_string()],
+                )]))
+                .credential(test_per_user_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -3278,30 +3163,24 @@ async fn issue_parent_set_requires_both_projects_in_authorized_scope_before_muta
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.parent.set".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "ENG-2",
-                "parentIssue": "OPS-100"
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["ENG".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.parent.set")
+                .inputs(json!({
+                    "issue": "ENG-2",
+                    "parentIssue": "OPS-100"
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["ENG".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.parent_updates.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -3347,7 +3226,7 @@ async fn issue_parent_set_rejects_same_canonical_issue_after_lookup() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "issue.parent.set",
             &json!({"issue": "OLD-1", "parentIssue": "PROJ-1"}),
             Some(&test_lookup_credential()),
@@ -3355,7 +3234,7 @@ async fn issue_parent_set_rejects_same_canonical_issue_after_lookup() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.parent_updates.lock().unwrap().is_empty());
 }
 
@@ -3379,7 +3258,7 @@ async fn issue_parent_set_readback_failure_emits_side_effect_audit() {
     );
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(204));
     assert_eq!(
         error.object_ids,
@@ -3442,7 +3321,7 @@ async fn issue_parent_set_readback_mismatch_fails_closed() {
 
         let error = provider.invoke(invocation).await.unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert_eq!(
             error.audit.as_ref().unwrap()["failurePhase"],
             "post_parent_readback"
@@ -3619,14 +3498,16 @@ async fn issue_update_enforces_description_body_cap_after_attribution() {
         }),
         vec![],
     );
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ))
+        .build();
 
     let error = provider.invoke(invocation).await.unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
@@ -3665,10 +3546,12 @@ async fn issue_update_attribution_is_visible_in_update_readback_and_issue_view()
         }),
         vec![],
     );
-    update_invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    update_invocation = InvocationBuilder::from(update_invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let update_response = provider.invoke(update_invocation).await.unwrap();
 
@@ -3720,7 +3603,7 @@ fn issue_update_input_validation_is_narrow_and_format_explicit() {
         json!({"issue": "PROJ-1", "summary": "x", "notifyUsers": "false"}),
     ] {
         let error = parse_issue_update_inputs(&inputs, &config).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 
     let error = parse_issue_update_inputs(
@@ -3728,14 +3611,14 @@ fn issue_update_input_validation_is_narrow_and_format_explicit() {
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let error = parse_issue_update_inputs(
         &json!({"issue": "PROJ-1", "contentFormat": "adf", "content": {}}),
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 #[tokio::test]
@@ -3800,7 +3683,7 @@ async fn issue_update_readback_failures_fail_closed_without_body_leakage() {
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, expected_reason);
+        assert_eq!(error.reason_code(), expected_reason);
         assert!(!error.message.contains("secret readback summary"));
         assert_eq!(backend.updated_issues.lock().unwrap().len(), 1);
     }
@@ -3836,7 +3719,7 @@ async fn issue_update_readback_validates_returned_description() {
         .unwrap_err();
 
     assert_eq!(
-        malformed_error.reason_code,
+        malformed_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!malformed_error.message.contains("bad"));
@@ -3869,10 +3752,10 @@ async fn issue_update_readback_validates_returned_description() {
         .unwrap_err();
 
     assert_eq!(
-        oversize_error.reason_code,
+        oversize_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    assert_eq!(oversize_error.reason_code.http_status(), 502);
+    assert_eq!(oversize_error.reason_code().http_status(), 502);
     assert_eq!(oversize_backend.updated_issues.lock().unwrap().len(), 1);
 }
 
@@ -3911,7 +3794,7 @@ async fn issue_update_rejects_reconfirmed_issue_outside_authorized_scope_before_
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!error.message.contains("moved issue summary"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
     assert_credential_observations(&backend, &[("issue_metadata", "lookup-token")]);
@@ -3935,7 +3818,7 @@ async fn issue_update_upstream_failure_is_sanitized() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
     assert_eq!(error.message, "Jira forbade the selected credential");
     assert!(!error.message.contains("secret rejected summary"));
     assert!(backend.updated_issues.lock().unwrap().is_empty());
@@ -3962,27 +3845,21 @@ async fn attachment_list_rejects_execution_metadata_for_different_parent() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.list".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.list")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("evidence.txt"));
 }
 
@@ -4012,7 +3889,7 @@ async fn attachment_list_scope_resolution_uses_authoritative_current_project() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let scopes = provider
-        .resolve_scopes_with_lookup(
+        .lookup_scopes(
             "attachment.list",
             &json!({"issue": "PROJ-1"}),
             Some(&test_lookup_credential()),
@@ -4033,27 +3910,21 @@ async fn attachment_list_rejects_unknown_input_fields() {
     );
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.list".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "maxResults": 1}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.list")
+                .inputs(json!({"issue": "PROJ-1", "maxResults": 1}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -4091,34 +3962,29 @@ async fn search_caps_pagination_and_rejects_out_of_scope_results() {
         backend.clone(),
     );
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "search".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "projects": ["PROJ"],
-                "query": {
-                    "type": "jql",
-                    "value": "project = PROJ"
-                },
-                "maxResults": 100
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: Some(search_preflight(["PROJ"], "service")),
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "search")
+                .inputs(json!({
+                    "projects": ["PROJ"],
+                    "query": {
+                        "type": "jql",
+                        "value": "project = PROJ"
+                    },
+                    "maxResults": 100
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .search(search_preflight(["PROJ"]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(!error.message.contains("must not leak"));
     assert_eq!(
         backend
@@ -4149,7 +4015,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         let inputs =
             parse_search_inputs(&json!({"query": {"type": "jql", "value": input}})).unwrap();
         let scope = effective_search_scope(
-            &search_preflight(["PROJ", "OTHER"], "service"),
+            &search_preflight(["PROJ", "OTHER"]),
             &requested_projects(&inputs).unwrap(),
         )
         .unwrap();
@@ -4157,7 +4023,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
             &inputs.query,
             &scope,
             &SearchLimitsConfig::default(),
-            "service",
+            CredentialMode::Service,
         )
         .unwrap();
         assert_eq!(query.jql, expected);
@@ -4166,7 +4032,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         assert_eq!(query.response_scope, scope);
         assert_eq!(query.injected_scope_predicate, "project_in");
         assert!(
-            parse_jql_query(input, "service")
+            parse_jql_query(input, CredentialMode::Service)
                 .unwrap()
                 .project_scope()
                 .is_none()
@@ -4180,7 +4046,9 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         "ORDER BY",
     ] {
         assert_eq!(
-            parse_jql_query(invalid, "service").unwrap_err().reason_code,
+            parse_jql_query(invalid, CredentialMode::Service)
+                .unwrap_err()
+                .reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -4189,13 +4057,12 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
 #[test]
 fn scope_only_jql_requires_positive_bound_for_all_project_access() {
     for excluded in [BTreeSet::new(), set(["PRIVATE"])] {
-        let authorization = SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
+        let authorization = SearchAuthorization::new(
+            "project".to_string(),
+            SearchAuthorizationScope::AllExcept {
                 excluded_values: excluded.iter().cloned().collect(),
             },
-            credential_mode: "service".to_string(),
-        };
+        );
         for value in ["", "ORDER BY updated DESC"] {
             let inputs =
                 parse_search_inputs(&json!({"query": {"type": "jql", "value": value}})).unwrap();
@@ -4206,17 +4073,17 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
                 &inputs.query,
                 &scope,
                 &SearchLimitsConfig::default(),
-                "service",
+                CredentialMode::Service,
             )
             .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
             assert!(error.message.contains("provide projects or a filter"));
             let narrowed = effective_search_scope(&authorization, &set(["PROJ"])).unwrap();
             let query = build_jira_search_query(
                 &inputs.query,
                 &narrowed,
                 &SearchLimitsConfig::default(),
-                "service",
+                CredentialMode::Service,
             )
             .unwrap();
             assert!(query.jql.starts_with("project IN (PROJ)"));
@@ -4229,7 +4096,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
             assert_eq!(
                 effective_search_scope(&authorization, &set(["PRIVATE"]))
                     .unwrap_err()
-                    .reason_code,
+                    .reason_code(),
                 ReasonCode::ServiceActionDenied
             );
         }
@@ -4238,7 +4105,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
         parse_search_inputs(&json!({"query": {"type": "jql", "value": ""}, "projects": []}))
             .unwrap();
     assert_eq!(
-        requested_projects(&inputs).unwrap_err().reason_code,
+        requested_projects(&inputs).unwrap_err().reason_code(),
         ReasonCode::InputInvalid
     );
 }
@@ -4268,8 +4135,8 @@ fn jql_input_errors_give_safe_locations_and_supported_choices() {
         ),
         ("status = secretValue AND", "missing a field"),
     ] {
-        let error = parse_jql_query(query, "service").unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        let error = parse_jql_query(query, CredentialMode::Service).unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(diagnostic), "{}", error.message);
         assert!(error.message.contains("near token"));
         for private in ["privateField", "privateFunction", "secretValue"] {
@@ -4356,7 +4223,7 @@ fn jira_search_documentation_advertises_parser_supported_grammar() {
             &inputs.query,
             &EffectiveSearchScope::Finite(set(["PROJ"])),
             &SearchLimitsConfig::default(),
-            "service",
+            CredentialMode::Service,
         )
         .unwrap();
     }
@@ -4393,11 +4260,13 @@ async fn scope_only_jira_search_checks_returned_containment() {
             json!({"query": {"type": "jql", "value": "ORDER BY updated DESC"}, "maxResults": 1}),
             vec![],
         );
-        request.search_authorization = Some(search_preflight(["PROJ"], "per_user"));
+        request = InvocationBuilder::from(request)
+            .search(search_preflight(["PROJ"]))
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
         assert_eq!(
             backend.last_search.lock().unwrap().as_ref().unwrap().jql,
@@ -4414,7 +4283,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["PROJ"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
 
@@ -4430,7 +4299,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["PROJ"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4444,7 +4313,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::Finite(set(["IN"])),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4458,7 +4327,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(wildcard.jql, "status = Done ORDER BY updated DESC");
@@ -4474,7 +4343,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4492,7 +4361,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         },
         &EffectiveSearchScope::AllExcept(BTreeSet::new()),
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4510,7 +4379,7 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         },
         &boundary,
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
@@ -4531,20 +4400,19 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         },
         &boundary,
         &SearchLimitsConfig::default(),
-        "service",
+        CredentialMode::Service,
     )
     .unwrap();
     assert_eq!(
         narrowed.response_scope,
         EffectiveSearchScope::Finite(set(["PROJ"]))
     );
-    let authorization = SearchAuthorization {
-        scope_type: "project".to_string(),
-        scope: SearchAuthorizationScope::AllExcept {
+    let authorization = SearchAuthorization::new(
+        "project".to_string(),
+        SearchAuthorizationScope::AllExcept {
             excluded_values: vec!["PRIVATE".to_string()],
         },
-        credential_mode: "service".to_string(),
-    };
+    );
     assert!(effective_search_scope(&authorization, &set(["PRIVATE"])).is_err());
     assert_eq!(
         effective_search_scope(&authorization, &set(["NEW"])).unwrap(),
@@ -4581,17 +4449,18 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
             json!({"query":{"type":"jql","value":"status = Done"},"maxResults":1}),
             vec![],
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: vec!["PRIVATE".to_string()],
-            },
-            credential_mode: "per_user".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization::new(
+                "project".to_string(),
+                SearchAuthorizationScope::AllExcept {
+                    excluded_values: vec!["PRIVATE".to_string()],
+                },
+            ))
+            .build();
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{project}/{key}: {result:?}");
         if let Err(error) = result {
-            assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
         let search = backend.last_search.lock().unwrap();
         let search = search.as_ref().unwrap();
@@ -4604,11 +4473,11 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
 fn raw_jql_rejects_length_and_nesting_caps() {
     let long = "project = PROJ ".repeat(MAX_JIRA_RAW_QUERY_BYTES / 4);
     let error = parse_jql_expression(&long).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let padded = format!("{}project = PROJ", " ".repeat(MAX_JIRA_RAW_QUERY_BYTES + 1));
     let error = parse_jql_expression(&padded).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let deep = format!(
         "{}project = PROJ{}",
@@ -4616,7 +4485,7 @@ fn raw_jql_rejects_length_and_nesting_caps() {
         ")".repeat(MAX_JIRA_QUERY_DEPTH + 1)
     );
     let error = parse_jql_expression(&deep).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
 
 #[tokio::test]
@@ -4691,16 +4560,17 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             }),
             vec![],
         );
-        request.search_authorization = Some(SearchAuthorization {
-            scope_type: "project".to_string(),
-            scope: SearchAuthorizationScope::AllExcept {
-                excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
-            },
-            credential_mode: "per_user".to_string(),
-        });
+        request = InvocationBuilder::from(request)
+            .search(SearchAuthorization::new(
+                "project".to_string(),
+                SearchAuthorizationScope::AllExcept {
+                    excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
+                },
+            ))
+            .build();
         let error = provider.invoke(request).await.unwrap_err();
-        assert_eq!(error.decision, Decision::Deny);
-        assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
             error.message,
             "Jira search returned an issue outside the authorized project scope"
@@ -4784,29 +4654,24 @@ async fn successful_search_returns_bounded_sanitized_issue_fields() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let response = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "search".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "projects": ["PROJ"],
-                "query": {
-                    "type": "jql",
-                    "value": "key in (PROJ-1)"
-                }
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: Some(search_preflight(["PROJ"], "service")),
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "search")
+                .inputs(json!({
+                    "projects": ["PROJ"],
+                    "query": {
+                        "type": "jql",
+                        "value": "key in (PROJ-1)"
+                    }
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .search(search_preflight(["PROJ"]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -4929,13 +4794,12 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
                     "sha256": sha256_hex(&upload)
                 }]
             }),
-            vec![BrokerBodyPart {
-                name: "file0".to_string(),
-                file_name: Some("evidence.txt".to_string()),
-                content_type: Some("text/plain".to_string()),
-                bytes: upload,
-                temp_file: None,
-            }],
+            vec![BrokerBodyPart::in_memory(
+                "file0".to_string(),
+                Some("evidence.txt".to_string()),
+                Some("text/plain".to_string()),
+                upload,
+            )],
         ))
         .await
         .unwrap();
@@ -5124,7 +4988,7 @@ async fn comment_view_rejects_non_adf_upstream_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[tokio::test]
@@ -5149,8 +5013,8 @@ async fn comment_view_rejects_oversize_upstream_body_as_sanitized_502() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(error.reason_code.http_status(), 502);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code().http_status(), 502);
     assert_eq!(error.message, "Jira comment response body was invalid");
     assert!(!error.message.contains(&sentinel));
 }
@@ -5268,7 +5132,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(view_error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(view_error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -5290,7 +5154,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(property_error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(property_error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -5331,7 +5195,7 @@ async fn comment_reply_denies_parent_on_different_issue() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.added_comments.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -5377,7 +5241,7 @@ async fn comment_reply_rejects_missing_or_mismatched_created_parent() {
             .await
             .unwrap_err();
 
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, expected_message);
         assert_eq!(backend.added_comments.lock().unwrap().len(), 1);
     }
@@ -5419,7 +5283,7 @@ async fn comment_reply_rejects_non_top_level_thread_root() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.message,
         "Jira comment thread root was not a top-level comment"
@@ -5471,7 +5335,7 @@ async fn comment_reply_denies_thread_root_on_different_issue() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.added_comments.lock().unwrap().is_empty());
 }
 
@@ -5497,7 +5361,7 @@ async fn comment_add_rejects_created_parent() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(
         error.message,
         "Jira top-level comment response unexpectedly included a parent id"
@@ -5535,8 +5399,8 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(add_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(add_error.reason_code.http_status(), 502);
+    assert_eq!(add_error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(add_error.reason_code().http_status(), 502);
     assert_eq!(add_backend.added_comments.lock().unwrap().len(), 1);
 
     let mut reply_backend = StubJiraBackend::default();
@@ -5568,8 +5432,11 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(reply_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(reply_error.reason_code.http_status(), 502);
+    assert_eq!(
+        reply_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(reply_error.reason_code().http_status(), 502);
     assert_eq!(reply_backend.added_comments.lock().unwrap().len(), 1);
 
     let mut update_backend = StubJiraBackend::default();
@@ -5598,8 +5465,11 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         ))
         .await
         .unwrap_err();
-    assert_eq!(update_error.reason_code, ReasonCode::UpstreamProtocolFailed);
-    assert_eq!(update_error.reason_code.http_status(), 502);
+    assert_eq!(
+        update_error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    assert_eq!(update_error.reason_code().http_status(), 502);
     assert_eq!(update_backend.updated_comments.lock().unwrap().len(), 1);
 
     for error in [add_error, reply_error, update_error] {
@@ -5700,7 +5570,7 @@ async fn comment_update_preserve_fails_before_put_when_current_comment_unreadabl
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
     assert!(backend.updated_comments.lock().unwrap().is_empty());
     assert_credential_observations(
         &backend,
@@ -5732,7 +5602,7 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
         ))
         .await
         .unwrap_err();
-    assert_eq!(denied.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(denied.reason_code(), ReasonCode::InputInvalid);
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 
     let mut config = jira_config();
@@ -5795,10 +5665,12 @@ async fn comment_add_applies_configured_attribution_footer() {
         }),
         vec![],
     );
-    invocation.correlation = crate::CorrelationContext::new(
-        "agent-request-id".to_string(),
-        broker_request_id.to_string(),
-    );
+    invocation = InvocationBuilder::from(invocation)
+        .correlation(crate::CorrelationContext::new(
+            "agent-request-id".to_string(),
+            broker_request_id.to_string(),
+        ))
+        .build();
 
     let result = provider.invoke(invocation).await.unwrap();
 
@@ -5998,7 +5870,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
             &config,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     }
 
     let error = parse_comment_property_inputs(
@@ -6012,7 +5884,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut config = jira_config();
     config.comments.max_property_value_bytes = 4;
@@ -6027,7 +5899,7 @@ fn comment_property_inputs_reject_disallowed_reserved_null_and_oversized_values(
         &config,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 }
 
 #[tokio::test]
@@ -6052,7 +5924,7 @@ async fn comment_property_membership_proof_uses_execution_credential() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_credential_observations(
         &backend,
         &[
@@ -6084,33 +5956,24 @@ async fn response_byte_cap_fails_without_returning_content() {
             description: None,
         },
     );
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 8,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_upstream_response_bytes(8);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.view".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(json!({"issue": "PROJ-1"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("large visible summary"));
 }
 
@@ -6122,92 +5985,74 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "comment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "contentFormat": "adf",
-                "content": {"type": "paragraph"}
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "comment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "contentFormat": "adf",
+                    "content": {"type": "paragraph"}
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "comment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "contentFormat": "adf",
-                "content": {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [{"type": "unknownNode"}]
-                }
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "comment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "contentFormat": "adf",
+                    "content": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{"type": "unknownNode"}]
+                    }
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 
     let mut config = jira_config();
     config.content.comment_formats.clear();
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend);
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "comment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "contentFormat": "adf",
-                "content": {"type": "doc", "version": 1, "content": []}
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "comment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "contentFormat": "adf",
+                    "content": {"type": "doc", "version": 1, "content": []}
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
 }
 
 #[tokio::test]
@@ -6222,74 +6067,66 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
     let second = b"second upload".to_vec();
     let third = b"third upload".to_vec();
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "attachments": [
-                    {
-                        "field": "file0",
-                        "filename": "first.txt",
-                        "contentType": "text/plain",
-                        "size": first.len(),
-                        "sha256": sha256_hex(&first)
-                    },
-                    {
-                        "field": "file1",
-                        "filename": "second.txt",
-                        "contentType": "text/plain",
-                        "size": second.len(),
-                        "sha256": sha256_hex(&second)
-                    },
-                    {
-                        "field": "file2",
-                        "filename": "third.txt",
-                        "contentType": "text/plain",
-                        "size": third.len(),
-                        "sha256": sha256_hex(&third)
-                    }
-                ]
-            }),
-            body_parts: vec![
-                BrokerBodyPart {
-                    name: "file0".to_string(),
-                    file_name: Some("first.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: first,
-                    temp_file: None,
-                },
-                BrokerBodyPart {
-                    name: "file1".to_string(),
-                    file_name: Some("second.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: second,
-                    temp_file: None,
-                },
-                BrokerBodyPart {
-                    name: "file2".to_string(),
-                    file_name: Some("third.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: third,
-                    temp_file: None,
-                },
-            ],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "attachments": [
+                        {
+                            "field": "file0",
+                            "filename": "first.txt",
+                            "contentType": "text/plain",
+                            "size": first.len(),
+                            "sha256": sha256_hex(&first)
+                        },
+                        {
+                            "field": "file1",
+                            "filename": "second.txt",
+                            "contentType": "text/plain",
+                            "size": second.len(),
+                            "sha256": sha256_hex(&second)
+                        },
+                        {
+                            "field": "file2",
+                            "filename": "third.txt",
+                            "contentType": "text/plain",
+                            "size": third.len(),
+                            "sha256": sha256_hex(&third)
+                        }
+                    ]
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .body_parts(vec![
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("first.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        first,
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file1".to_string(),
+                        Some("second.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        second,
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file2".to_string(),
+                        Some("third.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        third,
+                    ),
+                ])
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
     let result = error.result.as_ref().unwrap();
     assert_eq!(result["status"], "partial");
     assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
@@ -6316,119 +6153,100 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
 
     let bad = b"tampered".to_vec();
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "attachments": [{
-                    "field": "file0",
-                    "filename": "bad.txt",
-                    "contentType": "text/plain",
-                    "size": bad.len(),
-                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
-                }]
-            }),
-            body_parts: vec![BrokerBodyPart {
-                name: "file0".to_string(),
-                file_name: Some("bad.txt".to_string()),
-                content_type: Some("text/plain".to_string()),
-                bytes: bad,
-                temp_file: None,
-            }],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "attachments": [{
+                        "field": "file0",
+                        "filename": "bad.txt",
+                        "contentType": "text/plain",
+                        "size": bad.len(),
+                        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                    }]
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .body_parts(vec![BrokerBodyPart::in_memory(
+                    "file0".to_string(),
+                    Some("bad.txt".to_string()),
+                    Some("text/plain".to_string()),
+                    bad,
+                )])
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentIntegrityMismatch);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": ""}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": ""}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let duplicate = b"duplicate".to_vec();
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "attachments": [
-                    {
-                        "field": "file0",
-                        "filename": "duplicate.txt",
-                        "contentType": "text/plain",
-                        "size": duplicate.len(),
-                        "sha256": sha256_hex(&duplicate)
-                    },
-                    {
-                        "field": "file0",
-                        "filename": "duplicate.txt",
-                        "contentType": "text/plain",
-                        "size": duplicate.len(),
-                        "sha256": sha256_hex(&duplicate)
-                    }
-                ]
-            }),
-            body_parts: vec![
-                BrokerBodyPart {
-                    name: "file0".to_string(),
-                    file_name: Some("duplicate.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: duplicate.clone(),
-                    temp_file: None,
-                },
-                BrokerBodyPart {
-                    name: "file0".to_string(),
-                    file_name: Some("duplicate.txt".to_string()),
-                    content_type: Some("text/plain".to_string()),
-                    bytes: duplicate,
-                    temp_file: None,
-                },
-            ],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "attachments": [
+                        {
+                            "field": "file0",
+                            "filename": "duplicate.txt",
+                            "contentType": "text/plain",
+                            "size": duplicate.len(),
+                            "sha256": sha256_hex(&duplicate)
+                        },
+                        {
+                            "field": "file0",
+                            "filename": "duplicate.txt",
+                            "contentType": "text/plain",
+                            "size": duplicate.len(),
+                            "sha256": sha256_hex(&duplicate)
+                        }
+                    ]
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .body_parts(vec![
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("duplicate.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        duplicate.clone(),
+                    ),
+                    BrokerBodyPart::in_memory(
+                        "file0".to_string(),
+                        Some("duplicate.txt".to_string()),
+                        Some("text/plain".to_string()),
+                        duplicate,
+                    ),
+                ])
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     let mut failing_backend = StubJiraBackend::default();
     failing_backend
@@ -6442,41 +6260,35 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
     );
     let bytes = b"first failure".to_vec();
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.add".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "issue": "PROJ-1",
-                "attachments": [{
-                    "field": "file0",
-                    "filename": "failure.txt",
-                    "contentType": "text/plain",
-                    "size": bytes.len(),
-                    "sha256": sha256_hex(&bytes)
-                }]
-            }),
-            body_parts: vec![BrokerBodyPart {
-                name: "file0".to_string(),
-                file_name: Some("failure.txt".to_string()),
-                content_type: Some("text/plain".to_string()),
-                bytes,
-                temp_file: None,
-            }],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.add")
+                .inputs(json!({
+                    "issue": "PROJ-1",
+                    "attachments": [{
+                        "field": "file0",
+                        "filename": "failure.txt",
+                        "contentType": "text/plain",
+                        "size": bytes.len(),
+                        "sha256": sha256_hex(&bytes)
+                    }]
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .body_parts(vec![BrokerBodyPart::in_memory(
+                    "file0".to_string(),
+                    Some("failure.txt".to_string()),
+                    Some("text/plain".to_string()),
+                    bytes,
+                )])
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
     let audit = error.audit.unwrap();
     assert_eq!(
         audit["attachments"][0]["attachment"]["filename"],
@@ -6501,31 +6313,25 @@ fn attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
     let body_parts = names
         .iter()
         .enumerate()
-        .map(|(index, name)| BrokerBodyPart {
-            name: format!("file{index}"),
-            file_name: Some(format!("{name}.txt")),
-            content_type: Some("text/plain".to_string()),
-            bytes: name.as_bytes().to_vec(),
-            temp_file: None,
+        .map(|(index, name)| {
+            BrokerBodyPart::in_memory(
+                format!("file{index}"),
+                Some(format!("{name}.txt")),
+                Some("text/plain".to_string()),
+                name.as_bytes().to_vec(),
+            )
         })
         .collect();
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity::anonymous(),
-        service: "jira".to_string(),
-        action: "attachment.add".to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs: json!({"issue": "PROJ-1", "attachments": attachments}),
-        body_parts,
-        resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-        credential_mode: "service".to_string(),
-        credential: Some(test_credential()),
-        lookup_credential: Some(test_lookup_credential()),
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: None,
-    }
+    InvocationBuilder::new("jira", "attachment.add")
+        .inputs(json!({"issue": "PROJ-1", "attachments": attachments}))
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .credential(test_credential())
+        .lookup_credential(test_lookup_credential())
+        .body_parts(body_parts)
+        .build()
 }
 
 #[tokio::test]
@@ -6545,8 +6351,8 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .invoke(attachment_add_invocation(&["first", "second", "third"]))
         .await
         .unwrap_err();
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         "Jira attachment upload partially failed: part of the batch was applied before jira \
@@ -6579,7 +6385,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .invoke(attachment_add_invocation(&["only"]))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(
         error.message,
         format!(
@@ -6605,8 +6411,8 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.message,
         mutation_unverified_after_throttling_message("jira")
@@ -6815,7 +6621,7 @@ async fn throttled_writes_before_anything_applied_stay_upstream_rate_limited() {
             })))
             .await
             .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(error.result.as_deref().unwrap()["retryAfterSeconds"], 30);
 }
 
@@ -6864,9 +6670,9 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
             "{retry_after:?}"
         );
         let error = jira_backend_error(backend_error.clone());
-        assert_eq!(error.decision, crate::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
-        assert_eq!(error.reason_code.http_status(), 429);
+        assert_eq!(error.decision(), crate::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code().http_status(), 429);
         assert!(!error.message.contains("secret"));
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
@@ -6916,52 +6722,40 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "99999"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "99999"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     backend.attachment_content.lock().unwrap().insert(
         "10055".to_string(),
         JiraAttachmentContent::from_bytes("evidence.txt", "application/json", b"hello".to_vec()),
     );
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "10055"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentMediaTypeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = jira_config();
     config.attachments.media_types = vec![
@@ -6980,26 +6774,20 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     );
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "10055"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
 
     backend.attachment_content.lock().unwrap().insert(
         "10055".to_string(),
@@ -7010,32 +6798,23 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         ),
     );
 
-    let limits = ProviderLimits {
-        max_download_bytes: 4,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default().with_max_download_bytes(4);
     let provider = JiraProvider::with_backend(jira_config(), limits, backend);
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "10055"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 
     let mut backend = StubJiraBackend::default();
     backend.issues.insert("PROJ-1".to_string(), visible_issue());
@@ -7050,30 +6829,22 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         "10055".to_string(),
         JiraAttachmentContent::from_bytes("evidence.txt", "text/plain", large_bytes),
     );
-    let limits = ProviderLimits {
-        max_upstream_response_bytes: 64,
-        max_download_bytes: 128,
-        ..ProviderLimits::default()
-    };
+    let limits = ProviderLimits::default()
+        .with_max_upstream_response_bytes(64)
+        .with_max_download_bytes(128);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "10055"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!(result.result["size"], 80);
@@ -7106,23 +6877,17 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "attachment.download".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "attachmentId": "10055"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "attachment.download")
+                .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap();
     let stream = result.stream.unwrap();
@@ -7146,28 +6911,22 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "verify".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "expectCommentId": "10042"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "verify")
+                .inputs(json!({"issue": "PROJ-1", "expectCommentId": "10042"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.decision, crate::Decision::Allow);
-    assert_eq!(error.reason_code, ReasonCode::VerificationMismatch);
+    assert_eq!(error.decision(), crate::Decision::Allow);
+    assert_eq!(error.reason_code(), ReasonCode::VerificationMismatch);
     assert_eq!(error.audit.as_ref().unwrap()["status"], "mismatch");
     assert_eq!(
         error.audit.as_ref().unwrap()["mismatch"],
@@ -7185,27 +6944,21 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "verify".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({"issue": "PROJ-1", "expectCommentId": "10042"}),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_lookup_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "verify")
+                .inputs(json!({"issue": "PROJ-1", "expectCommentId": "10042"}))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["PROJ".to_string()],
+                )]))
+                .credential(test_credential())
+                .lookup_credential(test_lookup_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
 }
 
 #[test]
@@ -7216,7 +6969,7 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     config.allowed_upstream_hosts.push(format!(
         "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
     ));
-    let backend = HttpJiraBackend::new(config, ProviderLimits::default());
+    let backend = HttpJiraBackend::for_tests(config, ProviderLimits::default());
 
     assert_eq!(
         backend.api_base(&test_credential()).unwrap().as_str(),
@@ -7224,14 +6977,39 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     );
     assert_eq!(
         backend
-            .api_base(&ExecutionCredential {
-                kind: "bearer_token".to_string(),
-                username: None,
-                token: Some("token".to_string()),
-            })
+            .api_base(&bearer_credential("token"))
             .unwrap()
             .as_str(),
         "https://api.atlassian.com/ex/jira/11111111-1111-1111-1111-111111111111/rest/api/3/"
+    );
+}
+
+#[test]
+fn build_creates_request_and_stream_clients_for_each_api_base() {
+    let cloud_id = "11111111-1111-1111-1111-111111111111";
+    let mut config = jira_config();
+    config.cloud_id = Some(cloud_id.to_string());
+    config.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
+    ));
+    let host = agent_access_provider::test_support::TestHost::default();
+    config.build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.jira.egress_proxy".to_string();
+    let tenant = "https://example.atlassian.net/rest/api/3/".to_string();
+    let gateway = format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/");
+    assert_eq!(
+        built,
+        [
+            (label.clone(), tenant.clone(), ClientProfile::Request),
+            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Request),
+            (label, gateway, ClientProfile::Stream),
+        ]
     );
 }
 
@@ -7306,7 +7084,7 @@ async fn http_backend_search_requests_bounded_output_fields() {
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
-    let response = crate::with_correlation_context(
+    let response = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.search(
             JiraSearchRequest {
@@ -7895,7 +7673,7 @@ async fn http_backend_issue_create_ignores_ambiguous_error_messages() {
         .unwrap_err();
     assert_eq!(error, JiraBackendError::HttpStatus(400));
     let provider_error = jira_backend_error(error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert_eq!(provider_error.message, "Jira returned non-success");
     assert!(!provider_error.message.contains("secret value"));
 }
@@ -7945,7 +7723,7 @@ async fn http_backend_issue_create_exposes_structured_body_validation() {
     );
 
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::BodyMalformed);
     assert_eq!(
         provider_error.message,
         "Jira rejected the request: description: content must be valid ADF"
@@ -7981,7 +7759,7 @@ async fn http_backend_lookup_does_not_expose_structured_validation_body() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::HttpStatus(400));
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert_eq!(provider_error.message, "Jira returned non-success");
     assert!(!provider_error.message.contains("scope secret"));
 }
@@ -8020,7 +7798,7 @@ async fn http_backend_mutation_ignores_non_json_validation_body() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::HttpStatus(422));
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamFailed);
     assert!(!provider_error.message.contains("untrusted detail"));
 }
 
@@ -8098,7 +7876,7 @@ async fn http_backend_issue_update_permission_failure_is_sanitized() {
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::Forbidden);
     let provider_error = jira_backend_error(backend_error);
-    assert_eq!(provider_error.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(provider_error.reason_code(), ReasonCode::UpstreamForbidden);
     assert_eq!(
         provider_error.message,
         "Jira forbade the selected credential"
@@ -8179,10 +7957,7 @@ async fn http_backend_streams_jira_attachment_upload_from_file() {
     config.allowed_upstream_hosts = vec![format!("{}/rest/api/3/**", api.uri())];
     let backend = HttpJiraBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_request_timeout_ms(1),
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
@@ -8194,7 +7969,7 @@ async fn http_backend_streams_jira_attachment_upload_from_file() {
                 content_type: "text/plain".to_string(),
                 size: bytes.len() as u64,
                 bytes: Vec::new(),
-                temp_file: Some(Arc::new(BrokerBodyPartFile::new(
+                temp_file: Some(Arc::new(agent_access_provider::host::spooled_body_file(
                     upload_path.clone(),
                     bytes.len() as u64,
                     sha256_hex(bytes),
@@ -8306,7 +8081,7 @@ async fn attachment_content_redirects_are_allowlisted_and_strip_cross_origin_cre
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
-    let response = crate::with_correlation_context(
+    let response = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
         backend.attachment_content_response(
             Url::parse(&format!("{}/redirect", api.uri())).unwrap(),
@@ -8413,13 +8188,11 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse("https://example.atlassian.net/rest/api/3/").unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let audit = backend.egress_proxy_for_test(&test_credential());
     assert_eq!(audit["mode"], json!("service"));
@@ -8459,7 +8232,7 @@ async fn http_backend_issue_rejects_non_object_description_without_leaking_conte
     let provider_error = jira_backend_error(error);
 
     assert_eq!(
-        provider_error.reason_code,
+        provider_error.reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
     assert!(!provider_error.message.contains("plain string secret"));
@@ -8483,13 +8256,11 @@ async fn http_backend_routes_issue_requests_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend.issue("PROJ-1", &test_credential()).await.unwrap();
 
@@ -8519,13 +8290,11 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
         username_ref: None,
         password_ref: None,
     });
-    let backend = HttpJiraBackend::new_with_api_base_and_egress(
+    let backend = HttpJiraBackend::new_with_api_base(
         config,
         ProviderLimits::default(),
         Url::parse(&format!("{}/rest/api/3/", upstream.uri())).unwrap(),
-        &EgressProxyRuntimeConfig::direct(),
-    )
-    .unwrap();
+    );
 
     let response = backend
         .attachment_content("10055", &test_credential())
@@ -8749,40 +8518,24 @@ fn adf_table() -> Value {
 }
 
 fn test_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("service@example.com".to_string()),
-        token: Some("token".to_string()),
-    }
+    basic_credential("service@example.com", "token")
 }
 
 fn test_per_user_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("per-user@example.com".to_string()),
-        token: Some("per-user-token".to_string()),
-    }
+    basic_credential("per-user@example.com", "per-user-token")
 }
 
 fn test_lookup_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "basic_api_token".to_string(),
-        username: Some("lookup@example.com".to_string()),
-        token: Some("lookup-token".to_string()),
-    }
+    basic_credential("lookup@example.com", "lookup-token")
 }
 
-fn search_preflight<const N: usize>(
-    projects: [&str; N],
-    credential_mode: &str,
-) -> SearchAuthorization {
-    SearchAuthorization {
-        scope_type: "project".to_string(),
-        scope: SearchAuthorizationScope::Finite {
+fn search_preflight<const N: usize>(projects: [&str; N]) -> SearchAuthorization {
+    SearchAuthorization::new(
+        "project".to_string(),
+        SearchAuthorizationScope::Finite {
             values: projects.into_iter().map(ToString::to_string).collect(),
         },
-        credential_mode: credential_mode.to_string(),
-    }
+    )
 }
 
 fn per_user_invocation(
@@ -8790,66 +8543,49 @@ fn per_user_invocation(
     inputs: Value,
     body_parts: Vec<BrokerBodyPart>,
 ) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity {
-            principal: "agent-one".to_string(),
-            authenticated: true,
-        },
-        service: "jira".to_string(),
-        action: action.to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts,
-        resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-        credential_mode: "per_user".to_string(),
-        credential: Some(test_per_user_credential()),
-        lookup_credential: Some(test_lookup_credential()),
-        provider_preflight: None,
-        search_authorization: (action == "search").then(|| search_preflight(["PROJ"], "per_user")),
-        delegated_credential: None,
+    let builder = InvocationBuilder::new("jira", action)
+        .inputs(inputs)
+        .identity(crate::InvocationIdentity::new(
+            "agent-one".to_string(),
+            true,
+        ))
+        .body_parts(body_parts)
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .credential_mode(CredentialMode::PerUser)
+        .credential(test_per_user_credential())
+        .lookup_credential(test_lookup_credential());
+    if action == "search" {
+        builder.search(search_preflight(["PROJ"]))
+    } else {
+        builder
     }
+    .build()
 }
 
 fn issue_create_invocation(inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity::anonymous(),
-        service: "jira".to_string(),
-        action: "issue.create".to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-        credential_mode: "service".to_string(),
-        credential: Some(test_credential()),
-        lookup_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: None,
-    }
+    InvocationBuilder::new("jira", "issue.create")
+        .inputs(inputs)
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .credential(test_credential())
+        .build()
 }
 
 fn issue_child_create_invocation(inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity::anonymous(),
-        service: "jira".to_string(),
-        action: "issue.child.create".to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("project".to_string(), vec!["PROJ".to_string()])]),
-        credential_mode: "service".to_string(),
-        credential: Some(test_credential()),
-        lookup_credential: Some(test_lookup_credential()),
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: None,
-    }
+    InvocationBuilder::new("jira", "issue.child.create")
+        .inputs(inputs)
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .credential(test_credential())
+        .lookup_credential(test_lookup_credential())
+        .build()
 }
 
 fn seed_child_create_success(backend: &mut StubJiraBackend, child_description: Option<Value>) {
@@ -8990,7 +8726,7 @@ fn normalized_jira_content_contract_is_canonical_and_bounded() {
         &tiny,
     )
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
 }
 
 #[test]
@@ -9002,7 +8738,7 @@ fn create_scope_resolution_reads_only_scope_fields() {
     );
     let oversized_markdown = "> ".repeat(512);
     let create = provider
-        .resolve_scopes(
+        .local_scopes(
             "issue.create",
             &json!({
                 "project": "PROJ",
@@ -9016,7 +8752,7 @@ fn create_scope_resolution_reads_only_scope_fields() {
     assert_eq!(create["project"], vec!["PROJ"]);
 
     let child = provider
-        .resolve_scopes(
+        .local_scopes(
             "issue.child.create",
             &json!({
                 "project": "PROJ",
@@ -9038,33 +8774,26 @@ async fn issue_create_authorizes_scope_before_converting_content() {
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "jira".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::for_tests(),
-            inputs: json!({
-                "project": "PROJ",
-                "issueTypeId": "10001",
-                "summary": "summary",
-                "contentFormat": "markdown",
-                "content": "content that exceeds the configured cap",
-            }),
-            body_parts: vec![],
-            resource_scopes: BTreeMap::from([("project".to_string(), vec!["OTHER".to_string()])]),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("jira", "issue.create")
+                .inputs(json!({
+                    "project": "PROJ",
+                    "issueTypeId": "10001",
+                    "summary": "summary",
+                    "contentFormat": "markdown",
+                    "content": "content that exceeds the configured cap",
+                }))
+                .resources(BTreeMap::from([(
+                    "project".to_string(),
+                    vec!["OTHER".to_string()],
+                )]))
+                .credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
 }
 
@@ -9122,7 +8851,7 @@ fn jira_write_capabilities_advertise_typed_content_and_omit_disabled_comments() 
     let error = disabled_provider
         .validate_configured_comment_body_format("jira.comment.add")
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
 }
 
 #[test]
@@ -9230,7 +8959,7 @@ fn native_adf_validation_has_a_depth_bound() {
     }
     let body = json!({"type":"doc","version":1,"content":[node]});
     let error = validate_adf_body(&body).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyMalformed);
+    assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 }
 
 fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {
@@ -9283,34 +9012,36 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     config.allowed_upstream_hosts = vec![format!("{origin}/rest/api/3/**")];
     let backend = HttpJiraBackend::new_with_api_base(
         config,
-        ProviderLimits {
-            streaming_idle_timeout_ms: 200,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_streaming_idle_timeout_ms(200),
         Url::parse(&format!("{origin}/rest/api/3/")).unwrap(),
     );
-    agent_access_provider::test_support::start_capturing_events();
-    let error = with_provider_context(
-        CorrelationContext::for_tests(),
-        "jira".to_string(),
-        "attachment.add".to_string(),
-        backend.add_attachment(
-            "PROJ-1",
-            JiraAttachmentUpload {
-                filename: "evidence.txt".to_string(),
-                content_type: "text/plain".to_string(),
-                size: 8,
-                sha256: sha256_hex(b"evidence"),
-                bytes: b"evidence".to_vec(),
-                temp_file: None,
-            },
-            &test_credential(),
-        ),
-    )
-    .await
-    .unwrap_err();
+    let capture = agent_access_provider::test_support::install_trace_capture().start();
+    let error = capture
+        .run(agent_access_provider::host::with_provider_context(
+            CorrelationContext::for_tests(),
+            "jira".to_string(),
+            "attachment.add".to_string(),
+            agent_access_provider::test_support::in_invocation_hook(
+                "jira",
+                "attachment.add",
+                backend.add_attachment(
+                    "PROJ-1",
+                    JiraAttachmentUpload {
+                        filename: "evidence.txt".to_string(),
+                        content_type: "text/plain".to_string(),
+                        size: 8,
+                        sha256: sha256_hex(b"evidence"),
+                        bytes: b"evidence".to_vec(),
+                        temp_file: None,
+                    },
+                    &test_credential(),
+                ),
+            ),
+        ))
+        .await
+        .unwrap_err();
     assert!(matches!(error, JiraBackendError::Timeout), "{error:?}");
-    let events = agent_access_provider::test_support::captured_upstream_requests();
+    let events = capture.take_upstream_requests();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["upstreamOperation"], "attachment.add");
     assert_eq!(events[0]["http.statusCode"], 200);

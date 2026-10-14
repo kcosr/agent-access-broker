@@ -1,4 +1,5 @@
-use agent_access_broker::broker_build_status;
+use agent_access_broker::{build_identity, composition};
+use agent_access_broker_host::BrokerApplication;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use std::fs;
@@ -73,6 +74,14 @@ fn serve_locks_reject_second_process_by_shared_state_domain_and_validate_is_offl
     assert!(
         stderr.contains("nodeId"),
         "stderr did not show the holder's node ID: {stderr}"
+    );
+    assert!(
+        stderr.contains(r#""program":"agent-access-broker""#)
+            && stderr.contains(&format!(
+                r#""programVersion":"{}""#,
+                env!("CARGO_PKG_VERSION")
+            )),
+        "stderr did not show the holder's assembly identity: {stderr}"
     );
 
     let shared_spool = BrokerConfigPaths::new(temp.path(), "shared-spool", false, true)
@@ -192,7 +201,7 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     assert_eq!(invalid_filter["envVar"], "RUST_LOG");
     assert_eq!(
         invalid_filter["fallback"],
-        "agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn"
+        "agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn"
     );
     assert!(
         invalid_filter["error"]
@@ -209,19 +218,27 @@ fn serve_emits_json_startup_events_and_invalid_filter_warning() {
     assert!(starting.get("adminListen").is_none());
     assert_eq!(starting["reloadTimeoutMs"].as_u64(), Some(30_000));
     assert_eq!(starting["bodyHardCapBytes"], Value::Null);
-    let build = broker_build_status();
-    let build_json = serde_json::to_value(build).unwrap();
+    // The status the assembly's own application derives.
+    let application = BrokerApplication::new(composition().unwrap(), build_identity()).unwrap();
+    let build = serde_json::to_value(application.status()).unwrap();
+    let assembly = &build["assembly"];
+    assert_eq!(starting["assemblyName"], assembly["name"]);
+    assert_eq!(starting["assemblyVersion"], assembly["version"]);
+    assert_eq!(starting["qualification"], assembly["qualification"]);
     assert_eq!(
-        starting["brokerVersion"].as_str(),
-        Some(build.broker_version)
+        starting["assemblyProvenance"],
+        assembly["source"]["provenance"]
     );
+    match assembly["source"]["revision"].as_str() {
+        Some(revision) => assert_eq!(starting["assemblyRevision"].as_str(), Some(revision)),
+        None => assert!(starting.get("assemblyRevision").is_none()),
+    }
     assert_eq!(
-        starting["buildProvenance"].as_str(),
-        build_json["buildProvenance"].as_str()
+        starting["inventoryFingerprint"],
+        build["inventoryFingerprint"]
     );
-    match build.build_commit {
-        Some(commit) => assert_eq!(starting["buildCommit"].as_str(), Some(commit)),
-        None => assert!(starting.get("buildCommit").is_none()),
+    for removed in ["brokerVersion", "buildCommit", "buildProvenance"] {
+        assert!(starting.get(removed).is_none(), "{removed}: {starting}");
     }
 
     let listening = event_by_name(&events, "broker_listening");

@@ -26,20 +26,17 @@ struct ResultDescriptor {
 
 const NO_BODIES: &[EmbeddedBody] = &[];
 
-const ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[],
-    codec: &AdfBody("description"),
-}];
+const ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(&[], &AdfBody("description"))];
 
-const NESTED_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("issue")],
-    codec: &AdfBody("description"),
-}];
+const NESTED_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("issue")],
+    &AdfBody("description"),
+)];
 
-const COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody {
-    owner_path: &[BodyPathSegment::Field("comment")],
-    codec: &AdfBody("body"),
-}];
+const COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("comment")],
+    &AdfBody("body"),
+)];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
     ResultDescriptor {
@@ -116,12 +113,14 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
 
 /// The presentation of `action`'s results, if it has one.
 pub(super) fn presentation(action: &str) -> Option<ActionPresentation> {
-    descriptor(action).map(|descriptor| ActionPresentation {
-        embedded_bodies: descriptor.embedded_bodies,
-        whole: descriptor
-            .whole
-            .as_ref()
-            .map(|whole| whole as &'static dyn WholeResultRenderer),
+    descriptor(action).map(|descriptor| {
+        ActionPresentation::new(
+            descriptor.embedded_bodies,
+            descriptor
+                .whole
+                .as_ref()
+                .map(|whole| whole as &'static dyn WholeResultRenderer),
+        )
     })
 }
 
@@ -156,6 +155,7 @@ impl WholeResultRenderer for WholeRenderer {
             out,
             max_body_bytes,
             budget,
+            ..
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
@@ -702,17 +702,11 @@ mod tests {
         );
         assert_eq!(
             response_capabilities("issue.view"),
-            ResponseCapabilities {
-                read_content_formats: Some(READ_CONTENT_FORMATS),
-                response_formats: Some(RESPONSE_FORMATS),
-            }
+            ResponseCapabilities::new(Some(READ_CONTENT_FORMATS), Some(RESPONSE_FORMATS))
         );
         assert_eq!(
             response_capabilities("issue.delete"),
-            ResponseCapabilities {
-                read_content_formats: None,
-                response_formats: None,
-            }
+            ResponseCapabilities::new(None, None)
         );
     }
 
@@ -724,10 +718,7 @@ mod tests {
         present_provider_result(
             "comment.add",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Markdown,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
             4096,
             16384,
         )
@@ -750,7 +741,7 @@ mod tests {
             16384,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 
@@ -767,10 +758,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -793,10 +781,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut generously_bounded,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -807,10 +792,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut exactly_bounded,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             exact_serialized_bytes,
         )
@@ -827,10 +809,7 @@ mod tests {
             ],
             "startAt":0, "maxResults":2, "total":3, "isLast":false, "nextStartAt":2
         });
-        let options = ResponseOptions {
-            read_content_format: ReadContentFormat::Native,
-            response_format: ResponseFormat::Markdown,
-        };
+        let options = ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown);
         let mut result = source.clone();
         present_provider_result("issue_type.list", &mut result, options, 4096, 16384).unwrap();
         let markdown = result["value"].as_str().unwrap();
@@ -846,7 +825,7 @@ mod tests {
         let mut result = source;
         let error =
             present_provider_result("issue_type.list", &mut result, options, 4096, 32).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[test]
@@ -885,10 +864,7 @@ mod tests {
             present_provider_result(
                 action,
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -913,10 +889,7 @@ mod tests {
         present_provider_result(
             "search",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -942,10 +915,7 @@ mod tests {
         present_provider_result(
             "comment.property.get",
             &mut property,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -956,10 +926,7 @@ mod tests {
         present_provider_result(
             "search",
             &mut search,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -975,10 +942,7 @@ mod tests {
         present_provider_result(
             "comment.property.get",
             &mut property,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1006,10 +970,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut issue,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1030,10 +991,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut unsafe_url,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1051,10 +1009,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut credential_url,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1075,10 +1030,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut issue,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1094,10 +1046,7 @@ mod tests {
         present_provider_result(
             "issue.view",
             &mut hash_only_issue,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1116,10 +1065,7 @@ mod tests {
         present_provider_result(
             "attachment.list",
             &mut attachments,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16384,
         )
@@ -1154,10 +1100,7 @@ mod tests {
             present_provider_result(
                 "verify",
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Native,
-                    response_format: ResponseFormat::Markdown,
-                },
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
                 4096,
                 16384,
             )
@@ -1174,37 +1117,28 @@ mod tests {
     fn invalid_combinations_unsupported_actions_and_final_bounds_fail_closed() {
         let error = validate_response_options(
             presentation("issue.view").as_ref(),
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Markdown),
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
         let error = validate_response_options(
             presentation("issue.delete").as_ref(),
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResponseFormatUnsupported);
+        assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
 
         let mut result = json!({"id":"1","key":"SBC-1","description":adf("body")});
         let error = present_provider_result(
             "issue.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Markdown,
-            },
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
             4096,
             16,
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
     }
 
@@ -1218,10 +1152,7 @@ mod tests {
             present_provider_result(
                 "comment.view",
                 &mut result,
-                ResponseOptions {
-                    read_content_format: ReadContentFormat::Text,
-                    response_format: ResponseFormat::Json,
-                },
+                ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
                 4096,
                 16384,
             )
@@ -1232,10 +1163,7 @@ mod tests {
         present_provider_result(
             "comment.view",
             &mut result,
-            ResponseOptions {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Json,
-            },
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
             4096,
             16384,
         )

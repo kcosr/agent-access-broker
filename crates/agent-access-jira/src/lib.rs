@@ -15,9 +15,7 @@ pub use config::*;
 use jql::*;
 use validation::*;
 
-use agent_access_atlassian::{
-    AtlassianAuthorization, AtlassianCredentialError, validate_atlassian_gateway_credential,
-};
+use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
 #[allow(unused_imports)]
@@ -68,38 +66,21 @@ pub struct JiraProvider {
 }
 
 impl JiraProvider {
-    pub fn new(
+    pub(crate) fn new(
         config: JiraProviderConfig,
-        limits: ProviderLimits,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        Self::new_with_egress(
-            config,
-            limits,
-            &EgressProxyRuntimeConfig::direct(),
-            ProviderAttributionConfig::default(),
-            outbound_tls,
-        )
-    }
-
-    pub(crate) fn new_with_egress(
-        config: JiraProviderConfig,
-        limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        attribution: ProviderAttributionConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
-        let backend = Arc::new(HttpJiraBackend::new_with_egress(
+        host: &BuildContext<'_>,
+    ) -> Result<Self, ProviderBuildError> {
+        let limits = host.limits().clone();
+        let backend = Arc::new(HttpJiraBackend::new(
             config.clone(),
             limits.clone(),
-            egress_proxy,
-            outbound_tls,
+            host.clients(),
         )?);
         Ok(Self {
             config,
             limits,
             backend,
-            attribution,
+            attribution: host.attribution().clone(),
         })
     }
 
@@ -126,16 +107,13 @@ impl JiraProvider {
 }
 
 /// Jira projects, identified by project key.
-pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("jira_project"),
-    label: "Jira project",
-    plural_label: "Jira projects",
-    example: "ENG",
-    canonical: is_project_key,
-    namespace: None,
-};
+pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("jira_project"),
+    "Jira project",
+    "Jira projects",
+    "ENG",
+    is_project_key,
+);
 
 /// Jira's authoritative service definition. Every action is authorized
 /// against a project; comment writes are offered only while ADF comment
@@ -758,27 +736,25 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     {
         credentials = credentials.profile("jira-bearer-token", "bearer_token");
     }
-    ServiceDescriptor {
-        service: "jira".to_string(),
-        display_name: "Jira".to_string(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("jira", "Jira")
+        .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: crate::JIRA_PROJECT_RESOURCE.id.clone(),
-                selectors: vec!["exact".to_string(), "all".to_string()],
-            },
-        )]),
-        actions: actions
-            .into_iter()
-            .map(|action| {
-                let presentation = present::presentation(&action.action);
-                action.presentation(presentation)
-            })
-            .collect(),
-        credentials,
-        presentation_body_limit: Some(config.content.max_body_bytes),
-    }
+            ResourceScopeCapabilities::new(
+                crate::JIRA_PROJECT_RESOURCE.id().clone(),
+                vec!["exact".to_string(), "all".to_string()],
+            ),
+        )]))
+        .with_actions(
+            actions
+                .into_iter()
+                .map(|action| {
+                    let presentation = present::presentation(&action.action);
+                    action.presentation(presentation)
+                })
+                .collect(),
+        )
+        .with_credentials(credentials)
+        .with_presentation_body_limit(config.content.max_body_bytes)
 }
 
 fn jira_read_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {
@@ -791,13 +767,8 @@ fn jira_action(action: &str, description: &str, input_schema: Value) -> ActionDe
         .credential_modes(["service", "per_user"])
 }
 
-#[async_trait]
-impl Provider for JiraProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl JiraProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
             "issue_type.list" => {
                 let inputs = parse_issue_type_list_inputs(inputs)?;
@@ -863,8 +834,10 @@ impl Provider for JiraProvider {
             )),
         }
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+impl JiraProvider {
+    async fn lookup_scopes(
         &self,
         action: &str,
         inputs: &Value,
@@ -927,37 +900,56 @@ impl Provider for JiraProvider {
                     issue_scopes_from_metadata(&response.value)
                 }
             }
-            "issue_type.list" | "issue.create" | "search" => self.resolve_scopes(action, inputs),
+            "issue_type.list" | "issue.create" | "search" => self.local_scopes(action, inputs),
             _ => Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
                 "Jira action is not supported",
             )),
         }
     }
+}
+
+#[async_trait]
+impl Provider for JiraProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.lookup_scopes(
+            request.action(),
+            request.inputs(),
+            request.lookup_credential(),
+        )
+        .await
+        .map(ScopeResolution::resources)
+    }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
-        if request.action != "attachment.add" {
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
+    ) -> Result<BodyAdmission, ProviderError> {
+        if request.action() != "attachment.add" {
             return Err(ProviderError::deny(
                 ReasonCode::BodyMalformed,
                 "Jira action does not accept multipart body parts",
             ));
         }
         let credential = lookup_credential(request)?;
-        let inputs = parse_attachment_add_inputs(&request.inputs)?;
+        let inputs = parse_attachment_add_inputs(request.inputs())?;
         validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
         let body_part_specs = attachment_body_part_specs(&inputs.attachments);
         let response = self
             .confirm_issue_project(&inputs.issue, credential)
             .await?;
-        request.provider_preflight = Some(json!(JiraIssuePreflight {
-            metadata: response.value,
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-        }));
-        Ok(body_part_specs)
+        Ok(BodyAdmission::new(
+            body_part_specs,
+            StateDisposition::Replace(ProviderState::new(JiraIssuePreflight {
+                metadata: response.value,
+                upstream_status: response.status,
+                upstream_duration_ms: response.duration_ms,
+            })),
+        ))
     }
 
     async fn verify_execution_credential(
@@ -970,19 +962,19 @@ impl Provider for JiraProvider {
             .current_user(credential)
             .await
             .map_err(jira_backend_error)?;
-        Ok(Some(ProviderCredentialVerification {
-            upstream_status: response.status,
-            upstream_duration_ms: response.duration_ms,
-            audit: json!({
+        Ok(Some(ProviderCredentialVerification::new(
+            response.status,
+            response.duration_ms,
+            json!({
                 "provider": "jira",
                 "operation": "credential.verify",
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }),
-        }))
+        )))
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        match request.action.as_str() {
+        match request.action() {
             "issue_type.list" => self.invoke_issue_type_list(request).await,
             "issue.view" => self.invoke_issue_view(request).await,
             "issue.create" => self.invoke_issue_create(request).await,
@@ -1025,7 +1017,7 @@ impl JiraProvider {
         };
         validate_adf_body(body)?;
         let mutation =
-            append_adf_attribution(body, capability, &request.correlation.broker_request_id)?;
+            append_adf_attribution(body, capability, &request.correlation().broker_request_id)?;
         validate_adf_body(body)?;
         Ok(Some(mutation.audit_value()))
     }
@@ -1034,9 +1026,9 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let inputs = parse_issue_type_list_inputs(&request.inputs)?;
-        ensure_authorized_project_scope(&inputs.project, &request.resource_scopes)?;
-        let credential = invocation_credential(&request)?;
+        let inputs = parse_issue_type_list_inputs(request.inputs())?;
+        ensure_authorized_project_scope(&inputs.project, request.resource_scopes()?)?;
+        let credential = invocation_credential(request.admitted())?;
         let page_request = JiraIssueTypeListRequest {
             start_at: inputs.start_at,
             max_results: inputs.max_results,
@@ -1064,32 +1056,28 @@ impl JiraProvider {
             "nextStartAt": next_start_at,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue_type.list",
                 "project": inputs.project,
                 "startAt": page.start_at,
                 "maxResults": page.max_results,
                 "issueTypeCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({ "project": inputs.project })),
-        })
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({ "project": inputs.project })))
     }
 
     async fn invoke_issue_view(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let locator = issue_locator_from_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let locator = issue_locator_from_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
             .issue_metadata(&locator.issue_key, lookup_credential)
@@ -1102,7 +1090,7 @@ impl JiraProvider {
                 "Jira issue response did not include a valid current key and project",
             ));
         }
-        ensure_authorized_issue_metadata(&metadata, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let response = self
             .backend
             .issue(&metadata.key, credential)
@@ -1125,34 +1113,33 @@ impl JiraProvider {
         validate_returned_issue_description(&issue, &self.config)?;
         let result = issue_view_result(&issue, &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.view",
                 "issueKey": issue.key,
                 "project": issue.project,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": issue.id,
                 "issueKey": issue.key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_issue_create(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let scope_inputs = parse_issue_create_scope_inputs(&request.inputs)?;
-        ensure_authorized_project_scope(&scope_inputs.project, &request.resource_scopes)?;
-        let mut inputs = parse_issue_create_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let scope_inputs = parse_issue_create_scope_inputs(request.inputs())?;
+        ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
+        let mut inputs = parse_issue_create_inputs(request.inputs(), &self.config)?;
         let description_provided = inputs.description.is_some();
         let audit_context = IssueCreateAuditContext {
             project: &inputs.project,
@@ -1346,28 +1333,24 @@ impl JiraProvider {
             "project": issue.project,
             "issueTypeId": inputs.issue_type_id,
             "descriptionProvided": description_provided,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(upstream_status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_create_object_ids(Some(&created))),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+            .with_object_ids(issue_create_object_ids(Some(&created))))
     }
 
     async fn invoke_issue_child_create(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let scope_inputs = parse_issue_child_create_scope_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let scope_inputs = parse_issue_child_create_scope_inputs(request.inputs(), &self.config)?;
         // Reconfirm immediately before mutation instead of reusing scope-resolution
         // metadata so parent moves are caught before the create request.
         let parent_response = self
@@ -1375,9 +1358,9 @@ impl JiraProvider {
             .await?;
         let parent = parent_response.value;
         let mut upstream_duration_ms = parent_response.duration_ms;
-        ensure_authorized_project_scope(&scope_inputs.project, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&parent, &request.resource_scopes)?;
-        let mut inputs = parse_issue_child_create_inputs(&request.inputs, &self.config)?;
+        ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
+        let mut inputs = parse_issue_child_create_inputs(request.inputs(), &self.config)?;
 
         let description_provided = inputs.description.is_some();
         let audit_context = IssueChildCreateAuditContext {
@@ -1669,28 +1652,24 @@ impl JiraProvider {
             "parentProject": parent.project.as_str(),
             "descriptionProvided": description_provided,
             "verificationStatus": "matched",
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(upstream_status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_child_create_object_ids(Some(&created), &parent)),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent)))
     }
 
     async fn invoke_issue_update(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let mut inputs = parse_issue_update_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let mut inputs = parse_issue_update_inputs(request.inputs(), &self.config)?;
         let attribution = if let Some(description) = inputs.description.as_mut() {
             self.apply_adf_attribution("issue.update", description, &request)?
         } else if self.attribution.capability("issue.update").is_some() {
@@ -1715,7 +1694,7 @@ impl JiraProvider {
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
         let metadata = metadata_response.value;
-        ensure_authorized_issue_metadata(&metadata, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let update_response = self
             .backend
             .update_issue(
@@ -1770,40 +1749,39 @@ impl JiraProvider {
             "summaryChanged": summary_changed,
             "descriptionChanged": description_changed,
             "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(update_response.status),
-            upstream_duration_ms: Some(
-                metadata_response.duration_ms
-                    + update_response.duration_ms
-                    + readback_response.duration_ms,
-            ),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(update_response.status),
+                Some(
+                    metadata_response.duration_ms
+                        + update_response.duration_ms
+                        + readback_response.duration_ms,
+                ),
+            )
+            .with_object_ids(json!({
                 "issueId": issue.id,
                 "issueKey": issue.key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_issue_parent_set(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_issue_parent_set_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_issue_parent_set_inputs(request.inputs(), &self.config)?;
         let (issue, parent, mut upstream_duration_ms) = self
             .confirm_parent_set_issue_metadata(&inputs, lookup_credential)
             .await?;
-        ensure_authorized_issue_metadata(&issue, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&parent, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&issue, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
 
         let update_response = self
             .backend
@@ -1902,10 +1880,8 @@ impl JiraProvider {
             "verification": { "status": "matched" },
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.parent.set",
                 "issueKey": issue.key.as_str(),
@@ -1913,27 +1889,25 @@ impl JiraProvider {
                 "parentIssueKey": parent.key.as_str(),
                 "parentProject": parent.project.as_str(),
                 "verificationStatus": "matched",
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(update_response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_parent_set_object_ids(&issue, &parent)),
-        })
+            }))
+            .with_upstream(Some(update_response.status), Some(upstream_duration_ms))
+            .with_object_ids(issue_parent_set_object_ids(&issue, &parent)))
     }
 
     async fn invoke_issue_dependency_add(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_issue_dependency_add_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_issue_dependency_add_inputs(request.inputs(), &self.config)?;
         let (blocking, blocked, mut upstream_duration_ms) = self
             .confirm_dependency_issue_metadata(&inputs, lookup_credential)
             .await?;
-        ensure_authorized_issue_metadata(&blocking, &request.resource_scopes)?;
-        ensure_authorized_issue_metadata(&blocked, &request.resource_scopes)?;
+        ensure_authorized_issue_metadata(&blocking, request.resource_scopes()?)?;
+        ensure_authorized_issue_metadata(&blocked, request.resource_scopes()?)?;
 
         let link_types_response = self
             .backend
@@ -2029,10 +2003,8 @@ impl JiraProvider {
             "verification": { "status": "matched" },
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue.dependency.add",
                 "status": "present",
@@ -2042,26 +2014,24 @@ impl JiraProvider {
                 "blockedIssueKey": blocked.key.as_str(),
                 "blockedProject": blocked.project.as_str(),
                 "verificationStatus": "matched",
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(create_response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(issue_dependency_object_ids(&blocking, &blocked)),
-        })
+            }))
+            .with_upstream(Some(create_response.status), Some(upstream_duration_ms))
+            .with_object_ids(issue_dependency_object_ids(&blocking, &blocked)))
     }
 
     async fn invoke_search(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = request.credential.as_ref().ok_or_else(|| {
+        let credential = request.execution().static_credential().ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "selected credential material is unavailable",
             )
         })?;
-        let inputs = parse_search_inputs(&request.inputs)?;
+        let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_projects(&inputs)?;
         let authorization = search_authorization(&request)?;
         let effective_scope = effective_search_scope(&authorization, &requested)?;
@@ -2069,7 +2039,7 @@ impl JiraProvider {
             &inputs.query,
             &effective_scope,
             &self.config.search,
-            &authorization.credential_mode,
+            request.credential_mode(),
         )?;
         let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
@@ -2126,10 +2096,8 @@ impl JiraProvider {
 
         let result = search_result(&response.value, &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "search",
                 "requestedProjects": requested,
@@ -2144,29 +2112,27 @@ impl JiraProvider {
                 "sortFields": query.sort_fields,
                 "maxResults": max_results,
                 "resultCount": response.value.issues.len(),
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "issueKeys": response
                     .value
                     .issues
                     .iter()
                     .map(|issue| issue.key.clone())
                     .collect::<Vec<_>>(),
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_list(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_list_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2207,10 +2173,8 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.list",
                 "issueKey": metadata.key,
@@ -2219,26 +2183,27 @@ impl JiraProvider {
                 "maxResults": list_response.value.max_results,
                 "orderBy": inputs.order_by,
                 "commentCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(list_response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + list_response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(list_response.status),
+                Some(metadata_response.duration_ms + list_response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentIds": comment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_view(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_view_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2256,36 +2221,35 @@ impl JiraProvider {
             "comment": comment_result(&response.value),
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.view",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": response.value.id,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_add(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.add")?;
-        let mut inputs = parse_comment_add_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_add_inputs(request.inputs(), &self.config)?;
         let attribution = self.apply_adf_attribution("comment.add", &mut inputs.body, &request)?;
         finalize_jira_content(
             &inputs.body,
@@ -2327,33 +2291,32 @@ impl JiraProvider {
             "project": metadata.project,
             "commentId": response.value.id,
             "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_reply(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.reply")?;
-        let mut inputs = parse_comment_reply_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_reply_inputs(request.inputs(), &self.config)?;
         let requested_parent_comment_id = inputs.parent_comment_id.clone();
         let attribution =
             self.apply_adf_attribution("comment.reply", &mut inputs.body, &request)?;
@@ -2426,34 +2389,30 @@ impl JiraProvider {
             "requestedParentCommentId": requested_parent_comment_id,
             "parentCommentId": effective_parent_comment_id,
             "visibilityRestricted": visibility_restricted,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
                 "parentCommentId": effective_parent_comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_update(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.update")?;
-        let mut inputs = parse_comment_update_inputs(&request.inputs, &self.config)?;
+        let mut inputs = parse_comment_update_inputs(request.inputs(), &self.config)?;
         let attribution =
             self.apply_adf_attribution("comment.update", &mut inputs.body, &request)?;
         finalize_jira_content(
@@ -2513,32 +2472,28 @@ impl JiraProvider {
             "visibilityMode": inputs.visibility_mode.audit_value(),
             "visibilityRestricted": visibility_restricted,
             "notifyUsers": inputs.notify_users,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         merge_attribution_audit(&mut audit, attribution);
         merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": response.value.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_delete(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_comment_view_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
             .await?;
@@ -2555,36 +2510,35 @@ impl JiraProvider {
             "status": "deleted",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.delete",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_list(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.list", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.list", request.inputs(), &self.config)?;
         let (metadata, proof_response, metadata_duration_ms) = self
             .confirm_comment_membership(
                 &inputs.locator,
@@ -2614,39 +2568,36 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.list",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_get(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.get", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.get", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "propertyKey is required")
         })?;
@@ -2671,40 +2622,37 @@ impl JiraProvider {
             "value": response.value,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.get",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_set(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs =
-            parse_comment_property_inputs("comment.property.set", &request.inputs, &self.config)?;
+            parse_comment_property_inputs("comment.property.set", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "propertyKey is required")
         })?;
@@ -2733,41 +2681,38 @@ impl JiraProvider {
             "status": "set",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.set",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_comment_property_delete(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
         let inputs = parse_comment_property_inputs(
             "comment.property.delete",
-            &request.inputs,
+            request.inputs(),
             &self.config,
         )?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
@@ -2794,54 +2739,52 @@ impl JiraProvider {
             "status": "deleted",
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "comment.property.delete",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(
-                metadata_duration_ms + proof_response.duration_ms + response.duration_ms,
-            ),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(response.status),
+                Some(metadata_duration_ms + proof_response.duration_ms + response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.comment_id,
                 "propertyKey": property_key,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_add(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_add_inputs(&request.inputs)?;
-        let metadata_response = match jira_issue_preflight(&request)? {
-            Some(preflight) => JiraBackendResponse {
-                value: preflight.metadata,
-                status: preflight.upstream_status,
-                duration_ms: preflight.upstream_duration_ms,
-            },
-            None => {
-                self.confirm_issue_project(&inputs.issue, lookup_credential)
-                    .await?
-            }
-        };
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_add_inputs(request.inputs())?;
+        let metadata_response =
+            match ProviderState::optional::<JiraIssuePreflight>(request.state())? {
+                Some(preflight) => JiraBackendResponse {
+                    value: preflight.metadata.clone(),
+                    status: preflight.upstream_status,
+                    duration_ms: preflight.upstream_duration_ms,
+                },
+                None => {
+                    self.confirm_issue_project(&inputs.issue, lookup_credential)
+                        .await?
+                }
+            };
         let metadata = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
-            &request.body_parts,
+            request.body_parts(),
             &self.config.attachments,
         )?;
         let mut successes = Vec::new();
@@ -2919,7 +2862,7 @@ impl JiraProvider {
                 "successCount": 0,
                 "failureCount": failures.len(),
                 "attachments": attachment_audit,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             })));
         }
@@ -2945,7 +2888,7 @@ impl JiraProvider {
             "successCount": successes.len(),
             "failureCount": failures.len(),
             "attachments": attachment_audit,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         let object_ids = json!({
@@ -2976,23 +2919,19 @@ impl JiraProvider {
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
                 .with_object_ids(object_ids));
         }
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(audit),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(object_ids),
-        })
+        Ok(ProviderResult::new(result)
+            .with_audit(audit)
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_attachment_download(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_download_inputs(&request.inputs)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_download_inputs(request.inputs())?;
         let metadata = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
             .await?
@@ -3053,33 +2992,30 @@ impl JiraProvider {
             "contentType": content_type,
             "metadataContentType": attachment.content_type,
             "size": downloaded_size,
-            "credentialMode": request.credential_mode,
+            "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
         if let Some(sha256) = result.get("sha256").cloned() {
             audit["sha256"] = sha256;
         }
-        Ok(ProviderResult {
-            result,
-            stream: Some(stream),
-            audit: Some(audit),
-            upstream_status: Some(response.status),
-            upstream_duration_ms: Some(response.duration_ms),
-            object_ids: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_stream(stream)
+            .with_audit(audit)
+            .with_upstream(Some(response.status), Some(response.duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "attachmentId": attachment.id,
-            })),
-        })
+            })))
     }
 
     async fn invoke_attachment_list(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_attachment_list_inputs(&request.inputs, &self.config)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_attachment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
             .issue_metadata(&inputs.locator.issue_key, lookup_credential)
@@ -3132,35 +3068,34 @@ impl JiraProvider {
             "count": count,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "attachment.list",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "attachmentCount": count,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status: Some(list_response.status),
-            upstream_duration_ms: Some(metadata_response.duration_ms + list_response.duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(
+                Some(list_response.status),
+                Some(metadata_response.duration_ms + list_response.duration_ms),
+            )
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "attachmentIds": attachment_ids,
-            })),
-        })
+            })))
     }
 
     async fn invoke_verify(
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(&request)?;
-        let inputs = parse_verify_inputs(&request.inputs)?;
+        let credential = invocation_credential(request.admitted())?;
+        let lookup_credential = lookup_credential(request.admitted())?;
+        let inputs = parse_verify_inputs(request.inputs())?;
         let metadata_response = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
             .await?;
@@ -3211,7 +3146,7 @@ impl JiraProvider {
                     upstream_duration_ms += response.duration_ms;
                     upstream_status = Some(response.status);
                 }
-                Err(error) if error.reason_code == ReasonCode::ScopeUnresolved => {
+                Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {
                     return Err(verification_mismatch_error(
                         &request,
                         &metadata,
@@ -3234,27 +3169,23 @@ impl JiraProvider {
             "project": metadata.project,
         });
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult {
-            result,
-            stream: None,
-            audit: Some(json!({
+        Ok(ProviderResult::new(result)
+            .with_audit(json!({
                 "provider": "jira",
                 "operation": "verify",
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "checked": checked,
-                "credentialMode": request.credential_mode,
+                "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })),
-            upstream_status,
-            upstream_duration_ms: Some(upstream_duration_ms),
-            object_ids: Some(json!({
+            }))
+            .with_upstream(upstream_status, Some(upstream_duration_ms))
+            .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
                 "commentId": inputs.expect_comment_id,
                 "attachmentId": inputs.expect_attachment_id,
-            })),
-        })
+            })))
     }
 
     async fn confirm_issue_project(
@@ -4999,10 +4930,8 @@ fn parse_verify_inputs(inputs: &Value) -> Result<VerifyInputs, ProviderError> {
     Ok(parsed)
 }
 
-fn invocation_credential(
-    request: &ProviderInvocation,
-) -> Result<&ExecutionCredential, ProviderError> {
-    request.credential.as_ref().ok_or_else(|| {
+fn invocation_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
+    request.execution().static_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential material is unavailable",
@@ -5010,30 +4939,13 @@ fn invocation_credential(
     })
 }
 
-fn lookup_credential(request: &ProviderInvocation) -> Result<&ExecutionCredential, ProviderError> {
-    request.lookup_credential.as_ref().ok_or_else(|| {
+fn lookup_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
+    request.lookup_credential().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "lookup credential material is unavailable",
         )
     })
-}
-
-fn jira_issue_preflight(
-    request: &ProviderInvocation,
-) -> Result<Option<JiraIssuePreflight>, ProviderError> {
-    request
-        .provider_preflight
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value(value.clone()).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "provider preflight metadata is invalid",
-                )
-            })
-        })
-        .transpose()
 }
 
 fn serialized_body_size(value: &Value) -> Result<u64, ProviderError> {
@@ -5153,12 +5065,14 @@ fn validate_attachment_metadata_inputs(
 fn attachment_body_part_specs(inputs: &[AttachmentInput]) -> Vec<BrokerBodyPartSpec> {
     inputs
         .iter()
-        .map(|input| BrokerBodyPartSpec {
-            name: input.field.clone(),
-            file_name: input.filename.clone(),
-            content_type: input.content_type.clone(),
-            size: input.size,
-            sha256: input.sha256.clone(),
+        .map(|input| {
+            BrokerBodyPartSpec::new(
+                input.field.clone(),
+                input.filename.clone(),
+                input.content_type.clone(),
+                input.size,
+                input.sha256.clone(),
+            )
         })
         .collect()
 }
@@ -5218,7 +5132,7 @@ fn issue_create_failure_audit_partial(
         "issueTypeId": context.issue_type_id,
         "descriptionProvided": context.description_provided,
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     });
     if let Some(issue_id) = &created.id {
@@ -5287,7 +5201,7 @@ fn issue_child_create_failure_audit_partial(
         "descriptionProvided": context.description_provided,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     });
     if let Some(issue_id) = &created.id {
@@ -5391,7 +5305,7 @@ fn issue_parent_set_failure_audit(
         "parentProject": parent.project,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     })
 }
@@ -5433,7 +5347,7 @@ fn issue_dependency_failure_audit(
         "blockedProject": blocked.project,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     })
 }
@@ -5745,7 +5659,7 @@ fn verification_mismatch_error(
         "status": "mismatch",
         "checked": checked,
         "mismatch": mismatch,
-        "credentialMode": request.credential_mode,
+        "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     }))
     .with_object_ids(json!({

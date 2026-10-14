@@ -2,6 +2,7 @@ use crate::{
     config::bounded,
     document::{Plan, valid_status, validate_path},
 };
+use agent_access_core::imports::*;
 use agent_access_provider::*;
 use futures_util::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue};
@@ -296,18 +297,17 @@ pub(crate) fn client(
     endpoint: &Url,
     allowed: &[String],
     host: &BuildContext<'_>,
-) -> Result<Arc<UpstreamClient>, HostError> {
+) -> Result<Arc<UpstreamClient>, ProviderBuildError> {
     Ok(Arc::new(UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "imports.openapi_http",
-            provider: "openapi_http",
-            base: endpoint,
-            egress_proxy: None,
-            allowed_upstream_hosts: allowed,
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
-        host.network(),
+        UpstreamClientSpec::new(
+            "imports.openapi_http",
+            "openapi_http",
+            endpoint,
+            EgressDeclaration::Ordinary(None),
+            allowed,
+            ClientProfile::SingleAttempt,
+        ),
+        host.clients(),
     )?))
 }
 pub(crate) fn auth(
@@ -318,18 +318,16 @@ pub(crate) fn auth(
     if let ImportedCredentialDelivery::RawHeader { name } = delivery {
         crate::config::parameter_header(name).map_err(|_| credential_error())?;
     }
-    if credential.kind != "bearer_token" || credential.username.is_some() {
-        return Err(credential_error());
-    }
-    let token = credential
-        .token
-        .as_ref()
-        .filter(|token| {
-            !token.is_empty()
+    let token = match credential.view() {
+        CredentialView::Bearer { token }
+            if !token.is_empty()
                 && token.len() <= 32768
-                && token.bytes().all(|b| (0x21..=0x7e).contains(&b))
-        })
-        .ok_or_else(credential_error)?;
+                && token.bytes().all(|b| (0x21..=0x7e).contains(&b)) =>
+        {
+            token
+        }
+        _ => return Err(credential_error()),
+    };
     let (name, text) = match delivery {
         ImportedCredentialDelivery::Bearer => (
             HeaderName::from_static("authorization"),
@@ -337,7 +335,7 @@ pub(crate) fn auth(
         ),
         ImportedCredentialDelivery::RawHeader { name } => (
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
-            token.clone(),
+            token.to_owned(),
         ),
     };
     let mut value = HeaderValue::from_str(&text).map_err(|_| credential_error())?;

@@ -1,9 +1,19 @@
 //! Request correlation carried from the broker to upstream requests.
+use crate::contract::HookContext;
+use crate::finalization::{
+    ProviderFinalizationContext, current_provider_finalization, with_provider_finalization,
+};
 
+/// The request header carrying the caller's request ID to upstream services.
 pub const REQUEST_ID_HEADER: &str = "X-Agent-Access-Request-Id";
 
+/// The request header carrying the Broker's own request ID to upstream
+/// services.
 pub const BROKER_REQUEST_ID_HEADER: &str = "X-Agent-Access-Broker-Request-Id";
 
+/// The request IDs of one invocation, which upstream requests to the
+/// service's own origin carry.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CorrelationContext {
     pub agent_request_id: String,
@@ -35,6 +45,30 @@ tokio::task_local! {
     static CURRENT_PROVIDER_ACTION: (String, String);
 }
 
+tokio::task_local! {
+    static CURRENT_HOOK: HookContext;
+}
+
+/// Runs `future` as the provider hook `context` describes, with its service
+/// and action as the current provider action.
+pub(crate) async fn with_hook<F: std::future::Future>(
+    context: HookContext,
+    future: F,
+) -> F::Output {
+    let action = (context.service().to_owned(), context.action().to_owned());
+    CURRENT_HOOK
+        .scope(context, CURRENT_PROVIDER_ACTION.scope(action, future))
+        .await
+}
+
+/// The provider hook the current task runs, if the host is running one.
+pub(crate) fn current_hook_context() -> Option<HookContext> {
+    CURRENT_HOOK.try_with(Clone::clone).ok()
+}
+
+/// Runs `future` with `correlation` as the current correlation, which
+/// upstream requests to the service's own origin carry. The host sets it for
+/// work outside a provider hook, such as its own OAuth requests.
 pub async fn with_correlation_context<F>(correlation: CorrelationContext, future: F) -> F::Output
 where
     F: std::future::Future,
@@ -42,6 +76,9 @@ where
     CURRENT_CORRELATION_CONTEXT.scope(correlation, future).await
 }
 
+/// Runs `future` with `correlation` as the current correlation and
+/// `service`'s `action` as the current provider action, which upstream traces
+/// record. The host sets it around every provider hook it runs.
 pub async fn with_provider_context<F>(
     correlation: CorrelationContext,
     service: String,
@@ -66,16 +103,19 @@ where
 pub struct InvocationScope {
     correlation: Option<CorrelationContext>,
     action: Option<(String, String)>,
-    finalization: Option<crate::ProviderFinalizationContext>,
+    hook: Option<HookContext>,
+    finalization: Option<ProviderFinalizationContext>,
     span: tracing::Span,
 }
 
 impl InvocationScope {
+    /// Captures the current task's invocation context.
     pub fn current() -> Self {
         Self {
             correlation: current_correlation_context(),
             action: current_provider_action(),
-            finalization: crate::current_provider_finalization(),
+            hook: current_hook_context(),
+            finalization: current_provider_finalization(),
             span: tracing::Span::current(),
         }
     }
@@ -84,6 +124,12 @@ impl InvocationScope {
     pub async fn run<F: std::future::Future>(self, future: F) -> F::Output {
         use tracing::Instrument;
         let future = future.instrument(self.span);
+        let future = async {
+            match self.hook {
+                Some(hook) => CURRENT_HOOK.scope(hook, future).await,
+                None => future.await,
+            }
+        };
         let scoped = async {
             match (self.correlation, self.action) {
                 (Some(correlation), Some(action)) => {
@@ -99,21 +145,25 @@ impl InvocationScope {
             }
         };
         match self.finalization {
-            Some(context) => crate::with_provider_finalization(context, scoped).await,
+            Some(context) => with_provider_finalization(context, scoped).await,
             None => scoped.await,
         }
     }
 }
 
+/// The current invocation's correlation, if the host set one.
 pub fn current_correlation_context() -> Option<CorrelationContext> {
     CURRENT_CORRELATION_CONTEXT.try_with(Clone::clone).ok()
 }
 
+/// The service and action of the provider hook the current task runs, if
+/// any.
 pub fn current_provider_action() -> Option<(String, String)> {
     CURRENT_PROVIDER_ACTION.try_with(Clone::clone).ok()
 }
 
-pub fn apply_current_correlation_headers(
+/// Adds the current correlation headers, if any, to a request.
+pub(crate) fn apply_current_correlation_headers(
     builder: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
     match current_correlation_context() {

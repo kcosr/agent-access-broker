@@ -25,7 +25,7 @@ const temporary = (t) => {
 
 test("the Unix signal gate rejects a successful zero-match run or an ignored parent", () => {
   const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n";
-  assert.doesNotThrow(() => assertUnixSignalTestExecuted(`running 1 test\ntest tests::unix_signal_smoke_in_isolated_child_processes ... ok\n${summary}`));
+  assert.doesNotThrow(() => assertUnixSignalTestExecuted(`running 1 test\ntest lifecycle::tests::unix_signal_smoke_in_isolated_child_processes ... ok\n${summary}`));
   for (const output of [
     "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.00s\n",
     "running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 32 filtered out; finished in 0.00s\n",
@@ -93,6 +93,12 @@ test("qualification uses required native/browser gates and fresh paths without p
     assert.equal(check.command[check.command.indexOf("--target") + 1], nativeTarget);
     assert.equal(check.command[check.command.indexOf("--target-dir") + 1], "target");
   }
+  const boundaries = plan.find((entry) => entry.id === "crate-boundaries");
+  assert.deepEqual(boundaries.command, [process.execPath, "scripts/check-crate-boundaries.mjs"]);
+  assert.equal(boundaries.cargo, true);
+  const publicApi = plan.find((entry) => entry.id === "public-api");
+  assert.deepEqual(publicApi.command, [process.execPath, "scripts/public-api.mjs", "check"]);
+  assert.equal(publicApi.cargo, undefined, "the inventory selects its own pinned nightly, not the release toolchain");
   const browser = plan.find((entry) => entry.id === "portal-browser");
   assert.equal(browser.binaries.brokerBinary, path.join(root, "target", nativeTarget, "debug", "agent-access-broker"));
   assert.ok(plan.find((entry) => entry.id === "browser-prerequisites").command.at(-1).includes("chromium.launch"));

@@ -37,7 +37,7 @@ impl std::fmt::Display for CatalogAuditEntity {
             Some(ResourceSelector::Exact { value }) => f.write_str(value),
             Some(ResourceSelector::Namespace { value }) => write!(f, "{value}/*"),
             Some(ResourceSelector::All) => f.write_str("All resources"),
-            None => f.write_str(&self.id),
+            Some(_) | None => f.write_str(&self.id),
         }
     }
 }
@@ -118,13 +118,15 @@ pub(super) fn resource_entity(record: &ManagedResourceRecord) -> CatalogAuditEnt
     let (selector, selector_truncated) = match &definition.selector {
         ResourceSelector::Exact { value } => {
             let (value, truncated) = bounded_text(value);
-            (ResourceSelector::Exact { value }, truncated)
+            (Some(ResourceSelector::Exact { value }), truncated)
         }
         ResourceSelector::Namespace { value } => {
             let (value, truncated) = bounded_text(value);
-            (ResourceSelector::Namespace { value }, truncated)
+            (Some(ResourceSelector::Namespace { value }), truncated)
         }
-        ResourceSelector::All => (ResourceSelector::All, false),
+        ResourceSelector::All => (Some(ResourceSelector::All), false),
+        // A selector form this build cannot bound is omitted, not recorded whole.
+        _ => (None, true),
     };
     CatalogAuditEntity {
         kind: CatalogAuditEntityKind::Resource,
@@ -132,7 +134,7 @@ pub(super) fn resource_entity(record: &ManagedResourceRecord) -> CatalogAuditEnt
         display_name,
         display_name_truncated,
         resource_type: Some(definition.resource_type.clone()),
-        selector: Some(selector),
+        selector,
         selector_truncated: Some(selector_truncated),
         version: record.version,
     }
@@ -286,7 +288,7 @@ mod tests {
             selector: None,
             allowed_execution_contexts: None,
             enabled: None,
-            attributes: crate::ResourceAttributes::default(),
+            attributes: agent_access_provider::ResourceAttributes::default(),
             updated_by: "admin".into(),
         }
     }

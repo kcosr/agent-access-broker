@@ -7,11 +7,20 @@ use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
+#[cfg(test)]
+mod client_category_tests;
 mod discovery;
 mod import_control;
+pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 mod mcp_views;
 mod owned;
+#[cfg(test)]
+mod provider_contract_tests;
+#[cfg(test)]
+mod provider_fixture_tests;
+#[cfg(test)]
+mod provider_state_tests;
 #[cfg(test)]
 mod resource_attribute_tests;
 #[cfg(test)]
@@ -26,27 +35,35 @@ pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
 use crate::fs_permissions;
+use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
+use crate::network::{
+    ClientCaller, EgressProxyEnvironment, HostNetwork, PreparedOutboundTls, preflight_egress_proxy,
+};
 use crate::{
-    ActionDescriptor, AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig,
-    BrokerTokenClass, BrokerTokenHasher, BrowserCsrfKey, ConfigError, CredentialConfig,
-    CredentialDescriptor, CredentialKeyRing, DEFAULT_EXECUTION_CONTEXT, Decision,
-    EgressProxyEnvironment, EgressProxyRuntimeConfig, ExecutionContext, GatewayConfig,
-    InitialAdminBootstrapRequest, LocalPasswordHasher, LookupRequirement,
-    ManagedPolicyGrantCreateRequest, ManagedPolicyGrantPatchRequest, ManagedPolicyGrantRecord,
-    ManagedPolicyGrantStatusRequest, ManagedPolicyGrantSubjectAddRequest,
+    AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig, BrokerTokenClass,
+    BrokerTokenHasher, BrowserCsrfKey, CredentialConfig, CredentialKeyRing,
+    DEFAULT_EXECUTION_CONTEXT, ExecutionContext, GatewayConfig, InitialAdminBootstrapRequest,
+    LocalPasswordHasher, ManagedPolicyGrantCreateRequest, ManagedPolicyGrantPatchRequest,
+    ManagedPolicyGrantRecord, ManagedPolicyGrantStatusRequest, ManagedPolicyGrantSubjectAddRequest,
     ManagedPolicyGrantSubjectRemoveRequest, ManagedPolicyMutationResult,
     ManagedPolicySubjectCatalog, ManagedResourceCatalog, ManagedStore, ManagedStoreError,
     ManagedStoreOpenMode, NormalizedPolicyGrant, NormalizedPolicyGrantIssueField,
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
-    PolicyValidationIssue, PolicyWriteScope, ReasonCode, ResourceBoundary, ResourceCatalog,
-    ResourceDefinition, ResourceGroupDefinition, ResourceScopes, ResourceSelection,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry, ResponseEnvelope,
-    ServiceDescriptor, ServiceSurface, api_service_spec, apply_reqwest_proxy,
+    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
+    ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
     credential_mode_available, is_safe_identifier, is_safe_principal,
     normalized_policy_grant_validation_issues, validate_broker_config,
 };
+use crate::{ConfigError, HostConfigError, load_secret_ref_value};
+use agent_access_provider::host::{ContractViolation, HookContext, with_provider_context};
+use agent_access_provider::presentation::ActionPresentation;
 use agent_access_provider::*;
+use agent_access_provider::{
+    ActionDescriptor, CredentialDescriptor, Decision, LookupRequirement, ReasonCode,
+    ResourceScopes, ResourceSelector, ResourceType, ResourceTypeDescriptor, ResourceTypeRegistry,
+    ServiceDescriptor, ServiceSurface,
+};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use chrono::Utc;
@@ -122,12 +139,29 @@ pub enum RuntimeError {
     MicrosoftOidc(#[from] MicrosoftOidcRuntimeConfigError),
 }
 
-impl From<HostError> for RuntimeError {
-    fn from(error: HostError) -> Self {
+impl From<HostConfigError> for RuntimeError {
+    fn from(error: HostConfigError) -> Self {
         match error {
-            HostError::Config(error) => Self::Config(error),
-            HostError::MissingEnv { label, name } => Self::MissingEnv { label, name },
-            HostError::SecretFile { label, source } => Self::SecretFile { label, source },
+            HostConfigError::Config(error) => Self::Config(error),
+            HostConfigError::MissingEnv { label, name } => Self::MissingEnv { label, name },
+            HostConfigError::SecretFile { label, source } => Self::SecretFile { label, source },
+        }
+    }
+}
+
+/// A provider build failure keeps the host's own cause when the host's
+/// network construction failed, and otherwise reports the provider's safe
+/// configuration diagnostics.
+impl From<ProviderBuildError> for RuntimeError {
+    fn from(error: ProviderBuildError) -> Self {
+        let (mut errors, cause) = error.into_parts();
+        match cause.map(|cause| cause.downcast::<HostConfigError>()) {
+            Some(Ok(cause)) => (*cause).into(),
+            Some(Err(cause)) => {
+                errors.push(cause.to_string());
+                Self::Config(ConfigError::Invalid { errors })
+            }
+            None => Self::Config(ConfigError::Invalid { errors }),
         }
     }
 }
@@ -303,26 +337,18 @@ fn search_scope_from_boundary(boundary: &ResourceBoundary) -> SearchAuthorizatio
         .iter()
         .any(|selector| matches!(selector, ResourceSelector::All))
     {
-        if boundary.excluded.iter().any(|selector| {
-            matches!(
-                selector,
-                ResourceSelector::All | ResourceSelector::Namespace { .. }
-            )
-        }) {
-            // Search containment types support exact/all only. Invalid data is never broadened.
-            return SearchAuthorizationScope::Finite { values: Vec::new() };
+        // Search containment types support exact/all only. Any other exclusion,
+        // including a selector form this build does not know, yields an empty
+        // boundary: invalid data is never broadened.
+        let mut excluded_values = BTreeSet::new();
+        for selector in &boundary.excluded {
+            let ResourceSelector::Exact { value } = selector else {
+                return SearchAuthorizationScope::Finite { values: Vec::new() };
+            };
+            excluded_values.insert(value.clone());
         }
         return SearchAuthorizationScope::AllExcept {
-            excluded_values: boundary
-                .excluded
-                .iter()
-                .filter_map(|selector| match selector {
-                    ResourceSelector::Exact { value } => Some(value.clone()),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
+            excluded_values: excluded_values.into_iter().collect(),
         };
     }
     SearchAuthorizationScope::Finite {
@@ -363,16 +389,23 @@ pub(crate) fn search_scope_boundary(scope: &SearchAuthorizationScope) -> Resourc
 }
 
 impl SearchAuthorizationPlan {
+    /// The provider's view: the scope type and the complete finite or
+    /// all-except boundary. The credential mode travels in the admitted
+    /// context, not here.
     pub fn authorization(&self) -> SearchAuthorization {
-        SearchAuthorization {
-            scope_type: self.scope_type.clone(),
-            scope: self.scope.clone(),
-            credential_mode: self.credential_mode.clone(),
-        }
+        SearchAuthorization::new(self.scope_type.clone(), self.scope.clone())
     }
 
-    pub fn resource_scopes(&self) -> ResourceScopes {
-        self.authorization().resource_scopes()
+    /// The envelope and audit `resourceScopes` summary of the boundary:
+    /// finite values, or `["*"]` for an all-except boundary. It is lossy by
+    /// design and never reaches a provider; authorization always uses the
+    /// complete boundary.
+    pub fn resource_scope_summary(&self) -> ResourceScopes {
+        let values = match &self.scope {
+            SearchAuthorizationScope::Finite { values } => values.clone(),
+            SearchAuthorizationScope::AllExcept { .. } => vec!["*".to_string()],
+        };
+        BTreeMap::from([(self.scope_type.clone(), values)])
     }
 }
 
@@ -526,9 +559,9 @@ pub struct InvokeRequest {
     #[serde(default = "empty_json_object")]
     pub inputs: Value,
     #[serde(default)]
-    pub read_content_format: crate::ReadContentFormat,
+    pub read_content_format: agent_access_provider::presentation::ReadContentFormat,
     #[serde(default)]
-    pub response_format: crate::ResponseFormat,
+    pub response_format: agent_access_provider::presentation::ResponseFormat,
     #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
 }
@@ -537,17 +570,17 @@ impl InvokeRequest {
     pub fn new(inputs: Value) -> Self {
         Self {
             inputs,
-            read_content_format: crate::ReadContentFormat::Native,
-            response_format: crate::ResponseFormat::Json,
+            read_content_format: agent_access_provider::presentation::ReadContentFormat::Native,
+            response_format: agent_access_provider::presentation::ResponseFormat::Json,
             body_parts: Vec::new(),
         }
     }
 
-    fn response_options(&self) -> crate::ResponseOptions {
-        crate::ResponseOptions {
-            read_content_format: self.read_content_format,
-            response_format: self.response_format,
-        }
+    fn response_options(&self) -> agent_access_provider::presentation::ResponseOptions {
+        agent_access_provider::presentation::ResponseOptions::new(
+            self.read_content_format,
+            self.response_format,
+        )
     }
 }
 
@@ -576,7 +609,7 @@ impl TerminalAuditStream {
         &self,
         phase: &str,
         decision: Decision,
-        reason_code: Option<ReasonCode>,
+        reason_code: Option<ReasonCodeId>,
         message: Option<String>,
     ) {
         self.state.finish(phase, decision, reason_code, message);
@@ -601,7 +634,7 @@ impl Stream for TerminalAuditStream {
                 this.finish(
                     "failed",
                     Decision::Error,
-                    Some(error.reason_code),
+                    Some(error.reason_code.into()),
                     Some(error.message.clone()),
                 );
                 Poll::Ready(Some(Err(error)))
@@ -763,7 +796,7 @@ fn record_span_from_audit(record: &AuditRecord, status: u16) {
     span.record("action", record.action.as_str());
     span.record("principal", record.principal.as_str());
     span.record("decision", record.decision.as_str());
-    if let Some(reason_code) = record.reason_code {
+    if let Some(reason_code) = &record.reason_code {
         span.record("reasonCode", reason_code.as_str());
     }
     if let Some(config_generation) = record.config_generation {
@@ -836,7 +869,11 @@ fn emit_invoke_completed(
 ) {
     let resource_scope_keys = resource_scope_keys_field(&record.resource_scopes);
     let credential_mode = credential_mode_label(&record.credential_mode);
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     match record.decision {
         Decision::Allow | Decision::Deny => emit_invoke_completed_event!(
             tracing::info,
@@ -850,7 +887,7 @@ fn emit_invoke_completed(
         ),
         Decision::Error
             if matches!(
-                record.reason_code,
+                record.reason_code.as_ref().and_then(ReasonCodeId::standard),
                 Some(
                     ReasonCode::RateLimited
                         | ReasonCode::UpstreamRateLimited
@@ -984,7 +1021,11 @@ fn emit_invoke_stream_terminal(record: &AuditRecord, phase: &str, stream_duratio
     } else {
         "invoke_stream_failed"
     };
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     let stream_bytes = record
         .provider_audit
         .as_ref()
@@ -1019,7 +1060,11 @@ fn emit_invoke_stream_terminal(record: &AuditRecord, phase: &str, stream_duratio
 
 fn emit_gateway_terminal(record: &AuditRecord, phase: &str, duration_ms: u64) {
     let resource_scope_keys = resource_scope_keys_field(&record.resource_scopes);
-    let reason_code = record.reason_code.map(ReasonCode::as_str).unwrap_or("");
+    let reason_code = record
+        .reason_code
+        .as_ref()
+        .map(ReasonCodeId::as_str)
+        .unwrap_or("");
     let gateway_bytes = record
         .provider_audit
         .as_ref()
@@ -1116,7 +1161,7 @@ fn emit_audit_terminal_append_failed(
         action = record.action.as_str(),
         principal = record.principal.as_str(),
         decision = record.decision.as_str(),
-        reasonCode = record.reason_code.map(ReasonCode::as_str).unwrap_or(""),
+        reasonCode = record.reason_code.as_ref().map(ReasonCodeId::as_str).unwrap_or(""),
         error = %error,
     );
 }
@@ -1145,7 +1190,7 @@ fn add_upstream_resource_ownership_hint(
     error: &mut ProviderError,
     ownership: UpstreamResourceOwnership,
 ) {
-    if error.reason_code != ReasonCode::ScopeUnresolved {
+    if error.reason_code() != ReasonCode::ScopeUnresolved {
         return;
     }
     let result = error
@@ -1172,17 +1217,121 @@ fn add_upstream_resource_ownership_hint(
         );
 }
 
+/// The caller-facing form of a pre-authorization lookup failure: lookup
+/// concealment keeps only failures that reveal nothing about the resource.
+/// A concealed failure keeps its internal diagnostic code, such as a
+/// provider contract failure's, for the Broker's own records.
 fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
-    match error.reason_code {
-        ReasonCode::InputInvalid
-        | ReasonCode::BodyMalformed
-        | ReasonCode::BodyFormatUnsupported
-        | ReasonCode::LocatorInvalid
-        | ReasonCode::CredentialNotProvisioned
-        | ReasonCode::CredentialInvalid
-        | ReasonCode::CredentialExpired => error,
-        _ => lookup_scope_denial(),
+    match error.reason_code().standard() {
+        Some(
+            ReasonCode::InputInvalid
+            | ReasonCode::BodyMalformed
+            | ReasonCode::BodyFormatUnsupported
+            | ReasonCode::LocatorInvalid
+            | ReasonCode::CredentialNotProvisioned
+            | ReasonCode::CredentialInvalid
+            | ReasonCode::CredentialExpired,
+        ) => error,
+        _ => {
+            let mut denial = lookup_scope_denial();
+            denial.internal_diagnostic_code = error.internal_diagnostic_code;
+            denial
+        }
     }
+}
+
+/// The caller-facing message of a provider contract failure; the provider's
+/// own message, result and reason are never forwarded.
+const PROVIDER_CONTRACT_FAILED_MESSAGE: &str =
+    "the provider reported an outcome its contract does not allow";
+
+/// Runs one provider hook future under its hook context and checks the
+/// failure it returns against that hook's contract. Host work around the
+/// hook, such as lease revalidation or attribute decryption, stays outside.
+async fn run_provider_hook<T>(
+    hook: HookContext,
+    future: impl std::future::Future<Output = Result<T, ProviderError>>,
+) -> Result<T, ProviderError> {
+    let checked = hook.clone();
+    agent_access_provider::host::with_hook_context(hook, future)
+        .await
+        .map_err(|error| checked_hook_failure(&checked, error))
+}
+
+/// A hook's failure if its contract allows it, or the host's contract
+/// failure in its place.
+fn checked_hook_failure(hook: &HookContext, error: ProviderError) -> ProviderError {
+    match hook.check_failure(&error) {
+        Ok(()) => error,
+        Err(violation) => provider_contract_failure(hook, violation, error),
+    }
+}
+
+/// The host's `broker_provider_contract_failed` (error/500) replacing a hook
+/// failure its contract does not allow. It keeps the upstream status,
+/// duration, audit and object IDs the provider reported, but never its
+/// message, result or reason; the diagnostic code is internal. After
+/// dispatch the provider may already have acted upstream, so an invocation's
+/// contract failure reports an unknown, not retry-safe execution state.
+fn provider_contract_failure(
+    hook: &HookContext,
+    violation: ContractViolation,
+    error: ProviderError,
+) -> ProviderError {
+    record_provider_contract_failure(hook, "hook_failure", violation);
+    let mut failure = ProviderError::error(
+        ReasonCode::BrokerProviderContractFailed,
+        PROVIDER_CONTRACT_FAILED_MESSAGE,
+    )
+    .with_internal_diagnostic_code(violation.diagnostic_code());
+    if hook.phase() == HookPhase::Invocation {
+        failure = failure.with_result(json!({"executionState": "unknown", "retrySafe": false}));
+    }
+    failure.audit = error.audit;
+    failure.upstream_status = error.upstream_status;
+    failure.upstream_duration_ms = error.upstream_duration_ms;
+    failure.object_ids = error.object_ids;
+    failure
+}
+
+fn record_provider_contract_failure(
+    hook: &HookContext,
+    emission: &'static str,
+    violation: ContractViolation,
+) {
+    tracing::warn!(
+        event = "provider_contract_failed",
+        service = hook.service(),
+        action = hook.action(),
+        phase = hook.phase().as_str(),
+        emission,
+        diagnosticCode = violation.diagnostic_code(),
+        "provider outcome rejected by its hook contract"
+    );
+}
+
+/// Checks each late failure of the result's stream against the invocation's
+/// contract. A rejected failure keeps the host's late-failure handling but
+/// carries `broker_provider_contract_failed` and a fixed message.
+fn checked_result_stream(mut result: ProviderResult, hook: HookContext) -> ProviderResult {
+    use futures_util::StreamExt;
+    result.stream = result.stream.map(|stream| {
+        stream.map_byte_stream(move |inner| {
+            Box::pin(inner.map(move |item| {
+                item.map_err(|error| match hook.check_late_stream(error.reason_code) {
+                    Ok(()) => error,
+                    Err(violation) => {
+                        record_provider_contract_failure(&hook, "late_stream", violation);
+                        ProviderStreamError::new(
+                            ReasonCode::BrokerProviderContractFailed,
+                            "the provider stream failed outside its contract",
+                        )
+                    }
+                })
+            }))
+        })
+    });
+    result
 }
 
 fn preserve_result_metadata_on_error(
@@ -1201,7 +1350,7 @@ fn preserve_result_metadata_on_error(
 
 fn present_provider_outcome(
     presentation: Option<&ActionPresentation>,
-    options: crate::ResponseOptions,
+    options: agent_access_provider::presentation::ResponseOptions,
     max_body_bytes: u64,
     max_result_bytes: u64,
     outcome: Result<ProviderResult, ProviderError>,
@@ -1226,7 +1375,7 @@ fn present_provider_outcome(
             Ok(provider_result)
         }
         Err(mut provider_error)
-            if provider_error.decision == Decision::Allow && provider_error.result.is_some() =>
+            if provider_error.decision() == Decision::Allow && provider_error.result.is_some() =>
         {
             let mut result = *provider_error
                 .result
@@ -1256,16 +1405,13 @@ fn present_provider_outcome(
 
 /// Stand-in for a scope whose resource type is not registered: no resource
 /// catalog entry uses its identifier and no target is canonical.
-static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    attributes: &[],
-    id: ResourceType::from_static("unresolved_resource_type"),
-    label: "Unresolved resource type",
-    plural_label: "Unresolved resource types",
-    example: "",
-    canonical: |_| false,
-    namespace: None,
-};
+static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("unresolved_resource_type"),
+    "Unresolved resource type",
+    "Unresolved resource types",
+    "",
+    |_| false,
+);
 
 #[derive(Debug, Clone)]
 struct PolicySnapshot {
@@ -1484,36 +1630,101 @@ pub struct BrokerRuntime {
     local_password_hasher: Option<LocalPasswordHasher>,
     browser_csrf_key: Option<BrowserCsrfKey>,
     microsoft_oidc: Option<MicrosoftOidcRuntimeConfig>,
-    egress_proxy_environment: Arc<EgressProxyEnvironment>,
-    outbound_tls: crate::PreparedOutboundTls,
+    /// This generation's outbound network: limits, TLS trust and egress
+    /// proxy selection over the proxy environment captured at startup.
+    network: HostNetwork,
     audit: AuditSink,
     audit_registry: Arc<AuditRuntimeRegistry>,
     /// The effective node ID; see [`crate::resolve_node_id`].
     node_id: Arc<str>,
     config_generation: Option<u64>,
+    /// Test-fixture provider instances, inherited by reload candidates.
+    /// Empty, and zero-sized, outside test-support builds.
+    provider_fixtures: ProviderFixtureSlot,
 }
 
-/// The credentials an invocation dispatches with.
-#[derive(Default)]
-struct SelectedCredentials {
-    execution: Option<ExecutionCredential>,
-    delegated: Option<DelegatedCredential>,
+/// The provider fixtures a test-support runtime was constructed with. Each
+/// generation built from it, including reload candidates, asks the same
+/// fixtures again. Production builds have no fixture field at all.
+#[derive(Clone, Default)]
+struct ProviderFixtureSlot {
+    #[cfg(any(test, feature = "test-support"))]
+    fixtures: Option<crate::test_support::ProviderFixtures>,
 }
 
-impl SelectedCredentials {
-    fn execution(credential: ExecutionCredential) -> Self {
-        Self {
-            execution: Some(credential),
-            delegated: None,
+#[cfg(any(test, feature = "test-support"))]
+impl ProviderFixtureSlot {
+    /// Rejects fixtures that name an unselected or unconfigured native kind
+    /// in the startup configuration.
+    fn check_startup(&self, config: &BrokerConfig) -> Result<(), RuntimeError> {
+        let Some(fixtures) = &self.fixtures else {
+            return Ok(());
+        };
+        let registry = config.providers.registry();
+        let errors = fixtures
+            .kinds()
+            .filter_map(|kind| {
+                if registry.get(kind).is_none() {
+                    Some(format!(
+                        "provider fixture {kind} names no selected native provider"
+                    ))
+                } else if config.providers.get_kind(kind).is_none() {
+                    Some(format!(
+                        "provider fixture {kind} has no [providers.{kind}] configuration"
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(RuntimeError::Config(ConfigError::Invalid { errors }))
         }
+    }
+
+    /// The fixture's provider for the configured registration `kind`, if
+    /// the fixture supplies one. It must serve the service `kind`.
+    fn build(
+        &self,
+        kind: &str,
+        descriptor: &ServiceDescriptor,
+        host: &BuildContext<'_>,
+        backend: &dyn BackendConfig,
+    ) -> Option<Result<ServiceProvider, RuntimeError>> {
+        let provider = self.fixtures.as_ref()?.build(
+            kind,
+            &crate::test_support::ProviderFixtureContext::new(descriptor, host, backend),
+        )?;
+        Some(if provider.descriptor.service == kind {
+            Ok(provider)
+        } else {
+            Err(RuntimeError::Config(ConfigError::Invalid {
+                errors: vec![format!(
+                    "provider fixture {kind} serves service {}",
+                    provider.descriptor.service
+                )],
+            }))
+        })
     }
 }
 
+/// One admitted operation awaiting dispatch. It pins the provider instance
+/// that resolved and admitted it, so provider state never reaches another
+/// generation's provider.
 pub struct PreparedInvocation {
     resource_binding: Option<crate::ResourceAttributeBinding>,
     provider: Arc<dyn Provider>,
-    invocation: ProviderInvocation,
-    response_options: crate::ResponseOptions,
+    /// The domain reasons the provider's backend registered, pinned with
+    /// the provider for the operation's later hooks.
+    domain_reasons: &'static [&'static ProviderReasonDefinition],
+    request: AdmittedRequest,
+    /// Body parts supplied with the invoke request itself; multipart bodies
+    /// are consumed separately after admission.
+    body_parts: Vec<BrokerBodyPart>,
+    state: Option<ProviderState>,
+    response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -1596,6 +1807,7 @@ impl BrokerRuntime {
             None,
             environment,
             Arc::new(AuditRuntimeRegistry::new()),
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1604,15 +1816,44 @@ impl BrokerRuntime {
         audit_registry: Arc<AuditRuntimeRegistry>,
     ) -> Result<Self, RuntimeError> {
         let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
-        Self::new_with_identity_reuse(config, None, environment, audit_registry)
+        Self::new_with_identity_reuse(
+            config,
+            None,
+            environment,
+            audit_registry,
+            ProviderFixtureSlot::default(),
+        )
+    }
+
+    /// A startup runtime, as [`Self::new_with_audit_registry`] builds it,
+    /// except that `fixtures` supply the providers of the configured native
+    /// kinds they name, in this generation and every reload candidate built
+    /// from it. Each named kind must be selected and configured here.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_with_provider_fixtures(
+        config: BrokerConfig,
+        audit_registry: Arc<AuditRuntimeRegistry>,
+        fixtures: crate::test_support::ProviderFixtures,
+    ) -> Result<Self, RuntimeError> {
+        let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
+        Self::new_with_identity_reuse(
+            config,
+            None,
+            environment,
+            audit_registry,
+            ProviderFixtureSlot {
+                fixtures: Some(fixtures),
+            },
+        )
     }
 
     pub fn new_for_reload(config: BrokerConfig, previous: &Self) -> Result<Self, RuntimeError> {
         Self::new_with_identity_reuse(
             config,
             Some(previous),
-            Arc::clone(&previous.egress_proxy_environment),
+            Arc::clone(previous.network.environment()),
             Arc::clone(&previous.audit_registry),
+            previous.provider_fixtures.clone(),
         )
     }
 
@@ -1626,6 +1867,7 @@ impl BrokerRuntime {
             None,
             Arc::new(environment),
             Arc::new(AuditRuntimeRegistry::new()),
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1634,12 +1876,18 @@ impl BrokerRuntime {
         previous: Option<&Self>,
         egress_proxy_environment: Arc<EgressProxyEnvironment>,
         audit_registry: Arc<AuditRuntimeRegistry>,
+        provider_fixtures: ProviderFixtureSlot,
     ) -> Result<Self, RuntimeError> {
         validate_broker_config(&config)?;
+        #[cfg(any(test, feature = "test-support"))]
+        if previous.is_none() {
+            provider_fixtures.check_startup(&config)?;
+        }
         preflight_configured_egress_proxies(&config)?;
-        let outbound_tls = crate::PreparedOutboundTls::load(&config.network.outbound_tls)?;
-        let egress_proxy = EgressProxyRuntimeConfig::new(
-            Arc::clone(&egress_proxy_environment),
+        let network = HostNetwork::new(
+            ProviderLimits::from(&config.limits),
+            PreparedOutboundTls::load(&config.network.outbound_tls)?,
+            egress_proxy_environment,
             config.network.egress_proxy.clone(),
         );
         let broker_token_hasher = config
@@ -1648,32 +1896,41 @@ impl BrokerRuntime {
             .map(BrokerTokenHasher::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
-        let limits = ProviderLimits::from(&config.limits);
         let stable_signing_key = broker_token_hasher
             .clone()
             .map(|hasher| Arc::new(hasher) as Arc<dyn StableSigningKey>);
         let mut providers = Vec::new();
-        for backend in config.providers.iter() {
+        for (registration, backend) in config.providers.registered() {
             let descriptor = backend.descriptor();
-            let host = BuildContext {
-                limits: &limits,
-                egress: &egress_proxy,
-                outbound_tls: &outbound_tls,
-                attribution: config.attribution.for_service(&descriptor),
-                stable_signing_key: stable_signing_key
-                    .clone()
-                    .map(|key| crate::service_signing_key(key, &descriptor.service)),
-            };
+            // The registration selected by the configuration's table name,
+            // not anything the backend reports, decides its client category.
+            let clients =
+                network.client_factory(ClientCaller::native(registration, &config.deployment));
+            let host = agent_access_provider::host::build_context(
+                network.limits(),
+                &clients,
+                config.attribution.for_service(&descriptor),
+                stable_signing_key.clone().map(|key| {
+                    agent_access_provider::host::service_signing_key(key, &descriptor.service)
+                }),
+            );
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(provider) =
+                provider_fixtures.build(registration.kind(), &descriptor, &host, backend)
+            {
+                providers.push(provider?);
+                continue;
+            }
             providers.push(ServiceProvider::new(descriptor, backend.build(&host)?));
         }
         Self::with_providers_and_identity_reuse(
             config,
             providers,
             previous,
-            egress_proxy_environment,
+            network,
             broker_token_hasher,
             audit_registry,
-            outbound_tls,
+            provider_fixtures,
         )
     }
 
@@ -1685,22 +1942,26 @@ impl BrokerRuntime {
     ) -> Result<Self, RuntimeError> {
         let providers = providers.into_iter().map(Into::into).collect::<Vec<_>>();
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
-        let environment = Arc::new(EgressProxyEnvironment::from_process_env()?);
+        let network = HostNetwork::new(
+            ProviderLimits::from(&config.limits),
+            PreparedOutboundTls::load(&config.network.outbound_tls)?,
+            Arc::new(EgressProxyEnvironment::from_process_env()?),
+            config.network.egress_proxy.clone(),
+        );
         let broker_token_hasher = config
             .broker_tokens
             .as_ref()
             .map(BrokerTokenHasher::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
-        let outbound_tls = crate::PreparedOutboundTls::load(&config.network.outbound_tls)?;
         Self::with_providers_and_identity_reuse(
             config,
             providers,
             None,
-            environment,
+            network,
             broker_token_hasher,
             Arc::new(AuditRuntimeRegistry::new()),
-            outbound_tls,
+            ProviderFixtureSlot::default(),
         )
     }
 
@@ -1708,10 +1969,10 @@ impl BrokerRuntime {
         mut config: BrokerConfig,
         providers: Vec<ServiceProvider>,
         previous: Option<&Self>,
-        egress_proxy_environment: Arc<EgressProxyEnvironment>,
+        network: HostNetwork,
         broker_token_hasher: Option<BrokerTokenHasher>,
         audit_registry: Arc<AuditRuntimeRegistry>,
-        outbound_tls: crate::PreparedOutboundTls,
+        provider_fixtures: ProviderFixtureSlot,
     ) -> Result<Self, RuntimeError> {
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
         validate_broker_config(&config)?;
@@ -1749,64 +2010,19 @@ impl BrokerRuntime {
                 .ok_or_else(|| RuntimeError::ManagedStore {
                     message: "OAuth requires credential encryption".into(),
                 })?;
-            let egress = EgressProxyRuntimeConfig::new(
-                Arc::clone(&egress_proxy_environment),
-                config.network.egress_proxy.clone(),
-            );
             Some(
                 crate::OAuthManager::new_with_host(
                     store,
                     ring,
                     config.oauth.clone(),
                     config.providers.registry(),
-                    UpstreamNetwork {
-                        limits: &ProviderLimits::from(&config.limits),
-                        egress: &egress,
-                        outbound_tls: &outbound_tls,
-                    },
+                    &network,
                 )
                 .map_err(|error| RuntimeError::ManagedStore {
                     message: error.to_string(),
                 })?,
             )
         };
-        if let Some(credential) = config
-            .credentials
-            .per_user
-            .get("oauth_stub")
-            .filter(|c| c.kind == "oauth")
-        {
-            let registration = credential
-                .provider
-                .as_ref()
-                .and_then(|id| config.oauth.registrations.get(id))
-                .ok_or_else(|| RuntimeError::ManagedStore {
-                    message: "OAuth registration is missing".into(),
-                })?;
-            let egress = EgressProxyRuntimeConfig::new(
-                Arc::clone(&egress_proxy_environment),
-                config.network.egress_proxy.clone(),
-            );
-            let provider = crate::oauth_records::OAuthRecordsProvider::new(
-                registration,
-                UpstreamNetwork {
-                    limits: &ProviderLimits::from(&config.limits),
-                    egress: &egress,
-                    outbound_tls: &outbound_tls,
-                },
-            )
-            .map_err(|error| RuntimeError::ManagedStore {
-                message: error.to_string(),
-            })?;
-            register_service_provider(
-                &mut provider_map,
-                &config,
-                ServiceProvider::new(
-                    crate::oauth_records::oauth_records_descriptor(),
-                    Arc::new(provider),
-                ),
-            )?;
-        }
         let trusted_callers = load_trusted_callers(&config)?;
         let local_password_hasher = config
             .browser_auth
@@ -1848,16 +2064,9 @@ impl BrokerRuntime {
             .unwrap_or_default();
         for record in &imported_catalog.services {
             let name = &record.definition.service;
-            if services.contains_key(name)
-                || config.providers.registry().get(name).is_some()
-                || matches!(name.as_str(), "oauth_stub" | "broker")
-                || config.credentials.service.contains_key(name)
-                || config.credentials.per_user.contains_key(name)
-                || config.credentials.lookup.contains_key(name)
-            {
+            if let Some(owner) = imported_service_collision(&config, &services, name) {
                 return Err(RuntimeError::ManagedStore {
-                    message: "imported service collides with configured service or credentials"
-                        .into(),
+                    message: format!("retained imported service {name} collides with {owner}"),
                 });
             }
             let descriptor = imports::descriptor(record, &config);
@@ -1877,8 +2086,7 @@ impl BrokerRuntime {
             &imported_catalog,
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
-            &egress_proxy_environment,
-            &outbound_tls,
+            &network,
         )?;
         for (service, provider) in imported_providers {
             provider_map.insert(
@@ -1942,11 +2150,11 @@ impl BrokerRuntime {
             local_password_hasher,
             browser_csrf_key,
             microsoft_oidc,
-            egress_proxy_environment,
-            outbound_tls,
+            network,
             audit_registry,
             node_id,
             config_generation: None,
+            provider_fixtures,
         };
         runtime.initialize_import_dispatch(previous);
         runtime.initialize_scoped_mcp_readiness(None);
@@ -1976,7 +2184,7 @@ impl BrokerRuntime {
             .filter(|service| {
                 registry
                     .get(service)
-                    .is_some_and(|registration| registration.development_only)
+                    .is_some_and(|registration| registration.is_development_only())
             })
             .map(|service| {
                 format!(
@@ -2498,8 +2706,8 @@ impl BrokerRuntime {
         self.browser_csrf_key.as_ref()
     }
 
-    pub fn outbound_tls(&self) -> &crate::PreparedOutboundTls {
-        &self.outbound_tls
+    pub fn outbound_tls(&self) -> &PreparedOutboundTls {
+        self.network.outbound_tls()
     }
 
     pub fn microsoft_oidc(&self) -> Option<&MicrosoftOidcRuntimeConfig> {
@@ -2698,7 +2906,7 @@ impl BrokerRuntime {
                 service: "broker".into(),
                 action: failure.admission_action().into(),
                 resource_scopes: ResourceScopes::new(),
-                reason_code: Some(reason_code),
+                reason_code: Some(reason_code.into()),
                 reason: Some(failure.message().to_string()),
                 result: None,
                 error: Some(crate::ErrorBody {
@@ -2976,10 +3184,8 @@ impl BrokerRuntime {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                (!actions.is_empty()).then(|| ServiceDescriptor {
-                    actions,
-                    ..ServiceDescriptor::clone(descriptor)
-                })
+                (!actions.is_empty())
+                    .then(|| ServiceDescriptor::clone(descriptor).with_actions(actions))
             })
             .collect()
     }
@@ -3055,11 +3261,9 @@ impl BrokerRuntime {
                     .cloned()
                     .collect::<Vec<_>>();
                 (!actions.is_empty()).then(|| {
-                    ServiceDescriptor {
-                        actions,
-                        ..ServiceDescriptor::clone(descriptor)
-                    }
-                    .capabilities()
+                    ServiceDescriptor::clone(descriptor)
+                        .with_actions(actions)
+                        .capabilities()
                 })
             })
             .collect()
@@ -3217,7 +3421,7 @@ impl BrokerRuntime {
     }
 
     /// Resource types this broker understands, for catalogs and clients.
-    pub fn resource_type_metadata(&self) -> Vec<crate::ResourceTypeMetadata> {
+    pub fn resource_type_metadata(&self) -> Vec<agent_access_provider::ResourceTypeMetadata> {
         self.resource_types.metadata()
     }
 
@@ -3866,18 +4070,15 @@ impl BrokerRuntime {
     ) -> Result<(), Box<BrokerResponse<Value>>> {
         let append_mode = prepared.take_gateway_audit_append_mode();
         let result = if upstream_status == 429 {
-            Err(crate::upstream_rate_limited(&prepared.service, None)
-                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-                .with_audit(audit))
+            Err(
+                agent_access_provider::upstream_rate_limited(&prepared.service, None)
+                    .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                    .with_audit(audit),
+            )
         } else {
-            Ok(ProviderResult {
-                result: json!({"gateway": "completed"}),
-                stream: None,
-                audit: Some(audit),
-                upstream_status: Some(upstream_status),
-                upstream_duration_ms: Some(upstream_duration_ms),
-                object_ids: None,
-            })
+            Ok(ProviderResult::new(json!({"gateway": "completed"}))
+                .with_audit(audit)
+                .with_upstream(Some(upstream_status), Some(upstream_duration_ms)))
         };
         let response = self
             .finalize_with_append_mode(prepared.finalize_context, result, append_mode)
@@ -3901,29 +4102,12 @@ impl BrokerRuntime {
                 )],
             })
         })?;
-        let egress_proxy = EgressProxyRuntimeConfig::new(
-            self.egress_proxy_environment.clone(),
-            self.config.network.egress_proxy.clone(),
-        );
-        let proxy_selection = egress_proxy.resolve(
+        let (client, route) = self.network.gateway_client(
             &format!("gateways.{service}.egress_proxy"),
             &upstream_base,
             gateway.egress_proxy.as_ref(),
         )?;
-        let client = apply_reqwest_proxy(
-            self.outbound_tls
-                .apply(reqwest::Client::builder())
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_millis(self.config.limits.request_timeout_ms)),
-            &proxy_selection,
-        )?
-        .build()
-        .map_err(|error| {
-            RuntimeError::Config(ConfigError::Invalid {
-                errors: vec![format!("gateway HTTP client: {error}")],
-            })
-        })?;
-        Ok((client, proxy_selection.audit_value()))
+        Ok((client, route.audit_value()))
     }
 
     pub async fn verify_execution_credential(
@@ -3940,7 +4124,15 @@ impl BrokerRuntime {
                 correlation.clone(),
                 service.to_string(),
                 "credential.verify".to_string(),
-                provider.verify_execution_credential(credential, &correlation),
+                run_provider_hook(
+                    agent_access_provider::host::hook_context(
+                        service,
+                        "credential.verify",
+                        HookPhase::CredentialVerification,
+                        self.service_domain_reasons(service),
+                    ),
+                    provider.verify_execution_credential(credential, &correlation),
+                ),
             )
             .await;
         }
@@ -4076,7 +4268,10 @@ impl BrokerRuntime {
         })?;
 
         let upstream_url = git_discovery_verification_url(gateway, repository)?;
-        if !crate::url_allowed_by_patterns(&upstream_url, &gateway.allowed_upstream_hosts) {
+        if !agent_access_provider::url_allowed_by_patterns(
+            &upstream_url,
+            &gateway.allowed_upstream_hosts,
+        ) {
             return Err(ProviderError::error(
                 ReasonCode::GatewayUpstreamDenied,
                 "gateway upstream URL is not allowed",
@@ -4167,11 +4362,11 @@ impl BrokerRuntime {
                 .with_upstream(Some(upstream_status), Some(duration_ms))
                 .with_audit(audit));
             }
-            return Ok(ProviderCredentialVerification {
+            return Ok(ProviderCredentialVerification::new(
                 upstream_status,
-                upstream_duration_ms: duration_ms,
+                duration_ms,
                 audit,
-            });
+            ));
         }
         let duration_ms = elapsed_millis(started);
         let error = if upstream_status == 429 {
@@ -4213,7 +4408,7 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         match self.begin_invoke(context, request).await {
             Ok(mut prepared) => {
-                let body_parts = std::mem::take(&mut prepared.invocation.body_parts);
+                let body_parts = std::mem::take(&mut prepared.body_parts);
                 self.finish_prepared_invoke_with_stream_requirement(
                     prepared,
                     body_parts,
@@ -4262,6 +4457,7 @@ impl BrokerRuntime {
         let started = Instant::now();
         let policy_snapshot = self.policy_snapshot();
         let policy_generation = policy_snapshot.generation();
+        let domain_reasons = self.service_domain_reasons(&service);
         let Some(provider) = self.providers.get(&service).cloned() else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
@@ -4347,6 +4543,8 @@ impl BrokerRuntime {
         let Some(action_descriptor) = service_descriptor
             .as_ref()
             .and_then(|descriptor| descriptor.action(&action))
+            // An action whose I/O kind this host does not serve is not admitted.
+            .filter(|action| crate::api::supported_action_io(&action.io))
             .cloned()
         else {
             return Err(Box::new(owned::PreparationFailure::new(
@@ -4374,7 +4572,7 @@ impl BrokerRuntime {
             )));
         };
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != crate::ResponseOptions::default()
+        if response_options != agent_access_provider::presentation::ResponseOptions::default()
             && let Err(error) = agent_access_provider::presentation::validate_response_options(
                 action_descriptor.presentation.as_ref(),
                 response_options,
@@ -4441,7 +4639,7 @@ impl BrokerRuntime {
         };
 
         let mut audit_search_authorization = None;
-        let (scopes, policy, provider_preflight, search_authorization) =
+        let (scopes, policy, provider_state, search_authorization) =
             if action_descriptor.search_contained {
                 let mut search_authorization = match self.plan_search_authorization(
                     &policy_snapshot,
@@ -4503,7 +4701,7 @@ impl BrokerRuntime {
                         Err(error),
                     )));
                 }
-                let scopes = search_authorization.resource_scopes();
+                let scopes = search_authorization.resource_scope_summary();
                 let matched_grant = search_authorization
                     .matched_grants
                     .first()
@@ -4517,14 +4715,30 @@ impl BrokerRuntime {
                 audit_search_authorization = Some(search_authorization);
                 (scopes, policy, None, Some(provider_search_authorization))
             } else {
+                let scope_identity =
+                    InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
                 let scope_resolution = match with_provider_context(
                     correlation.clone(),
                     service.clone(),
                     action.clone(),
-                    provider.resolve_scopes_with_lookup_context(
-                        &action,
-                        &request.inputs,
-                        pre_scope_lookup.as_ref(),
+                    run_provider_hook(
+                        agent_access_provider::host::hook_context(
+                            &service,
+                            &action,
+                            HookPhase::ScopeResolution,
+                            domain_reasons,
+                        ),
+                        provider.resolve_scopes(agent_access_provider::host::scope_request(
+                            agent_access_provider::host::ScopeRequestParts {
+                                service: &service,
+                                action: &action,
+                                inputs: &request.inputs,
+                                execution_context: execution_context.as_str(),
+                                identity: &scope_identity,
+                                correlation: &correlation,
+                                lookup_credential: pre_scope_lookup.as_ref(),
+                            },
+                        )),
                     ),
                 )
                 .await
@@ -4557,8 +4771,7 @@ impl BrokerRuntime {
                         )));
                     }
                 };
-                let scopes = scope_resolution.resource_scopes;
-                let provider_preflight = scope_resolution.provider_preflight;
+                let (scopes, provider_state) = scope_resolution.into_parts();
 
                 if let Err(error) = self.enforce_agent_invoke_token_resource_caveats_with(
                     &policy_snapshot,
@@ -4633,7 +4846,7 @@ impl BrokerRuntime {
                         )));
                     }
                 };
-                (scopes, policy, provider_preflight, None)
+                (scopes, policy, provider_state, None)
             };
 
         let credentials = match self
@@ -4675,17 +4888,23 @@ impl BrokerRuntime {
             }
         };
 
-        let lookup_credential = match self
+        let (lookup_credential, credential_mode, authority) = match self
             .resolve_lookup_credential_if_required(
                 action_descriptor.lookup,
                 &service,
                 &policy,
-                credentials.execution.as_ref(),
+                credentials.static_credential(),
                 &pre_scope_lookup,
             )
             .await
-        {
-            Ok(credential) => credential,
+            .and_then(|lookup| {
+                Ok((
+                    lookup,
+                    admitted_credential_mode(&policy.credential_mode)?,
+                    admitted_authority(&action_descriptor, &scopes, search_authorization)?,
+                ))
+            }) {
+            Ok(selected) => selected,
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
@@ -4735,30 +4954,30 @@ impl BrokerRuntime {
         } else {
             None
         };
-        let invocation = ProviderInvocation {
-            execution_context: execution_context.as_str().to_owned(),
-            resource_attributes: Default::default(),
-            identity: InvocationIdentity {
-                principal: identity.principal.clone(),
-                authenticated: identity.authenticated,
+        let admitted = agent_access_provider::host::admitted_request(
+            agent_access_provider::host::AdmittedRequestParts {
+                service: service.clone(),
+                action: action.clone(),
+                execution_context: execution_context.as_str().to_owned(),
+                identity: InvocationIdentity::new(
+                    identity.principal.clone(),
+                    identity.authenticated,
+                ),
+                correlation: correlation.clone(),
+                credential_mode,
+                authority,
+                inputs: request.inputs,
+                execution: credentials,
+                lookup_credential,
             },
-            service: service.clone(),
-            action: action.clone(),
-            correlation: correlation.clone(),
-            inputs: request.inputs,
-            body_parts: request.body_parts,
-            resource_scopes: scopes.clone(),
-            credential_mode: policy.credential_mode.clone(),
-            credential: credentials.execution,
-            lookup_credential,
-            provider_preflight,
-            search_authorization,
-            delegated_credential: credentials.delegated,
-        };
+        );
         Ok(PreparedInvocation {
             resource_binding,
             provider,
-            invocation,
+            domain_reasons,
+            request: admitted,
+            body_parts: request.body_parts,
+            state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
@@ -4785,20 +5004,28 @@ impl BrokerRuntime {
         &self,
         mut prepared: PreparedInvocation,
     ) -> Result<PreparedInvocation, Box<BrokerResponse<Value>>> {
-        let correlation = prepared.invocation.correlation.clone();
-        let service = prepared.invocation.service.clone();
-        let action = prepared.invocation.action.clone();
+        let context = prepared.request.context().clone();
         let result = with_provider_context(
-            correlation,
-            service,
-            action,
-            prepared
-                .provider
-                .authorize_body_parts(&mut prepared.invocation),
+            context.correlation().clone(),
+            context.service().to_owned(),
+            context.action().to_owned(),
+            run_provider_hook(
+                agent_access_provider::host::hook_context(
+                    context.service(),
+                    context.action(),
+                    HookPhase::BodyAdmission,
+                    prepared.domain_reasons,
+                ),
+                prepared
+                    .provider
+                    .authorize_body_parts(&prepared.request, prepared.state.as_ref()),
+            ),
         )
         .await;
         match result {
-            Ok(body_part_specs) => {
+            Ok(admission) => {
+                let (body_part_specs, disposition) = admission.into_parts();
+                prepared.state = disposition.apply(prepared.state.take());
                 prepared.body_part_specs = body_part_specs;
                 Ok(prepared)
             }
@@ -4839,20 +5066,30 @@ impl BrokerRuntime {
 
     async fn execute_prepared_invoke(
         &self,
-        mut prepared: PreparedInvocation,
+        prepared: PreparedInvocation,
         body_parts: Vec<BrokerBodyPart>,
         require_stream: bool,
     ) -> (FinalizeContext, Result<ProviderResult, ProviderError>) {
-        prepared.invocation.body_parts = body_parts;
-        let correlation = prepared.invocation.correlation.clone();
-        let service = prepared.invocation.service.clone();
-        let action = prepared.invocation.action.clone();
-        let response_options = prepared.response_options;
-        let provider = prepared.provider;
-        let mut invocation = prepared.invocation;
-        let resource_binding = prepared.resource_binding;
-        let execution_context = prepared.finalize_context.execution_context.clone();
+        let PreparedInvocation {
+            resource_binding,
+            provider,
+            domain_reasons,
+            request,
+            body_parts: _,
+            state,
+            response_options,
+            body_part_specs: _,
+            finalize_context,
+        } = prepared;
+        let correlation = request.correlation().clone();
+        let service = request.service().to_owned();
+        let action = request.action().to_owned();
+        let execution_context = finalize_context.execution_context.clone();
+        // Staging happens before the final invocation exists: the body is
+        // already consumed, then the revision fences run and only the admitted
+        // resource's attributes are decrypted.
         let result = with_provider_context(correlation, service.clone(), action.clone(), async {
+            let mut resource_attributes = ResourceAttributes::default();
             if self
                 .action_descriptor(&service, &action)
                 .is_some_and(|descriptor| descriptor.requires_resource_attributes)
@@ -4884,11 +5121,11 @@ impl BrokerRuntime {
                         "resource configuration is not allowed by the current backend",
                     )
                 })?;
-                invocation.resource_attributes = values;
+                resource_attributes = values;
             }
             // Access lent at preparation may have been revoked, superseded, or
             // expired while the request body was admitted.
-            if let Some(delegated) = &invocation.delegated_credential {
+            if let Some(delegated) = request.execution().delegated() {
                 delegated.revalidate().await?;
             }
             if !self.imported_action_available(&service, &action) {
@@ -4897,7 +5134,23 @@ impl BrokerRuntime {
                     "imported service changed or is unavailable; repeat discovery",
                 ));
             }
-            provider.invoke(invocation).await
+            let hook = agent_access_provider::host::hook_context(
+                &service,
+                &action,
+                HookPhase::Invocation,
+                domain_reasons,
+            );
+            let result = run_provider_hook(
+                hook.clone(),
+                provider.invoke(agent_access_provider::host::invocation(
+                    request,
+                    body_parts,
+                    resource_attributes,
+                    state,
+                )),
+            )
+            .await?;
+            Ok(checked_result_stream(result, hook))
         })
         .await;
         let result = result.and_then(|result| {
@@ -4925,7 +5178,7 @@ impl BrokerRuntime {
                 result,
             )
         };
-        (prepared.finalize_context, result)
+        (finalize_context, result)
     }
 
     fn action_presentation(&self, service: &str, action: &str) -> Option<ActionPresentation> {
@@ -4933,6 +5186,19 @@ impl BrokerRuntime {
             .get(service)
             .and_then(|descriptor| descriptor.action(action))
             .and_then(|action| action.presentation)
+    }
+
+    /// The domain reasons `service`'s native backend registered; none for an
+    /// imported service.
+    fn service_domain_reasons(
+        &self,
+        service: &str,
+    ) -> &'static [&'static ProviderReasonDefinition] {
+        self.config
+            .providers
+            .registry()
+            .get(service)
+            .map_or(&[], BackendRegistration::domain_reasons)
     }
 
     fn presentation_body_limit(&self, service: &str) -> u64 {
@@ -5081,7 +5347,7 @@ impl BrokerRuntime {
 
     fn action_resource_type(&self, service: &str, action: &str) -> Option<ResourceType> {
         self.action_resource_scope(service, action)
-            .map(|scope| scope.resource_type.id.clone())
+            .map(|scope| scope.resource_type.id().clone())
     }
 
     fn policy_candidates_for_action(
@@ -5113,7 +5379,7 @@ impl BrokerRuntime {
                     |resource_scope| {
                         policy_snapshot.resources.resolve(
                             &grant.resources,
-                            &resource_scope.resource_type.id,
+                            resource_scope.resource_type.id(),
                             execution_context.as_str(),
                         )
                     },
@@ -5175,16 +5441,16 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         correlation: &CorrelationContext,
         pre_scope_lookup: &PreScopeLookup,
-    ) -> Result<SelectedCredentials, ProviderError> {
+    ) -> Result<ExecutionAccess, ProviderError> {
         if matches!(pre_scope_lookup, PreScopeLookup::PerUser(_)) && credential_mode == "service" {
             return Err(policy_planning_drift_error());
         }
         if !descriptor.is_none_or(|descriptor| descriptor.execution_required) {
-            return Ok(SelectedCredentials::default());
+            return Ok(ExecutionAccess::None);
         }
         if credential_mode == "per_user" {
             if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
-                return Ok(SelectedCredentials::execution(credential.clone()));
+                return Ok(ExecutionAccess::Static(credential.clone()));
             }
             if let Some(credential) = self
                 .effective_credentials
@@ -5206,15 +5472,12 @@ impl BrokerRuntime {
                     ),
                 )
                 .await
-                .map(|delegated| SelectedCredentials {
-                    execution: None,
-                    delegated: Some(delegated),
-                });
+                .map(ExecutionAccess::Delegated);
             }
         }
         self.resolve_execution_credential(service, credential_mode, identity)
             .await
-            .map(SelectedCredentials::execution)
+            .map(ExecutionAccess::Static)
     }
 
     async fn acquire_delegated_credential(
@@ -5856,8 +6119,9 @@ impl BrokerRuntime {
                 result.stream,
             ),
             Err(error) => {
-                let status = error.reason_code.http_status();
-                let decision = error.decision;
+                let reason_code = error.reason_code();
+                let status = reason_code.http_status();
+                let decision = error.decision();
                 let error_body = (decision != Decision::Allow).then(|| crate::ErrorBody {
                     message: error.message.clone(),
                 });
@@ -5879,7 +6143,7 @@ impl BrokerRuntime {
                         service: service.clone(),
                         action: action.clone(),
                         resource_scopes: envelope_resource_scopes,
-                        reason_code: Some(error.reason_code),
+                        reason_code: Some(reason_code.into()),
                         reason: Some(error.message.clone()),
                         result: error.result.map(|value| *value),
                         error: error_body,
@@ -5929,7 +6193,7 @@ impl BrokerRuntime {
             matched_grant,
             credential_mode: credential_mode.map(Some),
             decision: envelope.decision.clone(),
-            reason_code: envelope.reason_code,
+            reason_code: envelope.reason_code.clone(),
             upstream_status,
             upstream_duration_ms,
             object_ids,
@@ -6097,7 +6361,7 @@ fn normalize_git_verification_repository(
                 "git credential verification requires repository",
             )
         })?;
-    if !crate::is_repository_selector_path(repository) {
+    if !agent_access_provider::is_repository_selector_path(repository) {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
             "git credential verification repository is invalid",
@@ -6122,7 +6386,7 @@ fn normalize_git_verification_repository(
         *last = stripped.to_string();
     }
     let repository = segments.join("/");
-    if !crate::is_repository_selector_path(&repository) {
+    if !agent_access_provider::is_repository_selector_path(&repository) {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
             "git credential verification repository is invalid",
@@ -6135,35 +6399,12 @@ fn apply_gateway_execution_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.kind.as_str() {
-        "bearer_token" => credential
-            .token
-            .as_ref()
-            .map(|token| builder.bearer_auth(token))
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway bearer credential is missing token material",
-                )
-            }),
-        "basic_api_token" => {
-            let username = credential.username.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing username material",
-                )
-            })?;
-            let token = credential.token.as_ref().ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialInvalid,
-                    "gateway basic credential is missing token material",
-                )
-            })?;
-            Ok(builder.basic_auth(username, Some(token)))
-        }
+    match credential.view() {
+        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
+        CredentialView::Basic { username, token } => Ok(builder.basic_auth(username, Some(token))),
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,
-            "gateway credential kind is not supported",
+            "the Git gateway does not support this credential kind",
         )),
     }
 }
@@ -6380,6 +6621,38 @@ fn register_service_provider(
 /// registered providers are paired with, plus configured gateways. Each
 /// descriptor is validated once here and then shared by admission,
 /// discovery, and catalog projection.
+/// The other owner of an imported service identity, if any, named for a
+/// diagnostic: the reserved control-plane namespace, a selected native kind
+/// (configured or not), a gateway, another configured service or a
+/// configured credential. Every retained import is checked, whatever its
+/// status or adapter availability.
+pub(crate) fn imported_service_collision(
+    config: &BrokerConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    name: &str,
+) -> Option<String> {
+    if name == "broker" {
+        return Some("the reserved broker control-plane namespace".into());
+    }
+    if config.providers.registry().get(name).is_some() {
+        return Some(format!("the selected native provider kind {name}"));
+    }
+    if config.gateways.contains_key(name) {
+        return Some(format!("gateways.{name}"));
+    }
+    if services.contains_key(name) {
+        return Some(format!("the configured service {name}"));
+    }
+    [
+        ("credentials.service", &config.credentials.service),
+        ("credentials.per_user", &config.credentials.per_user),
+        ("credentials.lookup", &config.credentials.lookup),
+    ]
+    .into_iter()
+    .find(|(_, credentials)| credentials.contains_key(name))
+    .map(|(mode, _)| format!("{mode}.{name}"))
+}
+
 fn build_service_descriptors(
     config: &BrokerConfig,
     providers: &BTreeMap<String, ServiceProvider>,
@@ -6451,36 +6724,35 @@ pub(crate) fn gateway_service_descriptor(
         .credential_modes
         .iter()
         .any(|mode| mode == "per_user");
-    Some(ServiceDescriptor {
-        service: service.to_string(),
-        display_name: gateway.display_name.clone(),
-        surface: ServiceSurface::Gateway {
-            kind: gateway.kind.clone(),
-            broker_hosts: gateway.broker_hosts.clone(),
-        },
-        resource_scopes: BTreeMap::from([(
-            "repository".to_string(),
-            ResourceScopeCapabilities {
-                resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
-                selectors: vec![
-                    "exact".to_string(),
-                    "namespace".to_string(),
-                    "all".to_string(),
-                ],
-            },
-        )]),
-        actions,
-        // Verifying a Git credential reads one repository's refs.
-        credentials: if per_user {
-            CredentialDescriptor::default()
-                .verification_input("repository")
-                .profile("git-basic-api-token", "basic_api_token")
-                .profile("git-bearer-token", "bearer_token")
-        } else {
-            CredentialDescriptor::default().verification_input("repository")
-        },
-        presentation_body_limit: None,
-    })
+    // Verifying a Git credential reads one repository's refs.
+    let credentials = if per_user {
+        CredentialDescriptor::default()
+            .verification_input("repository")
+            .profile("git-basic-api-token", "basic_api_token")
+            .profile("git-bearer-token", "bearer_token")
+    } else {
+        CredentialDescriptor::default().verification_input("repository")
+    };
+    Some(
+        ServiceDescriptor::new(service, gateway.display_name.clone())
+            .with_surface(ServiceSurface::Gateway {
+                kind: gateway.kind.clone(),
+                broker_hosts: gateway.broker_hosts.clone(),
+            })
+            .with_resource_scopes(BTreeMap::from([(
+                "repository".to_string(),
+                ResourceScopeCapabilities::new(
+                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
+                    vec![
+                        "exact".to_string(),
+                        "namespace".to_string(),
+                        "all".to_string(),
+                    ],
+                ),
+            )]))
+            .with_actions(actions)
+            .with_credentials(credentials),
+    )
 }
 
 fn toml_identity_groups(config: &BrokerConfig, principal: &str) -> (Vec<String>, Vec<String>) {
@@ -6996,7 +7268,9 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, ManagedStoreError> + Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    // Keep the store work in the caller's span for log correlation.
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(operation))
         .await
         .map_err(|error| {
             ManagedStoreError::Unavailable(format!("managed store task failed: {error}"))
@@ -7432,6 +7706,48 @@ fn top_policy_band(mut candidates: Vec<PolicyCandidate>) -> Vec<PolicyCandidate>
         .collect()
 }
 
+/// The typed credential mode of an admitted policy decision. Policy only
+/// selects validated, provisioned modes, so another spelling fails closed.
+fn admitted_credential_mode(mode: &str) -> Result<CredentialMode, ProviderError> {
+    mode.parse().map_err(|_| {
+        ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "selected credential mode is not provisioned",
+        )
+    })
+}
+
+/// The exact authority an admitted action receives, from its validated
+/// contract: a search boundary for search-contained actions, the resolved
+/// resources for ordinary scoped actions, and nothing for action-only ones.
+/// Policy already required those shapes, so any mismatch fails closed.
+fn admitted_authority(
+    action: &ActionDescriptor,
+    scopes: &ResourceScopes,
+    search: Option<SearchAuthorization>,
+) -> Result<InvocationAuthority, ProviderError> {
+    let mismatch = || {
+        ProviderError::error(
+            ReasonCode::OperationFailed,
+            "admitted authority does not match the action contract",
+        )
+    };
+    match (
+        action.search_contained,
+        search,
+        action.resource_scope.as_deref(),
+    ) {
+        (true, Some(search), _) => Ok(InvocationAuthority::Search(search)),
+        (false, None, Some(scope))
+            if scopes.get(scope).is_some_and(|values| !values.is_empty()) =>
+        {
+            Ok(InvocationAuthority::Resources(scopes.clone()))
+        }
+        (false, None, None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+        _ => Err(mismatch()),
+    }
+}
+
 fn single_policy_credential_mode(candidates: &[PolicyCandidate]) -> Result<String, ProviderError> {
     let modes = candidates
         .iter()
@@ -7570,31 +7886,17 @@ fn load_materialized_credential(
     token_ref: Option<&str>,
 ) -> Result<ExecutionCredential, ProviderError> {
     match kind {
-        "basic_api_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "username_ref",
-                username_ref,
-            )?),
-            token: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "token_ref",
-                token_ref,
-            )?),
-        }),
-        "bearer_token" => Ok(ExecutionCredential {
-            kind: kind.to_string(),
-            username: None,
-            token: Some(load_credential_secret(
-                service,
-                credential_mode,
-                "token_ref",
-                token_ref,
-            )?),
-        }),
+        "basic_api_token" => {
+            let username =
+                load_credential_secret(service, credential_mode, "username_ref", username_ref)?;
+            let token = load_credential_secret(service, credential_mode, "token_ref", token_ref)?;
+            Ok(agent_access_provider::host::basic_credential(
+                username, token,
+            ))
+        }
+        "bearer_token" => Ok(agent_access_provider::host::bearer_credential(
+            load_credential_secret(service, credential_mode, "token_ref", token_ref)?,
+        )),
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,
             "credential store record has unsupported credential type",
@@ -7645,8 +7947,7 @@ fn load_secret_store_credential(
                 "per_user credential requires authenticated identity",
             )
         })?;
-    let store = read_local_file_secret_store(credential)
-        .map_err(|error| ProviderError::deny(error.reason_code, error.message))?;
+    let store = read_local_file_secret_store(credential)?;
     let record = store
         .credentials
         .iter()
@@ -7665,8 +7966,7 @@ fn load_secret_store_credential(
                 "per_user credential is not provisioned for principal",
             )
         })?;
-    validate_secret_store_record(record)
-        .map_err(|error| ProviderError::deny(error.reason_code, error.message))?;
+    validate_secret_store_record(record)?;
     load_materialized_credential(
         service,
         credential_mode,
@@ -7798,7 +8098,22 @@ fn check_credential_ready(
 
 fn provider_error_from_managed_store(error: ManagedStoreError) -> ProviderError {
     let reason_code = error.reason_code();
-    let message = match &error {
+    let message = managed_store_failure_message(&error);
+    match reason_code {
+        ReasonCode::ManagedStoreUnavailable
+        | ReasonCode::ManagedStoreMigrationRequired
+        | ReasonCode::EncryptionKeyMissing
+        | ReasonCode::EncryptionKeyInvalid
+        | ReasonCode::CredentialDecryptFailed
+        | ReasonCode::CredentialEncryptFailed => ProviderError::error(reason_code, message),
+        _ => ProviderError::deny(reason_code, message),
+    }
+}
+
+/// The public message for a managed-store failure the host reports, which
+/// never carries the store's internal detail.
+fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
+    match error {
         ManagedStoreError::CredentialNotFound => "managed per_user credential is not provisioned",
         ManagedStoreError::CredentialExpired => "managed per_user credential is expired",
         ManagedStoreError::CredentialDecryptFailed => "managed per_user credential cannot decrypt",
@@ -7868,15 +8183,6 @@ fn provider_error_from_managed_store(error: ManagedStoreError) -> ProviderError 
         | ManagedStoreError::LocalLoginLocked
         | ManagedStoreError::LocalPasswordBusy
         | ManagedStoreError::RightMissing => "managed credential authorization failed",
-    };
-    match reason_code {
-        ReasonCode::ManagedStoreUnavailable
-        | ReasonCode::ManagedStoreMigrationRequired
-        | ReasonCode::EncryptionKeyMissing
-        | ReasonCode::EncryptionKeyInvalid
-        | ReasonCode::CredentialDecryptFailed
-        | ReasonCode::CredentialEncryptFailed => ProviderError::error(reason_code, message),
-        _ => ProviderError::deny(reason_code, message),
     }
 }
 
@@ -8032,7 +8338,7 @@ pub struct AuditRecord {
     pub credential_mode: Option<Option<String>>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<ReasonCode>,
+    pub reason_code: Option<ReasonCodeId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8069,7 +8375,7 @@ fn audit_unavailable_response(
             service,
             action,
             resource_scopes,
-            reason_code: Some(reason_code),
+            reason_code: Some(reason_code.into()),
             reason: Some("audit sink unavailable".to_string()),
             result: None,
             error: Some(crate::ErrorBody {
@@ -9161,7 +9467,7 @@ impl TerminalAuditState {
         &self,
         phase: &str,
         decision: Decision,
-        reason_code: Option<ReasonCode>,
+        reason_code: Option<ReasonCodeId>,
         message: Option<String>,
     ) -> bool {
         let mut inner = self.inner.lock().unwrap();
@@ -9599,10 +9905,10 @@ pub fn split_service_action(value: &str) -> Result<(String, String), String> {
     if service.is_empty() || action.is_empty() {
         return Err("service action must include non-empty service and action".to_string());
     }
-    if !crate::is_service_name(service) {
+    if !agent_access_provider::is_service_name(service) {
         return Err("service action contains an invalid service name".to_string());
     }
-    if !crate::is_action_name(action) {
+    if !agent_access_provider::is_action_name(action) {
         return Err("service action contains an invalid action name".to_string());
     }
     Ok((service.to_string(), action.to_string()))

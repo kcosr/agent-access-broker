@@ -705,7 +705,7 @@ impl PreDispatchFailure {
     }
     pub(super) fn apply(self, mut response: BrokerResponse<Value>) -> BrokerResponse<Value> {
         // Required admission audit failure supersedes the initial denial.
-        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             Self::Admission
         } else {
             self
@@ -760,8 +760,12 @@ impl BrokerRuntime {
         error: ProviderError,
     ) -> BrokerResponse<Value> {
         let reserved = matches!(
-            error.reason_code,
-            ReasonCode::RateLimited | ReasonCode::ConcurrencyLimited | ReasonCode::AuditUnavailable
+            error.reason_code().standard(),
+            Some(
+                ReasonCode::RateLimited
+                    | ReasonCode::ConcurrencyLimited
+                    | ReasonCode::AuditUnavailable
+            )
         );
         let response = self.operation_error_response(context, error).await;
         if reserved {
@@ -778,8 +782,12 @@ impl BrokerRuntime {
         error: ProviderError,
     ) -> BrokerResponse<Value> {
         let reserved = matches!(
-            error.reason_code,
-            ReasonCode::RateLimited | ReasonCode::ConcurrencyLimited | ReasonCode::AuditUnavailable
+            error.reason_code().standard(),
+            Some(
+                ReasonCode::RateLimited
+                    | ReasonCode::ConcurrencyLimited
+                    | ReasonCode::AuditUnavailable
+            )
         );
         let response = self.governed_operation_error_response(context, error).await;
         if reserved {
@@ -796,8 +804,8 @@ impl BrokerRuntime {
         error: ProviderError,
     ) -> BrokerResponse<Value> {
         let reserved = matches!(
-            error.reason_code,
-            ReasonCode::ExecutionContextDenied | ReasonCode::BrokerTokenClassDenied
+            error.reason_code().standard(),
+            Some(ReasonCode::ExecutionContextDenied | ReasonCode::BrokerTokenClassDenied)
         );
         let response = self.governed_operation_error_response(context, error).await;
         if reserved {
@@ -815,9 +823,10 @@ impl BrokerRuntime {
         let stage = result
             .as_ref()
             .err()
-            .and_then(|error| PreDispatchFailure::for_reason(error.reason_code));
+            .and_then(|error| error.reason_code().standard())
+            .and_then(PreDispatchFailure::for_reason);
         let response = self.finalize(context, result).await;
-        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        let stage = if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             Some(PreDispatchFailure::Admission)
         } else {
             stage

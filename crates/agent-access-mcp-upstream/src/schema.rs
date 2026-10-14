@@ -7,11 +7,11 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-pub(crate) const MAX_TOOL_BYTES: usize = agent_access_provider::IMPORT_MAX_SCHEMA_BYTES;
+pub(crate) const MAX_TOOL_BYTES: usize = agent_access_core::imports::IMPORT_MAX_SCHEMA_BYTES;
 pub(crate) const MAX_DESCRIPTION_BYTES: usize = 16 * 1024;
 
 pub(crate) struct CompiledSchema {
-    validator: agent_access_provider::BoundedImportSchema,
+    validator: agent_access_core::imports::BoundedImportSchema,
     headers: Vec<MirroredHeader>,
 }
 
@@ -37,7 +37,7 @@ impl CompiledSchema {
         if input {
             inspect_headers(schema, &mut headers)?;
         }
-        let validator = agent_access_provider::BoundedImportSchema::compile(schema)?;
+        let validator = agent_access_core::imports::BoundedImportSchema::compile(schema)?;
         Ok(Self { validator, headers })
     }
 
@@ -98,7 +98,7 @@ fn mirrored_integer(number: &serde_json::Number) -> Result<i64, String> {
 fn inspect_headers(schema: &Value, output: &mut Vec<MirroredHeader>) -> Result<(), String> {
     let eligible = schema.get("properties").and_then(Value::as_object);
     let mut seen = BTreeSet::new();
-    agent_access_provider::visit_import_schema_nodes(schema, |node| {
+    agent_access_core::imports::visit_import_schema_nodes(schema, |node| {
         let Some(raw) = node.get("x-mcp-header") else {
             return Ok(());
         };

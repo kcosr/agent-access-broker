@@ -342,6 +342,21 @@ agent-access-broker --config /etc/agent-access-broker/config.toml serve \
   --listen 127.0.0.1:8787
 ```
 
+Without `--config`, broker commands read the file named by
+`AGENT_ACCESS_BROKER_CONFIG`, or else `/etc/agent-access/broker.toml`. Commands,
+including `serve` and the default command, exit:
+
+- `0` on success;
+- `3` when the configuration cannot be read, parsed, or validated, or the
+  compiled module composition is invalid;
+- `2` for command-line syntax errors, or for `audit verify` without a SQLite
+  audit store;
+- `1` for any other failure, such as a held state lock, a listener that cannot
+  bind, an out-of-range timeout or body-cap option, or a runtime error.
+
+`serve` reports its failure on stderr as an `Error: …` line after the JSON
+startup events.
+
 The public listener exposes health, discovery, authenticated runtime specs,
 invoke, self-service management, browser auth, and admin management routes under
 `/v1`; when `[portal]` is enabled it also serves the same-origin portal under
@@ -358,17 +373,45 @@ AGENT_ACCESS_BUILD_PROVENANCE=release
 AGENT_ACCESS_REQUIRE_BUILD_PROVENANCE=1
 ```
 
-The build fails when release provenance is missing or inconsistent. Without
-injected provenance, development builds are valid but report
-`buildCommit: null` and `buildProvenance: "unavailable"`.
+The build fails when release provenance is missing or inconsistent. Set
+`AGENT_ACCESS_BUILD_PROVENANCE=release` only for a build from a clean checkout of
+that exact commit, as the verifier below does: the `agent-access-broker`
+executable then reports the commit as `evidence`-backed for itself, the host,
+the SDK and every module it registers, which all come from this repository.
+Without injected provenance, development builds are valid but report every
+source revision as `unavailable` (`revision: null`).
 
 An authenticated caller can verify the running binary with `agent-access broker
-status` or `GET /v1/broker/status`. The response contains only
-`brokerVersion`, `buildCommit`, `buildProvenance`, `catalogVersion`, and
-`sendSchemaVersion`; it requires a normal identity and request ID but no admin
-right, provider grant, or execution context. The `broker_starting` JSON event
-also contains `brokerVersion` and `buildProvenance`, and includes `buildCommit`
-only for a release-stamped build.
+status` or `GET /v1/broker/status`. It requires a normal identity and request ID
+but no admin right, provider grant, or execution context. The response names
+the assembly (name, version, qualification label and source revision), the
+linked host and SDK packages, and every compiled module package with its roles,
+each with a source revision and its provenance, plus an inventory fingerprint
+and the contract versions; see [the HTTP API](http-api.md) for the exact shape.
+The module list is the compiled inventory, not the enabled configuration. The
+upstream executable declares no qualification label, so it reports
+`unqualified`; qualification evidence is the separate qualification receipt.
+
+The `broker_starting` JSON event identifies the same executable with
+`assemblyName`, `assemblyVersion`, `assemblyProvenance` (`evidence`,
+`declared` or `unavailable`), `qualification`, and `inventoryFingerprint`, and
+includes `assemblyRevision` only when a revision was supplied. The fingerprint
+is the status's `inventoryFingerprint`: it covers the host, SDK and module
+inventory with their revisions and provenance, and it does not change on reload.
+The event also reports `configPath`, `publicListen`, `gatewayListen`,
+`reloadTimeoutMs`, `shutdownTimeoutMs`, and `bodyHardCapBytes` when that cap is
+set.
+
+A distribution that assembles its own executable from the Broker host supplies
+its own identity: its executable name and version, its qualification label,
+its source revision and the revisions of the host and SDK it links, and a
+provenance map keyed by the crate name and version of each registered module
+package, each marked as declared or backed by its build evidence. The executable
+exits `3` at startup, like an invalid composition, when that identity is
+malformed or its map names an unregistered package, lists a package twice or
+gives one conflicting revisions. Renaming the executable never changes where
+the configuration, state, keys or locks are found, and its state locks still
+exclude a differently named executable on the same state.
 
 A source release follows the separate [prepare, qualify, and publish
 workflow](release-readiness.md). Full qualification runs the native provenance
@@ -393,10 +436,25 @@ Unset rejected overrides before running this production check.
 The build uses locked dependencies, the three provenance variables above, and
 an explicit native host target under `target/<host-triple>/release`. The verifier
 prints compiler/Cargo versions and paths plus paths and SHA-256 digests of
-discovered Cargo configuration files. It rechecks the clean, unchanged `HEAD`,
-checks CLI startup with `--help`, and starts the Broker on loopback with a
-temporary static identity. Authenticated status must match the expected version,
-commit, and `release` provenance. Temporary processes and files are cleaned up.
+discovered Cargo configuration files. Before building, it runs
+`cargo tree --locked --target <host-triple> -p agent-access-broker -p agent-access
+-e normal,build --format '{p}\t{f}'` with the validated Cargo. Without dev edges
+Cargo resolves no dev units, and `{f}` lists each package's resolved features,
+including those a release package's default features enable. The check fails
+when any package has the `test-support` feature or the graph links a workspace
+crate whose `[package.metadata.agent-access] role` is `reference`. The verifier
+also keeps each selected package's identity from that output, including its
+source origin, so an optional dependency that only development features
+activate is never counted. After
+the build it rechecks the clean, unchanged `HEAD`, checks CLI startup with
+`--help`, and starts the Broker on loopback with a temporary static identity.
+Authenticated status must name the `agent-access-broker` assembly at the expected
+version and report the expected commit as `evidence` for the assembly, host, SDK
+and every module. Each stamped host, SDK and module package must resolve to
+exactly one origin, a path package whose manifest Git tracks in the qualified
+checkout; a same-version package from another source, or two origins sharing a
+crate name and version, fails the check. Temporary processes and files are
+cleaned up.
 
 These checks do not establish a hermetic build. Cargo configuration includes,
 profile/linker settings, native tools, build scripts, and system libraries are
@@ -479,7 +537,7 @@ audit and upstream state for operations whose completion is uncertain. Delegated
 OAuth and private-resource dispatch checks remain independently enforced.
 
 On `SIGTERM` or `SIGINT`, the broker stops accepting new public and gateway connections, lets in-flight work drain within `--shutdown-timeout-ms`,
-then forces any remaining listener tasks closed. If the timeout is reached while
+then cuts off the connections still open. If the timeout is reached while
 streaming downloads are still open, those streams are canceled and their
 terminal audit records are queued through the audit writer before final writer
 drain. Unix `SIGUSR2` reloads continue to work before shutdown starts; once
@@ -550,8 +608,11 @@ state locks for:
 The broker uses small sibling lock files for managed-store and audit files
 (`<file>.agent-access.lock`) and `.agent-access-broker.spool.lock` inside the
 upload spool directory. Lock files are owner-only regular files and contain
-non-secret diagnostic metadata such as program name, PID, hostname, node ID,
-config path, target paths, and lock file path. The offline
+non-secret diagnostic metadata such as the holding executable's assembly name
+and version (`program`, `programVersion`), PID, hostname, node ID, config path,
+target paths, and lock file path. Lock file names do not depend on the
+executable, so differently named broker executables cannot own the same state
+at once. The offline
 `agent-access-broker audit verify` command takes the audit lock too, so it
 fails while a broker owns the audit database.
 
@@ -622,19 +683,23 @@ does not install the service subscriber.
 The default service filter is:
 
 ```text
-agent_access_broker=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn
+agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,axum=warn,tower=warn
 ```
 
 Override it with `RUST_LOG` using standard `tracing_subscriber::EnvFilter`
 syntax. An invalid `RUST_LOG` does not prevent startup; the broker falls back to
-the default and emits one `logging_filter_invalid` warning event.
+the default and emits one `logging_filter_invalid` warning event. Process
+lifecycle (`agent_access_broker_host::lifecycle`), HTTP, MCP, management,
+gateway, and reload events use `agent_access_broker_host::…` targets. Target
+directives match by prefix, so an `agent_access_broker` directive also covers
+them; use the full module path to select one host module.
 
 Microsoft OIDC exposes a permanent, opt-in identity diagnostic at the narrow
 `agent_access_broker::handlers::oidc=debug` target. Enable it without enabling
 debug output from dependencies or the rest of the broker:
 
 ```text
-RUST_LOG=agent_access_broker=info,agent_access_core=info,agent_access_provider=info,agent_access_broker::handlers::oidc=debug,axum=warn,tower=warn
+RUST_LOG=agent_access_broker=info,agent_access_broker_host=info,agent_access_core=info,agent_access_provider=info,agent_access_broker::handlers::oidc=debug,axum=warn,tower=warn
 ```
 
 For systemd, set that value in an `Environment="RUST_LOG=..."` service drop-in,
@@ -661,7 +726,7 @@ Durable audit records are unchanged.
 Example event:
 
 ```json
-{"level":"INFO","target":"agent_access_broker","event":"broker_listening","nodeId":"broker-prod-1","listener":"public","address":"127.0.0.1:8787"}
+{"level":"INFO","target":"agent_access_broker_host::lifecycle","event":"broker_listening","nodeId":"broker-prod-1","listener":"public","address":"127.0.0.1:8787"}
 ```
 
 The `http.request` span, the `broker_listening` and `config_reload_completed`
@@ -688,6 +753,16 @@ response envelope or result, set in an HTTP header or request span, or written
 to durable audit records. Keep using the public `reasonCode` and safe result for
 caller behavior; the internal code must not be copied into caller-visible or
 audit records.
+
+A provider outcome its contract does not allow logs a `provider_contract_failed`
+warning with `service`, `action`, `phase` (`scope_resolution`,
+`body_admission`, `invocation`, or `credential_verification`), `emission`
+(`hook_failure`, `late_stream`, or `upstream_trace`) and a `diagnosticCode`
+such as `provider_reason_host_only` or `provider_domain_reason_unregistered`.
+The caller, stream audit record, or trace sees `broker_provider_contract_failed`
+instead of the provider's reason, and the operation's `invoke_completed` event
+carries the same `diagnosticCode` when an invocation hook was rejected. A trace classified
+outside any provider hook logs `provider_hook_context_missing`.
 
 For Jira search result denials, `jira_search_issue_key_invalid`,
 `jira_search_issue_project_mismatch`, and `jira_search_project_unauthorized`

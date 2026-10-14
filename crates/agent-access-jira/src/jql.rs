@@ -148,7 +148,7 @@ pub(crate) struct BuiltJiraSearchQuery {
 pub(crate) fn search_authorization(
     request: &ProviderInvocation,
 ) -> Result<SearchAuthorization, ProviderError> {
-    request.search_authorization.clone().ok_or_else(|| {
+    request.authority().search().cloned().ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::ServiceActionDenied,
             "search authorization is unavailable",
@@ -207,7 +207,7 @@ pub(crate) fn build_jira_search_query(
     query: &JiraSearchQueryInput,
     effective_scope: &EffectiveSearchScope,
     limits: &SearchLimitsConfig,
-    credential_mode: &str,
+    credential_mode: CredentialMode,
 ) -> Result<BuiltJiraSearchQuery, ProviderError> {
     let (ast, kind) = match query {
         JiraSearchQueryInput::Jql { value } => (parse_jql_query(value, credential_mode)?, "jql"),
@@ -394,7 +394,7 @@ pub(crate) struct ParsedJqlExpression {
 
 #[cfg(test)]
 pub(crate) fn parse_jql_expression(jql: &str) -> Result<ParsedJqlExpression, ProviderError> {
-    let ast = parse_jql_query(jql, "service")?;
+    let ast = parse_jql_query(jql, CredentialMode::Service)?;
     Ok(ParsedJqlExpression {
         expression: ast.emit(),
         projects: ast.projects(),
@@ -403,7 +403,7 @@ pub(crate) fn parse_jql_expression(jql: &str) -> Result<ParsedJqlExpression, Pro
 
 pub(crate) fn parse_jql_query(
     jql: &str,
-    credential_mode: &str,
+    credential_mode: CredentialMode,
 ) -> Result<JqlQueryAst, ProviderError> {
     if jql.len() > MAX_JIRA_RAW_QUERY_BYTES {
         return Err(jql_input_invalid("JQL exceeded the byte cap"));
@@ -1157,13 +1157,13 @@ pub(crate) enum JqlBooleanOperator {
     Or,
 }
 
-pub(crate) struct JqlParser<'a> {
+pub(crate) struct JqlParser {
     pub(crate) tokens: Vec<JqlToken>,
     pub(crate) index: usize,
-    pub(crate) credential_mode: &'a str,
+    pub(crate) credential_mode: CredentialMode,
 }
 
-impl JqlParser<'_> {
+impl JqlParser {
     pub(crate) fn parse_query(&mut self) -> Result<JqlQueryAst, String> {
         let filter = if self.tokens.is_empty() || self.peek_keyword("ORDER") {
             None
@@ -1414,7 +1414,7 @@ impl JqlParser<'_> {
                         "JQL currentUser function is unsupported for this field".to_string()
                     );
                 }
-                if self.credential_mode != "per_user" {
+                if self.credential_mode != CredentialMode::PerUser {
                     return Err(
                         "JQL currentUser function requires per_user credentials".to_string()
                     );

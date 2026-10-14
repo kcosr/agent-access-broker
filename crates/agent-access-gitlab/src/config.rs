@@ -145,12 +145,11 @@ pub(crate) fn validate_gitlab_webhook_destinations(patterns: &[String], errors: 
     }
 }
 
-pub static GITLAB_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "gitlab",
-    resource_types: &[],
-    parse: parse_backend_config::<GitlabProviderConfig>,
-    development_only: false,
-};
+pub static GITLAB_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "gitlab",
+    parse_backend_config::<GitlabProviderConfig>,
+);
 
 impl BackendConfig for GitlabProviderConfig {
     fn kind(&self) -> &'static str {
@@ -276,14 +275,7 @@ impl BackendConfig for GitlabProviderConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        Ok(Arc::new(GitlabProvider::new_with_egress_and_signing_key(
-            self.clone(),
-            host.limits.clone(),
-            host.egress,
-            host.stable_signing_key.clone(),
-            host.attribution.clone(),
-            host.outbound_tls,
-        )?))
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        Ok(Arc::new(GitlabProvider::new(self.clone(), host)?))
     }
 }

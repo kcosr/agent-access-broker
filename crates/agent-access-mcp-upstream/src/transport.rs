@@ -11,6 +11,7 @@ use crate::{
     },
     schema::encode_header,
 };
+use agent_access_core::imports::HOST_IMPLEMENTATION;
 use agent_access_provider::{
     DelegatedCredential, InvocationScope, ProviderError, ProviderFinalizationContext, ReasonCode,
     UpstreamCall, UpstreamClient, UpstreamError, UpstreamRetryAfter, complete_upstream_trace,
@@ -325,18 +326,18 @@ impl OperationContext {
         if let Some((credential, resource)) = &self.delegated {
             credential.revalidate().await?;
             let access = credential.access();
-            if access.target != *resource
-                || access.audience != *resource
-                || access.version.is_empty()
-                || !crate::valid_token(&access.token)
+            if access.target() != *resource
+                || access.audience() != *resource
+                || access.version().is_empty()
+                || !crate::valid_token(access.token())
             {
                 return Err(crate::credential_error());
             }
-            let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token))
+            let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token()))
                 .map_err(|_| crate::credential_error())?;
             bearer.set_sensitive(true);
             headers.insert("authorization", bearer);
-            sent_version = Some(access.version);
+            sent_version = Some(access.version().to_string());
         }
         Ok((headers, sent_version))
     }
@@ -423,7 +424,10 @@ impl OperationContext {
             let _ = credential.mark_rejected(&version);
         }
         let outcome = self.read_response(&mut response, method).await;
-        complete_upstream_trace(&mut response, outcome.as_ref().err().map(|e| e.reason_code));
+        complete_upstream_trace(
+            &mut response,
+            outcome.as_ref().err().map(|e| e.reason_code()),
+        );
         outcome
     }
 
@@ -541,7 +545,7 @@ impl OperationContext {
         {
             let reason = (!response.status().is_success()).then(|| {
                 self.status_error(response.status().as_u16(), response.headers())
-                    .reason_code
+                    .reason_code()
             });
             complete_upstream_trace(&mut response, reason);
         }
@@ -731,7 +735,7 @@ async fn send_message(
         if modern {
             params.insert("_meta".into(), json!({
                 "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientInfo": {"name":"agent-access-broker", "version": env!("CARGO_PKG_VERSION")},
+                "io.modelcontextprotocol/clientInfo": {"name": HOST_IMPLEMENTATION.name, "version": HOST_IMPLEMENTATION.version},
                 "io.modelcontextprotocol/clientCapabilities": {}
             }));
         } else {
@@ -1004,25 +1008,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn operation(endpoint: &str, timeout: Duration) -> Operation {
-        use agent_access_provider::{
-            BuildContext, EgressProxyEnvironment, EgressProxyRuntimeConfig,
-            ImportedServiceDefinition, ProviderLimits, test_support,
-        };
+        use agent_access_core::imports::ImportedServiceDefinition;
+        use agent_access_provider::test_support;
         let definition: ImportedServiceDefinition = serde_json::from_value(json!({"service":"race","displayName":"Race","adapterKind":"mcp_http","endpoint":endpoint,"executionBindings":[{"ownerMode":"service","mechanism":"static_token","delivery":{"kind":"bearer"},"status":"configured"}],"discovery":{"kind":"execution"}})).unwrap();
-        let limits = ProviderLimits::default();
-        let egress = EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None);
-        let tls = test_support::test_outbound_tls();
-        let wire = crate::make_wire(
-            &definition,
-            &BuildContext {
-                limits: &limits,
-                egress: &egress,
-                outbound_tls: &tls,
-                attribution: Default::default(),
-                stable_signing_key: None,
-            },
-        )
-        .unwrap();
+        let wire =
+            crate::make_wire(&definition, &test_support::TestHost::default().context()).unwrap();
         Operation::new(wire, HeaderMap::new(), None, None, timeout)
     }
 
@@ -1075,7 +1065,7 @@ mod tests {
             pause.1.wait();
             let result = send.await.unwrap();
             assert_eq!(
-                result.err().unwrap().reason_code,
+                result.err().unwrap().reason_code(),
                 ReasonCode::OperationCancelled
             );
             assert_eq!(received.load(Ordering::SeqCst), 0);
@@ -1126,17 +1116,17 @@ mod tests {
                     .context
                     .admit(&mut state, false)
                     .unwrap_err()
-                    .reason_code,
+                    .reason_code(),
                 ReasonCode::UpstreamTimeout
             );
             assert!(state.closed);
             assert!(state.error.is_none());
         }
-        assert_eq!(expired.error().reason_code, ReasonCode::UpstreamTimeout);
+        assert_eq!(expired.error().reason_code(), ReasonCode::UpstreamTimeout);
         let cancelled = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
         cancelled.close();
         assert_eq!(
-            cancelled.error().reason_code,
+            cancelled.error().reason_code(),
             ReasonCode::OperationCancelled
         );
         for operation in [&expired, &cancelled] {
@@ -1148,55 +1138,61 @@ mod tests {
             state.status = Some(403);
             drop(state);
             let error = operation.error();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamForbidden);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
             assert_eq!(error.upstream_status, Some(403));
         }
     }
 
     #[tokio::test]
     async fn inherited_deadline_fences_every_dispatch_and_never_extends_local_budget() {
-        use agent_access_provider::with_provider_finalization;
+        use agent_access_provider::host::with_provider_finalization;
         let host = Instant::now();
-        with_provider_finalization(ProviderFinalizationContext::new(Some(host)), async {
-            let operation = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
-            assert_eq!(operation.context.deadline, host);
-            for method in ["server/discover", "initialize", "tools/call"] {
+        with_provider_finalization(
+            agent_access_provider::host::provider_finalization_context(Some(host)),
+            async {
+                let operation = operation("http://127.0.0.1:9/mcp", Duration::from_secs(60));
+                assert_eq!(operation.context.deadline, host);
+                for method in ["server/discover", "initialize", "tools/call"] {
+                    let error = operation
+                        .context
+                        .post(
+                            json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+                            HeaderMap::new(),
+                            method,
+                            None,
+                        )
+                        .await
+                        .err()
+                        .unwrap();
+                    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout, "{method}");
+                }
                 let error = operation
                     .context
-                    .post(
-                        json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
-                        HeaderMap::new(),
-                        method,
-                        None,
-                    )
+                    .delete_session(HeaderValue::from_static("private-session"))
                     .await
-                    .err()
-                    .unwrap();
-                assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout, "{method}");
-            }
-            let error = operation
-                .context
-                .delete_session(HeaderValue::from_static("private-session"))
-                .await
-                .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
-            assert!(operation.begin_legacy().is_err());
-            let state = operation.state.lock().unwrap();
-            assert!(state.closed);
-            assert!(!state.call_dispatched);
-        })
+                    .unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+                assert!(operation.begin_legacy().is_err());
+                let state = operation.state.lock().unwrap();
+                assert!(state.closed);
+                assert!(!state.call_dispatched);
+            },
+        )
         .await;
         let host = Instant::now() + Duration::from_secs(60);
-        with_provider_finalization(ProviderFinalizationContext::new(Some(host)), async {
-            let operation = operation("http://127.0.0.1:9/mcp", Duration::ZERO);
-            assert!(operation.context.deadline < host);
-            assert!(
-                operation
-                    .context
-                    .admit(&mut operation.state.lock().unwrap(), false)
-                    .is_err()
-            );
-        })
+        with_provider_finalization(
+            agent_access_provider::host::provider_finalization_context(Some(host)),
+            async {
+                let operation = operation("http://127.0.0.1:9/mcp", Duration::ZERO);
+                assert!(operation.context.deadline < host);
+                assert!(
+                    operation
+                        .context
+                        .admit(&mut operation.state.lock().unwrap(), false)
+                        .is_err()
+                );
+            },
+        )
         .await;
     }
 
@@ -1216,7 +1212,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_deadline_preserves_the_known_operation_outcome() {
-        use agent_access_provider::with_provider_finalization;
+        use agent_access_provider::host::with_provider_finalization;
         let received = Arc::new(AtomicUsize::new(0));
         let counter = received.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1233,8 +1229,9 @@ mod tests {
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let finalization =
-            ProviderFinalizationContext::new(Some(Instant::now() + Duration::from_millis(250)));
+        let finalization = agent_access_provider::host::provider_finalization_context(Some(
+            Instant::now() + Duration::from_millis(250),
+        ));
         let operation = with_provider_finalization(finalization.clone(), async {
             operation(&endpoint, Duration::from_secs(60))
         })

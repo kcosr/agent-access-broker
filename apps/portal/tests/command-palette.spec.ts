@@ -70,8 +70,8 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
     else if (pathname === "/v1/credentials") result = [credential];
-    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], oauthRegistrations: [], services: [draftImport] };
-    else if (pathname === "/v1/admin/imports/metrics-draft/preview") result = { service: draftImport, operatorAllowed: true, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], oauthRegistrations: [], affectedGrants: [], affectedGrantsByAction: {}, preview: null };
+    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };
+    else if (pathname === "/v1/admin/imports/metrics-draft/preview") result = { service: draftImport, operatorAllowed: true, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, preview: null };
     else if (pathname.endsWith("/audit/options")) result = { services: [] };
     else if (pathname.endsWith("/audit/events")) result = { records: [], nextCursor: null };
     await route.fulfill({ json: envelope(result) });

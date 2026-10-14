@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[package.metadata.agent-access]
+role = "adapter"
+
 [dependencies]
+agent-access-core = { path = "../agent-access-core" }
 agent-access-provider = { path = "../agent-access-provider" }
 async-trait.workspace = true
 base64.workspace = true

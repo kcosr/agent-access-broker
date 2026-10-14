@@ -2,6 +2,7 @@
 members = [
   "crates/agent-access",
   "crates/agent-access-broker",
+  "crates/agent-access-broker-host",
   "crates/agent-access-cloudbees-ci",
   "crates/agent-access-confluence",
   "crates/agent-access-atlassian",
@@ -35,6 +36,8 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 html5ever = "0.35"
 http = "1.3"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["http1", "server", "service", "tokio"] }
 jsonschema = { version = "0.46.6", default-features = false }
 libc = "0.2"
 mime_guess = "2.0"

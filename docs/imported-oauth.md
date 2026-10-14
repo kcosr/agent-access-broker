@@ -52,11 +52,21 @@ target = "https://tools.example.com/mcp"
 
 Keep the exact endpoint allowed under `[imports]` with `allowed_kinds =
 ["mcp_http"]`, as described in [imported services](imported-services.md).
+The `mcp_oauth` dialect is the OAuth companion of the `mcp_http` import kind:
+the Broker selects it together with MCP imports, and only an import of that
+kind can bind its registrations. Other dialects, including `google` and the
+development `stub`, are never offered to imports.
 `base_url` is the exact issuer identifier;
 `resource`, profile `audience`, profile `target`, and the imported MCP endpoint must
 match exactly. This adapter accepts HTTPS URLs without user information, queries,
 fragments or wildcards.
-Explicit insecure loopback endpoints are available only for development fixtures.
+Plain HTTP endpoints are available only for development fixtures: they require
+`allow_insecure_loopback = true` and a literal loopback IP address, such as
+`127.0.0.1` or `[::1]`, in every endpoint. `http://localhost` is rejected.
+The Broker's metadata and token requests route each endpoint origin
+independently through the global egress proxy resolution; only literal loopback
+addresses connect directly, so `https://localhost` and a non-loopback endpoint
+beside a loopback issuer still use the configured proxy.
 
 For confidential clients use `client_auth = "client_secret_post"` or
 `"client_secret_basic"` and set `client_secret_ref` to an existing supported `env:`

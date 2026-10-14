@@ -829,7 +829,11 @@ durability = "write" # write | sync_data | sync_all
 
 # Optional delegated OAuth test provider (non-production only). Requires managed
 # identity/store/encryption, browser auth, management and enable_fake_service.
+# The records backend and the stub registration point at the same test server;
+# base_url must be a literal loopback IP origin.
 # Full runnable harness and separate provider setup: docs/oauth.md.
+# [providers.oauth_stub]
+# base_url = "http://127.0.0.1:8099"
 # [oauth.registrations.stub]
 # adapter = "stub"
 # base_url = "http://127.0.0.1:8099"

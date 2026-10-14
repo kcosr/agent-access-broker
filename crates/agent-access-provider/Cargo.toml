@@ -4,8 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[package.metadata.agent-access]
+role = "sdk"
+
 [features]
-test-support = ["dep:tracing-subscriber"]
+test-support = ["dep:rustls", "dep:tracing-subscriber"]
 
 [dependencies]
 async-trait.workspace = true
@@ -15,12 +18,10 @@ chrono.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
 jsonschema.workspace = true
-percent-encoding.workspace = true
 rand = "0.8.5"
 regex.workspace = true
 reqwest.workspace = true
-rustls.workspace = true
-rustls-native-certs.workspace = true
+rustls = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -34,6 +35,7 @@ tracing-subscriber = { workspace = true, optional = true }
 url.workspace = true
 
 [dev-dependencies]
+rustls.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true

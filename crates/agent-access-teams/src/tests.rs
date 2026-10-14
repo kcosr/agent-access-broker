@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::InvocationBuilder;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -46,29 +47,19 @@ impl NotificationTransport for ThrottledTransport {
 }
 
 fn admitted_invocation() -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        identity: InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        },
-        service: "teams".into(),
-        action: ACTION.into(),
-        correlation: Default::default(),
-        inputs: simple(),
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("destination".into(), vec!["release-alerts".into()])]),
-        resource_attributes: ResourceAttributes::from(BTreeMap::from([(
+    InvocationBuilder::new("teams", ACTION)
+        .inputs(simple())
+        .identity(InvocationIdentity::new("alice", true))
+        .correlation(Default::default())
+        .resources(BTreeMap::from([(
+            "destination".into(),
+            vec!["release-alerts".into()],
+        )]))
+        .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
             "webhookUrl".into(),
             ENDPOINT.into(),
-        )])),
-        credential_mode: "service".into(),
-        credential: None,
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+        )])))
+        .build()
 }
 
 #[tokio::test]
@@ -93,8 +84,8 @@ async fn workflow_throttling_is_an_upstream_rate_limit_without_retry_claims() {
             max_bytes: MAX_BODY_BYTES,
         };
         let error = provider.invoke(admitted_invocation()).await.unwrap_err();
-        assert_eq!(error.decision, Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         assert_eq!(error.upstream_status, Some(429));
         assert_eq!(error.message, message);
         let mut expected = json!({"limitScope": "upstream", "service": "teams"});
@@ -115,29 +106,22 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
         allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
         max_bytes: MAX_BODY_BYTES,
     };
-    let mut invocation = ProviderInvocation {
-        execution_context: "internal".to_string(),
-        identity: InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        },
-        service: "teams".into(),
-        action: ACTION.into(),
-        correlation: Default::default(),
-        inputs: simple(),
-        body_parts: vec![],
-        resource_scopes: BTreeMap::from([("destination".into(), vec!["release-alerts".into()])]),
-        resource_attributes: ResourceAttributes::default(),
-        credential_mode: "service".into(),
-        credential: None,
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    };
+    let mut invocation = InvocationBuilder::new("teams", ACTION)
+        .inputs(simple())
+        .identity(InvocationIdentity::new("alice", true))
+        .correlation(Default::default())
+        .resources(BTreeMap::from([(
+            "destination".into(),
+            vec!["release-alerts".into()],
+        )]))
+        .build();
     assert!(provider.invoke(invocation.clone()).await.is_err());
-    invocation.resource_attributes =
-        ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())]));
+    invocation = InvocationBuilder::from(invocation)
+        .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
+            "webhookUrl".into(),
+            ENDPOINT.into(),
+        )])))
+        .build();
     let receipt = provider.invoke(invocation.clone()).await.unwrap();
     assert_eq!(
         receipt.result,
@@ -148,7 +132,9 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     assert!(!serialized.contains("SYNTHETIC_SECRET"));
     assert!(!serialized.contains("Version 2.3"));
     assert!(!serialized.contains("/powerautomate/"));
-    invocation.credential_mode = "per_user".into();
+    invocation = InvocationBuilder::from(invocation)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(provider.invoke(invocation).await.is_err());
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
@@ -283,7 +269,7 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
         ResourceAttributes::from(BTreeMap::from([("webhookUrl".into(), ENDPOINT.into())]));
     assert!(
         config()
-            .validate_resource_attributes(&TEAMS_DESTINATION_RESOURCE.id, &attributes)
+            .validate_resource_attributes(TEAMS_DESTINATION_RESOURCE.id(), &attributes)
             .is_ok()
     );
     let other = TeamsConfig {
@@ -292,7 +278,7 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
     };
     assert!(
         other
-            .validate_resource_attributes(&TEAMS_DESTINATION_RESOURCE.id, &attributes)
+            .validate_resource_attributes(TEAMS_DESTINATION_RESOURCE.id(), &attributes)
             .is_err()
     );
     let unsafe_config = TeamsConfig {
@@ -308,43 +294,60 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
     );
     let mut errors = vec![];
     config().validate(
-        &ValidationContext {
-            environment: "production",
-            policy_authority: "toml",
-            limits: &ProviderLimits::default(),
-            credentials: ServiceCredentialKinds {
-                service: Some("bearer"),
-                per_user: None,
-            },
-        },
+        &ValidationContext::new(
+            "production",
+            "toml",
+            &ProviderLimits::default(),
+            ServiceCredentialKinds::new(Some("bearer"), None),
+        ),
         &mut errors,
     );
     assert_eq!(errors.len(), 2);
 }
 
+#[test]
+fn build_creates_one_single_attempt_client_per_configured_origin() {
+    let second = "https://second.environment.api.powerplatform.com";
+    let host = agent_access_provider::test_support::TestHost::default();
+    TeamsConfig {
+        allowed_upstream_hosts: vec![format!("{ORIGIN}/**"), format!("{second}/**")],
+        egress_proxy: None,
+    }
+    .build(&host.context())
+    .unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| {
+            (
+                client.base.to_string(),
+                client.profile,
+                client.literal_loopback,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        built,
+        [
+            (format!("{ORIGIN}/"), ClientProfile::SingleAttempt, false),
+            (format!("{second}/"), ClientProfile::SingleAttempt, false),
+        ]
+    );
+}
+
 async fn transport(server: &MockServer) -> HttpTransport {
     let base = Url::parse(&format!("{}/", server.uri())).unwrap();
-    let limits = ProviderLimits {
-        request_timeout_ms: 200,
-        ..ProviderLimits::default()
-    };
-    let egress = EgressProxyRuntimeConfig::direct();
-    let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
+    let limits = ProviderLimits::default().with_request_timeout_ms(200);
     let client = UpstreamClient::build(
-        UpstreamClientSpec {
-            label: "teams.test",
-            provider: "teams",
-            base: &base,
-            egress_proxy: None,
-            allowed_upstream_hosts: &[format!("{}/**", server.uri())],
-            profile: ClientProfile::SingleAttempt,
-            status_reasons: &[],
-        },
-        UpstreamNetwork {
-            limits: &limits,
-            egress: &egress,
-            outbound_tls: &tls,
-        },
+        UpstreamClientSpec::new(
+            "teams.test",
+            "teams",
+            &base,
+            EgressDeclaration::Ordinary(None),
+            &[format!("{}/**", server.uri())],
+            ClientProfile::SingleAttempt,
+        ),
+        &agent_access_provider::test_support::TestHost::with_limits(limits),
     )
     .unwrap();
     HttpTransport {
@@ -440,7 +443,7 @@ async fn http_redirects_errors_and_timeouts_never_retry_or_leak_urls() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert!(error.message.contains("outcome may be unknown"));
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);

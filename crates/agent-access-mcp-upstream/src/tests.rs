@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
 use axum::{
     Json, Router,
     extract::State,
@@ -18,32 +19,14 @@ use tokio::task::JoinHandle;
 
 mod compatibility;
 
-struct Host {
-    limits: ProviderLimits,
-    egress: EgressProxyRuntimeConfig,
-    tls: PreparedOutboundTls,
-}
-impl Host {
-    fn new() -> Self {
-        Self {
-            limits: ProviderLimits {
-                max_upstream_response_bytes: 256 * 1024,
-                request_timeout_ms: 1_000,
-                ..Default::default()
-            },
-            egress: EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None),
-            tls: test_support::test_outbound_tls(),
-        }
-    }
-    fn context(&self) -> BuildContext<'_> {
-        BuildContext {
-            limits: &self.limits,
-            egress: &self.egress,
-            outbound_tls: &self.tls,
-            attribution: Default::default(),
-            stable_signing_key: None,
-        }
-    }
+/// The build host imported MCP tests share: a short request timeout and a
+/// 256 KiB response cap.
+fn test_host() -> test_support::TestHost {
+    test_support::TestHost::with_limits(
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(256 * 1024)
+            .with_request_timeout_ms(1_000),
+    )
 }
 
 fn definition(endpoint: &str) -> ImportedServiceDefinition {
@@ -63,11 +46,7 @@ fn definition(endpoint: &str) -> ImportedServiceDefinition {
     }
 }
 fn credential(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".into(),
-        username: None,
-        token: Some(token.into()),
-    }
+    bearer_credential(token)
 }
 fn action() -> ImportedActionDefinition {
     ImportedActionDefinition {
@@ -82,26 +61,11 @@ fn action() -> ImportedActionDefinition {
     }
 }
 fn invocation(inputs: Value, token: &str) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".into(),
-        identity: InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        },
-        service: "example".into(),
-        action: "item.update".into(),
-        correlation: CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: Default::default(),
-        resource_attributes: Default::default(),
-        credential_mode: "service".into(),
-        credential: Some(credential(token)),
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+    InvocationBuilder::new("example", "item.update")
+        .inputs(inputs)
+        .identity(InvocationIdentity::new("alice", true))
+        .credential(credential(token))
+        .build()
 }
 fn tool() -> Value {
     let action = action();
@@ -193,6 +157,13 @@ async fn fixture_handler(
             .unwrap(),
         &json!({})
     );
+    // The client names the Broker host and its version, not this adapter.
+    assert_eq!(
+        request
+            .pointer("/params/_meta/io.modelcontextprotocol~1clientInfo")
+            .unwrap(),
+        &json!({"name": "agent-access-broker-host", "version": env!("CARGO_PKG_VERSION")})
+    );
     assert!(!headers.contains_key("mcp-session-id"));
     assert!(!headers.contains_key("last-event-id"));
     let result = match request["method"].as_str().unwrap() {
@@ -256,7 +227,7 @@ async fn discovers_every_page_retains_unsupported_rows_and_requires_reviewed_rea
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let discovered = McpAdapter
         .discover(
             &definition(&fixture.endpoint),
@@ -294,7 +265,7 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -303,7 +274,7 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
             &host.context(),
         )
         .unwrap();
-    let result = with_provider_context(
+    let result = agent_access_provider::host::with_provider_context(
         CorrelationContext::for_tests(),
         "example".into(),
         "item.update".into(),
@@ -347,7 +318,7 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &definition(&fixture.endpoint),
@@ -369,7 +340,7 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
 #[tokio::test]
 async fn input_and_credential_rejections_dispatch_nothing() {
     let fixture = Fixture::new(Default::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -383,17 +354,21 @@ async fn input_and_credential_rejections_dispatch_nothing() {
             .invoke(invocation(json!({}), "secret"))
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::InputInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.credential = None;
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::None)
+        .build();
     assert_eq!(
-        provider.invoke(request).await.unwrap_err().reason_code,
+        provider.invoke(request).await.unwrap_err().reason_code(),
         ReasonCode::CredentialInvalid
     );
     let mut request = invocation(json!({"region":"east"}), "secret");
-    request.credential_mode = "per_user".into();
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(provider.invoke(request).await.is_err());
     assert!(fixture.state.recorded.lock().unwrap().is_empty());
 }
@@ -401,7 +376,7 @@ async fn input_and_credential_rejections_dispatch_nothing() {
 #[tokio::test]
 async fn independent_credentials_and_transport_auth_are_never_reused() {
     let fixture = Fixture::new(Default::default()).await;
-    let host = Host::new();
+    let host = test_host();
     let mut def = definition(&fixture.endpoint);
     def.transport_auth = true;
     def.execution_bindings[0].delivery = ImportedCredentialDelivery::RawHeader {
@@ -422,7 +397,9 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
         .unwrap();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
-        request.credential_mode = "per_user".into();
+        request = InvocationBuilder::from(request)
+            .credential_mode(CredentialMode::PerUser)
+            .build();
         provider.invoke(request).await.unwrap();
     }
     let calls = fixture.state.recorded.lock().unwrap();
@@ -454,7 +431,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &definition(&fixture.endpoint),
@@ -471,7 +448,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
         assert_eq!(error.upstream_status, Some(status.as_u16()));
         assert_eq!(error.result.as_ref().unwrap()["retrySafe"], false);
         if status == StatusCode::TOO_MANY_REQUESTS {
-            assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         }
     }
     for state in [
@@ -485,7 +462,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
         },
     ] {
         let fixture = Fixture::new(state).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.request_timeout_ms = 100;
         let provider = McpAdapter
             .build(
@@ -529,7 +506,7 @@ async fn duplicate_tools_repeated_cursors_and_malformed_metadata_fail_discovery(
         },
     ] {
         let fixture = Fixture::new(state).await;
-        let host = Host::new();
+        let host = test_host();
         assert!(
             McpAdapter
                 .discover(
@@ -550,7 +527,7 @@ async fn duplicate_tools_repeated_cursors_and_malformed_metadata_fail_discovery(
 async fn bounded_json_and_sse_results_include_discarded_bytes() {
     for sse in [false, true] {
         let fixture=Fixture::new(FixtureState{result:json!({"content":[{"type":"text","text":"x".repeat(4000)}],"structuredContent":null}),sse,..Default::default()}).await;
-        let mut host = Host::new();
+        let mut host = test_host();
         host.limits.max_upstream_response_bytes = 1500;
         let provider = McpAdapter
             .build(
@@ -564,7 +541,7 @@ async fn bounded_json_and_sse_results_include_discarded_bytes() {
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(fixture.calls(), 1);
     }
 }
@@ -577,7 +554,7 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
         ..Default::default()
     })
     .await;
-    let host = Host::new();
+    let host = test_host();
     let provider = McpAdapter
         .build(
             &definition(&fixture.endpoint),
@@ -586,24 +563,24 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
             &host.context(),
         )
         .unwrap();
-    test_support::start_capturing_events();
-    let result = with_provider_context(
-        CorrelationContext::for_tests(),
-        "example".into(),
-        "item.update".into(),
-        provider.invoke(invocation(
-            json!({"region":"private-input-value"}),
-            "private-execution-token",
-        )),
-    )
-    .await
-    .unwrap();
+    let capture = test_support::install_trace_capture().start();
+    let result = capture
+        .run(agent_access_provider::host::with_provider_context(
+            CorrelationContext::for_tests(),
+            "example".into(),
+            "item.update".into(),
+            provider.invoke(invocation(
+                json!({"region":"private-input-value"}),
+                "private-execution-token",
+            )),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
         result.result["upstreamMcp"]["structuredContent"]["secret"],
         "upstream-sensitive-result"
     );
-    let events = test_support::captured_events();
-    let logged = serde_json::to_string(&events).unwrap();
+    let logged = serde_json::to_string(&capture.take_events()).unwrap();
     for secret in [
         "private-input-value",
         "private-execution-token",
@@ -710,7 +687,7 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
             .await
             .unwrap();
     });
-    let host = Host::new();
+    let host = test_host();
     let def = definition(&endpoint);
     let discovery = McpAdapter
         .discover(
@@ -782,6 +759,9 @@ struct TestLease {
 }
 #[async_trait]
 impl DelegatedLease for TestLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("mcp-test-binding")
+    }
     fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         self.rejected.lock().unwrap().push(version.into());
         Ok(())
@@ -796,8 +776,13 @@ impl DelegatedLease for TestLease {
         }
         if count > 1 {
             let mut access = self.access.lock().unwrap();
-            access.token = "renewed-delegated-token".into();
-            access.version = "version-two".into();
+            *access = DelegatedAccess::new(
+                "renewed-delegated-token",
+                access.target(),
+                access.audience(),
+                "version-two",
+                access.expires_at(),
+            );
         }
         Ok(())
     }
@@ -827,13 +812,13 @@ fn leased_invocation(
     reject_after_handshake: bool,
 ) -> (ProviderInvocation, Arc<TestLease>) {
     let lease = Arc::new(TestLease {
-        access: Mutex::new(DelegatedAccess {
-            token: "initial-delegated-token".into(),
-            target: endpoint.into(),
-            audience: endpoint.into(),
-            version: "version-one".into(),
-            expires_at: i64::MAX,
-        }),
+        access: Mutex::new(DelegatedAccess::new(
+            "initial-delegated-token",
+            endpoint,
+            endpoint,
+            "version-one",
+            i64::MAX,
+        )),
         validations: AtomicUsize::new(0),
         recoveries: AtomicUsize::new(0),
         rejected: Mutex::new(Vec::new()),
@@ -844,9 +829,17 @@ fn leased_invocation(
         }),
     });
     let mut request = invocation(json!({"region":"east"}), "unused-static-token");
-    request.credential = None;
-    request.credential_mode = "per_user".into();
-    request.delegated_credential = Some(DelegatedCredential::new(lease.clone()));
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::None)
+        .build();
+    request = InvocationBuilder::from(request)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Delegated(
+            agent_access_provider::host::delegated_credential(lease.clone()),
+        ))
+        .build();
     (request, lease)
 }
 
@@ -861,7 +854,7 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         if revoke_after_first_page {
             lease.reject_after.store(2, Ordering::SeqCst);
@@ -869,16 +862,18 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
         let result = McpAdapter
             .discover(
                 &oauth_definition(&fixture.endpoint),
-                &ImportedDiscoveryAuthentication::Delegated(request.delegated_credential.unwrap()),
+                &ImportedDiscoveryAuthentication::Delegated(
+                    request.execution().delegated().cloned().unwrap(),
+                ),
                 None,
                 &host.context(),
             )
             .await;
         if revoke_after_first_page {
-            assert_eq!(
-                result.unwrap_err().reason_code,
-                ReasonCode::CredentialInvalid
-            );
+            assert!(matches!(
+                result.unwrap_err(),
+                AdapterDiscoveryError::Failed(error) if error.reason_code() == ReasonCode::CredentialInvalid
+            ));
         } else {
             assert_eq!(result.unwrap().tools.len(), 1);
         }
@@ -896,6 +891,76 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
     }
 }
 
+/// A lease whose refresh is already in progress for the same connection.
+struct BusyLease(DelegatedAccess);
+#[async_trait]
+impl DelegatedLease for BusyLease {
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("mcp-busy-binding")
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn access(&self) -> DelegatedAccess {
+        self.0.clone()
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Err(agent_access_provider::host::port_failure(
+            agent_access_provider::host::HostPort::DelegatedLease,
+            ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+        ))
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(credential_error())
+    }
+}
+
+#[tokio::test]
+async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
+    let fixture = Fixture::new(FixtureState::default()).await;
+    let host = test_host();
+    let provider = McpAdapter
+        .build(
+            &oauth_definition(&fixture.endpoint),
+            &[action()],
+            None,
+            &host.context(),
+        )
+        .unwrap();
+    let (request, _) = leased_invocation(&fixture.endpoint, false);
+    let request = InvocationBuilder::from(request)
+        .execution(ExecutionAccess::Delegated(
+            agent_access_provider::host::delegated_credential(Arc::new(BusyLease(
+                DelegatedAccess::new(
+                    "busy-delegated-token",
+                    fixture.endpoint.clone(),
+                    fixture.endpoint.clone(),
+                    "version-one",
+                    i64::MAX,
+                ),
+            ))),
+        ))
+        .build();
+    let action = request.action().to_owned();
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
+    assert_eq!(
+        error.reason_code().host_port(),
+        Some(agent_access_provider::host::HostPort::DelegatedLease)
+    );
+    assert_eq!(fixture.calls(), 0);
+    // Imported services register no domain reasons; the host accepts the
+    // lease's failure at the invocation boundary.
+    let hook = agent_access_provider::host::hook_context(
+        "imported",
+        action,
+        agent_access_provider::HookPhase::Invocation,
+        &[],
+    );
+    assert_eq!(hook.check_failure(&error), Ok(()));
+}
+
 #[tokio::test]
 async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_write() {
     for status in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
@@ -904,7 +969,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
             ..Default::default()
         })
         .await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -919,7 +984,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
             assert!(result.is_ok());
         } else {
             let error = result.err().unwrap();
-            assert_eq!(error.reason_code, ReasonCode::UpstreamUnauthorized);
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
             assert_eq!(error.result.as_ref().unwrap()["mutationStatus"], "unknown");
             assert_eq!(error.result.as_ref().unwrap()["retrySafe"], false);
         }
@@ -950,7 +1015,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
 async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dispatch() {
     for failure in ["resource", "audience", "revoked", "fallback"] {
         let fixture = Fixture::new(Default::default()).await;
-        let host = Host::new();
+        let host = test_host();
         let provider = McpAdapter
             .build(
                 &oauth_definition(&fixture.endpoint),
@@ -961,16 +1026,34 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
             .unwrap();
         let (mut request, lease) = leased_invocation(&fixture.endpoint, failure == "revoked");
         if failure == "resource" {
-            lease.access.lock().unwrap().target = "https://other.example/mcp".into();
+            let mut access = lease.access.lock().unwrap();
+            *access = DelegatedAccess::new(
+                access.token(),
+                "https://other.example/mcp",
+                access.audience(),
+                access.version(),
+                access.expires_at(),
+            );
         }
         if failure == "audience" {
-            lease.access.lock().unwrap().audience = "https://other.example/mcp".into();
+            let mut access = lease.access.lock().unwrap();
+            *access = DelegatedAccess::new(
+                access.token(),
+                access.target(),
+                "https://other.example/mcp",
+                access.version(),
+                access.expires_at(),
+            );
         }
         if failure == "fallback" {
-            request.credential = Some(credential("shared-fallback-is-forbidden"));
+            request = InvocationBuilder::from(request)
+                .execution(ExecutionAccess::Static(credential(
+                    "shared-fallback-is-forbidden",
+                )))
+                .build();
         }
         let error = provider.invoke(request).await.err().unwrap();
-        assert_eq!(error.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
         assert_eq!(fixture.calls(), 0);
         assert_eq!(
             fixture.state.recorded.lock().unwrap().len(),

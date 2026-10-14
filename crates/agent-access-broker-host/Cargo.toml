@@ -1,0 +1,72 @@
+[package]
+name = "agent-access-broker-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[package.metadata.agent-access]
+role = "host"
+
+[features]
+# Isolated broker applications for acceptance tests: construction and
+# control APIs only. Release builds must not enable it.
+test-support = ["agent-access-core/test-support"]
+
+[dependencies]
+agent-access-core = { path = "../agent-access-core" }
+agent-access-provider = { path = "../agent-access-provider" }
+aes-gcm = "0.10.3"
+anyhow.workspace = true
+arc-swap.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hmac = "0.12"
+mime_guess.workspace = true
+openidconnect.workspace = true
+percent-encoding.workspace = true
+rand = "0.8.5"
+reqwest.workspace = true
+rmcp = { workspace = true, features = ["transport-streamable-http-server", "transport-streamable-http-server-session"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The host's own integration tests use its test support.
+agent-access-broker-host = { path = ".", features = ["test-support"] }
+agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
+agent-access-confluence = { path = "../agent-access-confluence" }
+agent-access-conformance = { path = "../agent-access-conformance" }
+agent-access-core = { path = "../agent-access-core", features = ["test-support"] }
+agent-access-fake = { path = "../agent-access-fake" }
+agent-access-gitlab = { path = "../agent-access-gitlab" }
+agent-access-gmail = { path = "../agent-access-gmail", features = ["test-support"] }
+agent-access-jira = { path = "../agent-access-jira" }
+agent-access-mcp-upstream = { path = "../agent-access-mcp-upstream" }
+agent-access-openapi-upstream = { path = "../agent-access-openapi-upstream" }
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+agent-access-teams = { path = "../agent-access-teams" }
+async-trait.workspace = true
+filetime.workspace = true
+jsonschema.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+rustls.workspace = true
+toml.workspace = true
+tracing-core = "0.1"
+wiremock.workspace = true

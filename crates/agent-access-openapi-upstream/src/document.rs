@@ -2,7 +2,7 @@ use crate::{
     config::{Settings, bounded},
     refs,
 };
-use agent_access_provider::*;
+use agent_access_core::imports::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};

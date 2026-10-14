@@ -23,10 +23,30 @@ const WINDOWS_LOCK_RANGE_LOW: u32 = 1;
 #[cfg(windows)]
 const WINDOWS_LOCK_RANGE_HIGH: u32 = 0;
 
-const PROGRAM: &str = "agent-access-broker";
 const MANAGED_STORE_LOCK_SUFFIX: &str = ".agent-access.lock";
 const AUDIT_LOCK_SUFFIX: &str = ".agent-access.lock";
 const UPLOAD_SPOOL_LOCK_FILE: &str = ".agent-access-broker.spool.lock";
+
+/// The process that acquires state locks, recorded in each new lock file's
+/// holder metadata: its program (the executable's assembly name) and version,
+/// and the broker's effective node ID. The holder never names a lock file, so
+/// differently named programs contend for the same state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StateLockHolder<'a> {
+    program: &'a str,
+    version: &'a str,
+    node_id: &'a str,
+}
+
+impl<'a> StateLockHolder<'a> {
+    pub const fn new(program: &'a str, version: &'a str, node_id: &'a str) -> Self {
+        Self {
+            program,
+            version,
+            node_id,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateLockDomain {
@@ -207,19 +227,19 @@ impl StateLockSet {
         })
     }
 
-    /// Acquires the state locks for `config`. `node_id` is the broker's
-    /// effective node ID, recorded in new lock files' holder metadata.
+    /// Acquires the state locks for `config` on behalf of `holder`, whose
+    /// identity new lock files record.
     pub fn acquire_for_config(
         config: &BrokerConfig,
         config_path: &Path,
-        node_id: &str,
+        holder: &StateLockHolder<'_>,
         reuse: Option<&StateLockSet>,
     ) -> StateLockResult<Arc<Self>> {
         let reuse_sets = reuse.into_iter().collect::<Vec<_>>();
         Self::acquire_for_config_with_backend(
             config,
             config_path,
-            node_id,
+            holder,
             reuse_sets.as_slice(),
             &RealStateLockBackend,
         )
@@ -228,14 +248,14 @@ impl StateLockSet {
     pub fn acquire_for_config_reusing(
         config: &BrokerConfig,
         config_path: &Path,
-        node_id: &str,
+        holder: &StateLockHolder<'_>,
         reuse: &[Arc<StateLockSet>],
     ) -> StateLockResult<Arc<Self>> {
         let reuse_sets = reuse.iter().map(Arc::as_ref).collect::<Vec<_>>();
         Self::acquire_for_config_with_backend(
             config,
             config_path,
-            node_id,
+            holder,
             reuse_sets.as_slice(),
             &RealStateLockBackend,
         )
@@ -275,7 +295,7 @@ impl StateLockSet {
     pub fn acquire_audit_for_config(
         config: &BrokerConfig,
         config_path: &Path,
-        node_id: &str,
+        holder: &StateLockHolder<'_>,
     ) -> StateLockResult<Arc<Self>> {
         let mut targets = BTreeMap::new();
         if let Some(audit) = &config.audit {
@@ -287,7 +307,7 @@ impl StateLockSet {
                 .map(StateLockTargetBuilder::into_info)
                 .collect(),
             config_path,
-            node_id,
+            holder,
             &[],
             &RealStateLockBackend,
         )
@@ -296,18 +316,18 @@ impl StateLockSet {
     fn acquire_for_config_with_backend<B: StateLockBackend>(
         config: &BrokerConfig,
         config_path: &Path,
-        node_id: &str,
+        holder: &StateLockHolder<'_>,
         reuse: &[&StateLockSet],
         backend: &B,
     ) -> StateLockResult<Arc<Self>> {
         let targets = resolve_state_lock_targets(config)?;
-        Self::acquire_targets(targets, config_path, node_id, reuse, backend)
+        Self::acquire_targets(targets, config_path, holder, reuse, backend)
     }
 
     fn acquire_targets<B: StateLockBackend>(
         targets: Vec<StateLockInfo>,
         config_path: &Path,
-        node_id: &str,
+        holder: &StateLockHolder<'_>,
         reuse: &[&StateLockSet],
         backend: &B,
     ) -> StateLockResult<Arc<Self>> {
@@ -324,7 +344,7 @@ impl StateLockSet {
                 continue;
             }
 
-            let metadata = StateLockMetadata::new(config_path, node_id, &info);
+            let metadata = StateLockMetadata::new(config_path, holder, &info);
             let guard = backend
                 .acquire(&info, &metadata)
                 .map_err(|failure| Box::new(StateLockError::from_backend(&info, failure)))?;
@@ -402,7 +422,9 @@ impl StateLockBackend for RealStateLockBackend {
 
 #[derive(Serialize)]
 struct StateLockMetadata {
-    program: &'static str,
+    program: String,
+    #[serde(rename = "programVersion")]
+    program_version: String,
     domains: Vec<&'static str>,
     pid: u32,
     hostname: String,
@@ -419,13 +441,14 @@ struct StateLockMetadata {
 }
 
 impl StateLockMetadata {
-    fn new(config_path: &Path, node_id: &str, info: &StateLockInfo) -> Self {
+    fn new(config_path: &Path, holder: &StateLockHolder<'_>, info: &StateLockInfo) -> Self {
         Self {
-            program: PROGRAM,
+            program: holder.program.to_string(),
+            program_version: holder.version.to_string(),
             domains: info.domains.iter().map(|domain| domain.as_str()).collect(),
             pid: std::process::id(),
             hostname: hostname(),
-            node_id: node_id.to_string(),
+            node_id: holder.node_id.to_string(),
             started_at: Utc::now().to_rfc3339(),
             config_path: config_path.display().to_string(),
             target_paths: info
@@ -903,6 +926,7 @@ fn sanitized_metadata_snippet(metadata: Option<&str>) -> Option<String> {
     let mut sanitized = serde_json::Map::new();
 
     insert_sanitized_string(object, &mut sanitized, "program");
+    insert_sanitized_string(object, &mut sanitized, "programVersion");
     insert_sanitized_string_array(object, &mut sanitized, "domains");
     if let Some(pid) = object.get("pid").and_then(serde_json::Value::as_u64) {
         sanitized.insert("pid".to_string(), serde_json::Value::from(pid));
@@ -1059,6 +1083,8 @@ mod tests {
     }
 
     const TEST_NODE_ID: &str = "state-lock-test-node";
+    const TEST_HOLDER: StateLockHolder<'static> =
+        StateLockHolder::new("example-broker", "1.2.3", TEST_NODE_ID);
 
     fn config_with_paths(
         managed_store_path: Option<&Path>,
@@ -1258,7 +1284,7 @@ mod tests {
             let error = StateLockSet::acquire_for_config_with_backend(
                 &config,
                 Path::new("/tmp/config.toml"),
-                TEST_NODE_ID,
+                &TEST_HOLDER,
                 &[],
                 &backend,
             )
@@ -1276,7 +1302,7 @@ mod tests {
         let first = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
@@ -1285,7 +1311,7 @@ mod tests {
         let second = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             Some(first.as_ref()),
         )
         .unwrap();
@@ -1306,7 +1332,7 @@ mod tests {
         let first = StateLockSet::acquire_for_config(
             &store_only,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
@@ -1320,7 +1346,7 @@ mod tests {
         let second = StateLockSet::acquire_for_config(
             &store_and_audit,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             Some(first.as_ref()),
         )
         .unwrap();
@@ -1337,7 +1363,7 @@ mod tests {
         let third = StateLockSet::acquire_for_config(
             &store_only,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             Some(second.as_ref()),
         )
         .unwrap();
@@ -1363,7 +1389,8 @@ mod tests {
     #[test]
     fn held_lock_metadata_diagnostics_are_allowlisted_and_sanitized() {
         let metadata = serde_json::json!({
-            "program": "agent-access-broker",
+            "program": "example-broker",
+            "programVersion": "1.2.3",
             "domains": ["audit"],
             "pid": 12345,
             "hostname": "broker\nhost",
@@ -1386,7 +1413,8 @@ mod tests {
 
         let message = error.operator_message();
 
-        assert!(message.contains("agent-access-broker"));
+        assert!(message.contains("\"program\":\"example-broker\""));
+        assert!(message.contains("\"programVersion\":\"1.2.3\""));
         assert!(message.contains("broker host"));
         assert!(message.contains("\"nodeId\":\"broker-prod-1\""));
         assert!(message.contains("aaa..."));
@@ -1471,14 +1499,15 @@ mod tests {
         let locks = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
 
         assert!(locks.has_identity(&target.identity));
         let metadata = fs::read_to_string(&target.lock_file).unwrap();
-        assert!(metadata.contains("\"program\":\"agent-access-broker\""));
+        assert!(metadata.contains("\"program\":\"example-broker\""));
+        assert!(metadata.contains("\"programVersion\":\"1.2.3\""));
         assert!(metadata.contains("\"nodeId\":\"state-lock-test-node\""));
         assert!(!metadata.contains("stale"));
     }
@@ -1497,7 +1526,7 @@ mod tests {
         let error = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap_err();
@@ -1511,7 +1540,7 @@ mod tests {
         let error = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap_err();
@@ -1525,7 +1554,7 @@ mod tests {
         let error = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap_err();
@@ -1542,14 +1571,14 @@ mod tests {
         let active_locks = StateLockSet::acquire_for_config(
             &active,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
         let candidate_locks = StateLockSet::acquire_for_config(
             &candidate,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             Some(active_locks.as_ref()),
         )
         .unwrap();
@@ -1558,7 +1587,7 @@ mod tests {
         let reacquired = StateLockSet::acquire_for_config(
             &candidate,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
@@ -1574,14 +1603,14 @@ mod tests {
         let old_locks = StateLockSet::acquire_for_config(
             &old,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
         let conflict = StateLockSet::acquire_for_config(
             &old,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap_err();
@@ -1591,11 +1620,55 @@ mod tests {
         let reacquired = StateLockSet::acquire_for_config(
             &old,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
         assert_eq!(reacquired.infos().len(), 1);
+    }
+
+    #[test]
+    fn differently_named_programs_contend_for_the_same_state() {
+        let temp = TempDir::new().unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let store = temp.path().join("store.sqlite3");
+        let audit = temp.path().join("audit.jsonl");
+        let config = config_with_paths(Some(&store), Some(&audit), &temp.path().join("spool"));
+        let held = StateLockSet::acquire_for_config(
+            &config,
+            Path::new("/tmp/config.toml"),
+            &TEST_HOLDER,
+            None,
+        )
+        .unwrap();
+        let other = StateLockHolder::new("downstream-broker", "9.0.0", "other-node");
+        let conflict =
+            StateLockSet::acquire_for_config(&config, Path::new("/tmp/other.toml"), &other, None)
+                .unwrap_err();
+        assert_eq!(conflict.kind(), StateLockFailureKind::Held);
+        // The holder never names the lock files.
+        assert_eq!(
+            conflict.lock_file(),
+            resolve_state_lock_targets(&config).unwrap()[0].lock_file
+        );
+        // The diagnostic names the holder's program and version.
+        let message = conflict.operator_message();
+        assert!(
+            message.contains("\"program\":\"example-broker\""),
+            "{message}"
+        );
+        assert!(
+            message.contains("\"programVersion\":\"1.2.3\""),
+            "{message}"
+        );
+
+        drop(held);
+        let acquired =
+            StateLockSet::acquire_for_config(&config, Path::new("/tmp/other.toml"), &other, None)
+                .unwrap();
+        let metadata = fs::read_to_string(&acquired.infos()[0].lock_file).unwrap();
+        assert!(metadata.contains("\"program\":\"downstream-broker\""));
     }
 
     #[cfg(unix)]
@@ -1639,7 +1712,7 @@ mod tests {
         let locks = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         )
         .unwrap();
@@ -1667,7 +1740,7 @@ mod tests {
         let result = StateLockSet::acquire_for_config(
             &config,
             Path::new("/tmp/config.toml"),
-            TEST_NODE_ID,
+            &TEST_HOLDER,
             None,
         );
         match expectation.as_str() {

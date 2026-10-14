@@ -269,6 +269,12 @@ malformed JSON, unexpected content types, and oversized JSON responses are
 `upstream_protocol_failed`, except the detailed-test preview overflow described
 above. Job identity mismatches fail as `scope_unresolved`.
 
+CloudBees CI defines two [domain reasons](http-api.md#provider-owned-domain-reasons)
+of its own, both `decision = deny` and HTTP 413 (CLI exit 2):
+`cloudbees_ci_log_chunk_exceeded` for a Pipeline node log over the bounded read
+limit, and `cloudbees_ci_log_scan_exceeded` for a `tail` read the scan ceiling
+stopped before the log end. See [bounded console reads](#bounded-console-reads).
+
 The build trigger does not accept parameters or automatically retry after an
 uncertain POST. A successful POST without a usable queue `Location` returns
 `mutationStatus:"applied_unverified"`, `retrySafe:false`,

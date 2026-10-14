@@ -42,6 +42,7 @@ name = "agent-access"
 version = "0.1.0"
 dependencies = [
  "agent-access-broker",
+ "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
  "agent-access-core",
@@ -49,6 +50,7 @@ dependencies = [
  "agent-access-gitlab",
  "agent-access-gmail",
  "agent-access-jira",
+ "agent-access-provider",
  "agent-access-teams",
  "anyhow",
  "async-trait",
@@ -84,7 +86,6 @@ version = "0.1.0"
 dependencies = [
  "agent-access-provider",
  "reqwest",
- "thiserror 2.0.18",
  "url",
  "uuid",
 ]
@@ -93,7 +94,32 @@ dependencies = [
 name = "agent-access-broker"
 version = "0.1.0"
 dependencies = [
+ "agent-access-broker-host",
+ "agent-access-cloudbees-ci",
+ "agent-access-confluence",
+ "agent-access-core",
+ "agent-access-fake",
+ "agent-access-gitlab",
+ "agent-access-gmail",
+ "agent-access-jira",
+ "agent-access-mcp-upstream",
+ "agent-access-openapi-upstream",
+ "agent-access-provider",
+ "agent-access-teams",
+ "base64 0.22.1",
+ "reqwest",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "agent-access-broker-host"
+version = "0.1.0"
+dependencies = [
  "aes-gcm",
+ "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
  "agent-access-conformance",
@@ -118,6 +144,8 @@ dependencies = [
  "futures-util",
  "hmac",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonschema",
  "libc",
  "mime_guess",
@@ -134,6 +162,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml",
  "tower",
  "tracing",
  "tracing-core",
@@ -248,6 +277,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2",
@@ -271,8 +301,10 @@ version = "0.1.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
+ "reqwest",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -343,6 +375,7 @@ dependencies = [
 name = "agent-access-mcp-upstream"
 version = "0.1.0"
 dependencies = [
+ "agent-access-core",
  "agent-access-provider",
  "async-trait",
  "axum",
@@ -363,6 +396,7 @@ dependencies = [
 name = "agent-access-openapi-upstream"
 version = "0.1.0"
 dependencies = [
+ "agent-access-core",
  "agent-access-provider",
  "async-trait",
  "axum",
@@ -387,12 +421,10 @@ dependencies = [
  "futures-util",
  "hmac",
  "jsonschema",
- "percent-encoding",
  "rand 0.8.6",
  "regex",
  "reqwest",
  "rustls",
- "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2",
@@ -3675,6 +3707,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

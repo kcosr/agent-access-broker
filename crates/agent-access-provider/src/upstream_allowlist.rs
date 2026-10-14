@@ -8,7 +8,7 @@ pub fn url_allowed_by_patterns(url: &Url, patterns: &[String]) -> bool {
     })
 }
 
-pub fn url_matches_allowed_pattern(url: &Url, pattern: &Url) -> bool {
+fn url_matches_allowed_pattern(url: &Url, pattern: &Url) -> bool {
     same_origin(url, pattern)
         && pattern
             .query()

@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AttributionVerb {
@@ -29,6 +30,7 @@ impl AttributionVerb {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributionRepresentation {
     Adf,
@@ -47,7 +49,9 @@ impl AttributionRepresentation {
 }
 
 /// How an action can carry an attribution footer. Backends declare this on
-/// their action descriptors; configuration selects which ones are active.
+/// their action descriptors with [`Self::required`] or [`Self::optional`];
+/// configuration selects which ones are active.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttributionCapability {
     pub verb: AttributionVerb,
@@ -112,6 +116,8 @@ impl ProviderAttributionConfig {
     }
 }
 
+/// An attribution footer a write applied, as its audit records it.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributionMutation {
     pub target: &'static str,

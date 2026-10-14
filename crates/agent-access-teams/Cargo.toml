@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[package.metadata.agent-access]
+role = "native"
+
 [features]
 test-support = []
 
@@ -16,6 +19,7 @@ serde_json.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 jsonschema.workspace = true
 tokio.workspace = true
 wiremock.workspace = true

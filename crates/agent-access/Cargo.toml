@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[package.metadata.agent-access]
+role = "cli"
+
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
+agent-access-provider = { path = "../agent-access-provider" }
 anyhow.workspace = true
 base64.workspace = true
 bytes.workspace = true
@@ -40,6 +44,7 @@ agent-access-jira = { path = "../agent-access-jira" }
 jsonschema.workspace = true
 wiremock.workspace = true
 agent-access-broker = { path = "../agent-access-broker" }
+agent-access-broker-host = { path = "../agent-access-broker-host", features = ["test-support"] }
 async-trait.workspace = true
 axum.workspace = true
 rustls.workspace = true

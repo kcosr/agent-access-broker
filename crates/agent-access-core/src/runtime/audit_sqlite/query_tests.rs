@@ -13,9 +13,10 @@ use super::schema::FileIdentity;
 use super::tests::test_controls;
 use crate::{
     AuditConfig, AuditEventFilters, AuditEventsQuery, AuditListRoute, AuditPosition,
-    AuditQueryError, AuditQueryLimits, AuditStoreType, AuditVisibility, BrokerTokenClass, Decision,
-    LimitsConfig, ReasonCode, parse_audit_list_query,
+    AuditQueryError, AuditQueryLimits, AuditStoreType, AuditVisibility, BrokerTokenClass,
+    LimitsConfig, parse_audit_list_query,
 };
+use agent_access_provider::{Decision, ReasonCode};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
@@ -175,7 +176,7 @@ async fn seed_filter_records(fixture: &Fixture) {
         }),
         with(record("a2", 20, "bob", "jira", "issue.view"), |record| {
             record.decision = Decision::Deny;
-            record.reason_code = Some(ReasonCode::ServiceActionDenied);
+            record.reason_code = Some(ReasonCode::ServiceActionDenied.into());
         }),
         with(
             record("a3", 30, "alice", "broker", "admin.policy.grants.create"),
@@ -197,20 +198,20 @@ async fn seed_filter_records(fixture: &Fixture) {
             record("a5", 50, "anonymous", "broker", "admin.store.status"),
             |record| {
                 record.decision = Decision::Deny;
-                record.reason_code = Some(ReasonCode::IdentityRequired);
+                record.reason_code = Some(ReasonCode::IdentityRequired.into());
             },
         ),
         with(
             record("a6", 60, "carol", "gitlab_git", "git.receive_pack"),
             |record| {
                 record.decision = Decision::Error;
-                record.reason_code = Some(ReasonCode::UpstreamFailed);
+                record.reason_code = Some(ReasonCode::UpstreamFailed.into());
                 record.provider_audit = Some(json!({"gateway": {"phase": "started"}}));
             },
         ),
         with(record("a7", 70, "bob", "fake", "echo"), |record| {
             record.decision = Decision::Error;
-            record.reason_code = Some(ReasonCode::AuditUnavailable);
+            record.reason_code = Some(ReasonCode::AuditUnavailable.into());
         }),
         with(
             record("a8", 80, "alice", "jira", "issue.comment.create"),
@@ -648,6 +649,29 @@ fn count_events(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("SELECT count(*) FROM audit_events", [], |row| row.get(0))
 }
 
+/// Query work runs on a blocking thread inside the caller's span, so what it
+/// logs stays correlated with the request and inside a scoped trace capture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_work_runs_in_the_callers_span() {
+    let fixture = Fixture::new("reader-span.audit.sqlite");
+    let pool = fixture.pool(limits(1, 16, Duration::from_secs(5)));
+    let capture = agent_access_provider::test_support::install_trace_capture().start();
+    let counted = capture
+        .run(pool.run(|conn| {
+            tracing::info!(event = "audit_reader_test_work");
+            count_events(conn)
+        }))
+        .await;
+    assert!(counted.is_ok(), "{counted:?}");
+    let events = capture.take_events();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event"] == "audit_reader_test_work"),
+        "{events:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_query_past_its_deadline_before_starting_never_runs() {
     let fixture = Fixture::new("deadline-before.audit.sqlite");
@@ -1021,7 +1045,7 @@ async fn audit_query_scale() {
                 .to_rfc3339_opts(SecondsFormat::Micros, true);
                 if index % 7 == 0 {
                     record.decision = Decision::Deny;
-                    record.reason_code = Some(ReasonCode::ServiceActionDenied);
+                    record.reason_code = Some(ReasonCode::ServiceActionDenied.into());
                 }
                 record.identity_source = Some(IdentitySourceAudit {
                     namespace: None,

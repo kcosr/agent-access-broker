@@ -52,8 +52,11 @@ selection is fixed for the connection/process lifetime, including after local
 token or configuration rotation. Initialization can succeed before a stdio
 service becomes available; refresh discovery after granting access.
 
-Service connections report the canonical service ID as `serverInfo.name` and
-expose provider tools without a broker prefix or hash:
+The aggregate connection reports the executable's assembly name, such as
+`agent-access-broker`, as `serverInfo.name`; every HTTP connection reports the
+assembly version as `serverInfo.version`. Service connections report the
+canonical service ID as `serverInfo.name` and expose provider tools without a
+broker prefix or hash:
 
 - Built-ins use canonical action names, such as `issue.view`.
 - MCP imports use the exact accepted upstream tool name.

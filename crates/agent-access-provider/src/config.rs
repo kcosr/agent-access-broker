@@ -9,6 +9,17 @@ use url::{Host, Url};
 
 /// Broker-wide limits a backend must respect. The broker derives them from
 /// its `[limits]` section.
+///
+/// The public fields are what a backend reads. Start from the defaults and
+/// override limits with the `with_*` builders:
+///
+/// ```
+/// use agent_access_provider::ProviderLimits;
+///
+/// let limits = ProviderLimits::default().with_request_timeout_ms(5_000);
+/// assert_eq!(limits.request_timeout_ms, 5_000);
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderLimits {
     pub max_http_body_bytes: u64,
@@ -18,23 +29,53 @@ pub struct ProviderLimits {
     pub streaming_idle_timeout_ms: u64,
 }
 
-pub const DEFAULT_MAX_HTTP_BODY_BYTES: u64 = 512 * 1024 * 1024;
-pub const DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES: u64 = 512 * 1024 * 1024;
-pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
-pub const DEFAULT_STREAMING_IDLE_TIMEOUT_MS: u64 = 30_000;
-
+/// The Broker's default limits, which its `[limits]` section overrides.
 impl Default for ProviderLimits {
     fn default() -> Self {
         Self {
-            max_http_body_bytes: DEFAULT_MAX_HTTP_BODY_BYTES,
+            max_http_body_bytes: 512 * 1024 * 1024,
             max_download_bytes: default_download_max_bytes(),
-            max_upstream_response_bytes: DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES,
-            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
-            streaming_idle_timeout_ms: DEFAULT_STREAMING_IDLE_TIMEOUT_MS,
+            max_upstream_response_bytes: 512 * 1024 * 1024,
+            request_timeout_ms: 30_000,
+            streaming_idle_timeout_ms: 30_000,
         }
     }
 }
 
+impl ProviderLimits {
+    pub const fn with_max_http_body_bytes(mut self, bytes: u64) -> Self {
+        self.max_http_body_bytes = bytes;
+        self
+    }
+
+    pub const fn with_max_download_bytes(mut self, bytes: u64) -> Self {
+        self.max_download_bytes = bytes;
+        self
+    }
+
+    pub const fn with_max_upstream_response_bytes(mut self, bytes: u64) -> Self {
+        self.max_upstream_response_bytes = bytes;
+        self
+    }
+
+    pub const fn with_request_timeout_ms(mut self, milliseconds: u64) -> Self {
+        self.request_timeout_ms = milliseconds;
+        self
+    }
+
+    pub const fn with_streaming_idle_timeout_ms(mut self, milliseconds: u64) -> Self {
+        self.streaming_idle_timeout_ms = milliseconds;
+        self
+    }
+}
+
+/// A backend's `attachments` configuration table.
+///
+/// Configuration schema is intentionally exhaustive: its fields are the
+/// documented keys of a table that rejects unknown keys, so adding one is a
+/// configuration contract change that every consumer rendering or validating
+/// the table must handle. Build it from [`Default`] with struct update syntax
+/// or by deserializing it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentLimitsConfig {
@@ -71,6 +112,10 @@ pub fn default_download_max_bytes() -> u64 {
     100 * 1024 * 1024
 }
 
+/// A backend's `search` configuration table.
+///
+/// Configuration schema is intentionally exhaustive, like
+/// [`AttachmentLimitsConfig`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchLimitsConfig {
@@ -86,7 +131,7 @@ impl Default for SearchLimitsConfig {
     }
 }
 
-pub fn default_search_max_results() -> u32 {
+fn default_search_max_results() -> u32 {
     50
 }
 
@@ -373,6 +418,18 @@ pub fn is_loopback_or_localhost(host: Option<Host<&str>>) -> bool {
     }
 }
 
+/// Whether a URL names a literal IPv4 or IPv6 loopback address. Only such URLs
+/// receive the OAuth loopback exceptions (plain HTTP and the direct route).
+/// Host names never qualify, including `localhost`: name resolution must not
+/// grant the exception.
+pub fn is_literal_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        _ => false,
+    }
+}
+
 pub fn is_secret_ref(value: &str) -> bool {
     if let Some(name) = value.strip_prefix("env:") {
         return is_env_name(name);
@@ -395,6 +452,31 @@ fn env_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_loopback_requires_an_ip_address() {
+        for url in [
+            "http://127.0.0.1:8787/token",
+            "https://127.0.0.2/",
+            "http://[::1]:8787/token",
+            "https://[::1]/",
+        ] {
+            assert!(is_literal_loopback(&Url::parse(url).unwrap()), "{url}");
+        }
+        for url in [
+            "http://localhost:8787/token",
+            "https://localhost/",
+            "http://LOCALHOST/",
+            "http://localhost./",
+            "http://127.0.0.1.example/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::2]/",
+            "http://192.0.2.1/",
+            "https://issuer.example/",
+        ] {
+            assert!(!is_literal_loopback(&Url::parse(url).unwrap()), "{url}");
+        }
+    }
 
     #[test]
     fn upstream_http_accepts_only_exact_local_hosts_outside_production() {

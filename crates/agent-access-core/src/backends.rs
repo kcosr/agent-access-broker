@@ -1,6 +1,7 @@
 //! The backends a broker build links, and the `[providers]` tables that
 //! configure them.
-use crate::{
+use crate::imports::{ImportOAuthCompanion, ImportedAdapter, ImportedAdapterRegistration};
+use agent_access_provider::{
     BackendConfig, BackendRegistration, GIT_REPOSITORY_RESOURCE, OAuthDialectRegistration,
     ResourceTypeDescriptor, ResourceTypeRegistry, is_service_name,
 };
@@ -11,27 +12,21 @@ use std::fmt;
 use std::sync::Arc;
 use toml::de::{DeValue, ValueDeserializer};
 
-/// Resource types the broker itself defines, independent of any backend.
-fn host_resource_types() -> [&'static ResourceTypeDescriptor; 2] {
-    [
-        &GIT_REPOSITORY_RESOURCE,
-        &crate::oauth_records::OAUTH_COLLECTION_RESOURCE,
-    ]
-}
+mod domain_reasons;
 
-/// OAuth dialects the broker itself provides.
-fn host_oauth_dialects() -> [&'static OAuthDialectRegistration; 1] {
-    [&crate::oauth::STUB_OAUTH_DIALECT]
-}
+/// The resource type the broker itself defines, independent of any backend:
+/// the Git gateway's repositories.
+static HOST_RESOURCE_TYPE: &ResourceTypeDescriptor = &GIT_REPOSITORY_RESOURCE;
 
-/// The backends and OAuth dialects this build can configure, and every
-/// resource type they and the broker define. Built once by the broker binary.
+/// The backends, OAuth dialects and import adapters this build can
+/// configure, and every resource type they and the broker define. Built once
+/// by the broker binary.
 #[derive(Debug)]
 pub struct BackendRegistry {
     registrations: Vec<&'static BackendRegistration>,
     resource_types: ResourceTypeRegistry,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
-    imported_adapters: Vec<&'static dyn crate::ImportedAdapter>,
+    imported_adapters: Vec<ImportedAdapterRegistration>,
 }
 
 impl BackendRegistry {
@@ -42,36 +37,39 @@ impl BackendRegistry {
         let mut errors = Vec::new();
         let mut kinds = BTreeMap::new();
         for registration in &registrations {
-            if !is_service_name(registration.kind) {
+            if !is_service_name(registration.kind()) {
                 errors.push(format!(
                     "backend kind {} is not a valid service name",
-                    registration.kind
+                    registration.kind()
                 ));
+            } else if registration.kind() == "broker" {
+                // Reserved even when selected but never configured.
+                errors.push(
+                    "backend kind broker is reserved for the Broker control-plane namespace".into(),
+                );
             }
-            if kinds.insert(registration.kind, ()).is_some() {
+            if kinds.insert(registration.kind(), ()).is_some() {
                 errors.push(format!(
                     "backend kind {} is registered more than once",
-                    registration.kind
+                    registration.kind()
                 ));
             }
         }
-        let [git, oauth] = host_resource_types();
-        let types = std::iter::once(git)
-            .chain(
-                registrations
-                    .iter()
-                    .flat_map(|registration| registration.resource_types.iter().copied()),
-            )
-            .chain(std::iter::once(oauth));
+        errors.extend(domain_reasons::validate(&registrations));
+        let types = std::iter::once(HOST_RESOURCE_TYPE).chain(
+            registrations
+                .iter()
+                .flat_map(|registration| registration.resource_types().iter().copied()),
+        );
         let resource_types = ResourceTypeRegistry::new(types).unwrap_or_else(|type_errors| {
             errors.extend(type_errors);
-            ResourceTypeRegistry::new(host_resource_types()).expect("host resource types are valid")
+            ResourceTypeRegistry::new([HOST_RESOURCE_TYPE]).expect("host resource types are valid")
         });
         if errors.is_empty() {
             Ok(Self {
                 registrations,
                 resource_types,
-                oauth_dialects: host_oauth_dialects().to_vec(),
+                oauth_dialects: Vec::new(),
                 imported_adapters: Vec::new(),
             })
         } else {
@@ -79,48 +77,110 @@ impl BackendRegistry {
         }
     }
 
+    /// Adds the selected import adapters. An adapter's OAuth companion is
+    /// selected with it; selecting that dialect again, here or through
+    /// [`Self::with_oauth_dialects`], is rejected as a duplicate.
     pub fn with_imported_adapters(
         mut self,
-        adapters: impl IntoIterator<Item = &'static dyn crate::ImportedAdapter>,
+        registrations: impl IntoIterator<Item = ImportedAdapterRegistration>,
     ) -> Result<Self, Vec<String>> {
-        for adapter in adapters {
-            if !is_service_name(adapter.kind()) || self.imported_adapter(adapter.kind()).is_some() {
-                return Err(vec![
-                    "import adapter kind is invalid or registered more than once".into(),
-                ]);
+        let mut errors = Vec::new();
+        for registration in registrations {
+            let kind = registration.kind();
+            if !is_service_name(kind) {
+                errors.push(format!(
+                    "import adapter kind {kind} is not a valid service name"
+                ));
+            } else if self.imported_adapter(kind).is_some() {
+                errors.push(format!(
+                    "import adapter kind {kind} is registered more than once"
+                ));
+            } else if let Some(companion) = registration.authentication()
+                && let Err(error) = self.add_oauth_dialect(companion.dialect)
+            {
+                errors.push(error);
+            } else {
+                self.imported_adapters.push(registration);
             }
-            self.imported_adapters.push(adapter);
         }
-        Ok(self)
+        if errors.is_empty() {
+            Ok(self)
+        } else {
+            Err(errors)
+        }
     }
 
-    pub fn imported_adapter(&self, kind: &str) -> Option<&'static dyn crate::ImportedAdapter> {
+    pub fn imported_adapter(&self, kind: &str) -> Option<&'static dyn ImportedAdapter> {
+        self.imported_adapter_registration(kind)
+            .map(ImportedAdapterRegistration::adapter)
+    }
+
+    /// Selected import kinds, in selection order.
+    pub fn imported_adapter_kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.imported_adapters
             .iter()
-            .copied()
-            .find(|adapter| adapter.kind() == kind)
+            .map(ImportedAdapterRegistration::kind)
     }
 
-    /// Adds OAuth dialects linked outside core, selectable by a
-    /// registration's `adapter`.
+    /// Selected import adapter registrations, in selection order.
+    pub fn imported_adapter_registrations(
+        &self,
+    ) -> impl Iterator<Item = &ImportedAdapterRegistration> + '_ {
+        self.imported_adapters.iter()
+    }
+
+    /// Each selected import kind whose adapter declares an OAuth companion,
+    /// with that companion, in selection order.
+    pub fn import_authentications(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &ImportOAuthCompanion)> + '_ {
+        self.imported_adapters
+            .iter()
+            .filter_map(|registration| Some((registration.kind(), registration.authentication()?)))
+    }
+
+    /// The OAuth companion that authenticates imports of `kind`, if the
+    /// selected adapter declares one.
+    pub fn import_authentication(&self, kind: &str) -> Option<&ImportOAuthCompanion> {
+        self.imported_adapter_registration(kind)?.authentication()
+    }
+
+    fn imported_adapter_registration(&self, kind: &str) -> Option<&ImportedAdapterRegistration> {
+        self.imported_adapters
+            .iter()
+            .find(|registration| registration.kind() == kind)
+    }
+
+    fn add_oauth_dialect(
+        &mut self,
+        dialect: &'static OAuthDialectRegistration,
+    ) -> Result<(), String> {
+        if !is_service_name(dialect.id()) {
+            Err(format!(
+                "OAuth dialect {} is not a valid identifier",
+                dialect.id()
+            ))
+        } else if self.oauth_dialect(dialect.id()).is_some() {
+            Err(format!(
+                "OAuth dialect {} is registered more than once",
+                dialect.id()
+            ))
+        } else {
+            self.oauth_dialects.push(dialect);
+            Ok(())
+        }
+    }
+
+    /// Adds the selected OAuth dialects, selectable by a registration's
+    /// `adapter`. Core provides none of its own.
     pub fn with_oauth_dialects(
         mut self,
         dialects: impl IntoIterator<Item = &'static OAuthDialectRegistration>,
     ) -> Result<Self, Vec<String>> {
         let mut errors = Vec::new();
         for dialect in dialects {
-            if !is_service_name(dialect.id) {
-                errors.push(format!(
-                    "OAuth dialect {} is not a valid identifier",
-                    dialect.id
-                ));
-            } else if self.oauth_dialect(dialect.id).is_some() {
-                errors.push(format!(
-                    "OAuth dialect {} is registered more than once",
-                    dialect.id
-                ));
-            } else {
-                self.oauth_dialects.push(dialect);
+            if let Err(error) = self.add_oauth_dialect(dialect) {
+                errors.push(error);
             }
         }
         if errors.is_empty() {
@@ -134,14 +194,21 @@ impl BackendRegistry {
         self.oauth_dialects
             .iter()
             .copied()
-            .find(|dialect| dialect.id == id)
+            .find(|dialect| dialect.id() == id)
     }
 
     pub fn oauth_dialect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.oauth_dialects.iter().map(|dialect| dialect.id)
+        self.oauth_dialects.iter().map(|dialect| dialect.id())
     }
 
-    /// A registry with no backends: only the broker's own resource types.
+    /// Selected OAuth dialect registrations, including import companions, in
+    /// selection order.
+    pub fn oauth_dialects(&self) -> impl Iterator<Item = &'static OAuthDialectRegistration> + '_ {
+        self.oauth_dialects.iter().copied()
+    }
+
+    /// A registry with no backends or OAuth dialects: only the broker's own
+    /// resource type.
     pub fn empty() -> Self {
         Self::new([]).expect("the empty backend registry is valid")
     }
@@ -150,22 +217,25 @@ impl BackendRegistry {
         self.registrations
             .iter()
             .copied()
-            .find(|registration| registration.kind == kind)
+            .find(|registration| registration.kind() == kind)
     }
 
     pub fn registrations(&self) -> impl Iterator<Item = &'static BackendRegistration> + '_ {
         self.registrations.iter().copied()
     }
 
-    pub fn resource_owner(&self, resource_type: &crate::ResourceType) -> Option<&'static str> {
+    pub fn resource_owner(
+        &self,
+        resource_type: &agent_access_provider::ResourceType,
+    ) -> Option<&'static str> {
         self.registrations()
             .find(|registration| {
                 registration
-                    .resource_types
+                    .resource_types()
                     .iter()
-                    .any(|descriptor| &descriptor.id == resource_type)
+                    .any(|descriptor| descriptor.id() == resource_type)
             })
-            .map(|registration| registration.kind)
+            .map(|registration| registration.kind())
     }
 
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
@@ -198,7 +268,7 @@ impl BackendRegistry {
         for (kind, table) in tables {
             let kind = kind.into_inner();
             let Some(registration) = self.get(&kind) else {
-                let expected = self.registrations().map(|r| r.kind).collect::<Vec<_>>();
+                let expected = self.registrations().map(|r| r.kind()).collect::<Vec<_>>();
                 return Err(with_input(rejection(
                     table,
                     Rejection::UnknownBackend {
@@ -213,11 +283,12 @@ impl BackendRegistry {
                     Rejection::NotATable("a provider configuration table"),
                 )));
             }
-            let config =
-                (registration.parse)(ValueDeserializer::from(table)).map_err(with_input)?;
+            let config = registration
+                .parse_config(ValueDeserializer::from(table))
+                .map_err(with_input)?;
             debug_assert_eq!(
                 config.kind(),
-                registration.kind,
+                registration.kind(),
                 "a backend parser must produce its own kind"
             );
             configured
@@ -370,6 +441,18 @@ impl ProvidersConfig {
         self.backends.is_empty()
     }
 
+    /// Configured backends with the registration their table selected, in
+    /// registration order. Validation rejects kinds the registry does not
+    /// know, so these are every backend a validated configuration builds.
+    pub(crate) fn registered(
+        &self,
+    ) -> impl Iterator<Item = (&'static BackendRegistration, &dyn BackendConfig)> + '_ {
+        self.registry.registrations().filter_map(|registration| {
+            self.get_kind(registration.kind())
+                .map(|config| (registration, config))
+        })
+    }
+
     /// Configured backends in registration order; kinds the registry does
     /// not know (only possible for programmatic configurations, and
     /// rejected by validation) come last.
@@ -377,7 +460,7 @@ impl ProvidersConfig {
         let registered = self
             .registry
             .registrations()
-            .filter_map(|registration| self.get_kind(registration.kind));
+            .filter_map(|registration| self.get_kind(registration.kind()));
         let unregistered = self
             .backends
             .iter()
@@ -390,25 +473,49 @@ impl ProvidersConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_fake::{OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
 
-    static SECOND_STUB: OAuthDialectRegistration = OAuthDialectRegistration {
-        id: "stub",
-        development_only: true,
-        dialect: crate::oauth::STUB_OAUTH_DIALECT.dialect,
-    };
-    static INVALID: OAuthDialectRegistration = OAuthDialectRegistration {
-        id: "Not A Name",
-        development_only: false,
-        dialect: crate::oauth::STUB_OAUTH_DIALECT.dialect,
-    };
+    static SECOND_STUB: OAuthDialectRegistration = OAuthDialectRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "stub",
+        STUB_OAUTH_DIALECT.dialect(),
+    )
+    .development_only();
+    static INVALID: OAuthDialectRegistration = OAuthDialectRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "Not A Name",
+        STUB_OAUTH_DIALECT.dialect(),
+    );
 
     #[test]
-    fn oauth_dialects_include_the_stub_and_reject_conflicts() {
+    fn an_empty_registry_has_no_fixture_dialect_service_or_resource_type() {
         let registry = BackendRegistry::empty();
+        assert_eq!(registry.oauth_dialect_ids().count(), 0);
+        assert!(registry.oauth_dialect("stub").is_none());
+        assert!(registry.get("oauth_stub").is_none());
+        assert_eq!(
+            registry
+                .resource_types()
+                .ids()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>(),
+            ["git_repository"]
+        );
+    }
+
+    #[test]
+    fn selected_fixtures_register_and_conflicting_dialects_are_rejected() {
+        let registry = BackendRegistry::new([&OAUTH_STUB_BACKEND])
+            .unwrap()
+            .with_oauth_dialects([&STUB_OAUTH_DIALECT])
+            .unwrap();
         assert_eq!(registry.oauth_dialect_ids().collect::<Vec<_>>(), ["stub"]);
-        assert!(registry.oauth_dialect("stub").is_some());
         assert!(registry.oauth_dialect("outlook").is_none());
-        let errors = BackendRegistry::empty()
+        assert_eq!(
+            registry.resource_owner(OAUTH_STUB_BACKEND.resource_types()[0].id()),
+            Some("oauth_stub")
+        );
+        let errors = registry
             .with_oauth_dialects([&SECOND_STUB, &INVALID])
             .unwrap_err();
         assert_eq!(

@@ -177,7 +177,7 @@ impl ServiceDiscovery<'_> {
             .filter(|action| {
                 resource.is_none_or(|resource| {
                     kind.is_some_and(|kind| {
-                        self.action_resource_type(&action.action) == Some(&kind.id)
+                        self.action_resource_type(&action.action) == Some(kind.id())
                     }) && self
                         .clauses(&action.action)
                         .iter()
@@ -202,7 +202,7 @@ impl ServiceDiscovery<'_> {
             return Err("limit must be an integer between 1 and 100");
         }
         let descriptor = self.resource_type(query.resource_type.as_ref())?;
-        let kind = descriptor.map(|kind| kind.id.clone());
+        let kind = descriptor.map(|kind| kind.id().clone());
         let action_clauses = self
             .capabilities
             .actions
@@ -332,7 +332,7 @@ impl ServiceDiscovery<'_> {
             .runtime
             .providers
             .get(&self.capabilities.service)
-            .map(|provider| provider.resource_roots(&kind.id))
+            .map(|provider| provider.resource_roots(kind.id()))
             .unwrap_or_default()
             .into_iter()
             .map(|value| ResourceSelector::Namespace { value })
@@ -354,7 +354,11 @@ impl ServiceDiscovery<'_> {
                         ResourceSelector::Exact { .. } => Vec::new(),
                         // Roots enumerate the type's top-level namespaces.
                         ResourceSelector::All if !roots.is_empty() => roots.clone(),
-                        _ => vec![selector.clone()],
+                        ResourceSelector::All | ResourceSelector::Namespace { .. } => {
+                            vec![selector.clone()]
+                        }
+                        // A selector form this build does not know is never reported.
+                        _ => Vec::new(),
                     })
                     .filter(|entry| {
                         let only = ResourceBoundary {
@@ -398,7 +402,7 @@ impl ServiceDiscovery<'_> {
                     })
             })
             .map(|entry| ResourceCoverage {
-                resource_type: kind.id.clone(),
+                resource_type: kind.id().clone(),
                 selector: entry.clone(),
                 inputs: action_inputs(kind, entry),
                 restricted: actions.iter().any(|(clauses, reach)| {
@@ -417,8 +421,7 @@ fn action_inputs(
     kind: &ResourceTypeDescriptor,
     selector: &ResourceSelector,
 ) -> Option<serde_json::Map<String, Value>> {
-    kind.action_inputs
-        .and_then(|project| project(selector))
+    kind.action_inputs(selector)
         .filter(|inputs| !inputs.is_empty())
 }
 
@@ -488,12 +491,12 @@ mod tests {
             let mut descriptor = agent_access_fake::fake_descriptor();
             descriptor.resource_scopes.insert(
                 "space".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-                        .id
+                ResourceScopeCapabilities::new(
+                    agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+                        .id()
                         .clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
+                    vec!["exact".into(), "all".into()],
+                ),
             );
             descriptor.actions.push(
                 ActionDescriptor::new("note", "Note on a space", json!({"type": "object"}))
@@ -506,12 +509,13 @@ mod tests {
 
     #[async_trait]
     impl Provider for TwoTypeProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
 
         async fn invoke(
@@ -543,9 +547,9 @@ mod tests {
         let view = runtime
             .service_discovery(&identity, &context, "fake")
             .unwrap();
-        let fake_project = agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone();
+        let fake_project = agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone();
         let space = agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone();
 
         assert_eq!(
@@ -945,12 +949,12 @@ mod tests {
         assert!(view.resources(&ResourceListQuery::default()).is_ok());
         view.capabilities.resource_scopes.insert(
             "space".into(),
-            ResourceScopeCapabilities {
-                resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-                    .id
+            ResourceScopeCapabilities::new(
+                agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+                    .id()
                     .clone(),
-                selectors: vec!["exact".into()],
-            },
+                vec!["exact".into()],
+            ),
         );
         assert!(view.resources(&ResourceListQuery::default()).is_err());
         assert!(view.actions(Some("TEST"), None, None).is_err());

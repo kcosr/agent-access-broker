@@ -192,26 +192,40 @@ arguments.
 ### `broker`
 
 - `broker status` — `GET /v1/broker/status`. Prints the authenticated Broker's
-  immutable build and contract versions as pretty JSON.
+  immutable build identity and contract versions as pretty JSON.
 
-A release-stamped Broker returns this exact safe shape:
+The response names the running assembly (`assembly.name`, `version`,
+`qualification` and `source`), the linked `host` and `sdk` packages, every
+compiled module package with its `roles`, an `inventoryFingerprint`, and
+`catalogVersion`/`sendSchemaVersion`. For example, abbreviated to one module:
 
 ```json
 {
-  "brokerVersion": "0.1.0",
-  "buildCommit": "3c14665eb32caf14e21373a762da328ea78b79a2",
-  "buildProvenance": "release",
+  "assembly": {
+    "name": "agent-access-broker",
+    "version": "0.1.0",
+    "qualification": "unqualified",
+    "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}
+  },
+  "host": {"crate": "agent-access-broker-host", "version": "0.1.0", "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}},
+  "sdk": {"crate": "agent-access-provider", "version": "0.1.0", "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}},
+  "modules": [
+    {"crate": "agent-access-jira", "version": "0.1.0", "roles": [{"role": "native", "id": "jira"}], "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}}
+  ],
+  "inventoryFingerprint": "sha256:6f1c9d0e2b7a4c58e93d1f60a2b4c7e8d9f0a1b2c3d4e5f60718293a4b5c6d7e",
   "catalogVersion": "agent-access.catalog.v2",
   "sendSchemaVersion": "agent-access.send.v1"
 }
 ```
 
-An unstamped local build returns the same fields with `buildCommit: null` and
-`buildProvenance: "unavailable"`. The command uses normal Broker identity and
-request-ID handling, but requires no admin right, provider grant, or execution
-context. It is intended to verify the deployed binary without exposing branch,
-dirty state, build time, host, or path metadata; it does not replace health or
-readiness checks.
+Each `source.provenance` is `evidence`, `declared`, or `unavailable` with a
+`null` revision; an unstamped local build reports every source as unavailable.
+The module list is what the executable compiles in, not what its configuration
+enables. See [the HTTP API](http-api.md) for every field. The command uses
+normal Broker identity and request-ID handling, but requires no admin right,
+provider grant, or execution context. It is intended to verify the deployed
+binary without exposing branch, dirty state, build time, host, or path
+metadata; it does not replace health or readiness checks.
 
 ### `config`
 
@@ -1834,7 +1848,8 @@ authorization, result bounds, and trigger semantics.
 
 ## OAuth test records
 
-The development test provider provides `oauth-stub record list --collection alpha`,
+When the Broker configures the development `oauth_stub` backend, the CLI provides
+`oauth-stub record list --collection alpha`,
 `oauth-stub record view alice-alpha-1 --collection alpha`, and `oauth-stub account`.
 They invoke the canonical `oauth_stub.record.list`, `record.view`, and
 `account.view` actions using the caller’s existing Broker token. Connect the

@@ -1,6 +1,5 @@
 //! Helpers shared by the Jira and Confluence backends.
-use agent_access_provider::{ExecutionCredential, ServiceCredentialKinds};
-use thiserror::Error;
+use agent_access_provider::{CredentialView, ExecutionCredential, ServiceCredentialKinds};
 use url::Url;
 
 pub fn validate_atlassian_gateway_credential(
@@ -75,46 +74,24 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
 /// How an Atlassian execution credential authenticates a request: HTTP
 /// Basic for a tenant API token, a bearer token through the gateway.
 pub enum AtlassianAuthorization<'a> {
-    Basic {
-        username: &'a str,
-        token: Option<&'a str>,
-    },
+    Basic { username: &'a str, token: &'a str },
     Bearer(&'a str),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum AtlassianCredentialError {
-    #[error("basic username missing")]
-    BasicUsernameMissing,
-    #[error("bearer token missing")]
-    BearerTokenMissing,
-    #[error("unsupported credential kind")]
-    UnsupportedKind,
-}
-
 impl<'a> AtlassianAuthorization<'a> {
-    pub fn new(credential: &'a ExecutionCredential) -> Result<Self, AtlassianCredentialError> {
-        match credential.kind.as_str() {
-            "basic_api_token" => Ok(Self::Basic {
-                username: credential
-                    .username
-                    .as_deref()
-                    .ok_or(AtlassianCredentialError::BasicUsernameMissing)?,
-                token: credential.token.as_deref(),
-            }),
-            "bearer_token" => Ok(Self::Bearer(
-                credential
-                    .token
-                    .as_deref()
-                    .ok_or(AtlassianCredentialError::BearerTokenMissing)?,
-            )),
-            _ => Err(AtlassianCredentialError::UnsupportedKind),
+    /// How `credential` authenticates, or `None` for a credential kind
+    /// Atlassian providers do not support, which the caller must reject.
+    pub fn new(credential: &'a ExecutionCredential) -> Option<Self> {
+        match credential.view() {
+            CredentialView::Basic { username, token } => Some(Self::Basic { username, token }),
+            CredentialView::Bearer { token } => Some(Self::Bearer(token)),
+            _ => None,
         }
     }
 
     pub fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self {
-            Self::Basic { username, token } => builder.basic_auth(username, *token),
+            Self::Basic { username, token } => builder.basic_auth(username, Some(token)),
             Self::Bearer(token) => builder.bearer_auth(token),
         }
     }

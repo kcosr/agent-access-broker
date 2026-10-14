@@ -1,16 +1,10 @@
-mod common;
-use common::{resource_catalog, resource_selection};
-
-use agent_access_broker::build_router;
-use agent_access_core::{
-    BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, EXECUTION_CONTEXT_HEADER,
-    ExecutionContextConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
-    PolicyConfig, PolicyGrantConfig, REQUEST_ID_HEADER, RESULT_METADATA_HEADER, ResourceSelector,
-    StaticPrincipalConfig,
-};
+use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
+use agent_access_core::EXECUTION_CONTEXT_HEADER;
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
+use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rustls::pki_types::pem::PemObject;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -3254,61 +3248,24 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
         BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
         ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode, PrincipalWriteRequest,
     };
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-    let store_path = temp_path("resource-policy.sqlite");
-    let fixture_dir = store_path.parent().unwrap();
-    let hash_key_path = fixture_dir.join("hash-key");
-    let admin_token_path = fixture_dir.join("admin-token");
-    std::fs::write(&hash_key_path, URL_SAFE_NO_PAD.encode([73_u8; 32])).unwrap();
-    let mut config = fake_config();
-    config.execution_context = Some(ExecutionContextConfig {
-        allowed_values: vec!["default".to_string(), "internal".to_string()],
-        default_context: Some("default".to_string()),
-    });
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".to_string(),
-        authority: "managed".to_string(),
-        sources: vec![IdentitySourceConfig {
-            name: "broker".to_string(),
-            kind: "broker_tokens".to_string(),
-            header: "Authorization".to_string(),
-            scheme: "Bearer".to_string(),
-            principals: vec![],
-        }],
-        groups: vec![],
-    };
-    let store_config = ManagedStoreConfig {
-        kind: "sqlite".to_string(),
-        path: store_path.display().to_string(),
-        require_registered_principal_for_invocation: false,
-        auto_migrate: true,
-    };
-    config.managed_store = Some(store_config.clone());
-    config.credential_encryption = Some(agent_access_core::CredentialEncryptionConfig {
-        active_key: "test".into(),
-        keys: vec![agent_access_core::CredentialEncryptionKeyConfig {
-            id: "test".into(),
-            provider: "file".into(),
-            env: None,
-            path: Some(hash_key_path.display().to_string()),
-        }],
-    });
-
-    config.management.enabled = true;
-    config.policy = PolicyConfig {
-        authority: "managed".to_string(),
-        default_decision: "deny".to_string(),
-        resources: vec![],
-        resource_groups: vec![],
-        grants: vec![],
-    };
-    config.broker_tokens = Some(BrokerTokensConfig {
-        hash_key_ref: format!("file:{}", hash_key_path.display()),
-        ..Default::default()
-    });
-    let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
+    let application = fake_application();
+    let fixture_dir = application.directory().clone();
+    let document = fake_document(&fixture_dir, FakeAccess::Managed);
+    // Seed the managed store before the broker opens and locks it.
+    let store = ManagedStore::open(
+        &ManagedStoreConfig {
+            kind: "sqlite".to_string(),
+            path: fixture_dir
+                .join("resource-policy.sqlite")
+                .display()
+                .to_string(),
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        },
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
             role: agent_access_core::PrincipalRole::User,
@@ -3329,7 +3286,11 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             actor: "test".into(),
         })
         .unwrap();
-    let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", fixture_dir.join("hash-key").display()),
+        ..Default::default()
+    })
+    .unwrap();
     let admin = store
         .issue_broker_token(
             &hasher,
@@ -3343,20 +3304,11 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             },
         )
         .unwrap();
-    std::fs::write(&admin_token_path, admin.token).unwrap();
+    let admin_token_path = fixture_dir.secret_file("admin-token", admin.token).unwrap();
     drop(store);
 
-    let runtime = agent_access_core::BrokerRuntime::new(config).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+    let broker = application.config_document(document).start().await.unwrap();
+    let base_url = broker.public_url();
     let run = |token_path: &std::path::Path, args: &[&str], allowed: bool| {
         let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
             .args([
@@ -3606,8 +3558,12 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             ]);
         }
         let issued = run(&admin_token_path, &args, true);
-        let path = fixture_dir.join(format!("{name}-token"));
-        std::fs::write(&path, issued["result"]["token"].as_str().unwrap()).unwrap();
+        let path = fixture_dir
+            .secret_file(
+                format!("{name}-token"),
+                issued["result"]["token"].as_str().unwrap(),
+            )
+            .unwrap();
         tokens.push((
             path,
             issued["result"]["record"]["tokenId"]
@@ -3660,8 +3616,12 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             ],
             true,
         );
-        let path = fixture_dir.join(format!("{name}-token"));
-        std::fs::write(&path, issued["result"]["token"].as_str().unwrap()).unwrap();
+        let path = fixture_dir
+            .secret_file(
+                format!("{name}-token"),
+                issued["result"]["token"].as_str().unwrap(),
+            )
+            .unwrap();
         invoke(&path, "NEW", false);
         invoke(&path, "INTERNAL", false);
     }
@@ -3798,59 +3758,15 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
     );
     invoke(&tokens[0].0, "NEW", true);
     invoke(&tokens[1].0, "NEW", false);
-    server.abort();
-    let _ = server.await;
-    std::fs::remove_dir_all(fixture_dir).unwrap();
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_registration() {
     for separate_grant in [false, true] {
-        let mut config = fake_config();
-        config.policy.resources.extend(resource_catalog(&[(
-            "all-projects",
-            FAKE_PROJECT_RESOURCE.id.clone(),
-            ResourceSelector::All,
-        )]));
         // Disabling an exclusion must never expose its target through a wildcard.
-        config.policy.resources[0].enabled = false;
-        config.policy.resource_groups = vec![
-            agent_access_core::ResourceGroupDefinition {
-                id: "acceptable-projects".to_string(),
-                name: "Acceptable projects".to_string(),
-                included_resource_ids: vec!["all-projects".to_string()],
-                excluded_resource_ids: vec!["project-test".to_string()],
-            },
-            agent_access_core::ResourceGroupDefinition {
-                id: "overlapping-projects".to_string(),
-                name: "Overlapping projects".to_string(),
-                included_resource_ids: vec!["all-projects".to_string()],
-                excluded_resource_ids: vec![],
-            },
-        ];
-        config.policy.grants[0].resources = agent_access_core::ResourceSelection {
-            resource_ids: vec!["all-projects".to_string()],
-            resource_group_ids: vec![
-                "acceptable-projects".to_string(),
-                "overlapping-projects".to_string(),
-            ],
-        };
-        if separate_grant {
-            let mut grant = config.policy.grants[0].clone();
-            grant.resources = resource_selection(&["all-projects"]);
-            config.policy.grants.push(grant);
-        }
-        let runtime = agent_access_core::BrokerRuntime::new(config).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        });
+        let broker = start_fake_broker(FakeAccess::GroupExclusions { separate_grant }).await;
+        let base_url = broker.public_url();
         for (project, allowed) in [("TEST", separate_grant), ("NEW", true)] {
             let input =
                 serde_json::json!({"project": project, "message": "scope check"}).to_string();
@@ -3883,25 +3799,14 @@ async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_regis
                 assert_eq!(body["reasonCode"], "service_action_denied");
             }
         }
-        server.abort();
+        stop(broker).await;
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_fake_provider_against_stubbed_broker() {
-    let runtime = agent_access_core::BrokerRuntime::new(fake_config()).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-
-    let base_url = format!("http://{addr}");
+    let broker = start_fake_broker(FakeAccess::Anonymous).await;
+    let base_url = broker.public_url();
     let services = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args(["--url", &base_url, "--no-token", "services", "list"])
         .output()
@@ -4072,7 +3977,7 @@ async fn cli_invokes_fake_provider_against_stubbed_broker() {
     assert_eq!(invoke_json["result"]["message"], "from cli");
     assert_eq!(invoke_json["result"]["credentialMode"], "service");
 
-    server.abort();
+    stop(broker).await;
 }
 
 #[test]
@@ -4080,10 +3985,23 @@ fn cli_broker_status_gets_exact_endpoint_and_prints_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
+    let unavailable = serde_json::json!({"revision": null, "provenance": "unavailable"});
     let expected = serde_json::json!({
-        "brokerVersion": "0.1.0",
-        "buildCommit": null,
-        "buildProvenance": "unavailable",
+        "assembly": {
+            "name": "agent-access-broker",
+            "version": "0.1.0",
+            "qualification": "unqualified",
+            "source": unavailable
+        },
+        "host": {"crate": "agent-access-broker-host", "version": "0.1.0", "source": unavailable},
+        "sdk": {"crate": "agent-access-provider", "version": "0.1.0", "source": unavailable},
+        "modules": [{
+            "crate": "agent-access-fake",
+            "version": "0.1.0",
+            "roles": [{"role": "native", "id": "fake"}],
+            "source": unavailable
+        }],
+        "inventoryFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "catalogVersion": "agent-access.catalog.v2",
         "sendSchemaVersion": "agent-access.send.v1"
     });
@@ -4266,25 +4184,11 @@ fn cli_action_describe_keeps_hidden_and_nonexistent_errors_indistinguishable() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_required_static_identity_against_stubbed_broker() {
-    let token_path = temp_path("identity-token.txt");
-    std::fs::write(&token_path, "agent-access-token").unwrap();
-    let runtime =
-        agent_access_core::BrokerRuntime::new(required_context_fake_config(&token_path)).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let trusted_ingress = build_router(runtime).layer(axum::middleware::from_fn(
-            inject_trusted_internal_execution_context,
-        ));
-        axum::serve(
-            listener,
-            trusted_ingress.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-
-    let base_url = format!("http://{addr}");
+    let broker = start_fake_broker(FakeAccess::TrustedContext).await;
+    let directory = broker.directory().clone();
+    let token_path = directory.join("identity-token.txt");
+    // The CLI reaches the broker through the trusted ingress.
+    let (base_url, ingress) = start_trusted_ingress(&broker).await;
     let auth = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
             "--url",
@@ -4360,7 +4264,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let invoke_json: serde_json::Value = serde_json::from_slice(&invoke.stdout).unwrap();
     assert_eq!(invoke_json["result"]["principal"], "agent-one");
 
-    let input_path = temp_path("invoke-input.json");
+    let input_path = directory.join("invoke-input.json");
     std::fs::write(
         &input_path,
         r#"{"project":"TEST","message":"required identity from file"}"#,
@@ -4525,7 +4429,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
         "Agent Access CLI send request"
     );
 
-    let send_invoke_path = temp_path("send-invoke.json");
+    let send_invoke_path = directory.join("send-invoke.json");
     std::fs::write(
         &send_invoke_path,
         r#"{"version":"agent-access.send.v1","kind":"invoke","service":"fake","action":"echo","inputs":{"project":"TEST","message":"from send"}}"#,
@@ -4556,7 +4460,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let send_invoke_json: serde_json::Value = serde_json::from_slice(&send_invoke.stdout).unwrap();
     assert_eq!(send_invoke_json["result"]["message"], "from send");
 
-    let send_http_path = temp_path("send-http.json");
+    let send_http_path = directory.join("send-http.json");
     std::fs::write(
         &send_http_path,
         r#"{"version":"agent-access.send.v1","kind":"http","method":"GET","route":"/v1/services/{service}","pathParams":{"service":"fake"}}"#,
@@ -4587,7 +4491,9 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let send_http_json: serde_json::Value = serde_json::from_slice(&send_http.stdout).unwrap();
     assert_eq!(send_http_json["service"], "fake");
 
-    server.abort();
+    ingress.abort();
+    let _ = ingress.await;
+    stop(broker).await;
 }
 
 #[test]
@@ -5584,135 +5490,268 @@ fn group_record_response(group_id: &str) -> serde_json::Value {
     })
 }
 
-fn fake_config() -> BrokerConfig {
-    BrokerConfig {
-        imports: Default::default(),
-        oauth: Default::default(),
-        deployment: DeploymentConfig {
-            enable_fake_service: true,
-            ..DeploymentConfig::default()
-        },
-        network: agent_access_core::NetworkConfig::default(),
-        execution_context: None,
-        identity: IdentityConfig {
-            trusted_callers: Default::default(),
-            mode: "anonymous".to_string(),
-            authority: "toml".to_string(),
-            sources: vec![],
-            groups: vec![],
-        },
-        credentials: CredentialsConfig {
-            imported_modes: Default::default(),
-            service: BTreeMap::from([(
-                "fake".to_string(),
-                CredentialConfig {
-                    kind: "bearer_token".to_string(),
-                    username_ref: None,
-                    token_ref: Some("env:FAKE_SERVICE_TOKEN".to_string()),
-                    provider: None,
-                    path: None,
-                    read_only: None,
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-            per_user: BTreeMap::new(),
-            lookup: BTreeMap::new(),
-        },
-        managed_store: None,
-        credential_encryption: None,
-        management: agent_access_core::ManagementConfig::default(),
-        broker_tokens: None,
-        browser_auth: agent_access_core::BrowserAuthConfig::default(),
-        portal: agent_access_core::PortalConfig::default(),
-        mcp: Default::default(),
-        policy: PolicyConfig {
-            resources: resource_catalog(&[(
-                "project-test",
-                FAKE_PROJECT_RESOURCE.id.clone(),
-                ResourceSelector::Exact {
-                    value: "TEST".to_string(),
-                },
-            )]),
-            resource_groups: vec![],
-            authority: "toml".to_string(),
-            default_decision: "deny".to_string(),
-            grants: vec![PolicyGrantConfig {
-                execution_contexts: None,
-                subjects: vec!["group:anonymous".to_string()],
-                service: "fake".to_string(),
-                actions: vec!["echo".to_string()],
-                resources: resource_selection(&["project-test"]),
-                credential_mode: "service".to_string(),
-                priority: None,
-            }],
-        },
-        attribution: Default::default(),
-        providers: agent_access_core::ProvidersConfig::new(std::sync::Arc::new(
-            agent_access_broker::backend_registry(),
-        ))
-        .with(agent_access_fake::FakeProviderConfig::default()),
-
-        gateways: BTreeMap::new(),
-        limits: agent_access_core::LimitsConfig {
-            upload_spool_dir: temp_path("upload-spool").display().to_string(),
-            ..agent_access_core::LimitsConfig::default()
-        },
-        audit: None,
-    }
+/// Who may call the fake broker, and on which policy.
+#[derive(Clone, Copy, Debug)]
+enum FakeAccess {
+    /// Anonymous callers echo on project TEST with the service credential.
+    Anonymous,
+    /// As [`Self::Anonymous`], but the grant selects an all-projects resource
+    /// directly and through two groups, one of which excludes the disabled
+    /// project TEST. `separate_grant` adds a second grant of all projects
+    /// alone.
+    GroupExclusions { separate_grant: bool },
+    /// The static principal `agent-one`, whose token is `identity-token.txt`
+    /// and who is a member of group `agents`, echoes on TEST in context
+    /// `internal`. The trusted caller `test_ingress` asserts the context.
+    TrustedContext,
+    /// Managed identity, policy and store in `resource-policy.sqlite`, with
+    /// management enabled, broker tokens and credential encryption keyed by
+    /// `hash-key`, and the contexts `default` and `internal`.
+    Managed,
 }
 
-fn required_fake_config(token_path: &std::path::Path) -> BrokerConfig {
-    let mut config = fake_config();
-    config.identity = IdentityConfig {
-        trusted_callers: Default::default(),
-        mode: "required".to_string(),
-        authority: "toml".to_string(),
-        sources: vec![IdentitySourceConfig {
-            name: "local".to_string(),
-            kind: "static_principals".to_string(),
-            header: "X-Agent-Access-Identity-Token".to_string(),
-            scheme: "raw".to_string(),
-            principals: vec![StaticPrincipalConfig {
-                principal: "agent-one".to_string(),
-                token_refs: vec![format!("file:{}", token_path.display())],
-            }],
-        }],
-        groups: vec![IdentityGroupConfig {
-            id: "agents".to_string(),
-            status: "active".to_string(),
-            members: vec!["agent-one".to_string()],
-        }],
-    };
-    config.policy.grants[0].subjects = vec!["group:agents".to_string()];
-    config
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl std::fmt::Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
 }
 
-fn required_context_fake_config(token_path: &std::path::Path) -> BrokerConfig {
-    let mut config = required_fake_config(token_path);
-    config.execution_context = Some(ExecutionContextConfig {
-        allowed_values: vec!["internal".to_string(), "external".to_string()],
-        default_context: None,
-    });
-    config.policy.grants[0].execution_contexts = Some(vec!["internal".to_string()]);
-    for resource in &mut config.policy.resources {
-        resource.allowed_execution_contexts = vec!["internal".to_string(), "external".to_string()];
-    }
-    let caller_path = temp_path("context-caller.secret");
-    std::fs::write(&caller_path, "cli-smoke-context-caller-secret").unwrap();
-    config.identity.trusted_callers.insert(
-        "test_ingress".into(),
-        agent_access_core::TrustedCallerConfig {
-            credential_transport: Default::default(),
-            username_namespace: None,
-            credential_ref: format!("file:{}", caller_path.display()),
-            context_mode: agent_access_core::TrustedCallerContextMode::Asserted,
-            execution_context: None,
-            allowed_execution_contexts: Some(vec!["internal".into(), "external".into()]),
-            allow_forwarded_identity: false,
-        },
+/// A `file:` secret reference to a new private file in `directory`.
+fn secret_ref(directory: &FixtureDir, name: &str, contents: &str) -> String {
+    let path = directory.secret_file(name, contents).unwrap();
+    toml_string(format_args!("file:{}", path.display()))
+}
+
+/// The development deployment with the fake backend and its service
+/// credential, an upload spool in `directory`, and `access`'s identity and
+/// policy. Writes the secrets `access` names into `directory`.
+fn fake_document(directory: &FixtureDir, access: FakeAccess) -> String {
+    let resource_type = FAKE_PROJECT_RESOURCE.id().as_str();
+    let mut document = format!(
+        r#"
+[deployment]
+enable_fake_service = true
+
+[credentials.service.fake]
+type = "bearer_token"
+token_ref = "env:FAKE_SERVICE_TOKEN"
+
+[providers.fake]
+
+[limits]
+upload_spool_dir = {spool}
+"#,
+        spool = toml_string(directory.join("upload-spool").display()),
     );
-    config
+    document.push_str(&match access {
+        FakeAccess::Anonymous => format!(
+            r#"
+[identity]
+mode = "anonymous"
+authority = "toml"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "project-test"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "TEST" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "fake"
+actions = ["echo"]
+resources = {{ resource_ids = ["project-test"] }}
+credential_mode = "service"
+"#
+        ),
+        FakeAccess::GroupExclusions { separate_grant } => {
+            let mut section = format!(
+                r#"
+[identity]
+mode = "anonymous"
+authority = "toml"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+# Disabling an exclusion must never expose its target through a wildcard.
+[[policy.resources]]
+id = "project-test"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "TEST" }}
+allowed_execution_contexts = ["default"]
+enabled = false
+
+[[policy.resources]]
+id = "all-projects"
+resource_type = "{resource_type}"
+selector = {{ kind = "all" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.resource_groups]]
+id = "acceptable-projects"
+name = "Acceptable projects"
+included_resource_ids = ["all-projects"]
+excluded_resource_ids = ["project-test"]
+
+[[policy.resource_groups]]
+id = "overlapping-projects"
+name = "Overlapping projects"
+included_resource_ids = ["all-projects"]
+excluded_resource_ids = []
+
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "fake"
+actions = ["echo"]
+resources = {{ resource_ids = ["all-projects"], resource_group_ids = ["acceptable-projects", "overlapping-projects"] }}
+credential_mode = "service"
+"#
+            );
+            if separate_grant {
+                section.push_str(
+                    r#"
+[[policy.grants]]
+subjects = ["group:anonymous"]
+service = "fake"
+actions = ["echo"]
+resources = { resource_ids = ["all-projects"] }
+credential_mode = "service"
+"#,
+                );
+            }
+            section
+        }
+        FakeAccess::TrustedContext => format!(
+            r#"
+[execution_context]
+allowed_values = ["internal", "external"]
+
+[identity]
+mode = "required"
+authority = "toml"
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{agent_token}]
+
+[[identity.groups]]
+id = "agents"
+status = "active"
+members = ["agent-one"]
+
+[identity.trusted_callers.test_ingress]
+credential_ref = {caller}
+context_mode = "asserted"
+allowed_execution_contexts = ["internal", "external"]
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "project-test"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "TEST" }}
+allowed_execution_contexts = ["internal", "external"]
+
+[[policy.grants]]
+subjects = ["group:agents"]
+service = "fake"
+actions = ["echo"]
+resources = {{ resource_ids = ["project-test"] }}
+execution_contexts = ["internal"]
+credential_mode = "service"
+"#,
+            agent_token = secret_ref(directory, "identity-token.txt", "agent-access-token"),
+            caller = secret_ref(
+                directory,
+                "context-caller.secret",
+                "cli-smoke-context-caller-secret"
+            ),
+        ),
+        FakeAccess::Managed => {
+            let key = directory
+                .secret_file("hash-key", URL_SAFE_NO_PAD.encode([73_u8; 32]))
+                .unwrap();
+            format!(
+                r#"
+[execution_context]
+allowed_values = ["default", "internal"]
+default_context = "default"
+
+[identity]
+mode = "required"
+authority = "managed"
+
+[[identity.sources]]
+name = "broker"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+[managed_store]
+type = "sqlite"
+path = {store}
+auto_migrate = true
+
+[credential_encryption]
+active_key = "test"
+
+[[credential_encryption.keys]]
+id = "test"
+provider = "file"
+path = {key}
+
+[broker_tokens]
+hash_key_ref = {hash_key}
+
+[management]
+enabled = true
+
+[policy]
+authority = "managed"
+default_decision = "deny"
+"#,
+                store = toml_string(directory.join("resource-policy.sqlite").display()),
+                key = toml_string(key.display()),
+                hash_key = toml_string(format_args!("file:{}", key.display())),
+            )
+        }
+    });
+    document
+}
+
+/// The broker assembly's own composition and identity in a new fixture
+/// directory.
+fn fake_application() -> IsolatedBroker {
+    IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
+    )
+    .unwrap()
+}
+
+/// Starts the broker assembly on `access`'s fake configuration.
+async fn start_fake_broker(access: FakeAccess) -> RunningBroker {
+    let application = fake_application();
+    let document = fake_document(application.directory(), access);
+    application.config_document(document).start().await.unwrap()
+}
+
+async fn stop(broker: RunningBroker) {
+    broker.shutdown();
+    broker.join().await.unwrap();
 }
 
 async fn inject_trusted_internal_execution_context(
@@ -5731,6 +5770,69 @@ async fn inject_trusted_internal_execution_context(
         axum::http::HeaderValue::from_static("internal"),
     );
     next.run(request).await
+}
+
+/// Starts a trusted ingress in front of `broker`'s public listener: every
+/// request passes through [`inject_trusted_internal_execution_context`] and
+/// is then forwarded to the broker. Returns the ingress URL and its server.
+async fn start_trusted_ingress(broker: &RunningBroker) -> (String, tokio::task::JoinHandle<()>) {
+    let upstream = broker.public_url();
+    // One broker connection per request, so the ingress keeps no idle
+    // connection to the broker open.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap();
+    let ingress = axum::Router::new()
+        .fallback(move |request: axum::extract::Request| {
+            forward_to_broker(client.clone(), upstream.clone(), request)
+        })
+        .layer(axum::middleware::from_fn(
+            inject_trusted_internal_execution_context,
+        ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, ingress).await.unwrap();
+    });
+    (url, server)
+}
+
+/// Forwards `request` to the broker at `upstream` and relays its response,
+/// without the connection-level headers of either hop.
+async fn forward_to_broker(
+    client: reqwest::Client,
+    upstream: String,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::http::header::{CONNECTION, CONTENT_LENGTH, HOST, TRANSFER_ENCODING};
+    let hop_headers = [CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING];
+    let (parts, body) = request.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    let path = parts.uri.path_and_query().map_or("/", |path| path.as_str());
+    let mut headers = parts.headers;
+    headers.remove(HOST);
+    for name in &hop_headers {
+        headers.remove(name);
+    }
+    let mut forwarded = client
+        .request(parts.method, format!("{upstream}{path}"))
+        .headers(headers);
+    if !body.is_empty() {
+        forwarded = forwarded.body(body);
+    }
+    let response = forwarded.send().await.unwrap();
+    let status = response.status();
+    let mut headers = response.headers().clone();
+    for name in &hop_headers {
+        headers.remove(name);
+    }
+    let mut relayed =
+        axum::response::Response::new(axum::body::Body::from(response.bytes().await.unwrap()));
+    *relayed.status_mut() = status;
+    *relayed.headers_mut() = headers;
+    relayed
 }
 
 fn temp_path(name: &str) -> std::path::PathBuf {

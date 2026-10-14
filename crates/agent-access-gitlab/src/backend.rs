@@ -16,7 +16,7 @@ pub trait GitlabBackend: Send + Sync {
     }
 
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        EgressProxySelection::direct().audit_value()
+        EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
@@ -1618,17 +1618,12 @@ pub(crate) struct GitlabSuggestionApplyInputs {
     pub(crate) commit_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The repositories scope resolution confirmed for a suggestion apply,
+/// handed to the same operation's invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitlabSuggestionScopePreflight {
     pub(crate) target_project_id: u64,
     pub(crate) source_project_id: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct GitlabSuggestionProviderPreflight {
-    pub(crate) gitlab_suggestion_scope: GitlabSuggestionScopePreflight,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2104,34 +2099,37 @@ pub(crate) struct HttpGitlabBackend {
 }
 
 impl HttpGitlabBackend {
-    pub(crate) fn new_with_egress(
+    /// A backend whose clients come from a test host with `limits`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         config: GitlabProviderConfig,
         limits: ProviderLimits,
-        egress_proxy: &EgressProxyRuntimeConfig,
-        outbound_tls: &crate::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host)
+    }
+
+    pub(crate) fn new(
+        config: GitlabProviderConfig,
+        limits: ProviderLimits,
+        clients: &dyn agent_access_provider::host::UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let api_base = normalized_api_base(&config.api_base_url).map_err(|error| {
-            HostError::Config(crate::ConfigError::Invalid {
-                errors: vec![format!("providers.gitlab.api_base_url is invalid: {error}")],
-            })
+            ProviderBuildError::invalid(format!(
+                "providers.gitlab.api_base_url is invalid: {error}"
+            ))
         })?;
-        let network = UpstreamNetwork {
-            limits: &limits,
-            egress: egress_proxy,
-            outbound_tls,
-        };
         let client = |profile| {
             UpstreamClient::build(
-                UpstreamClientSpec {
-                    label: "providers.gitlab.egress_proxy",
-                    provider: "gitlab",
-                    base: &api_base,
-                    egress_proxy: config.egress_proxy.as_ref(),
-                    allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                UpstreamClientSpec::new(
+                    "providers.gitlab.egress_proxy",
+                    "gitlab",
+                    &api_base,
+                    EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                    &config.allowed_upstream_hosts,
                     profile,
-                    status_reasons: &[],
-                },
-                network,
+                ),
+                clients,
             )
         };
         let upload_client = client(ClientProfile::Upload)?;
@@ -2448,7 +2446,7 @@ impl GitlabBackend for HttpGitlabBackend {
     }
 
     fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
-        self.client.egress_proxy().audit_value()
+        self.client.egress_route().audit_value()
     }
 
     async fn current_user(
@@ -4702,13 +4700,8 @@ pub(crate) fn authenticated_gitlab_request(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, GitlabBackendError> {
-    match credential.kind.as_str() {
-        "bearer_token" => Ok(builder.bearer_auth(
-            credential
-                .token
-                .as_deref()
-                .ok_or_else(|| GitlabBackendError::Protocol("bearer token missing".to_string()))?,
-        )),
+    match credential.view() {
+        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
         _ => Err(GitlabBackendError::Protocol(
             "unsupported GitLab credential kind".to_string(),
         )),
@@ -4769,6 +4762,8 @@ pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError 
         UpstreamError::NotAllowed | UpstreamError::Redirect => {
             GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
         }
+        // Any other failure produced no usable response.
+        other => GitlabBackendError::Transport(other.to_string()),
     }
 }
 

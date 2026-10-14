@@ -3,10 +3,8 @@
 //! protocol comes from its registered dialect.
 //! Provider material never crosses the Broker credential boundary.
 mod lease;
-mod stub;
 
 pub(crate) use lease::ManagedOAuthLease;
-pub use stub::STUB_OAUTH_DIALECT;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
@@ -21,13 +19,13 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{
-    AuthorizationRequest, BackendRegistry, CodeExchange, CredentialKeyRing,
-    EgressProxyRuntimeConfig, InvocationScope, IssuedRefreshToken, ManagedStore, ManagedStoreError,
-    OAuthCallbackIssuer, OAuthClient, OAuthDialect, OAuthDialectError, OAuthHttp,
-    OAuthPermissionProfile, OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget,
-    OutboundTlsConfig, PreparedOutboundTls, ProviderLimits, RefreshReplay, TokenGrant,
-    UPSTREAM_RETRY_AFTER_MAX_SECONDS, UpstreamNetwork,
+use crate::network::{ClientCaller, HostNetwork};
+use crate::{BackendRegistry, CredentialKeyRing, ManagedStore, ManagedStoreError};
+use agent_access_provider::{
+    AuthorizationRequest, CodeExchange, InvocationScope, IssuedRefreshToken, OAuthCallbackIssuer,
+    OAuthClient, OAuthDialect, OAuthDialectError, OAuthHttp, OAuthPermissionProfile,
+    OAuthRegistrationConfig, OAuthScopeMode, OAuthTarget, RefreshReplay, TokenGrant,
+    UPSTREAM_RETRY_AFTER_MAX_SECONDS,
 };
 
 const MAX_FLOWS: usize = 1;
@@ -259,6 +257,8 @@ impl From<OAuthDialectError> for OAuthError {
             OAuthDialectError::GrantInvalid => Self::ReconnectRequired,
             OAuthDialectError::ClientRejected => Self::ApplicationCredential,
             OAuthDialectError::Configuration => Self::Configuration,
+            // A failure this host does not know may have consumed the grant.
+            _ => Self::Provider,
         }
     }
 }
@@ -288,7 +288,7 @@ impl OAuthConfig {
                 registration.allow_insecure_loopback,
             )?;
             let reference = &registration.client_secret_ref;
-            if registration.client_auth == crate::OAuthClientAuth::None {
+            if registration.client_auth == agent_access_provider::OAuthClientAuth::None {
                 if !reference.is_empty() {
                     return Err(OAuthError::Configuration);
                 }
@@ -330,6 +330,7 @@ impl OAuthConfig {
                         return Err(OAuthError::Configuration);
                     }
                     OAuthScopeMode::ServerDefault => {}
+                    _ => return Err(OAuthError::Configuration),
                 }
             }
         }
@@ -356,13 +357,9 @@ fn identifier(value: &str) -> bool {
 fn bounded(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
-pub(crate) fn is_loopback(url: &Url) -> bool {
-    matches!(url.host(), Some(url::Host::Ipv4(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback())
-}
 fn checked_url(raw: &str, insecure: bool) -> Result<Url, OAuthError> {
     let url = Url::parse(raw).map_err(|_| OAuthError::Configuration)?;
-    let loopback = is_loopback(&url);
+    let loopback = agent_access_provider::is_literal_loopback(&url);
     if !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -547,11 +544,7 @@ struct ResolvedRegistration {
 
 impl ResolvedRegistration {
     fn client(&self) -> OAuthClient<'_> {
-        OAuthClient {
-            registration_id: &self.id,
-            config: &self.config,
-            client_secret: &self.secret,
-        }
+        OAuthClient::new(&self.id, &self.config, &self.secret)
     }
 }
 type SlotLocks = Mutex<BTreeMap<(String, String), Arc<tokio::sync::Mutex<()>>>>;
@@ -605,41 +598,24 @@ impl std::fmt::Debug for OAuthManager {
 }
 
 impl OAuthManager {
-    /// A manager with the broker's own dialects, sending directly.
-    pub fn new(
-        store: ManagedStore,
-        ring: CredentialKeyRing,
-        config: OAuthConfig,
-    ) -> Result<Self, OAuthError> {
-        let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default())
-            .map_err(|_| OAuthError::Configuration)?;
-        Self::new_with_host(
-            store,
-            ring,
-            config,
-            &BackendRegistry::empty(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &tls,
-            },
-        )
-    }
     /// Preparation has no database side effects. Call activate only when publishing a validated runtime.
-    pub fn new_with_host(
+    /// Every registration's clients come from `network` in the host OAuth
+    /// category.
+    pub(crate) fn new_with_host(
         store: ManagedStore,
         ring: CredentialKeyRing,
         config: OAuthConfig,
         dialects: &BackendRegistry,
-        network: UpstreamNetwork<'_>,
+        network: &HostNetwork,
     ) -> Result<Self, OAuthError> {
         config.validate()?;
+        let clients = network.client_factory(ClientCaller::HostOAuth);
         let mut registrations = BTreeMap::new();
         for (id, registration) in &config.registrations {
             let dialect = dialects
                 .oauth_dialect(registration.adapter.as_str())
                 .ok_or(OAuthError::Configuration)?
-                .dialect;
+                .dialect();
             if !dialect.supports_server_default_scopes()
                 && registration
                     .permission_profiles
@@ -651,13 +627,15 @@ impl OAuthManager {
             dialect
                 .validate_registration(registration)
                 .map_err(|_| OAuthError::Configuration)?;
-            let secret = if registration.client_auth == crate::OAuthClientAuth::None {
+            let secret = if registration.client_auth == agent_access_provider::OAuthClientAuth::None
+            {
                 String::new()
             } else {
                 crate::load_secret_ref_value("OAuth application", &registration.client_secret_ref)
                     .map_err(|_| OAuthError::ApplicationCredential)?
             };
-            if registration.client_auth != crate::OAuthClientAuth::None && !bounded(&secret, 16384)
+            if registration.client_auth != agent_access_provider::OAuthClientAuth::None
+                && !bounded(&secret, 16384)
             {
                 return Err(OAuthError::ApplicationCredential);
             }
@@ -668,7 +646,7 @@ impl OAuthManager {
                 "oauth",
                 &base,
                 &dialect.upstream_allowlist(registration),
-                network,
+                &clients,
             )
             .map_err(|_| OAuthError::Configuration)?;
             registrations.insert(
@@ -890,11 +868,10 @@ impl OAuthManager {
                 &r.http,
                 &r.client(),
                 profile,
-                AuthorizationRequest {
-                    state: &state,
-                    code_challenge_s256: &URL_SAFE_NO_PAD
-                        .encode(Sha256::digest(verifier.as_bytes())),
-                },
+                AuthorizationRequest::new(
+                    &state,
+                    &URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
+                ),
             )
             .await?;
         self.update(owner, &binding.registration, |conn, current| {
@@ -1107,11 +1084,7 @@ impl OAuthManager {
             .exchange_code(
                 &r.http,
                 &client,
-                CodeExchange {
-                    code,
-                    code_verifier: &flow.verifier,
-                    profile,
-                },
+                CodeExchange::new(code, &flow.verifier, profile),
             )
             .await?;
         let scopes = grant_scopes(&grant, profile.scope_mode)?;
@@ -1970,10 +1943,16 @@ fn make_lease(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::managed_store::oauth::{test_fixture, test_sql};
-    use crate::{OAuthAdapter, OAuthClientAuth, OAuthRotation, OAuthTokenEncoding, ReasonCode};
+    use crate::network::EgressProxyEnvironment;
+    use crate::{OutboundTlsConfig, PreparedOutboundTls};
+    use agent_access_fake::{OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
+    use agent_access_provider::{
+        OAuthAdapter, OAuthClientAuth, OAuthRotation, OAuthTokenEncoding, ProviderLimits,
+        ReasonCode,
+    };
     use std::sync::atomic::AtomicUsize;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1981,12 +1960,13 @@ mod tests {
     // Tests core's mode-aware lifecycle without changing the production stub's
     // explicit-scope contract or coupling core to a protocol adapter.
     struct DefaultScopeDialect;
-    static DEFAULT_SCOPE_DIALECT: crate::OAuthDialectRegistration =
-        crate::OAuthDialectRegistration {
-            id: "default_scope_fixture",
-            development_only: true,
-            dialect: &DefaultScopeDialect,
-        };
+    pub(crate) static DEFAULT_SCOPE_DIALECT: agent_access_provider::OAuthDialectRegistration =
+        agent_access_provider::OAuthDialectRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "default_scope_fixture",
+            &DefaultScopeDialect,
+        )
+        .development_only();
 
     #[async_trait::async_trait]
     impl OAuthDialect for DefaultScopeDialect {
@@ -1997,7 +1977,7 @@ mod tests {
             Ok(())
         }
         fn upstream_allowlist(&self, config: &OAuthRegistrationConfig) -> Vec<String> {
-            STUB_OAUTH_DIALECT.dialect.upstream_allowlist(config)
+            STUB_OAUTH_DIALECT.dialect().upstream_allowlist(config)
         }
         fn authorization_url(
             &self,
@@ -2014,7 +1994,7 @@ mod tests {
             Ok(url)
         }
         fn callback_issuer(&self, config: &OAuthRegistrationConfig) -> OAuthCallbackIssuer {
-            STUB_OAUTH_DIALECT.dialect.callback_issuer(config)
+            STUB_OAUTH_DIALECT.dialect().callback_issuer(config)
         }
         fn refresh_replay(&self, _config: &OAuthRegistrationConfig) -> RefreshReplay {
             RefreshReplay::Consuming
@@ -2066,11 +2046,10 @@ mod tests {
             _http: &OAuthHttp,
             _client: &OAuthClient<'_>,
             _access_token: &str,
-        ) -> Result<crate::ConnectedIdentity, OAuthDialectError> {
-            Ok(crate::ConnectedIdentity {
-                subject: None,
-                display_name: "Example connection".into(),
-            })
+        ) -> Result<agent_access_provider::ConnectedIdentity, OAuthDialectError> {
+            Ok(agent_access_provider::ConnectedIdentity::new(
+                "Example connection",
+            ))
         }
         async fn discover_targets(
             &self,
@@ -2080,13 +2059,34 @@ mod tests {
             granted_scopes: &BTreeSet<String>,
         ) -> Result<Vec<OAuthTarget>, OAuthDialectError> {
             let profile = client.config.permission_profiles.values().next().unwrap();
-            Ok(vec![OAuthTarget {
-                id: profile.target.clone(),
-                name: "Example resource".into(),
-                audience: profile.audience.clone(),
-                scopes: granted_scopes.clone(),
-            }])
+            Ok(vec![
+                OAuthTarget::new(
+                    profile.target.clone(),
+                    profile.audience.clone(),
+                    granted_scopes.clone(),
+                )
+                .with_name("Example resource"),
+            ])
         }
+    }
+
+    /// The selections these tests configure: the development records
+    /// backend, its `stub` dialect and the default-scope fixture dialect.
+    fn test_registry() -> BackendRegistry {
+        BackendRegistry::new([&OAUTH_STUB_BACKEND])
+            .unwrap()
+            .with_oauth_dialects([&STUB_OAUTH_DIALECT, &DEFAULT_SCOPE_DIALECT])
+            .unwrap()
+    }
+
+    /// A manager over [`test_registry`]'s explicitly selected dialects,
+    /// sending directly.
+    fn stub_manager(
+        store: ManagedStore,
+        ring: CredentialKeyRing,
+        config: OAuthConfig,
+    ) -> Result<OAuthManager, OAuthError> {
+        OAuthManager::new_with_host(store, ring, config, &test_registry(), &direct_network())
     }
 
     fn default_scope_manager(
@@ -2094,27 +2094,24 @@ mod tests {
         ring: CredentialKeyRing,
         config: OAuthConfig,
     ) -> OAuthManager {
-        OAuthManager::new_with_host(
-            store,
-            ring,
-            config,
-            &BackendRegistry::empty()
-                .with_oauth_dialects([&DEFAULT_SCOPE_DIALECT])
-                .unwrap(),
-            UpstreamNetwork {
-                limits: &ProviderLimits::default(),
-                egress: &EgressProxyRuntimeConfig::direct(),
-                outbound_tls: &PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap(),
-            },
+        stub_manager(store, ring, config).unwrap()
+    }
+
+    /// Direct routes and system trust.
+    fn direct_network() -> HostNetwork {
+        HostNetwork::new(
+            ProviderLimits::default(),
+            PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap(),
+            Arc::new(EgressProxyEnvironment::empty()),
+            None,
         )
-        .unwrap()
     }
 
     #[test]
     fn registration_fingerprints_never_drift() {
         let registration = OAuthRegistrationConfig {
             adapter_settings: Default::default(),
-            adapter: OAuthAdapter::STUB,
+            adapter: OAuthAdapter::new("stub"),
             base_url: "https://stub.example/".into(),
             redirect_uri: "https://broker.example/v1/oauth/callback/stub".into(),
             client_id: "broker".into(),
@@ -2198,6 +2195,9 @@ mod tests {
             type = "oauth"
             provider = "stub"
             profile = "read"
+            # The records API is never contacted by these lifecycle tests.
+            [providers.oauth_stub]
+            base_url = "http://127.0.0.1:9"
             "#,
             directory.join("oauth.sqlite").display().to_string(),
             key.display().to_string()
@@ -2205,11 +2205,7 @@ mod tests {
         let mut config = crate::parse_broker_config_raw(
             "oauth-runtime-fixture",
             &raw,
-            &Arc::new(
-                BackendRegistry::empty()
-                    .with_oauth_dialects([&DEFAULT_SCOPE_DIALECT])
-                    .unwrap(),
-            ),
+            &Arc::new(test_registry()),
         )
         .unwrap();
         config.oauth = manager.config().clone();
@@ -2222,7 +2218,7 @@ mod tests {
                 "stub".into(),
                 OAuthRegistrationConfig {
                     adapter_settings: Default::default(),
-                    adapter: OAuthAdapter::STUB,
+                    adapter: OAuthAdapter::new("stub"),
                     base_url: server.uri(),
                     redirect_uri: "http://127.0.0.1:9000/v1/oauth/callback/stub".into(),
                     client_id: "broker".into(),
@@ -2320,7 +2316,7 @@ mod tests {
             let (_dir, store, ring, original, server) = fixture().await;
             let mut config = original.config().clone();
             config.registrations.get_mut("stub").unwrap().rotation = rotation;
-            let manager = OAuthManager::new(store, ring, config).unwrap();
+            let manager = stub_manager(store, ring, config).unwrap();
             manager.activate().unwrap();
             connected(&manager, &server).await;
             let requests = server.received_requests().await.unwrap().len();
@@ -2425,7 +2421,7 @@ mod tests {
         let secret_file = dir.path().join("client-secret");
         std::fs::write(&secret_file, "application-secret").unwrap();
         let manager =
-            OAuthManager::new(store.clone(), ring.clone(), config(&server, &secret_file)).unwrap();
+            stub_manager(store.clone(), ring.clone(), config(&server, &secret_file)).unwrap();
         manager.activate().unwrap();
         (dir, store, ring, manager, server)
     }
@@ -2552,7 +2548,7 @@ mod tests {
         default.validate().unwrap();
         // A generic registration is well formed, but a dialect must opt in.
         assert!(matches!(
-            OAuthManager::new(store, ring, default.clone()),
+            stub_manager(store, ring, default.clone()),
             Err(OAuthError::Configuration)
         ));
         for scopes in [vec![], vec!["records.read".into()]] {
@@ -2610,12 +2606,8 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let mut targets = vec![OAuthTarget {
-            id: "one".into(),
-            name: "One".into(),
-            audience: "records-api".into(),
-            scopes: BTreeSet::new(),
-        }];
+        let mut targets =
+            vec![OAuthTarget::new("one", "records-api", BTreeSet::new()).with_name("One")];
         assert!(eligible(&profile, &BTreeSet::new(), &targets).is_ok());
         assert_eq!(
             eligible(&profile, &BTreeSet::new(), &[]),
@@ -2656,7 +2648,7 @@ mod tests {
             let (_dir, store, ring, original, _server) = fixture().await;
             let mut config = original.config().clone();
             let registration = config.registrations.get_mut("stub").unwrap();
-            registration.adapter = OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id);
+            registration.adapter = OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id());
             let profile = registration.permission_profiles.get_mut("read").unwrap();
             profile.scope_mode = OAuthScopeMode::ServerDefault;
             profile.scopes = None;
@@ -2729,7 +2721,7 @@ mod tests {
         let (_dir, store, ring, original, _server) = fixture().await;
         let mut explicit = original.config().clone();
         explicit.registrations.get_mut("stub").unwrap().adapter =
-            OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id);
+            OAuthAdapter::new(DEFAULT_SCOPE_DIALECT.id());
         let manager = default_scope_manager(store.clone(), ring.clone(), explicit.clone());
         manager.activate().unwrap();
         let state = start(&manager, OAuthConnectIntent::Connect).await;
@@ -3163,7 +3155,7 @@ mod tests {
         }
         store.check_ready(Some(&ring)).unwrap();
         let restarted =
-            OAuthManager::new(store.clone(), ring.clone(), manager.config().clone()).unwrap();
+            stub_manager(store.clone(), ring.clone(), manager.config().clone()).unwrap();
         restarted.activate().unwrap();
         assert_eq!(
             restarted
@@ -3710,8 +3702,8 @@ mod tests {
                 .await
                 .unwrap();
         let first = credential.access();
-        assert_eq!(first.token, "protected-access-0");
-        assert_eq!(first.target, "workspace-one");
+        assert_eq!(first.token(), "protected-access-0");
+        assert_eq!(first.target(), "workspace-one");
         credential.revalidate().await.unwrap();
         assert_eq!(credential.access(), first);
 
@@ -3721,17 +3713,110 @@ mod tests {
         let current = manager.acquire("user", &binding()).await.unwrap();
         assert_eq!(current.token(), "protected-access-1");
         credential.revalidate().await.unwrap();
-        assert_eq!(credential.access().version, current.access_version());
+        assert_eq!(credential.access().version(), current.access_version());
 
         let recovered = credential.recover_after_unauthorized().await.unwrap();
-        assert_eq!(recovered.token, "protected-access-2");
+        assert_eq!(recovered.token(), "protected-access-2");
         assert_eq!(credential.access(), recovered);
         let again = credential.recover_after_unauthorized().await.unwrap_err();
-        assert_eq!(again.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(again.reason_code(), ReasonCode::CredentialInvalid);
 
         manager.disconnect("user", "stub").await.unwrap();
         let revoked = credential.revalidate().await.unwrap_err();
-        assert_eq!(revoked.reason_code, ReasonCode::CredentialInvalid);
+        assert_eq!(revoked.reason_code(), ReasonCode::CredentialInvalid);
+    }
+
+    #[tokio::test]
+    async fn delegated_binding_identity_survives_refresh_and_changes_on_reconnect() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        successive_refreshes(&server).await;
+        let credential =
+            ManagedOAuthLease::acquire(manager.clone(), "records".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        let identity = credential.binding_identity();
+        assert_eq!(format!("{identity:?}"), "DelegatedBindingId(<redacted>)");
+
+        // Routine refresh by another invocation and this invocation's own
+        // recovery keep the binding.
+        expire(&manager);
+        manager.acquire("user", &binding()).await.unwrap();
+        credential.revalidate().await.unwrap();
+        assert_eq!(credential.binding_identity(), identity);
+        credential.recover_after_unauthorized().await.unwrap();
+        assert_eq!(credential.binding_identity(), identity);
+
+        // Another service lent the same connection is another binding.
+        let other_service =
+            ManagedOAuthLease::acquire(manager.clone(), "other".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        assert_ne!(other_service.binding_identity(), identity);
+
+        // A disconnect and new consent create a new connection and binding.
+        manager.disconnect("user", "stub").await.unwrap();
+        server.reset().await;
+        connected(&manager, &server).await;
+        let reconnected =
+            ManagedOAuthLease::acquire(manager.clone(), "records".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        assert_ne!(reconnected.binding_identity(), identity);
+        assert!(credential.revalidate().await.is_err());
+    }
+
+    #[test]
+    fn delegated_binding_identity_covers_binding_fields_but_not_access() {
+        let lease = OAuthLease {
+            token: "access-token".into(),
+            owner: "user".into(),
+            binding: binding(),
+            config_fingerprint: "fingerprint".into(),
+            generation: "generation".into(),
+            connection_id: "connection".into(),
+            access_version: "version-1".into(),
+            target: "target".into(),
+            audience: "audience".into(),
+            expires_at: 100,
+        };
+        let identity = lease::delegated_binding_identity("records", &lease);
+        let refreshed = OAuthLease {
+            token: "renewed-token".into(),
+            access_version: "version-2".into(),
+            expires_at: 200,
+            ..lease.clone()
+        };
+        assert_eq!(
+            lease::delegated_binding_identity("records", &refreshed),
+            identity
+        );
+        let changed = |change: fn(&mut OAuthLease)| {
+            let mut changed = lease.clone();
+            change(&mut changed);
+            lease::delegated_binding_identity("records", &changed)
+        };
+        for other in [
+            changed(|lease| lease.owner = "other-user".into()),
+            changed(|lease| lease.binding.registration = "other-registration".into()),
+            changed(|lease| lease.binding.permission_profile = "write".into()),
+            changed(|lease| lease.config_fingerprint = "other-fingerprint".into()),
+            changed(|lease| lease.generation = "other-generation".into()),
+            changed(|lease| lease.connection_id = "other-connection".into()),
+            lease::delegated_binding_identity("other-service", &lease),
+        ] {
+            assert_ne!(other, identity);
+        }
+        // Length delimiting keeps adjacent fields from running together:
+        // "records" + "user" and "recordsu" + "ser" concatenate identically.
+        let shifted = OAuthLease {
+            owner: "ser".into(),
+            ..lease.clone()
+        };
+        assert_ne!(
+            lease::delegated_binding_identity("recordsu", &shifted),
+            identity
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3832,7 +3917,7 @@ mod tests {
                 credential.revalidate().await
             };
             assert_eq!(
-                result.unwrap_err().reason_code,
+                result.unwrap_err().reason_code(),
                 ReasonCode::CredentialInvalid
             );
             assert!(server.received_requests().await.unwrap().is_empty());
@@ -3844,7 +3929,7 @@ mod tests {
         let (_dir, store, ring, original, server) = fixture().await;
         let mut config = original.config().clone();
         config.registrations.get_mut("stub").unwrap().rotation = OAuthRotation::PreserveOld;
-        let manager = OAuthManager::new(store.clone(), ring.clone(), config.clone()).unwrap();
+        let manager = stub_manager(store.clone(), ring.clone(), config.clone()).unwrap();
         manager.activate().unwrap();
         connected(&manager, &server).await;
         expire(&manager);
@@ -3861,7 +3946,7 @@ mod tests {
                 Ok((slot, ()))
             })
             .unwrap();
-        let manager = OAuthManager::new(store, ring, config).unwrap();
+        let manager = stub_manager(store, ring, config).unwrap();
         manager.activate().unwrap();
         let recovery_start = now_millis();
         // An interrupted attempt is a failure, not throttling: refresh is
@@ -3945,8 +4030,7 @@ mod tests {
             let (_dir, store, ring, original, server) = fixture().await;
             let mut config = original.config().clone();
             config.registrations.get_mut("stub").unwrap().rotation = OAuthRotation::PreserveOld;
-            let mut manager =
-                OAuthManager::new(store.clone(), ring.clone(), config.clone()).unwrap();
+            let mut manager = stub_manager(store.clone(), ring.clone(), config.clone()).unwrap();
             manager.activate().unwrap();
             connected(&manager, &server).await;
             expire(&manager);
@@ -3960,17 +4044,12 @@ mod tests {
                     .get_mut("stub")
                     .unwrap();
                 r.config.base_url = url;
-                let tls = PreparedOutboundTls::load(&OutboundTlsConfig::default()).unwrap();
                 r.http = OAuthHttp::build(
                     "drop-test",
                     "oauth",
                     &Url::parse(&r.config.base_url).unwrap(),
                     &r.dialect.upstream_allowlist(&r.config),
-                    UpstreamNetwork {
-                        limits: &ProviderLimits::default(),
-                        egress: &EgressProxyRuntimeConfig::direct(),
-                        outbound_tls: &tls,
-                    },
+                    &direct_network().client_factory(ClientCaller::HostOAuth),
                 )
                 .unwrap();
                 Some(tokio::spawn(async move {
@@ -4037,7 +4116,7 @@ mod tests {
             if failure == "retry_after" {
                 assert!(matches!(error, OAuthError::RetryLater(1..=2)));
             }
-            let restarted = OAuthManager::new(store, ring, config).unwrap();
+            let restarted = stub_manager(store, ring, config).unwrap();
             restarted.activate().unwrap();
             // The cooldown's cause survives a restart: only throttling reads
             // as throttling; a failure pauses refresh and names the failure.
@@ -4095,7 +4174,7 @@ mod tests {
             manager.acquire("user", &binding()).await.unwrap_err(),
             OAuthError::RefreshUncertain
         );
-        let restarted = OAuthManager::new(store, ring, manager.config().clone()).unwrap();
+        let restarted = stub_manager(store, ring, manager.config().clone()).unwrap();
         restarted.activate().unwrap();
         assert_eq!(
             restarted.acquire("user", &binding()).await.unwrap_err(),
@@ -4149,7 +4228,7 @@ mod tests {
             .get_mut("stub")
             .unwrap()
             .client_secret_ref = format!("file:{}", new_secret.display());
-        let successor = OAuthManager::new(store.clone(), ring.clone(), changed).unwrap();
+        let successor = stub_manager(store.clone(), ring.clone(), changed).unwrap();
         manager.validate_lease(&lease).unwrap();
         successor.activate().unwrap();
         manager.deactivate();
@@ -4164,7 +4243,7 @@ mod tests {
         assert_eq!(manager.validate_lease(&lease), Err(OAuthError::Stale));
         let mut changed = successor.config().clone();
         changed.registrations.get_mut("stub").unwrap().client_id = "different-application".into();
-        let changed = OAuthManager::new(store, ring, changed).unwrap();
+        let changed = stub_manager(store, ring, changed).unwrap();
         successor.validate_lease(&lease).unwrap();
         changed.activate().unwrap();
         assert_eq!(
@@ -4217,18 +4296,13 @@ mod tests {
             target: "one".into(),
         };
         let targets = vec![
-            OAuthTarget {
-                id: "one".into(),
-                name: "One".into(),
-                audience: "records-api".into(),
-                scopes: BTreeSet::new(),
-            },
-            OAuthTarget {
-                id: "two".into(),
-                name: "Two".into(),
-                audience: "records-api".into(),
-                scopes: BTreeSet::from(["records.read".into()]),
-            },
+            OAuthTarget::new("one", "records-api", BTreeSet::new()).with_name("One"),
+            OAuthTarget::new(
+                "two",
+                "records-api",
+                BTreeSet::from(["records.read".into()]),
+            )
+            .with_name("Two"),
         ];
         assert_eq!(
             eligible(&profile, &BTreeSet::from(["records.read".into()]), &targets),
@@ -4308,7 +4382,7 @@ mod tests {
             .get_mut("stub")
             .unwrap()
             .client_secret_ref = format!("file:{}", secret_file.display());
-        let replacement = OAuthManager::new(store, ring, config).unwrap();
+        let replacement = stub_manager(store, ring, config).unwrap();
         replacement.activate().unwrap();
         manager.deactivate();
         server.reset().await;
@@ -4387,7 +4461,7 @@ mod tests {
             let (_dir, store, ring, manager, server) = fixture().await;
             let mut config = manager.config().clone();
             config.registrations.get_mut("stub").unwrap().rotation = rotation;
-            let manager = OAuthManager::new(store, ring, config).unwrap();
+            let manager = stub_manager(store, ring, config).unwrap();
             manager.activate().unwrap();
             connected(&manager, &server).await;
             expire(&manager);
@@ -4427,14 +4501,13 @@ mod tests {
     }
 
     fn grant(token_type: &str, expires_in: u64) -> TokenGrant {
-        TokenGrant {
-            access_token: "protected-access-1".into(),
-            token_type: token_type.into(),
+        TokenGrant::new(
+            "protected-access-1",
+            token_type,
             expires_in,
-            scopes: vec!["records.read".into(), "offline_access".into()],
-            refresh_token: IssuedRefreshToken::Issued("protected-refresh-1".into()),
-            supersedes_other_access: false,
-        }
+            IssuedRefreshToken::Issued("protected-refresh-1".into()),
+        )
+        .with_scopes(vec!["records.read".into(), "offline_access".into()])
     }
 
     #[test]
@@ -4577,9 +4650,6 @@ mod tests {
                 "protected-access-1"
             );
         }
-        assert_eq!(stub::retry_after_seconds(Some("9999999")), 86_400);
-        assert_eq!(stub::retry_after_seconds(Some("3600")), 3600);
-        assert_eq!(stub::retry_after_seconds(Some("invalid")), 1);
     }
 
     #[tokio::test]
@@ -4806,7 +4876,7 @@ mod tests {
         assert!(family.retry_not_before >= before + 3_600_000);
         assert!(family.retry_not_before <= after + 3_600_000);
         // The deadline survives a restart, and no refresh is sent before it.
-        let restarted = OAuthManager::new(store, ring, manager.config().clone()).unwrap();
+        let restarted = stub_manager(store, ring, manager.config().clone()).unwrap();
         restarted.activate().unwrap();
         let OAuthError::RetryLater(remaining) =
             restarted.acquire("user", &binding()).await.unwrap_err()
@@ -4964,7 +5034,7 @@ mod tests {
                 .get_mut("stub")
                 .unwrap()
                 .client_secret_ref = format!("file:{}", secret.display());
-            let successor = OAuthManager::new(store, ring, config).unwrap();
+            let successor = stub_manager(store, ring, config).unwrap();
             successor.activate().unwrap();
             manager.deactivate();
             assert_eq!(successor.validate_lease(&old), Err(OAuthError::Stale));
@@ -5085,7 +5155,7 @@ mod tests {
         let old = manager.clone();
         let discovery = tokio::spawn(async move { old.acquire("user", &binding()).await });
         called.notified().await;
-        let replacement = OAuthManager::new(store, ring, manager.config().clone()).unwrap();
+        let replacement = stub_manager(store, ring, manager.config().clone()).unwrap();
         replacement.activate().unwrap();
         manager.deactivate();
         let state = start(&replacement, OAuthConnectIntent::Reconnect).await;

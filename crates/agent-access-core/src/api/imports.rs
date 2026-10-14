@@ -7,8 +7,8 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     let mut list = get_management_route(BASE, "admin.imports.list", RouteAccess::AdminRead);
     list.result_schema = Some(json!({"type":"object","additionalProperties":false,
-    "required":["catalogRevision","operatorEnabled","services","availableKinds","oauthRegistrations"],"properties":{
-        "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"oauthRegistrations":oauth_registrations(),
+    "required":["catalogRevision","operatorEnabled","services","availableKinds","importAuthentication"],"properties":{
+        "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
         "catalogRevision":revision(),"services":{"type":"array","items":service_record()}
     }}));
     routes.push(list);
@@ -55,7 +55,7 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     routes.push(preview);
     let mut accept = versioned_request();
     accept["properties"]["manifestHash"] = json!({"type":"string","minLength":1,"maxLength":128});
-    accept["properties"]["selections"] = json!({"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":{
+    accept["properties"]["selections"] = json!({"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":{
         "type":"object","additionalProperties":false,"required":["source","action","readOnly"],"properties":{
             "source":{"type":"object","minProperties":1},"action":action_name(),
             "label":{"type":["string","null"],"maxLength":256},"readOnly":{"type":"boolean"}
@@ -264,12 +264,18 @@ fn service_record() -> Value {
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
     }})
 }
-fn oauth_registrations() -> Value {
-    json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","adapterId","issuer","resource","permissionProfiles"],"properties":{
-        "id":{"type":"string"},"adapterId":{"type":"string"},"issuer":{"type":"string"},"resource":{"type":"string"},
+/// The import-authentication projection: one group per selected import kind
+/// with an OAuth companion, listing the operator registrations it approves.
+fn import_authentication() -> Value {
+    let registration = json!({"type":"object","additionalProperties":false,"required":["id","issuer","resource","permissionProfiles"],"properties":{
+        "id":{"type":"string"},"issuer":{"type":"string"},"resource":{"type":"string"},
         "permissionProfiles":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","scopeMode","scopes"],"properties":{
             "id":{"type":"string"},"scopeMode":{"enum":["explicit","server_default"]},"scopes":{"type":"array","items":{"type":"string"}}
         }}}
+    }});
+    json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":["importKind","dialectId","registrations"],"properties":{
+        "importKind":service_name_schema(),"dialectId":{"type":"string"},
+        "registrations":{"type":"array","items":registration}
     }}})
 }
 fn scoped_mcp_issue_code() -> Value {
@@ -284,14 +290,14 @@ fn scoped_mcp_readiness() -> Value {
     }})
 }
 fn scoped_mcp_warnings() -> Value {
-    json!({"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":{"type":"object","additionalProperties":false,"required":["toolIndex","proposedAction","codes"],"properties":{
+    json!({"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":{"type":"object","additionalProperties":false,"required":["toolIndex","proposedAction","codes"],"properties":{
         "toolIndex":{"type":"integer","minimum":0},"proposedAction":{"type":"string"},
         "codes":{"type":"array","minItems":1,"uniqueItems":true,"items":scoped_mcp_issue_code()}
     }}})
 }
 fn service_result() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","oauthRegistrations","scopedMcp"],"properties":{
-        "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"oauthRegistrations":oauth_registrations(),
+    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
+        "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
         "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness()
     }})
 }
@@ -303,7 +309,7 @@ fn discovery_manifest() -> Value {
     }});
     json!({"type":"object","additionalProperties":false,"required":["protocolVersion","metadata","tools"],"properties":{
         "protocolVersion":{"type":"string"},"metadata":{},
-        "tools":{"type":"array","maxItems":crate::IMPORT_MAX_TOOLS,"items":tool}
+        "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool}
     }})
 }
 fn preview_record() -> Value {
@@ -316,8 +322,8 @@ fn preview_record() -> Value {
     }})
 }
 fn preview_result() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","oauthRegistrations","scopedMcp","scopedMcpWarnings"],"properties":{
-        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"oauthRegistrations":oauth_registrations(),"service":service_record(),
+    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings"],"properties":{
+        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
         "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings()
@@ -373,21 +379,41 @@ mod tests {
     }
 
     #[test]
-    fn imported_oauth_profiles_require_a_supported_permission_mode() {
-        let schema = oauth_registrations();
+    fn import_authentication_groups_safe_registration_metadata_by_import_kind() {
+        let schema = import_authentication();
         let validator = jsonschema::validator_for(&schema).unwrap();
-        let mut rows = json!([{"id":"metrics","adapterId":"mcp_oauth","issuer":"https://issuer.example.test","resource":"https://tools.example.test/mcp","permissionProfiles":[{"id":"access","scopeMode":"server_default","scopes":[]}]}]);
-        assert!(validator.is_valid(&rows));
-        rows[0]["permissionProfiles"][0]["scopeMode"] = json!("explicit");
-        rows[0]["permissionProfiles"][0]["scopes"] = json!(["metrics.read"]);
-        assert!(validator.is_valid(&rows));
-        rows[0]["permissionProfiles"][0]["scopeMode"] = json!("unknown");
-        assert!(!validator.is_valid(&rows));
-        rows[0]["permissionProfiles"][0]
+        let mut groups = json!([{"importKind":"mcp_http","dialectId":"mcp_oauth","registrations":[
+            {"id":"metrics","issuer":"https://issuer.example.test","resource":"https://tools.example.test/mcp","permissionProfiles":[{"id":"access","scopeMode":"server_default","scopes":[]}]}
+        ]}]);
+        assert!(validator.is_valid(&groups));
+        assert!(validator.is_valid(
+            &json!([{"importKind":"mcp_http","dialectId":"mcp_oauth","registrations":[]}])
+        ));
+        let profile = &mut groups[0]["registrations"][0]["permissionProfiles"][0];
+        profile["scopeMode"] = json!("explicit");
+        profile["scopes"] = json!(["metrics.read"]);
+        assert!(validator.is_valid(&groups));
+        groups[0]["registrations"][0]["permissionProfiles"][0]["scopeMode"] = json!("unknown");
+        assert!(!validator.is_valid(&groups));
+        groups[0]["registrations"][0]["permissionProfiles"][0]
             .as_object_mut()
             .unwrap()
             .remove("scopeMode");
-        assert!(!validator.is_valid(&rows));
+        assert!(!validator.is_valid(&groups));
+        // No secrets, secret references or adapter settings at any level.
+        for (pointer, field) in [
+            ("/0", "clientSecretRef"),
+            ("/0/registrations/0", "adapterSettings"),
+            ("/0/registrations/0", "clientSecretRef"),
+            ("/0/registrations/0", "adapterId"),
+        ] {
+            let mut extra = json!([{"importKind":"mcp_http","dialectId":"mcp_oauth","registrations":[
+                {"id":"metrics","issuer":"https://issuer.example.test","resource":"https://tools.example.test/mcp","permissionProfiles":[]}
+            ]}]);
+            extra.pointer_mut(pointer).unwrap()[field] = json!("value");
+            assert!(!validator.is_valid(&extra), "{pointer} {field}");
+        }
+        assert!(!validator.is_valid(&json!([{"importKind":"mcp_http","registrations":[]}])));
     }
 
     #[test]

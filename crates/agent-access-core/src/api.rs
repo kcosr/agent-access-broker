@@ -1,6 +1,7 @@
-use crate::{
-    ActionDescriptor, ActionIo, ExecutionContext, MultipartUploadSpec, RESULT_METADATA_HEADER,
-    ServiceDescriptor, ServiceSurface, is_action_name, is_service_name,
+use crate::ExecutionContext;
+use agent_access_provider::{
+    ActionDescriptor, ActionIo, MultipartUploadSpec, RESULT_METADATA_HEADER, ServiceDescriptor,
+    ServiceSurface, is_action_name, is_service_name,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,7 +23,7 @@ pub struct ApiCatalog {
     /// Every resource type this broker understands, whether or not a visible
     /// service uses it.
     #[serde(default)]
-    pub resource_types: Vec<crate::ResourceTypeMetadata>,
+    pub resource_types: Vec<agent_access_provider::ResourceTypeMetadata>,
     pub services: Vec<ApiServiceSpec>,
     pub routes: Vec<HttpRouteSpec>,
     pub send: SendCatalogSpec,
@@ -54,7 +55,7 @@ pub struct ApiServiceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiResourceScopeSpec {
-    pub resource_type: crate::ResourceType,
+    pub resource_type: agent_access_provider::ResourceType,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors: Vec<String>,
 }
@@ -77,7 +78,7 @@ pub struct ApiActionSpec {
     #[serde(default)]
     pub lookup_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upstream_resource_ownership: Option<crate::UpstreamResourceOwnership>,
+    pub upstream_resource_ownership: Option<agent_access_provider::UpstreamResourceOwnership>,
     pub input_schema: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_input_pointers: Vec<String>,
@@ -105,7 +106,22 @@ where
     Option::<String>::deserialize(deserializer)
 }
 
+/// Whether this host serves `io`: JSON, multipart uploads and raw downloads.
+/// An action with any other I/O kind is never published or admitted.
+pub(crate) fn supported_action_io(io: &ActionIo) -> bool {
+    matches!(
+        io,
+        ActionIo::Json | ActionIo::MultipartUpload { .. } | ActionIo::RawDownload { .. }
+    )
+}
+
 impl ApiActionSpec {
+    /// Whether this build serves the action's I/O kind; see
+    /// [`supported_action_io`]. Clients refuse any other kind.
+    pub fn supports_io(&self) -> bool {
+        supported_action_io(&self.io)
+    }
+
     /// JSON responses can be saved locally without changing execution permissions or bounds.
     pub fn supports_json_file_output(&self) -> bool {
         matches!(self.io, ActionIo::Json | ActionIo::MultipartUpload { .. })
@@ -273,22 +289,22 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         return None;
     }
     let io = action.io.clone();
+    let (response_kind, exit_policy) = match io {
+        ActionIo::Json | ActionIo::MultipartUpload { .. } => {
+            (ResponseKind::ResponseEnvelope, ExitPolicy::InvokeDecision)
+        }
+        ActionIo::RawDownload { .. } => (ResponseKind::RawStream, ExitPolicy::RawStream),
+        // An I/O kind this host does not serve is never published.
+        _ => return None,
+    };
     let sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
-    let response_kind = match io {
-        ActionIo::RawDownload { .. } => ResponseKind::RawStream,
-        _ => ResponseKind::ResponseEnvelope,
-    };
-    let exit_policy = match io {
-        ActionIo::RawDownload { .. } => ExitPolicy::RawStream,
-        _ => ExitPolicy::InvokeDecision,
-    };
     let response_capabilities =
         agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
     let mut rendered_body_owners = Vec::new();
     for body in action
         .presentation
         .iter()
-        .flat_map(|presentation| presentation.embedded_bodies)
+        .flat_map(|presentation| presentation.embedded_bodies())
     {
         let pointer = format!("/result{}", body.owner_pointer());
         if !rendered_body_owners.contains(&pointer) {
@@ -429,14 +445,18 @@ pub fn openapi_from_catalog(
     for service in &catalog.services {
         for action in &service.actions {
             let path = format!("/v1/invoke/{}/{}", service.service, action.action);
-            let mut request_content = action_request_body_content(action);
             let (media, schema_path) = match &action.io {
                 ActionIo::MultipartUpload { .. } => (
                     "multipart/form-data",
                     "/schema/properties/request/contentSchema/properties/inputs",
                 ),
-                _ => ("application/json", "/schema/properties/inputs"),
+                ActionIo::Json | ActionIo::RawDownload { .. } => {
+                    ("application/json", "/schema/properties/inputs")
+                }
+                // An I/O kind this host does not serve gets no operation.
+                _ => continue,
             };
+            let mut request_content = action_request_body_content(action);
             if let Some(inputs) = request_content
                 .get_mut(media)
                 .and_then(|content| content.pointer_mut(schema_path))
@@ -673,11 +693,13 @@ fn action_request_body_content(action: &ApiActionSpec) -> Value {
                 "x-agent-access-upload-plan": plan
             }
         }),
-        _ => json!({
+        ActionIo::Json | ActionIo::RawDownload { .. } => json!({
             "application/json": {
                 "schema": invoke_request_schema(action)
             }
         }),
+        // Never projected: see `supported_action_io`.
+        _ => json!({}),
     }
 }
 
@@ -731,7 +753,11 @@ fn route_parameters(route: &HttpRouteSpec) -> Value {
 pub fn send_schema_from_catalog(catalog: &ApiCatalog) -> Value {
     let mut variants = Vec::new();
     for service in &catalog.services {
-        for action in &service.actions {
+        for action in service
+            .actions
+            .iter()
+            .filter(|action| supported_action_io(&action.io))
+        {
             let mut variant = invoke_send_variant(&service.service, action);
             if let Some(inputs) = variant.pointer_mut("/properties/inputs") {
                 relocate_local_schema_refs(
@@ -800,7 +826,9 @@ pub fn generic_send_schema() -> Value {
 
 /// Every HTTP route the broker serves. Resource mutation schemas enumerate
 /// the registered resource types and their selector forms.
-pub fn http_route_specs(resource_types: &crate::ResourceTypeRegistry) -> Vec<HttpRouteSpec> {
+pub fn http_route_specs(
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
+) -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     routes.extend(discovery_route_specs());
     routes.extend(spec_route_specs());
@@ -1433,7 +1461,9 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
     routes
 }
 
-fn resource_policy_route_specs(resource_types: &crate::ResourceTypeRegistry) -> Vec<HttpRouteSpec> {
+fn resource_policy_route_specs(
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
+) -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     for (path, operation) in [
         ("resources", "resources"),
@@ -1572,7 +1602,7 @@ fn policy_grant_schema(patch: bool) -> Value {
 fn resource_mutation_schema(
     group: bool,
     patch: bool,
-    resource_types: &crate::ResourceTypeRegistry,
+    resource_types: &agent_access_provider::ResourceTypeRegistry,
 ) -> Value {
     let type_ids = resource_types
         .ids()
@@ -1580,8 +1610,8 @@ fn resource_mutation_schema(
         .collect::<Vec<_>>();
     let without_namespace = resource_types
         .descriptors()
-        .filter(|descriptor| descriptor.namespace.is_none())
-        .map(|descriptor| descriptor.id.as_str().to_string())
+        .filter(|descriptor| descriptor.namespace().is_none())
+        .map(|descriptor| descriptor.id().as_str().to_string())
         .collect::<Vec<_>>();
     let ids = json!({"type":"array","uniqueItems":true,"items":resource_id_schema()});
     let mut properties = if group {
@@ -1611,10 +1641,10 @@ fn resource_mutation_schema(
     };
     let mut schema = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
     if !group {
-        let attribute_schema = |descriptor: &crate::ResourceTypeDescriptor| {
-            let properties = descriptor.attributes.iter().map(|attribute| (
-                attribute.name.to_string(),
-                json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true,"description":attribute.description}),
+        let attribute_schema = |descriptor: &agent_access_provider::ResourceTypeDescriptor| {
+            let properties = descriptor.attributes().iter().map(|attribute| (
+                attribute.name().to_string(),
+                json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true,"description":attribute.description()}),
             )).collect::<serde_json::Map<_,_>>();
             json!({"type":"object","additionalProperties":false,"properties":properties,"writeOnly":true})
         };
@@ -1622,8 +1652,8 @@ fn resource_mutation_schema(
             resource_types
                 .descriptors()
                 .flat_map(|descriptor| {
-                    descriptor.attributes.iter().map(|attribute| (
-                attribute.name.to_string(),
+                    descriptor.attributes().iter().map(|attribute| (
+                attribute.name().to_string(),
                 json!({"type":"string","minLength":1,"maxLength":8192,"writeOnly":true}),
             ))
                 })
@@ -1641,18 +1671,18 @@ fn resource_mutation_schema(
         ];
         for descriptor in resource_types.descriptors() {
             conditions.push(json!({
-                "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id.as_str()}}},
+                "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id().as_str()}}},
                 "then":{"properties":{"attributes":attribute_schema(descriptor)}}
             }));
             let required = descriptor
-                .attributes
+                .attributes()
                 .iter()
-                .filter(|attribute| attribute.required)
-                .map(|attribute| attribute.name)
+                .filter(|attribute| attribute.is_required())
+                .map(|attribute| attribute.name())
                 .collect::<Vec<_>>();
             if !patch && !required.is_empty() {
                 conditions.push(json!({
-                    "if":{"required":["resourceType","selector"],"properties":{"resourceType":{"const":descriptor.id.as_str()},"selector":{"properties":{"kind":{"const":"exact"}}}}},
+                    "if":{"required":["resourceType","selector"],"properties":{"resourceType":{"const":descriptor.id().as_str()},"selector":{"properties":{"kind":{"const":"exact"}}}}},
                     "then":{"required":["attributes"],"properties":{"attributes":{"required":required}}}
                 }));
             }

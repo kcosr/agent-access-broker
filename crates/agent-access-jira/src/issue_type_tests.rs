@@ -1,8 +1,11 @@
 use super::*;
+use agent_access_provider::test_support::{credential_token, credential_username};
 
 fn invocation(inputs: Value) -> ProviderInvocation {
     let mut invocation = issue_create_invocation(inputs);
-    invocation.action = "issue_type.list".to_string();
+    invocation = InvocationBuilder::from(invocation)
+        .action("issue_type.list")
+        .build();
     invocation
 }
 
@@ -38,7 +41,7 @@ async fn issue_type_list_is_read_only_project_scoped_and_needs_no_lookup() {
     assert_eq!(action.input_schema["additionalProperties"], false);
     assert!(action.documentation.is_some());
     let scopes = provider
-        .resolve_scopes_with_lookup("issue_type.list", &json!({"project":"PROJ"}), None)
+        .lookup_scopes("issue_type.list", &json!({"project":"PROJ"}), None)
         .await
         .unwrap();
     assert_eq!(
@@ -71,7 +74,7 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
         json!({"project":"PROJ","maxResults":null}),
     ] {
         assert!(
-            provider.resolve_scopes("issue_type.list", &inputs).is_err(),
+            provider.local_scopes("issue_type.list", &inputs).is_err(),
             "{inputs}"
         );
         assert!(provider.invoke(invocation(inputs)).await.is_err());
@@ -80,7 +83,7 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
         .invoke(invocation(json!({"project":"OTHER"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.issue_type_requests.lock().unwrap().is_empty());
     assert!(backend.credential_observations.lock().unwrap().is_empty());
 }
@@ -89,16 +92,20 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
 async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_without_auditing_text()
  {
     for (mode, credential) in [
-        ("service", test_credential()),
-        ("per_user", test_per_user_credential()),
+        (CredentialMode::Service, test_credential()),
+        (CredentialMode::PerUser, test_per_user_credential()),
     ] {
         let backend = Arc::new(StubJiraBackend::default());
         *backend.issue_type_page.lock().unwrap() = Some(page(0, 2));
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
         let mut request = invocation(json!({"project":"PROJ"}));
-        request.credential_mode = mode.to_string();
-        request.credential = Some(credential.clone());
+        request = InvocationBuilder::from(request)
+            .credential_mode(mode)
+            .build();
+        request = InvocationBuilder::from(request)
+            .execution(ExecutionAccess::Static(credential.clone()))
+            .build();
         let response = provider.invoke(request).await.unwrap();
         assert_eq!(
             response.result,
@@ -129,12 +136,18 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         let observations = backend.credential_observations.lock().unwrap();
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0].operation, "issue_types");
-        assert_eq!(observations[0].token, credential.token);
-        assert_eq!(observations[0].username, credential.username);
+        assert_eq!(
+            observations[0].token.as_deref(),
+            Some(credential_token(&credential))
+        );
+        assert_eq!(
+            observations[0].username.as_deref(),
+            credential_username(&credential)
+        );
         assert_eq!(response.upstream_status, Some(200));
         assert_eq!(response.upstream_duration_ms, Some(7));
         let audit = response.audit.unwrap();
-        assert_eq!(audit["credentialMode"], mode);
+        assert_eq!(audit["credentialMode"], mode.as_str());
         assert_eq!(audit["issueTypeCount"], 1);
         let metadata = format!("{audit} {:?}", response.object_ids);
         assert!(!metadata.contains("sentinel"));
@@ -182,22 +195,19 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
         .invoke(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("sentinel"));
 
     *backend.issue_type_page.lock().unwrap() = Some(page(0, 1));
     let provider = JiraProvider::with_backend(
         jira_config(),
-        ProviderLimits {
-            max_upstream_response_bytes: 32,
-            ..ProviderLimits::default()
-        },
+        ProviderLimits::default().with_max_upstream_response_bytes(32),
         backend,
     );
     let error = provider
         .invoke(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("sentinel"));
 }

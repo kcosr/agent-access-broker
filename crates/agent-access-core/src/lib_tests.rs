@@ -1,11 +1,23 @@
 use super::*;
 use agent_access_cloudbees_ci::*;
 use agent_access_fake::*;
+use agent_access_provider::{
+    ActionDescriptor, ActionIo, BackendRegistration, GIT_REPOSITORY_RESOURCE, LookupRequirement,
+    ReasonCode, ResourceType, ScopedMcpNameSource, parse_backend_config,
+};
 use base64::Engine as _;
 
-pub(crate) use agent_access_provider::test_support::{TEST_CERT_PEM, test_outbound_tls};
+pub(crate) use agent_access_provider::test_support::TEST_CERT_PEM;
 
-/// Every backend core defines, as the broker binary registers them.
+/// Outbound TLS trust in only the core fixture CA
+/// (`tests/fixtures/outbound-tls/ca-a.pem`).
+pub(crate) fn test_outbound_tls() -> PreparedOutboundTls {
+    PreparedOutboundTls::custom_from_pem(include_bytes!("../tests/fixtures/outbound-tls/ca-a.pem"))
+        .expect("test CA is valid")
+}
+
+/// The backends core tests configure, in the broker binary's order: the
+/// development records backend comes last, with its `stub` OAuth dialect.
 pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
     std::sync::Arc::new(
         BackendRegistry::new([
@@ -14,8 +26,11 @@ pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
             &agent_access_gitlab::GITLAB_BACKEND,
             &CLOUDBEES_CI_BACKEND,
             &FAKE_BACKEND,
+            &OAUTH_STUB_BACKEND,
         ])
-        .expect("core backends register consistently"),
+        .expect("core backends register consistently")
+        .with_oauth_dialects([&STUB_OAUTH_DIALECT])
+        .expect("core OAuth dialects register consistently"),
     )
 }
 
@@ -374,8 +389,6 @@ fn reason_codes_have_expected_statuses() {
         "response_format_unsupported"
     );
     assert_eq!(ReasonCode::BodySizeDenied.http_status(), 413);
-    assert_eq!(ReasonCode::CloudbeesCiLogChunkExceeded.http_status(), 413);
-    assert_eq!(ReasonCode::CloudbeesCiLogScanExceeded.http_status(), 413);
     assert_eq!(ReasonCode::CursorSigningUnavailable.http_status(), 503);
     assert_eq!(ReasonCode::BodySizeDenied.as_str(), "body_size_denied");
     assert_eq!(
@@ -1127,7 +1140,7 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
     );
     let resources = select_resources(
         &mut config,
-        CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
+        CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
         &[namespace("team-ci/payments")],
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -1952,7 +1965,7 @@ fn disjoint_execution_contexts_remove_static_and_containment_ambiguity() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config.policy.grants[0].execution_contexts = Some(vec!["external".to_string()]);
@@ -2145,7 +2158,7 @@ fn validates_jira_issue_link_config_and_exposes_project_scope_only() {
     assert!(!capabilities.resource_scopes.contains_key("issue"));
     assert_eq!(
         capabilities.resource_scopes["project"].resource_type,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone()
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()
     );
 }
 
@@ -2586,7 +2599,7 @@ fn service_mode_confluence_comment_actions_require_lookup_credentials() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[exact("ENG")],
     );
@@ -2607,7 +2620,7 @@ fn accepts_wildcard_per_user_lookup_actions_without_lookup_credentials() {
     config.policy.grants[0].credential_mode = "per_user".to_string();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     validate_broker_config(&config).unwrap();
@@ -2623,7 +2636,7 @@ fn accepts_wildcard_per_user_lookup_actions_without_lookup_credentials() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[ResourceSelector::All],
     );
@@ -2643,7 +2656,7 @@ fn rejects_shadowed_service_lookup_grant_without_lookup_credentials() {
     config.policy.grants[0].priority = Some(100);
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2652,7 +2665,7 @@ fn rejects_shadowed_service_lookup_grant_without_lookup_credentials() {
     service_grant.priority = Some(10);
     service_grant.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
     config.policy.grants.push(service_grant);
@@ -2671,7 +2684,7 @@ fn rejects_lookup_backed_both_wildcard_mixed_modes() {
     config.policy.grants[0].actions = vec!["issue.view".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2709,7 +2722,7 @@ fn accepts_disjoint_mixed_lookup_grants_when_lookup_is_configured() {
     config.policy.grants[0].credential_mode = "service".to_string();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
 
@@ -2717,7 +2730,7 @@ fn accepts_disjoint_mixed_lookup_grants_when_lookup_is_configured() {
     per_user.credential_mode = "per_user".to_string();
     per_user.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("OPS")],
     );
     config.policy.grants.push(per_user);
@@ -2755,7 +2768,7 @@ fn accepts_typed_containment_wildcard_scopes() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     validate_broker_config(&config).unwrap();
@@ -2765,7 +2778,7 @@ fn accepts_typed_containment_wildcard_scopes() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[ResourceSelector::All],
     );
@@ -2777,7 +2790,7 @@ fn validates_resource_selectors_and_rejects_retired_child_scope_types() {
     let mut config = sample_broker();
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All, exact("PROJ")],
     );
     validate_broker_config(&config).unwrap();
@@ -2786,7 +2799,7 @@ fn validates_resource_selectors_and_rejects_retired_child_scope_types() {
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
         &[exact("eng")],
     );
@@ -2824,7 +2837,7 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     config.policy.grants[0].actions = vec!["search".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
 
@@ -2832,7 +2845,7 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     duplicate.credential_mode = "per_user".to_string();
     duplicate.resources = select_resources(
         &mut config,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         &[exact("PROJ")],
     );
     config.policy.grants.push(duplicate);
@@ -3106,7 +3119,7 @@ fn fake_service_requires_explicit_non_production_enablement() {
     config.policy.grants[0].actions = vec!["echo".to_string()];
     config.policy.grants[0].resources = select_resources(
         &mut config,
-        FAKE_PROJECT_RESOURCE.id.clone(),
+        FAKE_PROJECT_RESOURCE.id().clone(),
         &[exact("TEST")],
     );
 
@@ -3226,7 +3239,7 @@ fn git_http_gateway_accepts_typed_repository_resources_and_exposes_capabilities(
         .insert("gitlab_git".to_string(), git_http_gateway_config());
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[
             exact("sip/service"),
             exact("platform/tool"),
@@ -3261,7 +3274,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     let mut config = sample_broker();
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[
             exact("sip/service"),
             exact("platform/tool"),
@@ -3287,7 +3300,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     );
     assert_eq!(
         capabilities.resource_scopes["repository"].resource_type,
-        GIT_REPOSITORY_RESOURCE.id.clone()
+        GIT_REPOSITORY_RESOURCE.id().clone()
     );
     assert!(
         capabilities.resource_scopes["repository"]
@@ -3331,7 +3344,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
 
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config
@@ -3349,7 +3362,7 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
     );
     let resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[ResourceSelector::All],
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -3639,7 +3652,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
         config.gateways.insert("gitlab_git".to_string(), gateway);
         let resources = select_resources(
             &mut config,
-            GIT_REPOSITORY_RESOURCE.id.clone(),
+            GIT_REPOSITORY_RESOURCE.id().clone(),
             &[exact("sip/service")],
         );
         config.policy.grants.push(PolicyGrantConfig {
@@ -3666,7 +3679,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
     let last = config.policy.grants.len() - 1;
     config.policy.grants[last].resources = select_resources(
         &mut config,
-        GIT_REPOSITORY_RESOURCE.id.clone(),
+        GIT_REPOSITORY_RESOURCE.id().clone(),
         &[exact("sip%65/service")],
     );
     let errors = validation_errors(validate_broker_config(&config));
@@ -3690,7 +3703,7 @@ fn git_http_gateway_rejects_invalid_gateway_options() {
         config.gateways.insert("gitlab_git".to_string(), gateway);
         let resources = select_resources(
             &mut config,
-            GIT_REPOSITORY_RESOURCE.id.clone(),
+            GIT_REPOSITORY_RESOURCE.id().clone(),
             &[exact("sip/service")],
         );
         config.policy.grants.push(PolicyGrantConfig {
@@ -4751,10 +4764,10 @@ fn resource_scopes_must_bind_registered_types_and_supported_selectors() {
 
     descriptor.resource_scopes.insert(
         "issue".into(),
-        crate::ResourceScopeCapabilities {
-            resource_type: crate::ResourceType::new("jira_issue").unwrap(),
-            selectors: vec!["exact".into()],
-        },
+        agent_access_provider::ResourceScopeCapabilities::new(
+            agent_access_provider::ResourceType::new("jira_issue").unwrap(),
+            vec!["exact".into()],
+        ),
     );
     descriptor
         .resource_scopes
@@ -4790,7 +4803,7 @@ fn provider_tables_for_unregistered_backends_fail_to_parse_with_their_position()
     let error = parse_test_config(&raw).unwrap_err().to_string();
     assert!(
         error.contains(
-            "unknown provider `outlook`, expected one of `jira`, `confluence`, `gitlab`, `cloudbees_ci`, `fake`"
+            "unknown provider `outlook`, expected one of `jira`, `confluence`, `gitlab`, `cloudbees_ci`, `fake`, `oauth_stub`"
         ),
         "{error}"
     );
@@ -4872,6 +4885,50 @@ fn development_backends_require_the_fake_service_opt_in() {
 }
 
 #[test]
+fn the_oauth_records_fixture_is_configured_explicitly_and_only_in_development() {
+    let enabled = MINIMAL_BROKER_CONFIG.replace(
+        "environment = \"development\"",
+        "environment = \"development\"\nenable_fake_service = true",
+    );
+    // A delegated binding alone no longer creates the records service.
+    let binding = "\n[credentials.per_user.oauth_stub]\ntype = \"oauth\"\nprovider = \"stub\"\nprofile = \"read\"\n";
+    let config = parse_test_config(&format!("{enabled}{binding}")).unwrap();
+    assert!(!configured_service_descriptors(&config).contains_key("oauth_stub"));
+    assert_contains(
+        validate_broker_config(&config).unwrap_err().errors(),
+        "credentials.per_user.oauth_stub: OAuth credentials are per_user only, for services that accept delegated credentials",
+    );
+
+    let table = "\n[providers.oauth_stub]\nbase_url = \"http://127.0.0.1:8099\"\n";
+    let config = parse_test_config(&format!("{enabled}{table}")).unwrap();
+    validate_broker_config(&config).unwrap();
+    let descriptor = &configured_service_descriptors(&config)["oauth_stub"];
+    assert!(descriptor.credentials.delegated.is_some());
+
+    let disabled = parse_test_config(&format!("{MINIMAL_BROKER_CONFIG}{table}")).unwrap();
+    assert_contains(
+        validate_broker_config(&disabled).unwrap_err().errors(),
+        "providers.oauth_stub is a development backend and requires deployment.enable_fake_service",
+    );
+    let mut production = config.clone();
+    production.deployment.environment = "production".into();
+    assert_contains(
+        validate_broker_config(&production).unwrap_err().errors(),
+        "deployment.enable_fake_service is not allowed in production",
+    );
+
+    let named = table.replace("127.0.0.1", "localhost");
+    let config = parse_test_config(&format!("{enabled}{named}")).unwrap();
+    assert_contains(
+        validate_broker_config(&config).unwrap_err().errors(),
+        "providers.oauth_stub.base_url must be an http or https literal-IP loopback URL",
+    );
+    let unknown = format!("{enabled}{table}allow_insecure_loopback = true\n");
+    assert!(parse_test_config(&unknown).is_err());
+    assert!(parse_test_config(&format!("{enabled}\n[providers.oauth_stub]\n")).is_err());
+}
+
+#[test]
 fn programmatic_provider_configs_must_name_registered_backends() {
     let mut config = parse_test_config(MINIMAL_BROKER_CONFIG).unwrap();
     config.providers = ProvidersConfig::default().with(FakeProviderConfig::default());
@@ -4884,18 +4941,18 @@ fn programmatic_provider_configs_must_name_registered_backends() {
 
 #[test]
 fn backend_registries_reject_conflicting_registrations() {
-    static SHADOW_FAKE: BackendRegistration = BackendRegistration {
-        kind: "fake",
-        resource_types: &[],
-        parse: parse_backend_config::<FakeProviderConfig>,
-        development_only: true,
-    };
-    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration {
-        kind: "jira_mirror",
-        resource_types: &[&agent_access_jira::JIRA_PROJECT_RESOURCE],
-        parse: parse_backend_config::<agent_access_jira::JiraProviderConfig>,
-        development_only: false,
-    };
+    static SHADOW_FAKE: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "fake",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .development_only();
+    static SECOND_JIRA_TYPES: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "jira_mirror",
+        parse_backend_config::<agent_access_jira::JiraProviderConfig>,
+    )
+    .with_resource_types(&[&agent_access_jira::JIRA_PROJECT_RESOURCE]);
     let errors = BackendRegistry::new([&FAKE_BACKEND, &SHADOW_FAKE]).unwrap_err();
     assert_eq!(errors, ["backend kind fake is registered more than once"]);
     let errors =
@@ -4904,6 +4961,80 @@ fn backend_registries_reject_conflicting_registrations() {
         errors,
         ["resource type jira_project is registered more than once"]
     );
+}
+
+#[test]
+fn backend_registries_give_each_domain_reason_one_owner() {
+    // A second module whose kind normalizes to the CloudBees prefix may
+    // register its own codes, but never one CloudBees already owns.
+    static SAME_PREFIX_CODE: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::deny(
+            "cloudbees_ci_log_chunk_exceeded",
+            agent_access_provider::ProviderFailureStatus::ContentTooLarge,
+        );
+    static OWN_CODE: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::error(
+            "cloudbees_ci_queue_frozen",
+            agent_access_provider::ProviderFailureStatus::ServiceUnavailable,
+        );
+    static SAME_PREFIX: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "cloudbees-ci",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .with_domain_reasons(&[&OWN_CODE]);
+    static CONFLICTING: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "cloudbees-ci",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .with_domain_reasons(&[&SAME_PREFIX_CODE]);
+    let registry = BackendRegistry::new([&CLOUDBEES_CI_BACKEND, &SAME_PREFIX]).unwrap();
+    let cloudbees = registry.get("cloudbees_ci").unwrap();
+    assert!(cloudbees.declares_domain_reason(&CLOUDBEES_CI_LOG_CHUNK_EXCEEDED));
+    assert!(cloudbees.declares_domain_reason(&SAME_PREFIX_CODE));
+    assert!(!cloudbees.declares_domain_reason(&OWN_CODE));
+    assert!(!cloudbees.declares_domain_reason(
+        &agent_access_provider::ProviderReasonDefinition::error(
+            "cloudbees_ci_log_chunk_exceeded",
+            agent_access_provider::ProviderFailureStatus::ContentTooLarge,
+        )
+    ));
+    assert_eq!(
+        BackendRegistry::new([&CLOUDBEES_CI_BACKEND, &CONFLICTING]).unwrap_err(),
+        [
+            "domain reason cloudbees_ci_log_chunk_exceeded is declared by backend kinds \
+             cloudbees_ci and cloudbees-ci"
+        ]
+    );
+}
+
+#[test]
+fn cloudbees_log_limits_are_its_own_deny_413_reasons() {
+    assert_eq!(
+        CLOUDBEES_CI_BACKEND
+            .domain_reasons()
+            .iter()
+            .map(|reason| (
+                reason.code(),
+                reason.decision(),
+                reason.status().as_u16(),
+                cli_exit_code_for_http_status(reason.status().as_u16()),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("cloudbees_ci_log_chunk_exceeded", Decision::Deny, 413, 2),
+            ("cloudbees_ci_log_scan_exceeded", Decision::Deny, 413, 2),
+        ]
+    );
+    for reason in CLOUDBEES_CI_BACKEND.domain_reasons() {
+        assert!(
+            ReasonCodeId::new(reason.code())
+                .unwrap()
+                .standard()
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -4976,12 +5107,12 @@ fn inline_and_dotted_provider_tables_parse_like_table_headers() {
 
 #[test]
 fn backend_kinds_must_be_service_names() {
-    static INVALID_KIND: BackendRegistration = BackendRegistration {
-        kind: "Not A Service",
-        resource_types: &[],
-        parse: parse_backend_config::<FakeProviderConfig>,
-        development_only: true,
-    };
+    static INVALID_KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "Not A Service",
+        parse_backend_config::<FakeProviderConfig>,
+    )
+    .development_only();
     assert_eq!(
         BackendRegistry::new([&INVALID_KIND]).unwrap_err(),
         ["backend kind Not A Service is not a valid service name"]
@@ -5000,14 +5131,43 @@ fn the_fake_service_opt_in_alone_configures_no_fake_backend() {
 }
 
 #[test]
-fn development_backend_kinds_stay_reserved_for_gateways() {
-    let raw = format!(
-        "{MINIMAL_BROKER_CONFIG}\n[gateways.fake]\nkind = \"git_http\"\ndisplay_name = \"Fake\"\nbroker_hosts = [\"git.example.com\"]\nupstream_base_url = \"https://gitlab.example.com\"\nallowed_upstream_hosts = [\"https://gitlab.example.com/**\"]\n"
+fn every_selected_native_kind_stays_reserved_for_gateways() {
+    let gateway = |service: &str| {
+        format!(
+            "{MINIMAL_BROKER_CONFIG}\n[gateways.{service}]\nkind = \"git_http\"\ndisplay_name = \"Gateway\"\nbroker_hosts = [\"git.example.com\"]\nupstream_base_url = \"https://gitlab.example.com\"\nallowed_upstream_hosts = [\"https://gitlab.example.com/**\"]\n"
+        )
+    };
+    // Development and production kinds alike, with no provider table.
+    for service in ["fake", "jira", "cloudbees_ci", "oauth_stub"] {
+        let config = parse_test_config(&gateway(service)).unwrap();
+        assert!(config.providers.get_kind(service).is_none());
+        assert_contains(
+            validate_broker_config(&config).unwrap_err().errors(),
+            &format!(
+                "gateways.{service} collides with the selected native provider kind {service}"
+            ),
+        );
+    }
+    // A kind this build does not select stays available to a gateway.
+    let config = parse_test_config(&gateway("source")).unwrap();
+    assert!(validate_broker_config(&config).err().is_none_or(|error| {
+        !error
+            .errors()
+            .iter()
+            .any(|error| error.contains("collides"))
+    }));
+}
+
+#[test]
+fn the_broker_namespace_is_reserved_even_for_an_unconfigured_native_kind() {
+    static BROKER_KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "broker",
+        parse_backend_config::<FakeProviderConfig>,
     );
-    let config = parse_test_config(&raw).unwrap();
-    assert_contains(
-        validate_broker_config(&config).unwrap_err().errors(),
-        "gateways.fake must not collide with a provider service",
+    assert_eq!(
+        BackendRegistry::new([&FAKE_BACKEND, &BROKER_KIND]).unwrap_err(),
+        ["backend kind broker is reserved for the Broker control-plane namespace"]
     );
 }
 
@@ -5024,14 +5184,10 @@ fn oauth_credentials_need_a_per_user_service_that_accepts_delegation() {
         read_only: None,
         credential_name: None,
     };
-    let delegated = |actions: Vec<ActionDescriptor>| ServiceDescriptor {
-        service: "records".into(),
-        display_name: "Records".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::new(),
-        actions,
-        credentials: CredentialDescriptor::default().delegated("Read records."),
-        presentation_body_limit: None,
+    let delegated = |actions: Vec<ActionDescriptor>| {
+        ServiceDescriptor::new("records", "Records")
+            .with_actions(actions)
+            .with_credentials(CredentialDescriptor::default().delegated("Read records."))
     };
     let action = |name: &str| {
         ActionDescriptor::new(name, "Read", serde_json::json!({"type": "object"}))
@@ -5084,15 +5240,7 @@ fn builtin_descriptor_validation_rejects_imported_naming_origin() {
     action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
         name: Some("upstream_inspect".into()),
     };
-    let descriptor = ServiceDescriptor {
-        service: "fake".into(),
-        display_name: "Fake".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: Default::default(),
-        actions: vec![action],
-        credentials: Default::default(),
-        presentation_body_limit: None,
-    };
+    let descriptor = ServiceDescriptor::new("fake", "Fake").with_actions(vec![action]);
     let services = BTreeMap::from([("fake".into(), Arc::new(descriptor))]);
     let mut errors = Vec::new();
     validate_service_descriptors(&services, &test_resource_types(), &mut errors);

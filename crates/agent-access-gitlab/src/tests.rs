@@ -2,10 +2,42 @@ use super::*;
 use crate::{
     ActionIo, GitlabContentConfig, GitlabWebhooksConfig, SearchLimitsConfig, raw_download_io,
 };
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential, test_signing_key};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Duration as ChronoDuration;
 use wiremock::matchers::{
     body_json, body_string, method, path, query_param, query_param_is_missing,
 };
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Every page token failure the invoke hook can report stays within the
+/// provider-reportable subset for an invocation.
+#[test]
+fn page_token_failures_pass_the_invocation_contract() {
+    let hook = agent_access_provider::host::hook_context(
+        "gitlab",
+        "issue.list",
+        agent_access_provider::HookPhase::Invocation,
+        crate::GITLAB_BACKEND.domain_reasons(),
+    );
+    for error in [
+        ContinuationError::Invalid,
+        ContinuationError::UnsupportedVersion,
+        ContinuationError::Expired,
+        ContinuationError::TokenTooLarge { limit: 1 },
+        ContinuationError::PayloadTooLarge { limit: 1 },
+        ContinuationError::SigningUnavailable,
+        ContinuationError::DurableKeyUnavailable,
+    ] {
+        let failure = gitlab_page_token_failure(error);
+        assert_eq!(
+            hook.check_failure(&failure),
+            Ok(()),
+            "{error:?}: {failure:?}"
+        );
+    }
+    assert_eq!(hook.check_failure(&gitlab_page_token_error()), Ok(()));
+}
 
 fn config() -> GitlabProviderConfig {
     GitlabProviderConfig {
@@ -25,27 +57,42 @@ fn http_backend_for_base(uri: &str) -> HttpGitlabBackend {
     let mut config = config();
     config.api_base_url = format!("{uri}/api/v4");
     config.allowed_upstream_hosts = vec![format!("{uri}/api/v4/**")];
-    HttpGitlabBackend::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap()
+    HttpGitlabBackend::for_tests(config, ProviderLimits::default()).unwrap()
 }
 
 fn http_backend(server: &MockServer) -> HttpGitlabBackend {
     http_backend_for_base(&server.uri())
 }
 
+#[test]
+fn build_creates_upload_and_request_clients_for_the_api_base() {
+    let host = agent_access_provider::test_support::TestHost::default();
+    config().build(&host.context()).unwrap();
+    let built = host
+        .built_clients()
+        .into_iter()
+        .map(|client| (client.label, client.base.to_string(), client.profile))
+        .collect::<Vec<_>>();
+    let label = "providers.gitlab.egress_proxy".to_string();
+    let base = normalized_api_base(&config().api_base_url)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        built,
+        [
+            (label.clone(), base.clone(), ClientProfile::Upload),
+            (label, base, ClientProfile::Request),
+        ]
+    );
+}
+
 fn upload_fixture() -> (Value, BrokerBodyPart) {
-    let part = BrokerBodyPart {
-        name: "session".to_string(),
-        file_name: Some("session.html".to_string()),
-        content_type: Some("text/html".to_string()),
-        bytes: b"<html>private session</html>".to_vec(),
-        temp_file: None,
-    };
+    let part = BrokerBodyPart::in_memory(
+        "session".to_string(),
+        Some("session.html".to_string()),
+        Some("text/html".to_string()),
+        b"<html>private session</html>".to_vec(),
+    );
     let inputs = json!({"project": "sip/service", "attachments": [{
         "field": "session", "filename": "session.html", "contentType": "text/html",
         "size": part.size(), "sha256": part.sha256_hex(),
@@ -97,7 +144,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
         assert_eq!(
             parse_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             reason
         );
     }
@@ -106,7 +153,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentIntegrityMismatch
     );
     let mut changed = part.clone();
@@ -114,7 +161,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentIntegrityMismatch
     );
     let mut changed = part.clone();
@@ -122,7 +169,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::BodyMalformed
     );
     let mut changed = part;
@@ -130,7 +177,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         prepare_project_upload(&metadata, &[changed])
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentMediaTypeDenied
     );
     let mut invalid = inputs.clone();
@@ -153,7 +200,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     assert_eq!(
         parse_project_upload_inputs(&by_url, &config)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::AttachmentSizeDenied
     );
 }
@@ -170,7 +217,7 @@ fn project_upload_default_media_types_allow_html_and_reject_invalid_mime() {
         assert_eq!(
             parse_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::AttachmentMediaTypeDenied
         );
     }
@@ -191,15 +238,11 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     let mut config = config();
     config.api_base_url = format!("{}/api/v4", server.uri());
     config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
-    let backend = HttpGitlabBackend::new_with_egress(
+    let backend = HttpGitlabBackend::for_tests(
         config.clone(),
-        ProviderLimits {
-            request_timeout_ms: 10,
-            streaming_idle_timeout_ms: 1000,
-            ..ProviderLimits::default()
-        },
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
+        ProviderLimits::default()
+            .with_request_timeout_ms(10)
+            .with_streaming_idle_timeout_ms(1000),
     )
     .unwrap();
     assert!(
@@ -208,15 +251,11 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
             .await
             .is_ok()
     );
-    let backend = HttpGitlabBackend::new_with_egress(
+    let backend = HttpGitlabBackend::for_tests(
         config,
-        ProviderLimits {
-            request_timeout_ms: 1000,
-            streaming_idle_timeout_ms: 5,
-            ..ProviderLimits::default()
-        },
-        &EgressProxyRuntimeConfig::direct(),
-        &agent_access_provider::test_support::test_outbound_tls(),
+        ProviderLimits::default()
+            .with_request_timeout_ms(1000)
+            .with_streaming_idle_timeout_ms(5),
     )
     .unwrap();
     assert!(matches!(
@@ -241,14 +280,9 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
         let mut config = config();
         config.api_base_url = format!("{}/api/v4", server.uri());
         config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
-        let backend = HttpGitlabBackend::new_with_egress(
+        let backend = HttpGitlabBackend::for_tests(
             config,
-            ProviderLimits {
-                streaming_idle_timeout_ms: idle_ms,
-                ..ProviderLimits::default()
-            },
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
+            ProviderLimits::default().with_streaming_idle_timeout_ms(idle_ms),
         )
         .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -370,17 +404,24 @@ async fn project_upload_streams_html_with_selected_credential_and_sanitizes_audi
     std::fs::write(&temp_path, &part.bytes).unwrap();
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
-        provider.authorize_body_parts(&mut request).await.unwrap()[0].name,
+        provider
+            .authorize_body_parts(request.admitted(), request.state())
+            .await
+            .unwrap()
+            .part_specs()[0]
+            .name,
         "session"
     );
-    request.body_parts.push(BrokerBodyPart::from_temp_file(
-        part.name.clone(),
-        part.file_name.clone(),
-        part.content_type.clone(),
-        temp_path.clone(),
-        part.size(),
-        part.sha256_hex(),
-    ));
+    request = InvocationBuilder::from(request)
+        .body_part(agent_access_provider::host::spooled_body_part(
+            part.name.clone(),
+            part.file_name.clone(),
+            part.content_type.clone(),
+            temp_path.clone(),
+            part.size(),
+            part.sha256_hex(),
+        ))
+        .build();
     let result = provider.invoke(request).await.unwrap();
     assert_eq!(
         result.result["upload"]["markdown"],
@@ -430,15 +471,15 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
     let mut request = test_invocation("project.upload", inputs);
     assert_eq!(
         provider
-            .authorize_body_parts(&mut request)
+            .authorize_body_parts(request.admitted(), request.state())
             .await
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
-    request.body_parts.push(part);
+    request = InvocationBuilder::from(request).body_part(part).build();
     assert_eq!(
-        provider.invoke(request).await.unwrap_err().reason_code,
+        provider.invoke(request).await.unwrap_err().reason_code(),
         ReasonCode::ScopeUnresolved
     );
     assert!(
@@ -674,34 +715,17 @@ fn webhook_update_carries_disabled_tls_only_to_new_https_destinations() {
 }
 
 fn test_credential() -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("gitlab-token".to_string()),
-    }
+    bearer_credential("gitlab-token")
 }
 
 fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".to_string(),
-        resource_attributes: Default::default(),
-        identity: crate::InvocationIdentity {
-            principal: "agent-1".to_string(),
-            authenticated: true,
-        },
-        service: "gitlab".to_string(),
-        action: action.to_string(),
-        correlation: crate::CorrelationContext::for_tests(),
-        inputs,
-        body_parts: Vec::new(),
-        resource_scopes: repository_scopes_from_path("sip/service"),
-        credential_mode: "service".to_string(),
-        credential: Some(test_credential()),
-        lookup_credential: Some(test_credential()),
-        provider_preflight: None,
-        search_authorization: None,
-        delegated_credential: None,
-    }
+    InvocationBuilder::new("gitlab", action)
+        .inputs(inputs)
+        .identity(crate::InvocationIdentity::new("agent-1".to_string(), true))
+        .resources(repository_scopes_from_path("sip/service"))
+        .credential(test_credential())
+        .lookup_credential(test_credential())
+        .build()
 }
 
 fn test_project() -> GitlabProject {
@@ -896,7 +920,7 @@ fn branch_and_commit_validation_fail_closed() {
 
 #[test]
 fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry() {
-    let signer = OpaqueTokenSigner::new(None);
+    let signer = ContinuationSigner::new(None);
     let request = test_invocation(
         "issue.search",
         json!({ "project": "sip/service", "state": "opened" }),
@@ -966,7 +990,9 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
     );
 
     let mut changed_request = request.clone();
-    changed_request.action = "merge_request.search".to_string();
+    changed_request = InvocationBuilder::from(changed_request)
+        .action("merge_request.search")
+        .build();
     assert!(
         decode(
             &changed_request,
@@ -979,7 +1005,9 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
     let mut changed_principal = request.clone();
-    changed_principal.identity.principal = "agent-2".to_string();
+    changed_principal = InvocationBuilder::from(changed_principal)
+        .principal("agent-2")
+        .build();
     assert!(
         decode(
             &changed_principal,
@@ -992,10 +1020,26 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
     let mut changed_mode = request.clone();
-    changed_mode.credential_mode = "per_user".to_string();
+    changed_mode = InvocationBuilder::from(changed_mode)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert!(
         decode(
             &changed_mode,
+            &project,
+            "provider-fingerprint",
+            &request_hash,
+            100,
+            now,
+        )
+        .is_err()
+    );
+    let changed_context = InvocationBuilder::from(request.clone())
+        .execution_context("external")
+        .build();
+    assert!(
+        decode(
+            &changed_context,
             &project,
             "provider-fingerprint",
             &request_hash,
@@ -1062,17 +1106,10 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         .is_err()
     );
 
-    let (payload, signature) = token.split_once('.').unwrap();
-    let mut tampered_signature = signature.as_bytes().to_vec();
-    tampered_signature[0] = if tampered_signature[0] == b'A' {
-        b'B'
-    } else {
-        b'A'
-    };
-    let tampered = format!(
-        "{payload}.{}",
-        String::from_utf8(tampered_signature).unwrap()
-    );
+    let mut tampered = token.clone().into_bytes();
+    let middle = tampered.len() / 2;
+    tampered[middle] = if tampered[middle] == b'A' { b'B' } else { b'A' };
+    let tampered = String::from_utf8(tampered).unwrap();
     let context = GitlabPageTokenContext {
         request: &request,
         project: &project,
@@ -1081,6 +1118,108 @@ fn gitlab_pagination_tokens_round_trip_and_reject_rebinding_tampering_and_expiry
         max_results: 100,
     };
     assert!(decode_gitlab_page_token(&signer, &tampered, &context, now).is_err());
+}
+
+#[test]
+fn gitlab_page_tokens_reject_other_versions_purposes_and_oversize_and_keep_their_lifetime() {
+    let signer = ContinuationSigner::new(None);
+    let request = test_invocation("issue.search", json!({ "project": "sip/service" }));
+    let project = test_project();
+    let now = Utc::now();
+    let context = GitlabPageTokenContext {
+        request: &request,
+        project: &project,
+        provider_fingerprint: "provider-fingerprint",
+        request_hash: "request-hash",
+        max_results: 20,
+    };
+    let token = encode_gitlab_page_token(&signer, &context, 2, now).unwrap();
+    // The schema bound is the exact encoded size, and the token carries only
+    // the version, expiry, next page and MAC.
+    assert_eq!(token.len(), GITLAB_PAGE_TOKEN_MAX_BYTES);
+    assert_eq!(GITLAB_PAGE_TOKEN_MAX_BYTES, 60);
+    assert_eq!(
+        URL_SAFE_NO_PAD.decode(&token).unwrap().len(),
+        1 + 8 + 4 + 32
+    );
+    for family in [
+        ContinuationFamily::new(
+            "gitlab",
+            "list-page",
+            1,
+            ContinuationLifetime::StableWhenConfigured,
+            GITLAB_PAGE_TOKEN_PAYLOAD_BYTES,
+        )
+        .expires_after(Duration::from_secs(900)),
+        ContinuationFamily::new(
+            "gitlab",
+            "draft-page",
+            GITLAB_PAGE_TOKEN_VERSION,
+            ContinuationLifetime::StableWhenConfigured,
+            GITLAB_PAGE_TOKEN_PAYLOAD_BYTES,
+        )
+        .expires_after(Duration::from_secs(900)),
+    ] {
+        let foreign = signer
+            .seal_at(
+                &gitlab_page_token_binding(&family, &context),
+                &2_u32.to_be_bytes(),
+                now.into(),
+            )
+            .unwrap();
+        let error = decode_gitlab_page_token(&signer, &foreign, &context, now).unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(
+            error.message,
+            "GitLab pagination token is invalid or expired"
+        );
+    }
+    let oversized = format!("{token}A");
+    assert_eq!(
+        decode_gitlab_page_token(&signer, &oversized, &context, now)
+            .unwrap_err()
+            .reason_code(),
+        ReasonCode::InputInvalid
+    );
+
+    // Without a stable key another provider instance rejects the token; with
+    // one, instances sharing it accept each other's tokens.
+    assert!(
+        decode_gitlab_page_token(&ContinuationSigner::new(None), &token, &context, now).is_err()
+    );
+    let key = test_signing_key(4);
+    let shared = encode_gitlab_page_token(
+        &ContinuationSigner::new(Some(key.clone())),
+        &context,
+        3,
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        decode_gitlab_page_token(&ContinuationSigner::new(Some(key)), &shared, &context, now)
+            .unwrap(),
+        3
+    );
+
+    struct Unavailable;
+    impl StableSigningKey for Unavailable {
+        fn hmac_base64url(&self, _: &[u8], _: &[u8]) -> Result<String, SigningError> {
+            Err(SigningError)
+        }
+    }
+    let failing = ContinuationSigner::new(Some(Arc::new(Unavailable)));
+    for error in [
+        encode_gitlab_page_token(&failing, &context, 2, now).unwrap_err(),
+        decode_gitlab_page_token(&failing, &shared, &context, now).unwrap_err(),
+    ] {
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.decision(), Decision::Error);
+        assert_eq!(
+            error.message,
+            "GitLab pagination signing key is unavailable"
+        );
+    }
 }
 
 #[test]
@@ -1209,7 +1348,7 @@ fn gitlab_search_discovery_documents_project_local_filters_and_valid_examples() 
         // Discovery must not imply Jira-style scope-only execution or admit a
         // query-language object in these structured project-local searches.
         assert_eq!(
-            parse(&json!({})).unwrap_err().reason_code,
+            parse(&json!({})).unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         assert!(
@@ -2093,7 +2232,7 @@ fn diff_version_list_rejects_cross_merge_request_items() {
         }],
     )
     .unwrap_err();
-    assert_eq!(mismatch.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(mismatch.reason_code(), ReasonCode::UpstreamProtocolFailed);
 }
 
 #[test]
@@ -2396,7 +2535,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         100,
     )
     .unwrap_err();
-    assert_eq!(unsupported.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(unsupported.reason_code(), ReasonCode::BodyFormatUnsupported);
 
     let oversized = parse_note_update_inputs(
         &json!({
@@ -2409,7 +2548,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         4,
     )
     .unwrap_err();
-    assert_eq!(oversized.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(oversized.reason_code(), ReasonCode::BodySizeDenied);
 
     for invalid in [
         json!({ "project": "sip/service", "iid": 7, "noteId": 701, "content": "missing format" }),
@@ -2420,7 +2559,7 @@ fn normalized_gitlab_content_is_explicit_literal_and_bounded() {
         assert_eq!(
             parse_note_update_inputs(&invalid, 100)
                 .unwrap_err()
-                .reason_code,
+                .reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -2432,8 +2571,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
     provider_config.content.max_body_bytes = 8;
     let provider = GitlabProvider::new(
         provider_config,
-        ProviderLimits::default(),
-        &agent_access_provider::test_support::test_outbound_tls(),
+        &agent_access_provider::test_support::TestHost::default().context(),
     )
     .expect("test provider");
     let sentinel = "SOURCE_SENTINEL_TOO_LONG";
@@ -2484,7 +2622,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
             .invoke(test_invocation(action, inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::BodySizeDenied, "{action}");
+        assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied, "{action}");
         assert!(!error.message.contains(sentinel), "{action}");
     }
 
@@ -2501,7 +2639,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::BodyFormatUnsupported);
+    assert_eq!(error.reason_code(), ReasonCode::BodyFormatUnsupported);
     assert!(!error.message.contains(unsupported_sentinel));
 
     let malformed_sentinel = "MALFORMED_SENTINEL";
@@ -2517,7 +2655,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
         ))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(!error.message.contains(malformed_sentinel));
 }
 
@@ -2741,14 +2879,9 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
         &gitlab_descriptor(&config),
         &[String::from("issue.note.add")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let attributed_body = format!(
         "note before attribution\n\n<!-- agent-access-attribution:start -->\n\n---\n\n_Added via Agent Access Broker. Request ID: {broker_request_id}_\n\n<!-- agent-access-attribution:end -->"
@@ -2787,31 +2920,23 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.note.add".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                broker_request_id.to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "contentFormat": "markdown",
-                "content": "note before attribution"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.note.add")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "contentFormat": "markdown",
+                    "content": "note before attribution"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    broker_request_id.to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2836,14 +2961,9 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
         &gitlab_descriptor(&config),
         &[String::from("issue.create")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let attributed_description = format!(
         "description before attribution\n\n<!-- agent-access-attribution:start -->\n\n---\n\n_Added via Agent Access Broker. Request ID: {broker_request_id}_\n\n<!-- agent-access-attribution:end -->"
@@ -2876,31 +2996,23 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.create".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                broker_request_id.to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "title": "New issue",
-                "contentFormat": "markdown",
-                "content": "description before attribution"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.create")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "title": "New issue",
+                    "contentFormat": "markdown",
+                    "content": "description before attribution"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    broker_request_id.to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -2928,14 +3040,9 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
         &gitlab_descriptor(&config),
         &[String::from("issue.update")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     Mock::given(method("GET"))
         .and(path("/api/v4/projects/sip%2Fservice"))
@@ -2970,30 +3077,22 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
         .await;
 
     let result = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.update".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "title": "New title"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.update")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "title": "New title"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -3017,45 +3116,32 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
         &gitlab_descriptor(&config),
         &[String::from("issue.note.add")],
     );
-    let provider = GitlabProvider::new_with_egress(
-        config,
-        ProviderLimits::default(),
-        &EgressProxyRuntimeConfig::direct(),
-        attribution,
-        &agent_access_provider::test_support::test_outbound_tls(),
-    )
-    .unwrap();
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.attribution = attribution;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     let error = provider
-        .invoke(ProviderInvocation {
-            execution_context: "internal".to_string(),
-            resource_attributes: Default::default(),
-            identity: crate::InvocationIdentity::anonymous(),
-            service: "gitlab".to_string(),
-            action: "issue.note.add".to_string(),
-            correlation: crate::CorrelationContext::new(
-                "agent-request-id".to_string(),
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            ),
-            inputs: json!({
-                "project": "sip/service",
-                "iid": 7,
-                "contentFormat": "markdown",
-                "content": "short"
-            }),
-            body_parts: vec![],
-            resource_scopes: repository_scopes_from_path("sip/service"),
-            credential_mode: "service".to_string(),
-            credential: Some(test_credential()),
-            lookup_credential: Some(test_credential()),
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        })
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.note.add")
+                .inputs(json!({
+                    "project": "sip/service",
+                    "iid": 7,
+                    "contentFormat": "markdown",
+                    "content": "short"
+                }))
+                .correlation(crate::CorrelationContext::new(
+                    "agent-request-id".to_string(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ))
+                .resources(repository_scopes_from_path("sip/service"))
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::BodySizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
 }
 
@@ -3546,7 +3632,7 @@ async fn http_backend_exposes_only_allowlisted_structured_mutation_validation() 
         }
     );
     let public = gitlab_backend_error(backend_error);
-    assert_eq!(public.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(public.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(public.upstream_status, Some(422));
     assert!(!public.message.contains("scope detail"));
     assert!(!public.message.contains("raw detail"));
@@ -3569,7 +3655,7 @@ async fn http_backend_rejects_wrong_type_current_user_identity() {
     let error = backend.current_user(&test_credential()).await.unwrap_err();
     assert!(matches!(error, GitlabBackendError::Protocol(_)));
     let public = gitlab_backend_error(error);
-    assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(public.message, "GitLab response protocol error");
     assert!(!public.message.contains("sentinel-private-user-id"));
 }
@@ -3737,7 +3823,7 @@ async fn http_backend_views_exact_diff_version_and_streams_raw_diff() {
         .unwrap();
     assert_eq!(oversized.value.size, Some(8));
     let error = validate_gitlab_raw_diff_download_size(oversized.value.size, 4).unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
 }
 
 #[tokio::test]
@@ -3780,7 +3866,7 @@ async fn http_backend_does_not_expose_scalar_or_lookup_validation_messages() {
     assert_eq!(lookup_error, GitlabBackendError::HttpStatus(400));
     for error in [mutation_error, lookup_error] {
         let public = gitlab_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamFailed);
         assert!(!public.message.contains("detail"));
     }
 }
@@ -3807,7 +3893,7 @@ fn positioned_writes_allow_structured_line_code_validation_only() {
             status: 400,
             message,
         });
-        assert_eq!(public.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(public.reason_code(), ReasonCode::InputInvalid);
         assert!(public.message.contains("line_code"));
         assert!(!public.message.contains("secret"));
 
@@ -3850,7 +3936,7 @@ async fn http_backend_does_not_read_authorization_failure_bodies_as_validation()
         .unwrap_err();
     assert_eq!(backend_error, GitlabBackendError::Forbidden);
     let public = gitlab_backend_error(backend_error);
-    assert_eq!(public.reason_code, ReasonCode::UpstreamForbidden);
+    assert_eq!(public.reason_code(), ReasonCode::UpstreamForbidden);
     assert!(!public.message.contains("scope detail"));
 }
 
@@ -4673,7 +4759,7 @@ fn draft_note_parser_accepts_unpositioned_variants_but_rejects_partial_positions
         let error = draft_note_from_value(malformed).unwrap_err();
         assert_eq!(error, GitlabBackendError::DraftPositionShapeInvalid);
         let public = gitlab_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(public.message, "GitLab response protocol error");
         assert_eq!(
             public.internal_diagnostic_code,
@@ -4734,7 +4820,7 @@ fn multiline_patch_resolution_rejects_reversed_and_missing_coordinates() {
     assert!(resolve_multiline_position(patch, &missing, "a.rs").is_err());
     let malformed =
         resolve_multiline_position("@@ malformed @@\n+line\n", &missing, "a.rs").unwrap_err();
-    assert_eq!(malformed.reason_code, ReasonCode::InputInvalid);
+    assert_eq!(malformed.reason_code(), ReasonCode::InputInvalid);
     assert_eq!(
         malformed.result.as_deref(),
         Some(&json!({ "inputCategory": "patch_unavailable" }))
@@ -4768,7 +4854,7 @@ fn diff_version_terminal_missing_patch_states_are_permanent_input_failures() {
     assert!(ensure_current_diff_version(&version("collected"), &merge_request).is_ok());
     for state in ["overflow", "without_files"] {
         let error = ensure_current_diff_version(&version(state), &merge_request).unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert_eq!(
             error.result.as_deref(),
             Some(&json!({ "inputCategory": "patch_unavailable" }))
@@ -4776,7 +4862,7 @@ fn diff_version_terminal_missing_patch_states_are_permanent_input_failures() {
     }
     let transient =
         ensure_current_diff_version(&version("collecting"), &merge_request).unwrap_err();
-    assert_eq!(transient.reason_code, ReasonCode::VersionConflict);
+    assert_eq!(transient.reason_code(), ReasonCode::VersionConflict);
 }
 
 #[test]
@@ -4798,7 +4884,9 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         })
     );
     let mut per_user = service.clone();
-    per_user.credential_mode = "per_user".to_string();
+    per_user = InvocationBuilder::from(per_user)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
     assert_eq!(
         gitlab_review_context(&per_user, &actor).unwrap().1,
         json!({
@@ -4813,7 +4901,7 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
         name: None,
     })
     .unwrap_err();
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     for username in ["", "   "] {
         let error = gitlab_review_context(
             &service,
@@ -4824,18 +4912,10 @@ fn current_user_identity_and_review_context_are_closed_and_validated() {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
-    let mut invalid_mode = service;
-    invalid_mode.credential_mode = "other".to_string();
     assert_eq!(
-        gitlab_review_context(&invalid_mode, &actor)
-            .unwrap_err()
-            .reason_code,
-        ReasonCode::CredentialInvalid
-    );
-    assert_eq!(
-        acting_reviewer_not_assigned_error().reason_code,
+        acting_reviewer_not_assigned_error().reason_code(),
         ReasonCode::VersionConflict
     );
 }
@@ -4849,7 +4929,7 @@ fn mutation_http_5xx_is_ambiguous_but_http_4xx_remains_an_ordinary_failure() {
             .with_discussion_id("discussion-9")
             .with_note_id(901),
     );
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
     assert_eq!(
         error.result.as_deref(),
         Some(&json!({
@@ -4864,7 +4944,7 @@ fn mutation_http_5xx_is_ambiguous_but_http_4xx_remains_an_ordinary_failure() {
         MutationVerificationStage::MutationResponse,
         MutationSafeLocators::new().with_note_id(901),
     );
-    assert_eq!(ordinary.reason_code, ReasonCode::UpstreamFailed);
+    assert_eq!(ordinary.reason_code(), ReasonCode::UpstreamFailed);
     assert!(ordinary.result.is_none());
 }
 
@@ -4876,8 +4956,8 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
         MutationVerificationStage::MutationResponse,
         MutationSafeLocators::new().with_webhook_ids(vec![5]),
     );
-    assert_eq!(rejected.decision, Decision::Error);
-    assert_eq!(rejected.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(rejected.decision(), Decision::Error);
+    assert_eq!(rejected.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(
         rejected.message,
         format!(
@@ -4904,9 +4984,9 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
             MutationVerificationStage::MutationReadback,
             MutationSafeLocators::new().with_webhook_ids(vec![5]),
         );
-        assert_eq!(unverified.decision, Decision::Error);
+        assert_eq!(unverified.decision(), Decision::Error);
         assert_eq!(
-            unverified.reason_code,
+            unverified.reason_code(),
             ReasonCode::MutationVerificationFailed
         );
         assert_eq!(
@@ -4925,7 +5005,7 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
     }
     assert_eq!(
         gitlab_review_submit_version_backend_error(GitlabBackendError::RateLimited(None))
-            .reason_code,
+            .reason_code(),
         ReasonCode::UpstreamRateLimited
     );
 }
@@ -4963,7 +5043,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
         };
         assert_eq!(wait.is_some(), expected.is_some(), "{retry_after:?}");
         let error = gitlab_backend_error(backend_error.clone());
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         assert!(!error.message.contains("secret"));
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
@@ -5007,7 +5087,7 @@ fn mutation_readback_translation_preserves_only_the_closed_internal_diagnostic()
             stage,
             MutationSafeLocators::new().with_draft_note_ids(vec![11963]),
         );
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert_eq!(
             error.internal_diagnostic_code,
             Some(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str())
@@ -5466,7 +5546,7 @@ fn gitlab_review_submit_unreadable_version_is_always_a_protocol_failure() {
         GitlabBackendError::Protocol("parse detail".to_string()),
     ] {
         let public = gitlab_review_submit_version_backend_error(error);
-        assert_eq!(public.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(public.message, "GitLab version discovery failed");
     }
 }
@@ -5675,9 +5755,9 @@ fn mutation_verification_failure_is_closed_and_unsafe_to_retry() {
             .with_webhook_event_ids(vec![9002, 9001, 9002]),
     );
 
-    assert_eq!(error.decision, crate::Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
-    assert_eq!(error.reason_code.http_status(), 409);
+    assert_eq!(error.decision(), crate::Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
+    assert_eq!(error.reason_code().http_status(), 409);
     assert_eq!(
         error.message,
         "upstream mutation could not be fully verified"
@@ -5779,9 +5859,9 @@ fn position_input_failure_categories_are_closed_and_non_refreshable() {
             category,
         );
         let error = position_input_invalid(category);
-        assert_eq!(error.decision, crate::Decision::Deny);
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid);
-        assert_eq!(error.reason_code.http_status(), 400);
+        assert_eq!(error.decision(), crate::Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.reason_code().http_status(), 400);
         assert_eq!(
             error.result.as_deref(),
             Some(&json!({ "inputCategory": encoded }))

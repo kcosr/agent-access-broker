@@ -3,11 +3,12 @@
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, EgressProxyConfig, EgressProxyRuntimeConfig, EgressProxySelection,
-    ExecutionCredential, HostError, Provider, ProviderError, ProviderInvocation, ProviderLimits,
-    ProviderResult, ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
-    ResourceScopeCapabilities, ResourceScopes, ResourceType, ServiceDescriptor, ServiceSurface,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, UpstreamNetwork,
+    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, EgressRoute,
+    ExecutionCredential, Provider, ProviderBuildError, ProviderError, ProviderFailureStatus,
+    ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderResult,
+    ProviderResultStream, ProviderStreamError, ReasonCode, RedirectRules,
+    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
     UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
     is_service_name, parse_backend_config, upstream_rate_limited, url_allowed_by_patterns,
     validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
@@ -47,7 +48,7 @@ pub struct CloudbeesCiProvider {
     download_idle_timeout: Duration,
     request_timeout: Duration,
     log_scan_limit: u64,
-    log_signer: agent_access_provider::OpaqueTokenSigner,
+    log_signer: agent_access_provider::ContinuationSigner,
     log_fingerprint: String,
 }
 
@@ -60,12 +61,22 @@ struct Reply {
 }
 
 impl CloudbeesCiProvider {
-    pub(crate) fn new_with_egress(
+    /// A provider whose clients come from a test host with `limits`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         config: CloudbeesCiProviderConfig,
         limits: ProviderLimits,
-        egress: &EgressProxyRuntimeConfig,
-        outbound_tls: &agent_access_provider::PreparedOutboundTls,
-    ) -> Result<Self, HostError> {
+    ) -> Result<Self, ProviderBuildError> {
+        let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
+        Self::new(config, limits, &host)
+    }
+
+    /// One request client and one download client per controller.
+    pub(crate) fn new(
+        config: CloudbeesCiProviderConfig,
+        limits: ProviderLimits,
+        clients: &dyn agent_access_provider::host::UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
         let log_fingerprint = logs::fingerprint(&config, &limits);
         let log_scan_limit = config.max_log_scan_bytes;
         let mut controllers = BTreeMap::new();
@@ -78,24 +89,18 @@ impl CloudbeesCiProvider {
                 .transpose()
                 .expect("validated web URL")
                 .unwrap_or_else(|| base.clone());
-            let network = UpstreamNetwork {
-                limits: &limits,
-                egress,
-                outbound_tls,
-            };
             let label = format!("providers.cloudbees_ci.controllers.{alias}");
             let client = |profile| {
                 UpstreamClient::build(
-                    UpstreamClientSpec {
-                        label: &label,
-                        provider: "cloudbees_ci",
-                        base: &base,
-                        egress_proxy: config.egress_proxy.as_ref(),
-                        allowed_upstream_hosts: &config.allowed_upstream_hosts,
+                    UpstreamClientSpec::new(
+                        &label,
+                        "cloudbees_ci",
+                        &base,
+                        EgressDeclaration::Ordinary(config.egress_proxy.as_ref()),
+                        &config.allowed_upstream_hosts,
                         profile,
-                        status_reasons: &[],
-                    },
-                    network,
+                    ),
+                    clients,
                 )
             };
             let download_client = client(ClientProfile::Stream)?;
@@ -113,7 +118,7 @@ impl CloudbeesCiProvider {
         Ok(Self {
             controllers,
             log_scan_limit,
-            log_signer: agent_access_provider::OpaqueTokenSigner::new(None),
+            log_signer: agent_access_provider::ContinuationSigner::new(None),
             log_fingerprint,
             response_limit: limits.max_upstream_response_bytes.min(JSON_LIMIT),
             download_limit: limits.max_download_bytes,
@@ -232,19 +237,7 @@ impl CloudbeesCiProvider {
         size_error: fn() -> ProviderError,
         mutation: Option<&Value>,
     ) -> Result<Reply, ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {
@@ -442,19 +435,7 @@ impl CloudbeesCiProvider {
         credential: &ExecutionCredential,
         initial: Url,
     ) -> Result<(reqwest::Response, u64), ProviderError> {
-        let username = credential
-            .username
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        let token = credential
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(credential_invalid)?;
-        if credential.kind != "basic_api_token" {
-            return Err(credential_invalid());
-        }
+        let (username, token) = basic_material(credential)?;
         let base = &controller.base;
         let same_artifact_path = |url: &Url| {
             url.path() == initial.path() || url.path().strip_suffix('/') == Some(initial.path())
@@ -470,16 +451,13 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 initial.clone(),
-                RedirectRules {
-                    max_redirects: 3,
-                    deadline: self.request_timeout,
-                    correlate_other_origins: false,
-                    vet: &vet,
-                    decorate: &|request| {
-                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                    },
-                    authorize: &|request| request.basic_auth(username, Some(token)),
-                },
+                RedirectRules::new(3, self.request_timeout, &|request| {
+                    request.basic_auth(username, Some(token))
+                })
+                .with_vet(&vet)
+                .with_decorate(&|request| {
+                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                }),
                 "build.artifact.download",
             )
             .await
@@ -498,6 +476,10 @@ impl CloudbeesCiProvider {
                     )
                 }
                 UpstreamError::NotAllowed | UpstreamError::Redirect => protocol_error(),
+                other => ProviderError::error(
+                    other.reason_code(),
+                    "CloudBees CI artifact request failed",
+                ),
             })?;
         complete_upstream_trace(&mut response, None);
         match response.status() {
@@ -546,7 +528,7 @@ impl CloudbeesCiProvider {
         input: &JobInput<'_>,
         value: Value,
         reply: &Reply,
-        proxy: &EgressProxySelection,
+        proxy: &EgressRoute,
     ) -> ProviderResult {
         let queue_id = input
             .queue_id
@@ -566,37 +548,32 @@ impl CloudbeesCiProvider {
                 audit["buildSelector"] = json!(selector);
             }
         }
-        ProviderResult {
-            result: value,
-            stream: None,
-            audit: Some(audit),
-            upstream_status: Some(reply.status.as_u16()),
-            upstream_duration_ms: Some(reply.duration_ms),
-            object_ids: Some(json!({
+        ProviderResult::new(value)
+            .with_audit(audit)
+            .with_upstream(Some(reply.status.as_u16()), Some(reply.duration_ms))
+            .with_object_ids(json!({
                 "job": format!("{}/{}", input.controller, input.job),
                 "buildNumber": input.build_number, "queueId": queue_id,
-            })),
-        }
+            }))
     }
 }
 
 /// CloudBees CI jobs, identified as `controller/full/job/name`. Namespaces
 /// cover a controller or a folder beneath it.
-pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: Some(input::job_action_inputs),
-    attributes: &[],
-    id: ResourceType::from_static("cloudbees_ci_job"),
-    label: "CloudBees CI job",
-    plural_label: "CloudBees CI jobs",
-    example: "team-ci/payments/build-api",
-    canonical: |value| is_cloudbees_ci_resource_path(value, false),
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: |value| is_cloudbees_ci_resource_path(value, true),
-        label: "Jobs under a controller or folder",
-        members_label: "Jobs",
-        example: "team-ci/payments",
-    }),
-};
+pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("cloudbees_ci_job"),
+    "CloudBees CI job",
+    "CloudBees CI jobs",
+    "team-ci/payments/build-api",
+    |value| is_cloudbees_ci_resource_path(value, false),
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    |value| is_cloudbees_ci_resource_path(value, true),
+    "Jobs under a controller or folder",
+    "Jobs",
+    "team-ci/payments",
+))
+.with_action_inputs(input::job_action_inputs);
 
 /// CloudBees CI jobs across configured controllers.
 pub fn cloudbees_ci_descriptor(_config: &CloudbeesCiProviderConfig) -> ServiceDescriptor {
@@ -645,41 +622,44 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
         });
     }
     actions.extend(reads::descriptors());
-    ServiceDescriptor {
-        service: "cloudbees_ci".into(),
-        display_name: "CloudBees CI".into(),
-        surface: ServiceSurface::Invoke,
-        resource_scopes: BTreeMap::from([(
+    ServiceDescriptor::new("cloudbees_ci", "CloudBees CI")
+        .with_resource_scopes(BTreeMap::from([(
             "job".into(),
-            ResourceScopeCapabilities {
-                resource_type: crate::CLOUDBEES_CI_JOB_RESOURCE.id.clone(),
-                selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-            },
-        )]),
-        actions,
-        credentials: CredentialDescriptor::default()
-            .service_kinds(&["basic_api_token"])
-            .profile("cloudbees-ci-api-token", "basic_api_token"),
-        presentation_body_limit: None,
-    }
+            ResourceScopeCapabilities::new(
+                crate::CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
+                vec!["exact".into(), "namespace".into(), "all".into()],
+            ),
+        )]))
+        .with_actions(actions)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .service_kinds(&["basic_api_token"])
+                .profile("cloudbees-ci-api-token", "basic_api_token"),
+        )
 }
 
-#[async_trait]
-impl Provider for CloudbeesCiProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl CloudbeesCiProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let input = self.parse(action, inputs)?;
         Ok(BTreeMap::from([(
             "job".into(),
             vec![format!("{}/{}", input.controller, input.job)],
         )]))
     }
+}
+
+#[async_trait]
+impl Provider for CloudbeesCiProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
-        if *resource_type == CLOUDBEES_CI_JOB_RESOURCE.id {
+        if resource_type == CLOUDBEES_CI_JOB_RESOURCE.id() {
             self.controllers.keys().cloned().collect()
         } else {
             Vec::new()
@@ -687,19 +667,22 @@ impl Provider for CloudbeesCiProvider {
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        if !request.body_parts.is_empty() {
+        if !request.body_parts().is_empty() {
             return Err(input_error(
                 "value_invalid",
                 None,
                 "CloudBees CI actions take no file parts",
             ));
         }
-        let mut input = self.parse(&request.action, &request.inputs)?;
+        let mut input = self.parse(request.action(), request.inputs())?;
         let controller = self
             .controllers
             .get(&input.controller)
             .expect("validated controller");
-        let credential = request.credential.as_ref().ok_or_else(credential_invalid)?;
+        let credential = request
+            .execution()
+            .static_credential()
+            .ok_or_else(credential_invalid)?;
         let job_url = Self::job_url(&controller.base, &input.job);
         match self
             .dispatch(
@@ -712,7 +695,7 @@ impl Provider for CloudbeesCiProvider {
             .await
         {
             Err(error)
-                if error.reason_code == ReasonCode::ResourceNotFound
+                if error.reason_code() == ReasonCode::ResourceNotFound
                     && error.upstream_status == Some(404) =>
             {
                 Err(self
@@ -814,7 +797,7 @@ impl CloudbeesCiProvider {
             );
         }
         let input: &JobInput<'_> = input;
-        if request.action == "build.artifact.download" {
+        if request.action() == "build.artifact.download" {
             let number = input.build_number.expect("required");
             let path = input.artifact_path.expect("required");
             let (artifacts, _) = self
@@ -896,11 +879,11 @@ impl CloudbeesCiProvider {
                 duration_ms,
             };
             let mut result = self.result(
-                &request.action,
+                request.action(),
                 input,
                 value,
                 &reply,
-                controller.client.egress_proxy(),
+                controller.client.egress_route(),
             );
             let mut stream = ProviderResultStream::from_stream(content_type, byte_stream);
             if let Some(size) = size {
@@ -912,13 +895,13 @@ impl CloudbeesCiProvider {
             result.stream = Some(stream);
             return Ok(result);
         }
-        if reads::is_action(&request.action) {
+        if reads::is_action(request.action()) {
             return self
-                .invoke_read(&request.action, input, controller, credential, job_url)
+                .invoke_read(request.action(), input, controller, credential, job_url)
                 .await;
         }
         let job_api = Self::append(job_url.clone(), &["api", "json"]);
-        let (value, reply) = match request.action.as_str() {
+        let (value, reply) = match request.action() {
             "job.view" => {
                 let (data, reply) = self
                     .json(controller, credential, Self::tree(job_api, "fullName,_class,displayName,url,description,buildable,inQueue,lastBuild[number],property[parameterDefinitions[name,type]]"))
@@ -1085,7 +1068,7 @@ impl CloudbeesCiProvider {
                     self.json(controller, credential, url)
                         .await
                         .map_err(|error| {
-                            if error.reason_code == ReasonCode::ResourceNotFound {
+                            if error.reason_code() == ReasonCode::ResourceNotFound {
                                 ProviderError::deny(
                                     ReasonCode::ScopeUnresolved,
                                     "queue item does not identify the authorized job",
@@ -1179,11 +1162,11 @@ impl CloudbeesCiProvider {
             _ => unreachable!(),
         };
         Ok(self.result(
-            &request.action,
+            request.action(),
             input,
             value,
             &reply,
-            controller.client.egress_proxy(),
+            controller.client.egress_route(),
         ))
     }
 }
@@ -1261,6 +1244,18 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
         "safeLocators": safe_locators,
     }))
 }
+/// CloudBees CI authenticates with a non-empty Basic username and API token.
+pub(crate) fn basic_material(
+    credential: &ExecutionCredential,
+) -> Result<(&str, &str), ProviderError> {
+    match credential.view() {
+        CredentialView::Basic { username, token } if !username.is_empty() && !token.is_empty() => {
+            Ok((username, token))
+        }
+        _ => Err(credential_invalid()),
+    }
+}
+
 fn credential_invalid() -> ProviderError {
     ProviderError::deny(
         ReasonCode::CredentialInvalid,
@@ -1311,12 +1306,30 @@ pub struct CloudbeesCiControllerConfig {
     pub web_base_url: Option<String>,
 }
 
-pub static CLOUDBEES_CI_BACKEND: BackendRegistration = BackendRegistration {
-    kind: "cloudbees_ci",
-    resource_types: &[&CLOUDBEES_CI_JOB_RESOURCE],
-    parse: parse_backend_config::<CloudbeesCiProviderConfig>,
-    development_only: false,
-};
+/// A Pipeline node log whose text exceeds the bounded read limit.
+pub static CLOUDBEES_CI_LOG_CHUNK_EXCEEDED: ProviderReasonDefinition =
+    ProviderReasonDefinition::deny(
+        "cloudbees_ci_log_chunk_exceeded",
+        ProviderFailureStatus::ContentTooLarge,
+    );
+
+/// A `tail` log read the scan ceiling stopped before the log end.
+pub static CLOUDBEES_CI_LOG_SCAN_EXCEEDED: ProviderReasonDefinition =
+    ProviderReasonDefinition::deny(
+        "cloudbees_ci_log_scan_exceeded",
+        ProviderFailureStatus::ContentTooLarge,
+    );
+
+pub static CLOUDBEES_CI_BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "cloudbees_ci",
+    parse_backend_config::<CloudbeesCiProviderConfig>,
+)
+.with_resource_types(&[&CLOUDBEES_CI_JOB_RESOURCE])
+.with_domain_reasons(&[
+    &CLOUDBEES_CI_LOG_CHUNK_EXCEEDED,
+    &CLOUDBEES_CI_LOG_SCAN_EXCEEDED,
+]);
 
 impl BackendConfig for CloudbeesCiProviderConfig {
     fn kind(&self) -> &'static str {
@@ -1400,15 +1413,11 @@ impl BackendConfig for CloudbeesCiProviderConfig {
             .collect()
     }
 
-    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
-        let mut provider = CloudbeesCiProvider::new_with_egress(
-            self.clone(),
-            host.limits.clone(),
-            host.egress,
-            host.outbound_tls,
-        )?;
+    fn build(&self, host: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        let mut provider =
+            CloudbeesCiProvider::new(self.clone(), host.limits().clone(), host.clients())?;
         provider.log_signer =
-            agent_access_provider::OpaqueTokenSigner::new(host.stable_signing_key.clone());
+            agent_access_provider::ContinuationSigner::new(host.stable_signing_key().cloned());
         Ok(Arc::new(provider))
     }
 }
@@ -1457,11 +1466,12 @@ pub fn is_cloudbees_ci_resource_path(value: &str, allow_controller_only: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::test_support::{InvocationBuilder, basic_credential};
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     pub(super) fn provider(server: &MockServer) -> CloudbeesCiProvider {
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -1475,37 +1485,72 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{}/team-ci/**", server.uri())],
             },
             ProviderLimits::default(),
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
     }
 
+    #[test]
+    fn build_creates_stream_and_request_clients_per_controller() {
+        let host = agent_access_provider::test_support::TestHost::default();
+        let controller = |base: &str| crate::CloudbeesCiControllerConfig {
+            base_url: base.into(),
+            web_base_url: None,
+        };
+        CloudbeesCiProviderConfig {
+            max_log_scan_bytes: logs::default_scan_limit(),
+            controllers: BTreeMap::from([
+                ("alpha".into(), controller("https://alpha.example/ci/")),
+                ("beta".into(), controller("https://beta.example/")),
+            ]),
+            egress_proxy: None,
+            allowed_upstream_hosts: vec![
+                "https://alpha.example/ci/**".into(),
+                "https://beta.example/**".into(),
+            ],
+        }
+        .build(&host.context())
+        .unwrap();
+        let built = host
+            .built_clients()
+            .into_iter()
+            .map(|client| (client.label, client.base.to_string(), client.profile))
+            .collect::<Vec<_>>();
+        let (alpha, beta) = (
+            "providers.cloudbees_ci.controllers.alpha".to_string(),
+            "providers.cloudbees_ci.controllers.beta".to_string(),
+        );
+        assert_eq!(
+            built,
+            [
+                (
+                    alpha.clone(),
+                    "https://alpha.example/ci/".into(),
+                    ClientProfile::Stream
+                ),
+                (
+                    alpha,
+                    "https://alpha.example/ci/".into(),
+                    ClientProfile::Request
+                ),
+                (
+                    beta.clone(),
+                    "https://beta.example/".into(),
+                    ClientProfile::Stream
+                ),
+                (beta, "https://beta.example/".into(), ClientProfile::Request),
+            ]
+        );
+    }
+
     pub(super) fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
-        ProviderInvocation {
-            resource_attributes: Default::default(),
-            identity: agent_access_provider::InvocationIdentity::anonymous(),
-            execution_context: "internal".into(),
-            service: "cloudbees_ci".into(),
-            action: action.into(),
-            correlation: agent_access_provider::CorrelationContext::for_tests(),
-            inputs,
-            body_parts: Vec::new(),
-            resource_scopes: BTreeMap::from([(
+        InvocationBuilder::new("cloudbees_ci", action)
+            .inputs(inputs)
+            .resources(BTreeMap::from([(
                 "job".into(),
                 vec!["team-ci/payments/build-api".into()],
-            )]),
-            credential_mode: "service".into(),
-            credential: Some(ExecutionCredential {
-                kind: "basic_api_token".into(),
-                username: Some("automation".into()),
-                token: Some("secret".into()),
-            }),
-            lookup_credential: None,
-            provider_preflight: None,
-            search_authorization: None,
-            delegated_credential: None,
-        }
+            )]))
+            .credential(basic_credential("automation", "secret"))
+            .build()
     }
 
     #[test]
@@ -1711,11 +1756,8 @@ mod tests {
             let _ = headers_sent.send(());
             tokio::time::sleep(Duration::from_secs(10)).await;
         });
-        let limits = ProviderLimits {
-            request_timeout_ms: 5_000,
-            ..ProviderLimits::default()
-        };
-        let provider = CloudbeesCiProvider::new_with_egress(
+        let limits = ProviderLimits::default().with_request_timeout_ms(5_000);
+        let provider = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -1729,8 +1771,6 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
             },
             limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap();
         let request = tokio::spawn(async move {
@@ -1746,7 +1786,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let error = request.await.unwrap().unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
         server.abort();
     }
 
@@ -1768,10 +1808,7 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(ProviderError {
-                reason_code: ReasonCode::ScopeUnresolved,
-                ..
-            })
+            Err(ref error) if error.reason_code() == ReasonCode::ScopeUnresolved
         ));
         assert_eq!(
             server.received_requests().await.unwrap()[0].url.path(),
@@ -1829,10 +1866,7 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(ProviderError {
-                reason_code: ReasonCode::VerificationMismatch,
-                ..
-            })
+            Err(ref error) if error.reason_code() == ReasonCode::VerificationMismatch
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
@@ -1898,8 +1932,8 @@ mod tests {
     }
 
     fn assert_upstream_rate_limited(error: &ProviderError, seconds: Option<u64>) {
-        assert_eq!(error.decision, agent_access_provider::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+        assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         let result = error.result.as_deref().unwrap();
         assert_eq!(result["limitScope"], "upstream");
         assert_eq!(result["service"], "cloudbees_ci");
@@ -2095,7 +2129,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         for path in [
             "../other.txt",
@@ -2104,7 +2138,7 @@ mod tests {
             "reports\\out.txt",
         ] {
             let error = provider(&server)
-                .resolve_scopes(
+                .local_scopes(
                     "build.artifact.download",
                     &json!({
                         "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2112,7 +2146,7 @@ mod tests {
                     }),
                 )
                 .unwrap_err();
-            assert_eq!(error.reason_code, ReasonCode::InputInvalid);
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         }
     }
 
@@ -2140,7 +2174,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2164,7 +2198,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
@@ -2222,24 +2256,25 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"artifact".to_vec()))
             .mount(&server)
             .await;
-        agent_access_provider::test_support::start_capturing_events();
+        let capture = agent_access_provider::test_support::install_trace_capture().start();
         let ci = provider(&server);
-        agent_access_provider::with_provider_context(
-            agent_access_provider::CorrelationContext::for_tests(),
-            "cloudbees_ci".into(),
-            "build.artifact.download".into(),
-            ci.invoke(invocation(
-                "build.artifact.download",
-                json!({
-                    "controller":"team-ci","job":"payments/build-api","buildNumber":42,
-                    "artifactPath":"reports/out.txt"
-                }),
-            )),
-        )
-        .await
-        .unwrap();
+        capture
+            .run(agent_access_provider::host::with_provider_context(
+                agent_access_provider::CorrelationContext::for_tests(),
+                "cloudbees_ci".into(),
+                "build.artifact.download".into(),
+                ci.invoke(invocation(
+                    "build.artifact.download",
+                    json!({
+                        "controller":"team-ci","job":"payments/build-api","buildNumber":42,
+                        "artifactPath":"reports/out.txt"
+                    }),
+                )),
+            ))
+            .await
+            .unwrap();
 
-        let events = agent_access_provider::test_support::captured_upstream_requests();
+        let events = capture.take_upstream_requests();
         // The artifact listing, then each hop of the download.
         let expected = [(200, 1), (302, 1), (200, 2)];
         assert_eq!(events.len(), expected.len(), "{events:?}");
@@ -2275,7 +2310,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+        assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);
     }
 
     #[tokio::test]
@@ -2302,7 +2337,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
     }
 
     #[tokio::test]
@@ -2349,7 +2384,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2394,7 +2429,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 
     #[tokio::test]
@@ -2421,7 +2456,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
     }
 
     const JOB_API: &str = "/team-ci/job/payments/job/build-api/api/json";
@@ -2435,14 +2470,14 @@ mod tests {
     }
 
     fn input_category(error: &ProviderError) -> &str {
-        assert_eq!(error.reason_code, ReasonCode::InputInvalid, "{error:?}");
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{error:?}");
         error.result.as_deref().unwrap()["inputCategory"]
             .as_str()
             .unwrap()
     }
 
     fn provider_with_limits(origin: &str, limits: ProviderLimits) -> CloudbeesCiProvider {
-        CloudbeesCiProvider::new_with_egress(
+        CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
@@ -2456,8 +2491,6 @@ mod tests {
                 allowed_upstream_hosts: vec![format!("{origin}/team-ci/**")],
             },
             limits,
-            &EgressProxyRuntimeConfig::direct(),
-            &agent_access_provider::test_support::test_outbound_tls(),
         )
         .unwrap()
     }
@@ -2548,7 +2581,7 @@ mod tests {
                 .invoke(invocation("build.log.read", json!({"url":url})))
                 .await
                 .unwrap_err();
-            assert_eq!(error.reason_code, expected, "{body}");
+            assert_eq!(error.reason_code(), expected, "{body}");
             match expected {
                 ReasonCode::ResourceNotFound => {
                     assert_eq!(error.message, "CloudBees CI job has no lastFailedBuild");
@@ -2628,7 +2661,7 @@ mod tests {
             "url":"https://public.example/controller/job/payments/job/feature%252Ffoo/42/console?x=1"
         });
         assert_eq!(
-            ci.resolve_scopes("build.view", &inputs).unwrap()["job"],
+            ci.local_scopes("build.view", &inputs).unwrap()["job"],
             vec!["team-ci/payments/feature%2Ffoo"]
         );
         let result = ci.invoke(invocation("build.view", inputs)).await.unwrap();
@@ -2716,7 +2749,7 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert_eq!(error.message, "CloudBees CI object was not found");
         server.verify().await;
     }
@@ -2729,7 +2762,7 @@ mod tests {
             .invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert!(
             error
                 .message
@@ -2748,7 +2781,7 @@ mod tests {
             .invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code, ReasonCode::ResourceNotFound);
+        assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
         assert!(
             error.message.contains("job repeats the controller alias"),
             "{}",
@@ -2766,8 +2799,8 @@ mod tests {
     }
 
     fn assert_trigger_unverified(error: &ProviderError) {
-        assert_eq!(error.decision, agent_access_provider::Decision::Error);
-        assert_eq!(error.reason_code, ReasonCode::MutationVerificationFailed);
+        assert_eq!(error.decision(), agent_access_provider::Decision::Error);
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
         assert!(error.message.contains("Do not retry"), "{}", error.message);
         assert_eq!(
             error.result.as_deref(),
@@ -2810,10 +2843,7 @@ mod tests {
             .await;
         let ci = provider_with_limits(
             &server.uri(),
-            ProviderLimits {
-                request_timeout_ms: 300,
-                ..ProviderLimits::default()
-            },
+            ProviderLimits::default().with_request_timeout_ms(300),
         );
         let error = ci
             .invoke(invocation("build.trigger", job_inputs(json!({}))))
@@ -2890,7 +2920,7 @@ mod tests {
             .await
             .unwrap_err();
         server.await.unwrap();
-        assert_eq!(error.reason_code, ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
         assert!(error.result.is_none());
     }
 

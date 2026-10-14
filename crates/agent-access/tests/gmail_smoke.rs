@@ -1,5 +1,9 @@
 //! Real CLI, stdio MCP, HTTP MCP and HTTP against the managed Gmail fixture.
-use agent_access_broker::{backend_registry, build_router};
+use agent_access_broker_host::test_support::{
+    FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
+};
+use agent_access_broker_host::{AssemblyIdentity, BrokerComposition};
+use reqwest::Method;
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -13,7 +17,7 @@ use wiremock::{
     Mock, ResponseTemplate,
     matchers::{method, path},
 };
-#[path = "../../agent-access-broker/tests/support/gmail.rs"]
+#[path = "../../agent-access-broker-host/tests/support/gmail.rs"]
 mod fixture;
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 struct McpProcess {
@@ -150,13 +154,6 @@ impl Drop for McpProcess {
     }
 }
 
-struct BrokerTask(tokio::task::JoinHandle<()>);
-impl Drop for BrokerTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 fn run(config: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
     for (key, _) in std::env::vars_os() {
@@ -184,15 +181,28 @@ fn success(output: std::process::Output) -> Value {
 async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects() {
     let f = fixture::gmail_fixture().await;
     f.connect("").await;
+    // Alice's own connection list reports the Google registration's subject.
+    let connections = fixture::body_json(
+        f.browser(
+            Method::GET,
+            "/v1/oauth/connections",
+            "oauth-connections",
+            None,
+        )
+        .await,
+    )
+    .await;
+    let connection = &connections["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["service"] == "gmail")
+        .unwrap()["connection"];
+    assert_eq!(connection["registration"], "google", "{connections}");
     assert_eq!(
-        f.runtime
-            .oauth_manager()
-            .unwrap()
-            .status("alice", "google")
-            .unwrap()
-            .subject_id
-            .as_deref(),
-        Some("google-sub-alice")
+        connection["subjectId"].as_str(),
+        Some("google-sub-alice"),
+        "{connections}"
     );
     Mock::given(method("POST"))
         .and(path("/gmail/v1/users/me/threads/abc/trash"))
@@ -202,24 +212,15 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         )
         .mount(&f.server)
         .await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let app = f.app.clone();
-    let _broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    }));
-    let token = f._dir.path().join("agent-token");
+    let base = f.broker.public_url();
+    let directory = f.broker.directory();
+    let token = directory.join("agent-token");
     std::fs::write(&token, &f.agent_token).unwrap();
-    let config = f._dir.path().join("cli.toml");
+    let config = directory.join("cli.toml");
     std::fs::write(&config,format!("[service]\nurl = {base:?}\n[identity]\nheader = \"Authorization\"\nscheme = \"Bearer\"\ntoken_file = {:?}\n",token.display().to_string())).unwrap();
     let value = success(run(&config, &["gmail", "account"]));
     assert_eq!(value["result"]["emailAddress"], "alice@example.test");
-    let read_file = f._dir.path().join("account.json");
+    let read_file = directory.join("account.json");
     success(run(
         &config,
         &["gmail", "account", "--output", read_file.to_str().unwrap()],
@@ -350,7 +351,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         let response = client
             .get(format!("{base}/v1/spec/{endpoint}"))
             .bearer_auth(&f.agent_token)
-            .header(agent_access_core::REQUEST_ID_HEADER, "gmail-spec")
+            .header(agent_access_provider::REQUEST_ID_HEADER, "gmail-spec")
             .send()
             .await
             .unwrap();
@@ -364,6 +365,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         assert!(text.contains("thread.trash"), "{endpoint}: {text}");
         assert!(!text.contains("message.delete"));
     }
+    f.stop().await;
 }
 async fn rpc_response(response: reqwest::Response) -> Value {
     let text = response.text().await.unwrap();

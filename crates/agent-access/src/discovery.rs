@@ -1,5 +1,6 @@
 //! Shared caller discovery for CLI and MCP. All resource policy is evaluated by the broker.
-use agent_access_core::{ActionCapabilities, ActionList, ApiCatalog, ResourceList};
+use agent_access_core::{ActionList, ApiCatalog, ResourceList};
+use agent_access_provider::ActionCapabilities;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
@@ -181,7 +182,7 @@ pub(crate) async fn actions_list(
     if selected
         .actions
         .iter()
-        .any(|action| !agent_access_core::is_action_name(action))
+        .any(|action| !agent_access_provider::is_action_name(action))
     {
         bail!("broker returned an invalid action name");
     }

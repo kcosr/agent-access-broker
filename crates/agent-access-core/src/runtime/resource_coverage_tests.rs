@@ -1,9 +1,8 @@
 //! A backend unknown to core exercises discovery's input projection and
 //! caller coverage: jobs under configured controllers, like CloudBees CI.
 use super::*;
-use crate::{
-    BackendConfig, BackendRegistration, BackendRegistry, ProvidersConfig, ResourceCoverage,
-};
+use crate::{BackendRegistry, ProvidersConfig, ResourceCoverage};
+use agent_access_provider::{BackendConfig, BackendRegistration};
 use async_trait::async_trait;
 
 const SERVICE: &str = "coverage_fixture";
@@ -24,7 +23,7 @@ fn job_inputs(selector: &ResourceSelector) -> Option<serde_json::Map<String, Val
     let (value, exact) = match selector {
         ResourceSelector::Exact { value } => (value, true),
         ResourceSelector::Namespace { value } => (value, false),
-        ResourceSelector::All => return None,
+        _ => return None,
     };
     let (controller, job) = value.split_once('/').unwrap_or((value, ""));
     let mut inputs = serde_json::Map::from_iter([("controller".into(), json!(controller))]);
@@ -34,27 +33,27 @@ fn job_inputs(selector: &ResourceSelector) -> Option<serde_json::Map<String, Val
     Some(inputs)
 }
 
-static JOB: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: Some(job_inputs),
-    attributes: &[],
-    id: ResourceType::from_static("coverage_job"),
-    label: "Coverage job",
-    plural_label: "Coverage jobs",
-    example: "team-ci/payments/build-api",
-    canonical: |value| is_path(value, 2..=4),
-    namespace: Some(NamespaceSelectorDescriptor {
-        valid: |value| is_path(value, 1..=3),
-        label: "Jobs under a namespace",
-        members_label: "Jobs",
-        example: "team-ci/payments",
-    }),
-};
-static BACKEND: BackendRegistration = BackendRegistration {
-    kind: SERVICE,
-    resource_types: &[&JOB],
-    parse: parse_backend_config::<FixtureConfig>,
-    development_only: true,
-};
+static JOB: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("coverage_job"),
+    "Coverage job",
+    "Coverage jobs",
+    "team-ci/payments/build-api",
+    |value| is_path(value, 2..=4),
+)
+.with_namespace(NamespaceSelectorDescriptor::new(
+    |value| is_path(value, 1..=3),
+    "Jobs under a namespace",
+    "Jobs",
+    "team-ci/payments",
+))
+.with_action_inputs(job_inputs);
+static BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    SERVICE,
+    parse_backend_config::<FixtureConfig>,
+)
+.with_resource_types(&[&JOB])
+.development_only();
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,44 +67,51 @@ impl BackendConfig for FixtureConfig {
     fn validate(&self, _: &ValidationContext<'_>, _: &mut Vec<String>) {}
     fn descriptor(&self) -> ServiceDescriptor {
         let schema = json!({"type":"object","properties":{"controller":{"type":"string"},"job":{"type":"string"}},"additionalProperties":false});
-        ServiceDescriptor {
-            service: SERVICE.into(),
-            display_name: "Coverage fixture".into(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new(SERVICE, "Coverage fixture")
+            .with_resource_scopes(BTreeMap::from([(
                 "job".into(),
-                ResourceScopeCapabilities {
-                    resource_type: JOB.id.clone(),
-                    selectors: vec!["exact".into(), "namespace".into(), "all".into()],
-                },
-            )]),
-            actions: ["view", "trigger"]
-                .into_iter()
-                .map(|action| {
-                    ActionDescriptor::new(action, "Fixture action", schema.clone())
-                        .scope("job")
-                        .credential_modes(["service", "per_user"])
-                })
-                .collect(),
-            credentials: CredentialDescriptor::without_execution_credential(),
-            presentation_body_limit: None,
-        }
+                ResourceScopeCapabilities::new(
+                    JOB.id().clone(),
+                    vec!["exact".into(), "namespace".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(
+                ["view", "trigger"]
+                    .into_iter()
+                    .map(|action| {
+                        ActionDescriptor::new(action, "Fixture action", schema.clone())
+                            .scope("job")
+                            .credential_modes(["service", "per_user"])
+                    })
+                    .collect(),
+            )
+            .with_credentials(CredentialDescriptor::without_execution_credential())
     }
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]
     }
-    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(self.clone()))
     }
 }
-#[async_trait]
-impl Provider for FixtureConfig {
-    fn resolve_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+impl FixtureConfig {
+    fn local_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let job = format!("{}/{}", inputs["controller"], inputs["job"]);
         Ok(BTreeMap::from([("job".into(), vec![job])]))
     }
+}
+
+#[async_trait]
+impl Provider for FixtureConfig {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
     fn resource_roots(&self, resource_type: &ResourceType) -> Vec<String> {
-        if resource_type == &JOB.id {
+        if resource_type == JOB.id() {
             self.roots.clone()
         } else {
             Vec::new()
@@ -130,7 +136,7 @@ fn resource(id: &str, selector: ResourceSelector) -> ResourceDefinition {
     ResourceDefinition {
         id: id.into(),
         display_name: None,
-        resource_type: JOB.id.clone(),
+        resource_type: JOB.id().clone(),
         selector,
         allowed_execution_contexts: vec!["default".into()],
         enabled: true,
@@ -234,7 +240,7 @@ fn token(resources: ResourceSelection) -> IdentityContext {
 
 fn entry(selector: ResourceSelector, restricted: bool) -> ResourceCoverage {
     ResourceCoverage {
-        resource_type: JOB.id.clone(),
+        resource_type: JOB.id().clone(),
         inputs: job_inputs(&selector),
         selector,
         restricted,

@@ -1,34 +1,30 @@
 //! A backend unknown to core exercises the complete private-resource contract.
 use super::*;
-use crate::{
-    BackendConfig, BackendRegistration, BackendRegistry, CreateResourceRequest,
-    PatchResourceRequest, ProvidersConfig,
-};
+use crate::{BackendRegistry, CreateResourceRequest, PatchResourceRequest, ProvidersConfig};
+use agent_access_provider::{BackendConfig, BackendRegistration};
 use async_trait::async_trait;
 use std::sync::Mutex;
 
-static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor {
-    action_inputs: None,
-    id: ResourceType::from_static("attribute_fixture"),
-    label: "Fixture destination",
-    plural_label: "Fixture destinations",
-    example: "one",
-    canonical: |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
-    namespace: None,
-    attributes: &[ResourceAttributeDescriptor {
-        name: "endpoint",
-        label: "Endpoint",
-        description: "Private test endpoint",
-        required: true,
-        validate: |value| value.starts_with("secret-"),
-    }],
-};
-static BACKEND: BackendRegistration = BackendRegistration {
-    kind: "attribute_fixture",
-    resource_types: &[&TYPE],
-    parse: parse_backend_config::<FixtureConfig>,
-    development_only: true,
-};
+static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("attribute_fixture"),
+    "Fixture destination",
+    "Fixture destinations",
+    "one",
+    |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
+)
+.with_attributes(&[ResourceAttributeDescriptor::required(
+    "endpoint",
+    "Endpoint",
+    "Private test endpoint",
+    |value| value.starts_with("secret-"),
+)]);
+static BACKEND: BackendRegistration = BackendRegistration::new(
+    agent_access_provider::module_metadata!(),
+    "attribute_fixture",
+    parse_backend_config::<FixtureConfig>,
+)
+.with_resource_types(&[&TYPE])
+.development_only();
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,24 +49,18 @@ impl BackendConfig for FixtureConfig {
         }
     }
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: self.kind().into(), display_name: "Attribute conformance".into(), surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([("destination".into(), ResourceScopeCapabilities { resource_type: TYPE.id.clone(), selectors: vec!["exact".into(), "all".into()] })]),
-            actions: vec![ActionDescriptor::new("send", "Send to a private fixture", json!({"type":"object","required":["destination"],"properties":{"destination":{"type":"string"}},"additionalProperties":false}))
-                .scope("destination").credential_modes(["service"]).resource_attributes()],
-            credentials: CredentialDescriptor::without_execution_credential(), presentation_body_limit: None,
-        }
+        ServiceDescriptor::new(self.kind(), "Attribute conformance").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TYPE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new("send", "Send to a private fixture", json!({"type":"object","required":["destination"],"properties":{"destination":{"type":"string"}},"additionalProperties":false}))
+                .scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
     }
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
         vec![]
     }
-    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, HostError> {
+    fn build(&self, _: &BuildContext<'_>) -> Result<Arc<dyn Provider>, ProviderBuildError> {
         Ok(Arc::new(self.clone()))
     }
 }
-#[async_trait]
-impl Provider for FixtureConfig {
-    fn resolve_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+impl FixtureConfig {
+    fn local_scopes(&self, _: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         let target = inputs["destination"]
             .as_str()
             .filter(|target| TYPE.is_canonical_target(target))
@@ -80,20 +70,24 @@ impl Provider for FixtureConfig {
             vec![target.into()],
         )]))
     }
+}
+
+#[async_trait]
+impl Provider for FixtureConfig {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        assert!(request.credential.is_none());
-        let value = request.resource_attributes.get("endpoint").unwrap();
+        assert!(request.execution().static_credential().is_none());
+        let value = request.resource_attributes().get("endpoint").unwrap();
         assert!(!format!("{request:?}").contains(value));
-        assert!(!serde_json::to_string(&request).unwrap().contains(value));
+        assert_invocation_never_serializes();
         self.observed.lock().unwrap().push(value.into());
-        Ok(ProviderResult {
-            result: json!({"accepted":true}),
-            stream: None,
-            audit: None,
-            upstream_status: Some(202),
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({"accepted":true})).with_upstream(Some(202), None))
     }
 }
 
@@ -144,7 +138,7 @@ fn create(
     runtime.create_managed_resource(CreateResourceRequest {
         id: Some(id.into()),
         display_name: None,
-        resource_type: TYPE.id.clone(),
+        resource_type: TYPE.id().clone(),
         selector,
         attributes: values,
         allowed_execution_contexts: vec!["default".into()],
@@ -436,4 +430,18 @@ fn private_attribute_type_metadata_is_generic_and_consumers_must_own_the_type() 
             .iter()
             .any(|error| error.contains("defining backend"))
     );
+}
+
+/// Private attributes cannot leak through invocation serialization because
+/// the invocation does not implement `Serialize`: a serializable invocation
+/// makes this item lookup ambiguous and fails to compile.
+fn assert_invocation_never_serializes() {
+    trait AmbiguousIfSerialize<A> {
+        fn item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+    #[allow(dead_code)]
+    struct Serializes;
+    impl<T: ?Sized + serde::Serialize> AmbiguousIfSerialize<Serializes> for T {}
+    let _ = <ProviderInvocation as AmbiguousIfSerialize<_>>::item;
 }

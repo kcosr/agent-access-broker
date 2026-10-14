@@ -7,9 +7,8 @@
 //! how a rejection is described; the in-memory window itself lives in the
 //! broker's ingress layer.
 
-use crate::{
-    BrokerConfig, ProviderError, ReasonCode, ServiceDescriptor, is_service_name, parse_ttl_seconds,
-};
+use crate::{BrokerConfig, parse_ttl_seconds};
+use agent_access_provider::{ProviderError, ReasonCode, ServiceDescriptor, is_service_name};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -496,8 +495,8 @@ mod tests {
             })
         );
         let error = rejection.clone().into_provider_error();
-        assert_eq!(error.reason_code, ReasonCode::RateLimited);
-        assert_eq!(error.reason_code.http_status(), 429);
+        assert_eq!(error.reason_code(), ReasonCode::RateLimited);
+        assert_eq!(error.reason_code().http_status(), 429);
         assert_eq!(error.message, rejection.message());
         assert_eq!(
             error.audit.as_deref().unwrap()["rateLimit"],

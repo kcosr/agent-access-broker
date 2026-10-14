@@ -1,4 +1,5 @@
 use super::*;
+use agent_access_provider::test_support::{InvocationBuilder, bearer_credential};
 use axum::{
     Router,
     body::Bytes,
@@ -10,32 +11,14 @@ use axum::{
 use std::sync::Mutex;
 use tokio::task::JoinHandle;
 
-struct Host {
-    limits: ProviderLimits,
-    egress: EgressProxyRuntimeConfig,
-    tls: PreparedOutboundTls,
-}
-impl Host {
-    fn new() -> Self {
-        Self {
-            limits: ProviderLimits {
-                max_upstream_response_bytes: 256 * 1024,
-                request_timeout_ms: 500,
-                ..Default::default()
-            },
-            egress: EgressProxyRuntimeConfig::new(Arc::new(EgressProxyEnvironment::empty()), None),
-            tls: test_support::test_outbound_tls(),
-        }
-    }
-    fn context(&self) -> BuildContext<'_> {
-        BuildContext {
-            limits: &self.limits,
-            egress: &self.egress,
-            outbound_tls: &self.tls,
-            attribution: Default::default(),
-            stable_signing_key: None,
-        }
-    }
+/// The build host imported OpenAPI tests share: a short request timeout and
+/// a 256 KiB response cap.
+fn test_host() -> test_support::TestHost {
+    test_support::TestHost::with_limits(
+        ProviderLimits::default()
+            .with_max_upstream_response_bytes(256 * 1024)
+            .with_request_timeout_ms(500),
+    )
 }
 #[derive(Clone)]
 struct StateData {
@@ -148,33 +131,14 @@ fn definition(endpoint: &str, document: &str) -> ImportedServiceDefinition {
     }
 }
 fn credential(token: &str) -> ExecutionCredential {
-    ExecutionCredential {
-        kind: "bearer_token".into(),
-        username: None,
-        token: Some(token.into()),
-    }
+    bearer_credential(token)
 }
 fn invocation(inputs: Value) -> ProviderInvocation {
-    ProviderInvocation {
-        execution_context: "internal".into(),
-        identity: InvocationIdentity {
-            principal: "alice".into(),
-            authenticated: true,
-        },
-        service: "example".into(),
-        action: "item.update".into(),
-        correlation: CorrelationContext::for_tests(),
-        inputs,
-        body_parts: vec![],
-        resource_scopes: Default::default(),
-        resource_attributes: Default::default(),
-        credential_mode: "service".into(),
-        credential: Some(credential("api-secret")),
-        lookup_credential: None,
-        delegated_credential: None,
-        provider_preflight: None,
-        search_authorization: None,
-    }
+    InvocationBuilder::new("example", "item.update")
+        .inputs(inputs)
+        .identity(InvocationIdentity::new("alice", true))
+        .credential(credential("api-secret"))
+        .build()
 }
 fn document() -> Value {
     json!({"openapi":"3.1.1","info":{"title":"Inventory","version":"1"},"components":{"securitySchemes":{"access":{"type":"http","scheme":"bearer"},"Key":{"type":"apiKey","in":"header","name":"X-Api-Key"}},"schemas":{"Item":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}},"security":[{"access":[]},{"Key":[]}],"paths":{"/items/{id}":{"post":{"operationId":"update_item","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"name":"q","in":"query","schema":{"type":"string"}},{"name":"tags","in":"query","explode":false,"schema":{"type":"array","items":{"type":"string"}}},{"name":"Count","in":"header","schema":{"type":"integer"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}},"responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}},"default":{"description":"Error","content":{"application/json":{"schema":true}}}}}}}})
@@ -202,7 +166,7 @@ async fn public_discovery_returns_picker_without_credentials_or_executable_opera
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let mut definition = fixture.definition();
     definition.connection_settings.remove("securityScheme");
-    let host = Host::new();
+    let host = test_host();
     let result = OpenApiAdapter
         .discover(
             &definition,
@@ -233,7 +197,7 @@ async fn private_document_token_is_separate_from_selected_execution_token() {
     definition
         .connection_settings
         .insert("definitionAuthHeader".into(), "X-Definition-Key".into());
-    let host = Host::new();
+    let host = test_host();
     let discovery = OpenApiAdapter
         .discover(
             &definition,
@@ -352,7 +316,7 @@ fn self_contained_refs_preserve_literals_and_enforce_constraints() {
 async fn execution_serializes_separate_locations_and_never_refetches_definition() {
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let def = fixture.definition();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[action(&def)], None, &host.context())
         .unwrap();
@@ -377,7 +341,7 @@ async fn execution_serializes_separate_locations_and_never_refetches_definition(
 async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
     let fixture = Fixture::new(document(), 200, json!({"value":"done"}), Duration::ZERO).await;
     let def = fixture.definition();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[action(&def)], None, &host.context())
         .unwrap();
@@ -387,13 +351,21 @@ async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
         assert!(provider.invoke(invocation(value)).await.is_err());
     }
     let mut call = invocation(input());
-    call.credential_mode = "per_user".into();
-    call.credential = None;
+    call = InvocationBuilder::from(call)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    call = InvocationBuilder::from(call)
+        .execution(ExecutionAccess::None)
+        .build();
     assert!(provider.invoke(call).await.is_err());
     assert_eq!(fixture.call_count(), 0);
     let mut call = invocation(input());
-    call.credential_mode = "per_user".into();
-    call.credential = Some(credential("alice-secret"));
+    call = InvocationBuilder::from(call)
+        .credential_mode(CredentialMode::PerUser)
+        .build();
+    call = InvocationBuilder::from(call)
+        .execution(ExecutionAccess::Static(credential("alice-secret")))
+        .build();
     provider.invoke(call).await.unwrap();
     assert_eq!(
         fixture.state.calls.lock().unwrap()[0].headers["authorization"],
@@ -411,12 +383,12 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
         )
         .await;
         let def = fixture.definition();
-        let host = Host::new();
+        let host = test_host();
         let provider = OpenApiAdapter
             .build(&def, &[action(&def)], None, &host.context())
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
-        assert_eq!(error.reason_code, status_reason(status));
+        assert_eq!(error.reason_code(), status_reason(status));
         if status == 429 {
             assert_eq!(error.result.as_ref().unwrap()["retryAfterSeconds"], 30);
             assert_eq!(error.result.as_ref().unwrap()["limitScope"], "upstream");
@@ -434,14 +406,14 @@ async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {
     ] {
         let fixture = Fixture::new(document(), 200, body, delay).await;
         let def = fixture.definition();
-        let host = Host::new();
+        let host = test_host();
         let provider = OpenApiAdapter
             .build(&def, &[action(&def)], None, &host.context())
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert!(matches!(
-            error.reason_code,
-            ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamTimeout
+            error.reason_code().standard(),
+            Some(ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamTimeout)
         ));
         assert_eq!(error.result.as_ref().unwrap()["mutationStatus"], "unknown");
         assert_eq!(fixture.call_count(), 1);
@@ -490,7 +462,7 @@ async fn no_content_operations_omit_empty_accept_and_return_null_body() {
     doc["paths"]["/items/{id}"]["post"]["responses"] = json!({"204":{"description":"Updated"}});
     let mut accepted = discovered(doc, &def).definition;
     accepted.action = "item.update".into();
-    let host = Host::new();
+    let host = test_host();
     let provider = OpenApiAdapter
         .build(&def, &[accepted], None, &host.context())
         .unwrap();
@@ -511,7 +483,7 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
     let fixture = Fixture::new(document(), 200, json!({"value":"ok"}), Duration::ZERO).await;
     let mut def = fixture.definition();
     def.connection_settings.remove("definitionUrl");
-    let host = Host::new();
+    let host = test_host();
     let error = OpenApiAdapter
         .discover(
             &def,
@@ -522,8 +494,10 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
         .await
         .err()
         .unwrap();
-    assert_eq!(error.reason_code, ReasonCode::ConfigValidationFailed);
-    assert!(error.message.contains("definitionUrl is required"));
+    let AdapterDiscoveryError::Configuration(message) = error else {
+        panic!("expected a configuration failure: {error:?}");
+    };
+    assert!(message.contains("definitionUrl is required"));
     assert_eq!(fixture.call_count(), 0);
 }
 
@@ -563,4 +537,14 @@ fn scoped_mcp_names_use_exact_operation_ids_or_saved_unnamed_action_ids() {
         assert!(OpenApiAdapter.validate_action(&action).is_err());
         assert!(OpenApiAdapter.scoped_mcp_name(&action).is_err());
     }
+}
+
+#[test]
+fn the_openapi_selection_declares_no_oauth_companion() {
+    let registry = agent_access_core::BackendRegistry::empty()
+        .with_imported_adapters([crate::registration()])
+        .unwrap();
+    assert!(registry.imported_adapter("openapi_http").is_some());
+    assert!(registry.import_authentication("openapi_http").is_none());
+    assert_eq!(registry.oauth_dialect_ids().count(), 0);
 }

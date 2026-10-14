@@ -1,6 +1,5 @@
 //! Exercise the published stdio command through a real broker, including its
 //! caller-filtered catalog and resource authorization (not a mock MCP handler).
-mod common;
 #[path = "mcp_stdio/imported_oauth.rs"]
 mod imported_oauth;
 #[path = "mcp_stdio/imports.rs"]
@@ -8,16 +7,10 @@ mod imports;
 #[path = "mcp_stdio/names.rs"]
 mod names;
 
-use agent_access_broker::build_router;
-use agent_access_core::{
-    BrokerConfig, CredentialConfig, CredentialsConfig, DeploymentConfig, IdentityConfig,
-    IdentityGroupConfig, IdentitySourceConfig, PolicyConfig, PolicyGrantConfig, ResourceSelector,
-    StaticPrincipalConfig,
-};
+use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
-use common::{resource_catalog, resource_selection};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -175,43 +168,57 @@ impl Drop for McpProcess {
     }
 }
 
-struct BrokerTask(tokio::task::JoinHandle<()>);
-impl Drop for BrokerTask {
+/// A test-owned upstream server, aborted when dropped.
+struct ServerTask(tokio::task::JoinHandle<()>);
+impl Drop for ServerTask {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
 
+/// An isolated application of this broker assembly.
+fn isolated_broker() -> IsolatedBroker {
+    IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
+    )
+    .unwrap()
+}
+
+/// Shuts `broker` down and waits until it has released its state.
+async fn stop(broker: RunningBroker) {
+    broker.shutdown();
+    broker.join().await.unwrap();
+}
+
+/// A TOML basic string holding `value`.
+fn toml_string(value: impl Display) -> String {
+    serde_json::to_string(&value.to_string()).unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_token_rotation() {
-    let temp = tempfile::tempdir().unwrap();
-    let first_token = temp.path().join("principal-one.token");
-    let second_token = temp.path().join("principal-two.token");
-    let client_token = temp.path().join("client.token");
-    std::fs::write(&first_token, "mcp-principal-one-token").unwrap();
-    std::fs::write(&second_token, "mcp-principal-two-token").unwrap();
+    let application = isolated_broker();
+    let directory = application.directory().clone();
+    let first_token = directory
+        .secret_file("principal-one.token", "mcp-principal-one-token")
+        .unwrap();
+    let second_token = directory
+        .secret_file("principal-two.token", "mcp-principal-two-token")
+        .unwrap();
+    let client_token = directory.join("client.token");
     std::fs::write(&client_token, "mcp-principal-one-token").unwrap();
-    let runtime = agent_access_core::BrokerRuntime::new(fake_config(
-        temp.path(),
-        &first_token,
-        &second_token,
-    ))
-    .unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let _broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
+    let broker = application
+        .config_document(fake_document(&directory, &first_token, &second_token))
+        .start()
         .await
         .unwrap();
-    }));
-    let config = temp.path().join("client.toml");
+    let base = broker.public_url();
+    let config = directory.join("client.toml");
     std::fs::write(
         &config,
         format!(
-            "[service]\nurl = \"http://{address}\"\n[identity]\ndisabled = false\ntoken_file = {}\n",
+            "[service]\nurl = \"{base}\"\n[identity]\ndisabled = false\ntoken_file = {}\n",
             toml::Value::String(client_token.to_string_lossy().into_owned())
         ),
     )
@@ -459,7 +466,7 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
 
     // File content is read by the actual local MCP process; only its path is
     // transmitted through MCP, and the actual broker authorizes TEST.
-    let request_file = temp.path().join("inputs.json");
+    let request_file = directory.join("inputs.json");
     std::fs::write(
         &request_file,
         br#"{"project":"TEST","message":"first file revision"}"#,
@@ -584,111 +591,79 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
         .await;
     assert_eq!(recovered["result"]["isError"], false, "{recovered}");
     client.finish().await;
+    stop(broker).await;
 }
 
-fn fake_config(directory: &Path, first_token: &Path, second_token: &Path) -> BrokerConfig {
-    BrokerConfig {
-        imports: Default::default(),
-        oauth: Default::default(),
-        deployment: DeploymentConfig {
-            enable_fake_service: true,
-            ..Default::default()
-        },
-        network: Default::default(),
-        execution_context: None,
-        identity: IdentityConfig {
-            trusted_callers: Default::default(),
-            mode: "required".into(),
-            authority: "toml".into(),
-            sources: vec![IdentitySourceConfig {
-                name: "local".into(),
-                kind: "static_principals".into(),
-                header: "X-Agent-Access-Identity-Token".into(),
-                scheme: "raw".into(),
-                principals: vec![
-                    StaticPrincipalConfig {
-                        principal: "agent-one".into(),
-                        token_refs: vec![format!("file:{}", first_token.display())],
-                    },
-                    StaticPrincipalConfig {
-                        principal: "agent-two".into(),
-                        token_refs: vec![format!("file:{}", second_token.display())],
-                    },
-                ],
-            }],
-            groups: vec![IdentityGroupConfig {
-                id: "agents".into(),
-                status: "active".into(),
-                members: vec!["agent-one".into()],
-            }],
-        },
-        credentials: CredentialsConfig {
-            imported_modes: Default::default(),
-            service: BTreeMap::from([(
-                "fake".into(),
-                CredentialConfig {
-                    kind: "bearer_token".into(),
-                    username_ref: None,
-                    token_ref: Some("env:FAKE_SERVICE_TOKEN".into()),
-                    provider: None,
-                    path: None,
-                    read_only: None,
-                    credential_name: None,
-                    profile: None,
-                },
-            )]),
-            per_user: BTreeMap::new(),
-            lookup: BTreeMap::new(),
-        },
-        managed_store: None,
-        credential_encryption: None,
-        management: Default::default(),
-        broker_tokens: None,
-        browser_auth: Default::default(),
-        portal: Default::default(),
-        mcp: Default::default(),
-        policy: PolicyConfig {
-            resources: resource_catalog(&[
-                (
-                    "project-test",
-                    FAKE_PROJECT_RESOURCE.id.clone(),
-                    ResourceSelector::Exact {
-                        value: "TEST".into(),
-                    },
-                ),
-                (
-                    "project-test2",
-                    FAKE_PROJECT_RESOURCE.id.clone(),
-                    ResourceSelector::Exact {
-                        value: "TEST2".into(),
-                    },
-                ),
-            ]),
-            resource_groups: vec![],
-            authority: "toml".into(),
-            default_decision: "deny".into(),
-            grants: vec![PolicyGrantConfig {
-                execution_contexts: None,
-                subjects: vec!["group:agents".into()],
-                service: "fake".into(),
-                actions: vec!["echo".into()],
-                resources: resource_selection(&["project-test", "project-test2"]),
-                credential_mode: "service".into(),
-                priority: None,
-            }],
-        },
-        attribution: Default::default(),
-        providers: agent_access_core::ProvidersConfig::new(std::sync::Arc::new(
-            agent_access_broker::backend_registry(),
-        ))
-        .with(agent_access_fake::FakeProviderConfig::default()),
-        gateways: BTreeMap::new(),
-        limits: agent_access_core::LimitsConfig {
-            upload_spool_dir: directory.join("upload-spool").display().to_string(),
-            ..Default::default()
-        },
-        audit: Default::default(),
-    }
+/// The fake provider with its service credential, the static principals
+/// `agent-one` (in group `agents`) and `agent-two` with the tokens in
+/// `first_token` and `second_token`, the TEST and TEST2 project resources, and
+/// the `agents` group's `echo` grant on both.
+fn fake_document(directory: &FixtureDir, first_token: &Path, second_token: &Path) -> String {
+    format!(
+        r#"
+[deployment]
+enable_fake_service = true
+
+[identity]
+mode = "required"
+authority = "toml"
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{first_token}]
+
+[[identity.sources.principals]]
+principal = "agent-two"
+token_refs = [{second_token}]
+
+[[identity.groups]]
+id = "agents"
+status = "active"
+members = ["agent-one"]
+
+[credentials.service.fake]
+type = "bearer_token"
+token_ref = "env:FAKE_SERVICE_TOKEN"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+
+[[policy.resources]]
+id = "project-test"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "TEST" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.resources]]
+id = "project-test2"
+resource_type = "{resource_type}"
+selector = {{ kind = "exact", value = "TEST2" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.grants]]
+subjects = ["group:agents"]
+service = "fake"
+actions = ["echo"]
+resources = {{ resource_ids = ["project-test", "project-test2"] }}
+credential_mode = "service"
+
+[providers.fake]
+
+[limits]
+upload_spool_dir = {spool}
+"#,
+        first_token = toml_string(format_args!("file:{}", first_token.display())),
+        second_token = toml_string(format_args!("file:{}", second_token.display())),
+        resource_type = FAKE_PROJECT_RESOURCE.id().as_str(),
+        spool = toml_string(directory.join("upload-spool").display()),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -850,30 +825,23 @@ async fn scoped_initialization_names_an_unavailable_service_without_catalog_prob
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_side_effects() {
-    let directory = tempfile::tempdir().unwrap();
-    let one = directory.path().join("one.token");
-    let two = directory.path().join("two.token");
-    let rotating = directory.path().join("rotating.token");
-    std::fs::write(&one, "principal-one").unwrap();
-    std::fs::write(&two, "principal-two").unwrap();
+    let application = isolated_broker();
+    let directory = application.directory().clone();
+    let one = directory.secret_file("one.token", "principal-one").unwrap();
+    let two = directory.secret_file("two.token", "principal-two").unwrap();
+    let rotating = directory.join("rotating.token");
     std::fs::write(&rotating, "principal-two").unwrap();
-    let runtime =
-        agent_access_core::BrokerRuntime::new(fake_config(directory.path(), &one, &two)).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let _broker = BrokerTask(tokio::spawn(async move {
-        axum::serve(
-            listener,
-            build_router(runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
+    let broker = application
+        .config_document(fake_document(&directory, &one, &two))
+        .start()
         .await
         .unwrap();
-    }));
-    let config = directory.path().join("client.toml");
+    let base = broker.public_url();
+    let config = directory.join("client.toml");
     std::fs::write(
         &config,
         format!(
-            "[service]\nurl=\"http://{address}\"\n[identity]\ndisabled=false\ntoken_file={:?}\n",
+            "[service]\nurl=\"{base}\"\n[identity]\ndisabled=false\ntoken_file={:?}\n",
             rotating.display().to_string()
         ),
     )
@@ -887,7 +855,7 @@ async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_
             .unwrap()
             .contains("service view is unavailable")
     );
-    let output = directory.path().join("saved.json");
+    let output = directory.join("saved.json");
     std::fs::write(&output, "preserve").unwrap();
     let denied = process
         .request(
@@ -907,7 +875,7 @@ async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_
         agent_access_core::mcp::tool_name("fake", "echo"),
         "unknown".into(),
     ] {
-        let denied = process.request("tools/call",json!({"name":name,"arguments":{"requestFile":directory.path().join("missing.json"),"outputPath":output}})).await;
+        let denied = process.request("tools/call",json!({"name":name,"arguments":{"requestFile":directory.join("missing.json"),"outputPath":output}})).await;
         assert_eq!(denied["error"]["code"], -32602);
         assert_eq!(std::fs::read_to_string(&output).unwrap(), "preserve");
     }
@@ -965,4 +933,5 @@ async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_
     assert_eq!(file["services"].as_array().unwrap().len(), 1);
     assert_eq!(file["services"][0]["service"], "fake");
     process.finish().await;
+    stop(broker).await;
 }

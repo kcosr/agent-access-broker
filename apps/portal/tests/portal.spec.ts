@@ -819,7 +819,7 @@ test("global admins assign and revoke a service policy manager with whole-servic
   }));
   await page.route("**/v1/admin/imports", (route) => route.fulfill({
     contentType: "application/json",
-    body: managementResult({ catalogRevision: 1, operatorEnabled: false, availableKinds: [], oauthRegistrations: [], services: [] })
+    body: managementResult({ catalogRevision: 1, operatorEnabled: false, availableKinds: [], importAuthentication: [], services: [] })
   }));
   await page.route("**/v1/admin/policy/service-managers", (route) => route.fulfill({
     contentType: "application/json",

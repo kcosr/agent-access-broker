@@ -1,4 +1,7 @@
 use super::*;
+use agent_access_provider::test_support::{
+    bearer_credential, credential_token, credential_username,
+};
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
 #[path = "trusted_user_tests.rs"]
@@ -6,8 +9,9 @@ mod trusted_user;
 use crate::{
     BrokerTokensConfig, CredentialEncryptionConfig, CredentialEncryptionKeyConfig,
     CredentialsConfig, DeploymentConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
-    LookupRequirement, ManagedStoreConfig, PolicyGrantConfig, StaticPrincipalConfig,
+    ManagedStoreConfig, PolicyGrantConfig, StaticPrincipalConfig,
 };
+use agent_access_provider::LookupRequirement;
 use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
@@ -41,9 +45,12 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
     .unwrap();
     assert_eq!(
         request.read_content_format,
-        crate::ReadContentFormat::Native
+        agent_access_provider::presentation::ReadContentFormat::Native
     );
-    assert_eq!(request.response_format, crate::ResponseFormat::Json);
+    assert_eq!(
+        request.response_format,
+        agent_access_provider::presentation::ResponseFormat::Json
+    );
 
     let explicit: InvokeRequest = serde_json::from_value(json!({
         "inputs": {},
@@ -51,8 +58,14 @@ fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
         "responseFormat": "markdown"
     }))
     .unwrap();
-    assert_eq!(explicit.read_content_format, crate::ReadContentFormat::Text);
-    assert_eq!(explicit.response_format, crate::ResponseFormat::Markdown);
+    assert_eq!(
+        explicit.read_content_format,
+        agent_access_provider::presentation::ReadContentFormat::Text
+    );
+    assert_eq!(
+        explicit.response_format,
+        agent_access_provider::presentation::ResponseFormat::Markdown
+    );
 
     assert!(
         serde_json::from_value::<InvokeRequest>(json!({
@@ -81,7 +94,7 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
             }),
             InvokeRequest {
                 inputs: json!({"project": "TEST", "message": "hello"}),
-                response_format: crate::ResponseFormat::Markdown,
+                response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                 ..InvokeRequest::new(json!({}))
             },
         )
@@ -90,13 +103,13 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
     let unknown = invoke("missing").await;
     assert_eq!(
         unknown.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 
     let unsupported = invoke("echo").await;
     assert_eq!(
         unsupported.envelope.reason_code,
-        Some(ReasonCode::ResponseFormatUnsupported)
+        Some(ReasonCode::ResponseFormatUnsupported.into())
     );
     assert_eq!(
         unsupported.status,
@@ -145,7 +158,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: crate::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -153,7 +166,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
 
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::BrokerTokenClassDenied)
+            Some(ReasonCode::BrokerTokenClassDenied.into())
         );
         assert_eq!(
             response.status,
@@ -181,7 +194,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: crate::ResponseFormat::Markdown,
+                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -189,7 +202,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
 
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::ServiceActionDenied)
+            Some(ReasonCode::ServiceActionDenied.into())
         );
         assert_eq!(
             response.envelope.reason.as_deref(),
@@ -220,24 +233,24 @@ fn test_resources() -> Vec<ResourceDefinition> {
     let mut resources = Vec::new();
     for (resource_type, prefix, values) in [
         (
-            agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+            agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
             "project",
             &["TEST", "ENG", "OPS", "PROJ", "OTHER", "RESEARCH"][..],
         ),
         (
-            agent_access_fake::FAKE_PROJECT_RESOURCE.id.clone(),
+            agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
             "fake-project",
             &["TEST", "ENG", "OPS", "PROJ", "OTHER", "RESEARCH"][..],
         ),
         (
             agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-                .id
+                .id()
                 .clone(),
             "space",
             &["ENG", "OPS", "RESEARCH", "TEST"][..],
         ),
         (
-            crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             "repository",
             &[
                 "sip/service",
@@ -273,7 +286,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
         resources.push(ResourceDefinition {
             id: format!("repository-namespace-{value}"),
             display_name: None,
-            resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+            resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector: ResourceSelector::Namespace {
                 value: value.into(),
             },
@@ -315,6 +328,7 @@ fn seed_test_resource_catalog(store_path: &Path) {
             ResourceSelector::Exact { value } => ("exact", value),
             ResourceSelector::Namespace { value } => ("namespace", value),
             ResourceSelector::All => ("all", String::new()),
+            other => panic!("untested selector {other:?}"),
         };
         conn.execute("INSERT OR IGNORE INTO resources (resource_id,resource_type,selector_kind,selector_value,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES (?1,?2,?3,?4,?5,1,1,?6,'admin',?6,'admin')",rusqlite::params![resource.id,resource.resource_type.as_str(),kind,value,serde_json::to_string(&resource.allowed_execution_contexts).unwrap(),now]).unwrap();
     }
@@ -396,12 +410,12 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         local_password_hasher: runtime.local_password_hasher.clone(),
         browser_csrf_key: runtime.browser_csrf_key.clone(),
         microsoft_oidc: runtime.microsoft_oidc.clone(),
-        egress_proxy_environment: Arc::clone(&runtime.egress_proxy_environment),
-        outbound_tls: runtime.outbound_tls.clone(),
+        network: runtime.network.clone(),
         audit: runtime.audit.clone(),
         audit_registry: Arc::clone(&runtime.audit_registry),
         node_id: Arc::clone(&runtime.node_id),
         config_generation: runtime.config_generation,
+        provider_fixtures: runtime.provider_fixtures.clone(),
     }
 }
 
@@ -1098,7 +1112,7 @@ async fn retention_prune_deletes_only_rotated_files() {
     let locks = crate::StateLockSet::acquire_for_config(
         &config,
         Path::new("/tmp/retention-prune.toml"),
-        TEST_NODE_ID,
+        &crate::StateLockHolder::new("runtime-test", "0.0.0", TEST_NODE_ID),
         None,
     )
     .unwrap();
@@ -1150,7 +1164,7 @@ async fn retention_prune_deletes_only_rotated_files() {
     let conflict = crate::StateLockSet::acquire_for_config(
         &config,
         Path::new("/tmp/retention-prune.toml"),
-        TEST_NODE_ID,
+        &crate::StateLockHolder::new("runtime-test", "0.0.0", TEST_NODE_ID),
         None,
     )
     .unwrap_err();
@@ -1278,54 +1292,68 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
     });
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "jira",
-        upstream_operation: "attachment.download",
-        upstream_origin: "https://example.atlassian.net",
-        method: "GET",
-        status: Some(302),
-        duration_ms: 3,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: None,
-    });
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "jira",
-        upstream_operation: "issue.get",
-        upstream_origin: "https://example.atlassian.net",
-        method: "GET",
-        status: Some(404),
-        duration_ms: 4,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: None,
-    });
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "configured_http",
-        upstream_operation: "issues.list",
-        upstream_origin: "https://api.example.test",
-        method: "GET",
-        status: Some(500),
-        duration_ms: 5,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: None,
-        path_template: Some("/repos/{owner}/{repo}/issues"),
-    });
-    emit_upstream_request_completed(UpstreamTrace {
-        provider: "configured_http",
-        upstream_operation: "issues.list",
-        upstream_origin: "https://api.example.test",
-        method: "GET",
-        status: Some(200),
-        duration_ms: 6,
-        attempt: 1,
-        egress_proxy_mode: "direct",
-        reason_code: Some(ReasonCode::UpstreamProtocolFailed),
-        path_template: Some("/repos/{owner}/{repo}/issues"),
-    });
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "jira",
+            UpstreamCall::new("attachment.download"),
+            "https://example.atlassian.net",
+            "GET",
+            "direct",
+            3,
+        )
+        .with_status(Some(302)),
+    );
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "jira",
+            UpstreamCall::new("issue.get"),
+            "https://example.atlassian.net",
+            "GET",
+            "direct",
+            4,
+        )
+        .with_status(Some(404)),
+    );
+    emit_upstream_request_completed(
+        UpstreamTrace::new(
+            "configured_http",
+            UpstreamCall::new("issues.list"),
+            "https://api.example.test",
+            "GET",
+            "direct",
+            5,
+        )
+        .with_status(Some(500))
+        .with_path_template(Some("/repos/{owner}/{repo}/issues")),
+    );
+    let classified = |duration_ms| {
+        UpstreamTrace::new(
+            "configured_http",
+            UpstreamCall::new("issues.list"),
+            "https://api.example.test",
+            "GET",
+            "direct",
+            duration_ms,
+        )
+        .with_status(Some(200))
+        .with_reason_code(Some(ReasonCode::UpstreamProtocolFailed.into()))
+        .with_path_template(Some("/repos/{owner}/{repo}/issues"))
+    };
+    // A provider's own classification is checked against its hook.
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(agent_access_provider::host::with_hook_context(
+            agent_access_provider::host::hook_context(
+                "configured_http",
+                "issues.list",
+                HookPhase::Invocation,
+                &[],
+            ),
+            async { emit_upstream_request_completed(classified(6)) },
+        ));
+    // Outside any provider hook it cannot be, so it is not recorded.
+    emit_upstream_request_completed(classified(7));
 
     let events = captured.take();
     let redirect = event_by_status(&events, 302);
@@ -1357,6 +1385,14 @@ fn upstream_events_infer_levels_and_reason_codes_without_paths() {
     assert_eq!(
         string_field(protocol_failed, "reasonCode"),
         Some("upstream_protocol_failed")
+    );
+    let unattributed = events
+        .iter()
+        .find(|event| number_field(event, "upstreamDurationMs") == Some(7))
+        .expect("unattributed classification event is captured");
+    assert_eq!(
+        string_field(unattributed, "reasonCode"),
+        Some("broker_provider_contract_failed")
     );
 }
 
@@ -1471,7 +1507,7 @@ async fn malformed_gitlab_draft_readback_diagnostic_reaches_invoke_completion_on
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::MutationVerificationFailed)
+        Some(ReasonCode::MutationVerificationFailed.into())
     );
     let result = response.envelope.result.as_ref().unwrap();
     assert_eq!(result["mutationStatus"], "applied_unverified");
@@ -1504,7 +1540,7 @@ async fn malformed_gitlab_draft_readback_diagnostic_survives_mandatory_audit_fai
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::AuditUnavailable)
+        Some(ReasonCode::AuditUnavailable.into())
     );
     let failed = events
         .iter()
@@ -1615,7 +1651,7 @@ async fn invoke_malformed_gitlab_draft_readback(
         egress_proxy: None,
         allowed_upstream_hosts: vec![format!("{}/api/v4/**", server.uri())],
         content: agent_access_gitlab::GitlabContentConfig::default(),
-        search: crate::SearchLimitsConfig::default(),
+        search: agent_access_provider::SearchLimitsConfig::default(),
         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
     };
     let mut config = base_fake_config();
@@ -1891,7 +1927,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
         ReasonCode::UpstreamForbidden,
         "upstream forbidden",
     ));
-    assert_eq!(public.reason_code, ReasonCode::ScopeUnresolved);
+    assert_eq!(public.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         public.message,
         "resource scope is not authorized or unavailable"
@@ -1901,7 +1937,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
         ReasonCode::LocatorInvalid,
         "bad locator",
     ));
-    assert_eq!(locator.reason_code, ReasonCode::LocatorInvalid);
+    assert_eq!(locator.reason_code(), ReasonCode::LocatorInvalid);
     assert_eq!(locator.message, "bad locator");
 
     for reason_code in [ReasonCode::BodyMalformed, ReasonCode::BodyFormatUnsupported] {
@@ -1909,7 +1945,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
             reason_code,
             "safe local body validation",
         ));
-        assert_eq!(validation.reason_code, reason_code);
+        assert_eq!(validation.reason_code(), reason_code);
         assert_eq!(validation.message, "safe local body validation");
     }
 
@@ -1920,7 +1956,7 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
     ] {
         let hidden =
             public_lookup_scope_error(ProviderError::error(reason_code, "upstream scope detail"));
-        assert_eq!(hidden.reason_code, ReasonCode::ScopeUnresolved);
+        assert_eq!(hidden.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
             hidden.message,
             "resource scope is not authorized or unavailable"
@@ -1945,13 +1981,13 @@ struct LookupTraceProvider {
 /// The registered resource type a trace fixture's scope name stands for.
 fn fixture_resource_type(scope: &str) -> ResourceType {
     match scope {
-        "project" => agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
+        "project" => agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
         "space" => agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
-            .id
+            .id()
             .clone(),
-        "repository" => crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+        "repository" => agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         "job" => agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
-            .id
+            .id()
             .clone(),
         other => panic!("no fixture resource type for scope {other}"),
     }
@@ -1984,7 +2020,7 @@ impl LookupTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.and_then(|credential| credential.token.clone()),
+                token: credential.map(|credential| credential_token(credential).to_owned()),
             });
     }
 }
@@ -1994,18 +2030,15 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
         let mut properties = serde_json::Map::new();
         properties.insert(self.input_name.clone(), json!({ "type": "string" }));
         properties.insert("message".to_string(), json!({ "type": "string" }));
-        ServiceDescriptor {
-            service: self.service.clone(),
-            display_name: "Lookup Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new(self.service.clone(), "Lookup Trace Provider".to_string())
+            .with_resource_scopes(BTreeMap::from([(
                 self.scope_type.clone(),
-                ResourceScopeCapabilities {
-                    resource_type: fixture_resource_type(&self.scope_type),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: vec![
+                ResourceScopeCapabilities::new(
+                    fixture_resource_type(&self.scope_type),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     self.action.clone(),
                     "Trace lookup credential selection",
@@ -2019,20 +2052,12 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
                 .scope(self.scope_type.clone())
                 .credential_modes(["service", "per_user"])
                 .lookup(LookupRequirement::ScopeResolution),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for LookupTraceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl LookupTraceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != self.action.as_str() {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -2050,30 +2075,25 @@ impl Provider for LookupTraceProvider {
             vec![scope_value.to_string()],
         )]))
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+#[async_trait::async_trait]
+impl Provider for LookupTraceProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.record("pre_scope", lookup_credential);
-        self.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.record("pre_scope", request.lookup_credential());
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution_lookup", request.lookup_credential.as_ref());
-        self.record("execution", request.credential.as_ref());
-        Ok(ProviderResult {
-            result: json!({
-                "credentialMode": request.credential_mode,
-            }),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        self.record("execution_lookup", request.lookup_credential());
+        self.record("execution", request.execution().static_credential());
+        Ok(ProviderResult::new(json!({
+            "credentialMode": request.credential_mode(),
+        })))
     }
 }
 
@@ -2090,18 +2110,15 @@ impl SearchPreflightTraceProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for SearchPreflightTraceProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Search Preflight Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new("jira", "Search Preflight Trace Provider")
+            .with_resource_scopes(BTreeMap::from([(
                 "project".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: vec![
+                ResourceScopeCapabilities::new(
+                    agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(vec![
                 ActionDescriptor::new(
                     "search",
                     "Trace search authorization preflight",
@@ -2113,44 +2130,32 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
                 .scope("project")
                 .credential_modes(["service"])
                 .search_contained(),
-            ],
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+            ])
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for SearchPreflightTraceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        _action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+        _request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
         panic!("search authorization must replace ordinary scope resolution")
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert!(
-            request.provider_preflight.is_none(),
-            "core never writes provider-owned preflight state"
+            request.state().is_none(),
+            "core never writes provider-owned state"
         );
-        self.preflights.lock().unwrap().push(
-            serde_json::to_value(
-                request
-                    .search_authorization
-                    .expect("search invocation carries search authorization"),
-            )
-            .unwrap(),
-        );
-        Ok(ProviderResult {
-            result: json!({"issues": []}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        let search = request
+            .search_authorization()
+            .expect("search invocation carries search authorization");
+        self.preflights
+            .lock()
+            .unwrap()
+            .push(json!({"scopeType": search.scope_type, "scope": search.scope}));
+        Ok(ProviderResult::new(json!({"issues": []})))
     }
 }
 
@@ -2200,7 +2205,7 @@ impl DependencyPolicyTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.and_then(|credential| credential.token.clone()),
+                token: credential.map(|credential| credential_token(credential).to_owned()),
             });
     }
 }
@@ -2209,51 +2214,42 @@ impl agent_access_provider::test_support::DescribedProvider for DependencyPolicy
     fn descriptor(&self) -> ServiceDescriptor {
         let mut actions = vec![self.action.clone()];
         actions.extend(self.extra_actions.iter().cloned());
-        ServiceDescriptor {
-            service: "jira".to_string(),
-            display_name: "Jira Dependency Policy Trace Provider".to_string(),
-            surface: ServiceSurface::Invoke,
-            resource_scopes: BTreeMap::from([(
+        ServiceDescriptor::new("jira", "Jira Dependency Policy Trace Provider")
+            .with_resource_scopes(BTreeMap::from([(
                 "project".into(),
-                ResourceScopeCapabilities {
-                    resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id.clone(),
-                    selectors: vec!["exact".into(), "all".into()],
-                },
-            )]),
-            actions: actions
-                .into_iter()
-                .map(|action| {
-                    let lookup = if action == self.action {
-                        LookupRequirement::ScopeResolution
-                    } else {
-                        LookupRequirement::None
-                    };
-                    ActionDescriptor::new(
-                        action,
-                        "Trace Jira relationship policy selection",
-                        json!({
-                            "type": "object",
-                            "additionalProperties": true
-                        }),
-                    )
-                    .scope("project")
-                    .credential_modes(["service"])
-                    .lookup(lookup)
-                })
-                .collect(),
-            credentials: Default::default(),
-            presentation_body_limit: None,
-        }
+                ResourceScopeCapabilities::new(
+                    agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                    vec!["exact".into(), "all".into()],
+                ),
+            )]))
+            .with_actions(
+                actions
+                    .into_iter()
+                    .map(|action| {
+                        let lookup = if action == self.action {
+                            LookupRequirement::ScopeResolution
+                        } else {
+                            LookupRequirement::None
+                        };
+                        ActionDescriptor::new(
+                            action,
+                            "Trace Jira relationship policy selection",
+                            json!({
+                                "type": "object",
+                                "additionalProperties": true
+                            }),
+                        )
+                        .scope("project")
+                        .credential_modes(["service"])
+                        .lookup(lookup)
+                    })
+                    .collect(),
+            )
     }
 }
 
-#[async_trait::async_trait]
-impl Provider for DependencyPolicyTraceProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        _inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl DependencyPolicyTraceProvider {
+    fn local_scopes(&self, action: &str, _inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != self.action {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -2271,27 +2267,22 @@ impl Provider for DependencyPolicyTraceProvider {
             ),
         ]))
     }
+}
 
-    async fn resolve_scopes_with_lookup(
+#[async_trait::async_trait]
+impl Provider for DependencyPolicyTraceProvider {
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.record("pre_scope", lookup_credential);
-        self.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.record("pre_scope", request.lookup_credential());
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution", request.credential.as_ref());
-        Ok(ProviderResult {
-            result: json!({"status": "present"}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        self.record("execution", request.execution().static_credential());
+        Ok(ProviderResult::new(json!({"status": "present"})))
     }
 }
 
@@ -2465,7 +2456,7 @@ async fn jira_dependency_policy_denies_when_either_resolved_project_is_outside_g
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(
         response.envelope.resource_scopes.is_empty(),
@@ -2514,7 +2505,7 @@ async fn jira_parent_policy_denies_when_either_resolved_project_is_outside_grant
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(
         response.envelope.resource_scopes.is_empty(),
@@ -2566,7 +2557,11 @@ async fn jira_issue_update_grant_does_not_authorize_parent_set() {
     assert_eq!(response.status, 403);
     assert!(
         matches!(
-            response.envelope.reason_code,
+            response
+                .envelope
+                .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard),
             Some(ReasonCode::ScopeUnresolved | ReasonCode::ServiceActionDenied)
         ),
         "unexpected denial reason: {:?}",
@@ -2629,7 +2624,11 @@ async fn jira_issue_create_grant_does_not_authorize_child_create() {
     assert_eq!(response.status, 403);
     assert!(
         matches!(
-            response.envelope.reason_code,
+            response
+                .envelope
+                .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard),
             Some(ReasonCode::ScopeUnresolved | ReasonCode::ServiceActionDenied)
         ),
         "unexpected denial reason: {:?}",
@@ -2696,7 +2695,7 @@ async fn same_precedence_per_user_wildcard_and_service_finite_denies_when_scope_
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert_lookup_observations(&observations, &[("pre_scope", "lookup-token")]);
@@ -2751,7 +2750,7 @@ async fn missing_per_user_lookup_credential_fails_without_shared_lookup_fallback
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::CredentialNotProvisioned)
+        Some(ReasonCode::CredentialNotProvisioned.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 }
@@ -2773,7 +2772,7 @@ async fn no_candidate_lookup_backed_action_denies_before_upstream_lookup() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert!(observations.lock().unwrap().is_empty());
@@ -2806,7 +2805,7 @@ async fn execution_context_mismatch_denies_before_upstream_lookup() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     assert!(response.envelope.resource_scopes.is_empty());
     assert!(observations.lock().unwrap().is_empty());
@@ -2861,7 +2860,7 @@ async fn token_execution_context_mismatch_denies_before_upstream_lookup() {
     );
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ExecutionContextDenied)
+        Some(ReasonCode::ExecutionContextDenied.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 }
@@ -2883,7 +2882,7 @@ fn context_binding_and_service_context_intersection_are_enforced() {
         runtime
             .enforce_agent_invoke_token_caveats(&bound, "fake", "echo", &default)
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ExecutionContextDenied
     );
     assert_eq!(
@@ -2895,7 +2894,7 @@ fn context_binding_and_service_context_intersection_are_enforced() {
                 &ExecutionContext::new("interactive").unwrap()
             )
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -2944,7 +2943,7 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     .await;
     assert_eq!(
         action_denied.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert!(observations.lock().unwrap().is_empty());
 
@@ -2963,7 +2962,7 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     .await;
     assert_eq!(
         resource_denied.envelope.reason_code,
-        Some(ReasonCode::ScopeUnresolved)
+        Some(ReasonCode::ScopeUnresolved.into())
     );
     let normalized = lookup_scope_denial();
     assert_eq!(
@@ -3027,7 +3026,7 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
             &identity,
             "confluence",
             "search",
-            &authorization.resource_scopes(),
+            &authorization.resource_scope_summary(),
         )
         .unwrap();
 }
@@ -3131,7 +3130,7 @@ async fn empty_token_search_intersection_denies_without_provider_invocation() {
 
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert!(preflights.lock().unwrap().is_empty());
 }
@@ -3492,7 +3491,7 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
         runtime
             .plan_search_authorization(&snapshot, &identity, &ambiguous, "jira", "search")
             .unwrap_err()
-            .reason_code,
+            .reason_code(),
         ReasonCode::ServiceActionDenied
     );
 }
@@ -3600,29 +3599,24 @@ impl agent_access_provider::test_support::DescribedProvider for MissingStreamHan
 
 #[async_trait::async_trait]
 impl Provider for MissingStreamHandleProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action,
-            }),
-            stream: Some(ProviderResultStream {
-                content_type: "text/plain".to_string(),
-                source: ProviderResultStreamSource::Stream(Arc::new(Mutex::new(None))),
-            }),
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        // A stream whose body was already taken.
+        let mut stream = ProviderResultStream::from_bytes("text/plain", Vec::new());
+        stream.source = ProviderResultStreamSource::Stream(Arc::new(Mutex::new(None)));
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(stream))
     }
 }
 
@@ -3634,12 +3628,13 @@ impl agent_access_provider::test_support::DescribedProvider for FailingStreamPro
 
 #[async_trait::async_trait]
 impl Provider for FailingStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3650,20 +3645,16 @@ impl Provider for FailingStreamProvider {
                 "provider stream failed",
             )),
         ]);
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action,
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -3675,12 +3666,13 @@ impl agent_access_provider::test_support::DescribedProvider for CompletedStreamP
 
 #[async_trait::async_trait]
 impl Provider for CompletedStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -3688,20 +3680,16 @@ impl Provider for CompletedStreamProvider {
             Ok(Bytes::from_static(b"prefix")),
             Ok(Bytes::from_static(b"-suffix")),
         ]);
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action,
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -3713,31 +3701,28 @@ impl agent_access_provider::test_support::DescribedProvider for PendingStreamPro
 
 #[async_trait::async_trait]
 impl Provider for PendingStreamProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         let stream = futures_util::stream::once(async { Ok(Bytes::from_static(b"prefix")) })
             .chain(futures_util::stream::pending());
-        Ok(ProviderResult {
-            result: json!({
-                "provider": "fake",
-                "action": request.action,
-            }),
-            stream: Some(ProviderResultStream::from_stream("text/plain", stream)),
-            audit: Some(json!({
-                "provider": "fake",
-                "operation": "echo",
-            })),
-            upstream_status: Some(200),
-            upstream_duration_ms: Some(1),
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_stream("text/plain", stream))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        }))
+        .with_upstream(Some(200), Some(1)))
     }
 }
 
@@ -3953,7 +3938,7 @@ async fn required_stream_rejects_missing_provider_stream_before_allowed_audit() 
     assert_eq!(response.envelope.decision, Decision::Error);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::UpstreamProtocolFailed)
+        Some(ReasonCode::UpstreamProtocolFailed.into())
     );
     assert!(response.stream.is_none());
     let audit = fs::read_to_string(audit_path).unwrap();
@@ -4260,7 +4245,7 @@ async fn registered_principal_invocation_admission_maps_missing_principal_to_req
     assert_eq!(response.envelope.decision, Decision::Deny);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::PrincipalRequired)
+        Some(ReasonCode::PrincipalRequired.into())
     );
 }
 
@@ -4689,9 +4674,9 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
     let secret_path = write_temp_secret("oauth-readiness-client-secret");
     config.oauth.registrations.insert(
         "stub".into(),
-        crate::OAuthRegistrationConfig {
+        agent_access_provider::OAuthRegistrationConfig {
             adapter_settings: Default::default(),
-            adapter: crate::OAuthAdapter::STUB,
+            adapter: agent_access_provider::OAuthAdapter::new("stub"),
             base_url: "https://unreachable.example.test".into(),
             redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
             client_id: "readiness-test".into(),
@@ -4702,8 +4687,8 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
             allow_insecure_loopback: false,
             permission_profiles: BTreeMap::from([(
                 "read".into(),
-                crate::OAuthPermissionProfile {
-                    scope_mode: crate::OAuthScopeMode::Explicit,
+                agent_access_provider::OAuthPermissionProfile {
+                    scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                     scopes: Some(vec!["records.read".into(), "offline_access".into()]),
                     audience: "records-api".into(),
                     target: "workspace-one".into(),
@@ -4725,6 +4710,11 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
         .credentials
         .per_user
         .insert("oauth_stub".into(), credential.clone());
+    config
+        .providers
+        .insert(agent_access_fake::OAuthStubProviderConfig {
+            base_url: "http://127.0.0.1:9".into(),
+        });
     let runtime = BrokerRuntime::new(config.clone()).unwrap();
     runtime.readiness().await.unwrap();
     assert!(
@@ -4772,9 +4762,9 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
     config.credentials = Default::default();
     config.policy.grants.clear();
     let secret_path = write_temp_secret("oauth-dialect-client-secret");
-    let registration = crate::OAuthRegistrationConfig {
+    let registration = agent_access_provider::OAuthRegistrationConfig {
         adapter_settings: Default::default(),
-        adapter: crate::OAuthAdapter::STUB,
+        adapter: agent_access_provider::OAuthAdapter::new("stub"),
         base_url: "https://stub.example.test".into(),
         redirect_uri: "https://broker.example.test/v1/oauth/callback/stub".into(),
         client_id: "dialect-test".into(),
@@ -4785,8 +4775,8 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
         allow_insecure_loopback: false,
         permission_profiles: BTreeMap::from([(
             "read".into(),
-            crate::OAuthPermissionProfile {
-                scope_mode: crate::OAuthScopeMode::Explicit,
+            agent_access_provider::OAuthPermissionProfile {
+                scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
                 scopes: Some(vec!["records.read".into(), "offline_access".into()]),
                 audience: "records-api".into(),
                 target: "workspace-one".into(),
@@ -4805,7 +4795,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
 
     let mut unknown = config.clone();
     unknown.oauth.registrations.get_mut("stub").unwrap().adapter =
-        crate::OAuthAdapter::new("outlook");
+        agent_access_provider::OAuthAdapter::new("outlook");
     assert!(errors(&unknown).contains(
         "oauth.registrations.stub.adapter `outlook` is not a registered OAuth dialect (expected one of: stub)"
     ));
@@ -4832,7 +4822,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
         .permission_profiles
         .get_mut("read")
         .unwrap();
-    profile.scope_mode = crate::OAuthScopeMode::ServerDefault;
+    profile.scope_mode = agent_access_provider::OAuthScopeMode::ServerDefault;
     profile.scopes = None;
     assert!(errors(&server_default).contains("stub does not support server_default scope mode"));
 
@@ -4925,9 +4915,9 @@ fn local_file_secret_store_resolves_per_user_material() {
     let resolved =
         load_execution_credential("fake", "per_user", &credential, Some(&identity)).unwrap();
 
-    assert_eq!(resolved.kind, "bearer_token");
-    assert_eq!(resolved.username, None);
-    assert_eq!(resolved.token.as_deref(), Some("principal-token"));
+    assert_eq!(resolved.kind().as_str(), "bearer_token");
+    assert_eq!(credential_username(&resolved), None);
+    assert_eq!(credential_token(&resolved), "principal-token");
 }
 
 #[test]
@@ -4958,9 +4948,9 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let resolved =
         load_execution_credential("jira", "per_user", &credential, Some(&principal_identity))
             .unwrap();
-    assert_eq!(resolved.kind, "basic_api_token");
-    assert_eq!(resolved.username.as_deref(), Some("alice@example.com"));
-    assert_eq!(resolved.token.as_deref(), Some("alice-token"));
+    assert_eq!(resolved.kind().as_str(), "basic_api_token");
+    assert_eq!(credential_username(&resolved), Some("alice@example.com"));
+    assert_eq!(credential_token(&resolved), "alice-token");
 
     let subject_identity = IdentityContext {
         caller_id: None,
@@ -4974,9 +4964,9 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let resolved =
         load_execution_credential("jira", "per_user", &credential, Some(&subject_identity))
             .unwrap();
-    assert_eq!(resolved.kind, "basic_api_token");
-    assert_eq!(resolved.username.as_deref(), Some("subject@example.com"));
-    assert_eq!(resolved.token.as_deref(), Some("subject-token"));
+    assert_eq!(resolved.kind().as_str(), "basic_api_token");
+    assert_eq!(credential_username(&resolved), Some("subject@example.com"));
+    assert_eq!(credential_token(&resolved), "subject-token");
 }
 
 #[test]
@@ -4997,7 +4987,7 @@ fn local_file_secret_store_rejects_jira_anonymous_and_invalid_records() {
     )
     .unwrap_err();
     assert_eq!(
-        anonymous_error.reason_code,
+        anonymous_error.reason_code(),
         ReasonCode::CredentialNotProvisioned
     );
 
@@ -5012,7 +5002,7 @@ fn local_file_secret_store_rejects_jira_anonymous_and_invalid_records() {
     };
     let invalid_error =
         load_execution_credential("jira", "per_user", &credential, Some(&identity)).unwrap_err();
-    assert_eq!(invalid_error.reason_code, ReasonCode::CredentialInvalid);
+    assert_eq!(invalid_error.reason_code(), ReasonCode::CredentialInvalid);
 }
 
 #[test]
@@ -5295,11 +5285,7 @@ async fn git_gateway_credential_verify_uses_upload_pack_discovery() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let verification = runtime
         .verify_execution_credential(
@@ -5381,11 +5367,7 @@ async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5400,7 +5382,7 @@ async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5457,11 +5439,7 @@ async fn git_gateway_credential_verify_reports_upstream_throttling() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5476,8 +5454,8 @@ async fn git_gateway_credential_verify_reports_upstream_throttling() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.decision, Decision::Error);
-    assert_eq!(error.reason_code, ReasonCode::UpstreamRateLimited);
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
     assert_eq!(error.upstream_status, Some(429));
     assert!(!error.message.contains("secret"));
     let result = error.result.as_deref().unwrap();
@@ -5549,11 +5527,7 @@ async fn git_gateway_credential_verify_rejects_malformed_discovery_body() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5568,7 +5542,7 @@ async fn git_gateway_credential_verify_rejects_malformed_discovery_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5601,7 +5575,7 @@ async fn git_gateway_credential_verify_times_out_waiting_for_headers() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, None);
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5642,7 +5616,7 @@ async fn git_gateway_credential_verify_times_out_waiting_for_discovery_body() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5688,7 +5662,7 @@ async fn git_gateway_credential_verify_times_out_slow_discovery_body_drip() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::UpstreamTimeout);
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.upstream_status, Some(200));
     let audit = error.audit.as_ref().unwrap();
     assert_eq!(audit["git"]["repository"], "sip/service");
@@ -5725,11 +5699,7 @@ async fn git_gateway_credential_verify_requires_per_user_policy() {
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
 
     let error = runtime
         .verify_execution_credential(
@@ -5744,7 +5714,7 @@ async fn git_gateway_credential_verify_requires_per_user_policy() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code, ReasonCode::ServiceActionDenied);
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
     assert!(error.message.contains("per_user"));
 }
 
@@ -5814,8 +5784,8 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
     assert_eq!(prepared.service, "gitlab_git");
     assert_eq!(prepared.action, "repo.fetch");
     assert_eq!(prepared.credential_mode, "service");
-    assert_eq!(prepared.credential.kind, "bearer_token");
-    assert_eq!(prepared.credential.token.as_deref(), Some("git-token"));
+    assert_eq!(prepared.credential.kind().as_str(), "bearer_token");
+    assert_eq!(credential_token(&prepared.credential), "git-token");
     assert_eq!(prepared.matched_grant.subject, "user:agent-one");
 
     runtime
@@ -6066,7 +6036,7 @@ async fn gateway_operation_requires_classified_required_scopes_before_credential
 
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::GatewayScopeUnresolved)
+        Some(ReasonCode::GatewayScopeUnresolved.into())
     );
 }
 
@@ -6768,7 +6738,7 @@ async fn managed_policy_mutations_publish_without_runtime_reload() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 }
 
@@ -6879,7 +6849,7 @@ async fn managed_policy_authority_with_no_active_grants_denies_by_default() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
 }
 
@@ -6927,12 +6897,12 @@ async fn attribution_validation_failure_during_reload_preserves_active_runtime()
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -6995,7 +6965,7 @@ async fn policy_denies_scope_outside_grant_before_credential_selection() {
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::ServiceActionDenied)
+        Some(ReasonCode::ServiceActionDenied.into())
     );
     assert_eq!(response.envelope.resource_scopes["project"], vec!["OTHER"]);
     assert!(response.envelope.result.is_none());
@@ -7179,7 +7149,7 @@ fn repository_candidate(included: Vec<ResourceSelector>) -> PolicyCandidate {
         execution_contexts: vec![default_execution_context()],
         resource_scope: Some(ActionResourceScope {
             scope: "repository".to_string(),
-            resource_type: &crate::GIT_REPOSITORY_RESOURCE,
+            resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
         }),
         boundary: ResourceBoundary {
             included,
@@ -7398,12 +7368,12 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         local_password_hasher: None,
         browser_csrf_key: None,
         microsoft_oidc: None,
-        egress_proxy_environment: runtime.egress_proxy_environment.clone(),
-        outbound_tls: runtime.outbound_tls.clone(),
+        network: runtime.network.clone(),
         audit,
         audit_registry,
         node_id: Arc::clone(&runtime.node_id),
         config_generation: None,
+        provider_fixtures: ProviderFixtureSlot::default(),
     };
     let response = invalid_runtime
         .invoke(
@@ -7426,7 +7396,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
     assert_eq!(response.status, 403);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::CredentialNotProvisioned)
+        Some(ReasonCode::CredentialNotProvisioned.into())
     );
 }
 
@@ -7458,7 +7428,7 @@ async fn fake_input_schema_is_enforced_before_credential_selection() {
     assert_eq!(response.status, 400);
     assert_eq!(
         response.envelope.reason_code,
-        Some(ReasonCode::InputInvalid)
+        Some(ReasonCode::InputInvalid.into())
     );
     let audit = fs::read_to_string(audit_path).unwrap();
     assert!(audit.contains("\"reasonCode\":\"input_invalid\""));
@@ -7502,7 +7472,7 @@ fn runtime_can_use_explicit_egress_environment_for_tests() {
 #[test]
 fn runtime_preflights_configured_proxy_secrets_even_when_no_proxy_matches() {
     let mut config = base_fake_config();
-    config.network.egress_proxy = Some(crate::EgressProxyConfig {
+    config.network.egress_proxy = Some(agent_access_provider::EgressProxyConfig {
         url: "https://proxy.example:8443".to_string(),
         username_ref: Some("env:AGENT_ACCESS_MISSING_PROXY_USER".to_string()),
         password_ref: Some("env:AGENT_ACCESS_MISSING_PROXY_PASSWORD".to_string()),
@@ -7543,7 +7513,7 @@ fn runtime_preflights_gateway_proxy_secrets() {
             broker_hosts: vec!["git.example.test".to_string()],
             upstream_base_url: "https://gitlab.example.com".to_string(),
             allowed_upstream_hosts: vec!["https://gitlab.example.com/**".to_string()],
-            egress_proxy: Some(crate::EgressProxyConfig {
+            egress_proxy: Some(agent_access_provider::EgressProxyConfig {
                 url: "https://proxy.example:8443".to_string(),
                 username_ref: Some("env:AGENT_ACCESS_MISSING_GATEWAY_PROXY_USER".to_string()),
                 password_ref: Some("env:AGENT_ACCESS_MISSING_GATEWAY_PROXY_PASSWORD".to_string()),
@@ -7584,7 +7554,7 @@ fn runtime_preflights_gateway_proxy_secrets() {
 #[test]
 fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
     let proxy = || {
-        Some(crate::EgressProxyConfig {
+        Some(agent_access_provider::EgressProxyConfig {
             url: "https://proxy.example:8443".to_string(),
             username_ref: Some("env:AGENT_ACCESS_MISSING_PROVIDER_PROXY_USER".to_string()),
             password_ref: Some("env:AGENT_ACCESS_MISSING_PROVIDER_PROXY_PASSWORD".to_string()),
@@ -7606,7 +7576,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
                             "https://gitlab.example.com/api/v4/**".to_string(),
                         ],
                         content: agent_access_gitlab::GitlabContentConfig::default(),
-                        search: crate::SearchLimitsConfig::default(),
+                        search: agent_access_provider::SearchLimitsConfig::default(),
                         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                     });
             }
@@ -7658,21 +7628,21 @@ struct NamedServiceProvider(&'static str);
 
 impl agent_access_provider::test_support::DescribedProvider for NamedServiceProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor {
-            service: self.0.to_string(),
-            ..agent_access_fake::fake_descriptor()
-        }
+        let mut descriptor = agent_access_fake::fake_descriptor();
+        descriptor.service = self.0.to_string();
+        descriptor
     }
 }
 
 #[async_trait]
 impl Provider for NamedServiceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7768,15 +7738,21 @@ impl agent_access_provider::test_support::DescribedProvider for ResponseResoluti
     }
 }
 
+impl ResponseResolutionTraceProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+        self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
+        agent_access_fake::FakeProvider.echo_scopes(action, inputs)
+    }
+}
+
 #[async_trait]
 impl Provider for ResponseResolutionTraceProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        self.scope_resolutions.fetch_add(1, Ordering::SeqCst);
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
@@ -7817,13 +7793,8 @@ impl agent_access_provider::test_support::DescribedProvider for CorrelationCaptu
     }
 }
 
-#[async_trait]
-impl Provider for CorrelationCaptureProvider {
-    fn resolve_scopes(
-        &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
+impl CorrelationCaptureProvider {
+    fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action != "echo" {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -7839,20 +7810,24 @@ impl Provider for CorrelationCaptureProvider {
             vec![project.to_string()],
         )]))
     }
+}
+
+#[async_trait]
+impl Provider for CorrelationCaptureProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.local_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({
-                "agentRequestId": request.correlation.agent_request_id,
-                "brokerRequestId": request.correlation.broker_request_id,
-                "executionContext": request.execution_context,
-            }),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({
+            "agentRequestId": request.correlation().agent_request_id,
+            "brokerRequestId": request.correlation().broker_request_id,
+            "executionContext": request.execution_context(),
+        })))
     }
 }
 
@@ -7864,45 +7839,43 @@ impl agent_access_provider::test_support::DescribedProvider for BodyPartCorrelat
 
 #[async_trait]
 impl Provider for BodyPartCorrelationCaptureProvider {
-    fn resolve_scopes(
+    async fn resolve_scopes(
         &self,
-        action: &str,
-        inputs: &Value,
-    ) -> Result<ResourceScopes, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     async fn authorize_body_parts(
         &self,
-        request: &mut ProviderInvocation,
-    ) -> Result<Vec<BrokerBodyPartSpec>, ProviderError> {
+        request: &AdmittedRequest,
+        _state: Option<&ProviderState>,
+    ) -> Result<BodyAdmission, ProviderError> {
         *self.captured_correlation.lock().unwrap() = current_correlation_context();
         *self.captured_action.lock().unwrap() = current_provider_action();
         assert_eq!(
-            request.correlation,
-            CorrelationContext::new(
+            request.correlation(),
+            &CorrelationContext::new(
                 "agent-body-preflight-id".to_string(),
                 "broker-body-preflight-id".to_string()
             )
         );
-        Ok(vec![BrokerBodyPartSpec {
-            name: "attachment".to_string(),
-            file_name: "upload.bin".to_string(),
-            content_type: "application/octet-stream".to_string(),
-            size: 7,
-            sha256: "sha256".to_string(),
-        }])
+        Ok(BodyAdmission::new(
+            vec![BrokerBodyPartSpec::new(
+                "attachment".to_string(),
+                "upload.bin".to_string(),
+                "application/octet-stream".to_string(),
+                7,
+                "sha256".to_string(),
+            )],
+            StateDisposition::Keep,
+        ))
     }
 
     async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        Ok(ProviderResult {
-            result: json!({}),
-            stream: None,
-            audit: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-        })
+        Ok(ProviderResult::new(json!({})))
     }
 }
 
@@ -8113,11 +8086,7 @@ fn git_verify_runtime_for_upstream(
         None,
         None,
     );
-    let credential = ExecutionCredential {
-        kind: "bearer_token".to_string(),
-        username: None,
-        token: Some("runtime-token".to_string()),
-    };
+    let credential = bearer_credential("runtime-token");
     (runtime, identity, credential)
 }
 
@@ -8298,12 +8267,12 @@ fn configure_lookup_trace_jira(config: &mut BrokerConfig) {
             cloud_id: None,
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_jira::JiraContentConfig {
                 comment_formats: vec!["adf".to_string()],
                 ..agent_access_jira::JiraContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -8324,12 +8293,12 @@ fn configure_lookup_trace_confluence(config: &mut BrokerConfig) {
             allowed_upstream_hosts: vec![
                 "https://example.atlassian.net/wiki/rest/api/**".to_string(),
             ],
-            attachments: crate::AttachmentLimitsConfig::default(),
+            attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_confluence::ConfluenceContentConfig {
                 page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],
                 ..agent_access_confluence::ConfluenceContentConfig::default()
             },
-            search: crate::SearchLimitsConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
         });
     config.credentials.service.clear();
     config.credentials.lookup.clear();
@@ -9005,7 +8974,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
     config.policy.resources.push(crate::ResourceDefinition {
         id: "foreign-repo".into(),
         display_name: None,
-        resource_type: crate::GIT_REPOSITORY_RESOURCE.id.clone(),
+        resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         selector: ResourceSelector::Exact {
             value: "foreign/repo".into(),
         },
@@ -9259,4 +9228,37 @@ fn unrelated_authorization_still_cannot_fall_back_to_forwarded_identity() {
         runtime.resolve_identity(&headers).unwrap_err(),
         IdentityFailure::Invalid
     );
+}
+
+#[test]
+fn search_boundaries_under_all_admit_only_exact_exclusions() {
+    let exact = |value: &str| ResourceSelector::Exact {
+        value: value.to_string(),
+    };
+    let all_except = |excluded: Vec<ResourceSelector>| {
+        search_scope_from_boundary(&ResourceBoundary {
+            included: vec![ResourceSelector::All],
+            excluded,
+        })
+    };
+    assert_eq!(
+        all_except(vec![exact("b"), exact("a"), exact("b")]),
+        SearchAuthorizationScope::AllExcept {
+            excluded_values: vec!["a".to_string(), "b".to_string()],
+        }
+    );
+    // A non-exact exclusion, the closest constructible stand-in for a selector
+    // form this build does not know, never widens to an all-except boundary:
+    // the whole boundary is empty, for grants and token restrictions alike.
+    for unsupported in [
+        ResourceSelector::Namespace {
+            value: "team".to_string(),
+        },
+        ResourceSelector::All,
+    ] {
+        assert_eq!(
+            all_except(vec![exact("a"), unsupported]),
+            SearchAuthorizationScope::Finite { values: Vec::new() }
+        );
+    }
 }

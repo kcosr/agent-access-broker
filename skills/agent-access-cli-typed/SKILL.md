@@ -169,11 +169,15 @@ unregistered value can also be allowed. A service that authorizes several
 resource types needs `--resource-type` (a row's `type`) on both commands. This checks single-target policy, not full-request or
 upstream authorization. Actual execution remains authoritative.
 
-`agent-access broker status` reports only `brokerVersion`, `buildCommit`,
-`buildProvenance`, `catalogVersion`, and `sendSchemaVersion`. A release build has
-`buildProvenance: "release"` and a full immutable commit; an unstamped build has
-`buildProvenance: "unavailable"` and `buildCommit: null`. Use it to identify the
-deployed Broker and contract versions. It needs normal Broker identity but no
+`agent-access broker status` reports the running executable's `assembly` (`name`,
+`version`, `qualification`, `source`), the linked `host` and `sdk` packages, the
+compiled `modules` (each `crate`, `version`, `roles` and `source`), an
+`inventoryFingerprint`, `catalogVersion`, and `sendSchemaVersion`. Each `source`
+has a `revision` and a `provenance` of `evidence`, `declared`, or `unavailable`
+(with `revision: null`); an unstamped build reports every source as unavailable.
+`modules` lists what is compiled in, not which services are configured or granted
+to you; use discovery for those. Use it to identify the deployed Broker and
+contract versions. It needs normal Broker identity but no
 provider grant, admin right, or execution context, and it is not a health or
 readiness probe.
 

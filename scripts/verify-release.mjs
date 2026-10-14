@@ -6,6 +6,7 @@ import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync,
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryBinaries } from "./portal-binaries.mjs";
+import { inspectPublicApiToolchain } from "./public-api.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { inspectLocalToolchain, provenanceBuildPlan } from "./verify-release-provenance.mjs";
@@ -71,13 +72,16 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "audit-demo-tests", command: [python, "-B", "demo/seed-audit-showcase.test.py"] },
     { id: "doc-links", command: [node, "scripts/check-doc-links.mjs"] },
     { id: "rust-format", command: cargoCommand("fmt", "--check"), cargo: true },
+    { id: "crate-boundaries", command: [node, "scripts/check-crate-boundaries.mjs"], cargo: true },
+    // Runs the pinned nightly rustdoc in target/public-api; it sets its own toolchain environment.
+    { id: "public-api", command: [node, "scripts/public-api.mjs", "check"] },
     { id: "portal-unit", command: portal("test:unit") },
     { id: "portal-build", command: portal("build") },
     { id: "rust-tests", command: cargoCommand("test", ...native, "--workspace", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
     { id: "rust-build", command: cargoCommand("build", ...native, "-p", "agent-access-broker", "-p", "agent-access"), cargo: true },
     { id: "rust-clippy", command: cargoCommand("clippy", ...native, "--all-targets", "--all-features", "--", "-D", "warnings"), cargo: true },
-    { id: "unix-signals", command: cargoCommand("test", ...native, "-p", "agent-access-broker", "--bin", "agent-access-broker",
-      "tests::unix_signal_smoke_in_isolated_child_processes", "--", "--ignored", "--exact", "--color=never"), cargo: true, notApplicable: platform === "win32" },
+    { id: "unix-signals", command: cargoCommand("test", ...native, "-p", "agent-access-broker-host", "--lib",
+      "lifecycle::tests::unix_signal_smoke_in_isolated_child_processes", "--", "--ignored", "--exact", "--color=never"), cargo: true, notApplicable: platform === "win32" },
     { id: "broker-sample", command: [binaries.brokerBinary, "--config", "agent-access-broker.sample.toml", "config", "validate"] },
     { id: "broker-production-sample", command: [binaries.brokerBinary, "--config", "agent-access-broker.production.sample.toml", "config", "validate"] },
     { id: "cli-sample", command: [binaries.cliBinary, "--config", "agent-access.sample.toml", "config", "validate"] },
@@ -126,6 +130,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
       "Browser tests mix real-service fixtures and mocked UI contracts; optional delegated OAuth runs only when OAUTH_STUB_REPO is configured.",
       "Native host results do not establish cross-platform, other Linux distribution, or hermetic-build guarantees.",
       "No runtime archive is assembled; package extraction/checksum acceptance remains a distribution gate.",
+      "The public API gate matches the candidate against its own checked-in api/ inventory; compatibility with the previous release on the same line is a separate review of the api/ diff.",
     ],
     delegatedOAuthFixture: env.OAUTH_STUB_REPO ? "configured; see browser log for outcome" : "not configured; optional browser fixture skipped",
   };
@@ -145,6 +150,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
     report.toolchain = { ...toolchain, node: process.version,
       npm: capture(root, npmVersionCommand[0], npmVersionCommand.slice(1), baseEnv),
       python: capture(root, "python3", ["--version"], baseEnv),
+      publicApi: inspectPublicApiToolchain({ env: baseEnv }),
     };
     const provenancePlan = provenanceBuildPlan(report.commit, { root, env: baseEnv, toolchain });
     const cargoEnv = { ...provenancePlan.env };

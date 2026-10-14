@@ -2,7 +2,7 @@
 //! the derived query columns, and the broker-built full-text index text.
 
 use super::super::{AuditRecord, StampedAuditRecord};
-use crate::SearchAuthorizationScope;
+use agent_access_provider::SearchAuthorizationScope;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -78,6 +78,7 @@ impl PreparedRow {
             decision: record.decision.as_str(),
             reason_code: record
                 .reason_code
+                .as_ref()
                 .map(|reason_code| indexed_text(reason_code.as_str())),
             phase: phase(provider_audit).map(str::to_string),
             token_id: identity
@@ -222,7 +223,7 @@ fn fts_text(record: &AuditRecord) -> String {
     }
     text.push(&record.service);
     text.push(&record.action);
-    if let Some(reason_code) = record.reason_code {
+    if let Some(reason_code) = &record.reason_code {
         text.push(reason_code.as_str());
     }
     if let Some(context) = &record.execution_context {

@@ -164,13 +164,16 @@ impl BrokerRuntime {
                         )),
                     )
                 } else {
-                    let body_parts = std::mem::take(&mut prepared.invocation.body_parts);
-                    let finalization = ProviderFinalizationContext::new(control.inner.deadline);
-                    let execution = AssertUnwindSafe(with_provider_finalization(
-                        finalization.clone(),
-                        self.execute_prepared_invoke(prepared, body_parts, false),
-                    ))
-                    .catch_unwind();
+                    let body_parts = std::mem::take(&mut prepared.body_parts);
+                    let finalization = agent_access_provider::host::provider_finalization_context(
+                        control.inner.deadline,
+                    );
+                    let execution =
+                        AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
+                            finalization.clone(),
+                            self.execute_prepared_invoke(prepared, body_parts, false),
+                        ))
+                        .catch_unwind();
                     tokio::pin!(execution);
                     let result = tokio::select! {
                         biased;
@@ -212,7 +215,7 @@ impl BrokerRuntime {
         // No cancellation select around finalization: the reserved terminal append
         // is acknowledged before success and cannot race a second outcome record.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
-            error.reason_code == ReasonCode::MutationVerificationFailed
+            error.reason_code() == ReasonCode::MutationVerificationFailed
                 && error
                     .result
                     .as_ref()
@@ -227,7 +230,7 @@ impl BrokerRuntime {
                 AuditAppendMode::OwnedTerminal(permit),
             )
             .await;
-        if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable) {
+        if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
             // A failure to acknowledge audit is not proof that the provider did
             // nothing. Preserve safe completion evidence without copying results.
             let mut evidence = json!({
@@ -244,6 +247,8 @@ impl BrokerRuntime {
             && let Some(stage) = response
                 .envelope
                 .reason_code
+                .as_ref()
+                .and_then(ReasonCodeId::standard)
                 .and_then(trusted_callers::PreDispatchFailure::for_reason)
         {
             response = stage.apply(response);
@@ -311,22 +316,15 @@ mod tests {
 
     #[async_trait]
     impl Provider for ControlledProvider {
-        fn resolve_scopes(
+        async fn resolve_scopes(
             &self,
-            action: &str,
-            inputs: &Value,
-        ) -> Result<ResourceScopes, ProviderError> {
-            agent_access_fake::FakeProvider.resolve_scopes(action, inputs)
-        }
-        async fn resolve_scopes_with_lookup(
-            &self,
-            action: &str,
-            inputs: &Value,
-            _: Option<&ExecutionCredential>,
-        ) -> Result<ResourceScopes, ProviderError> {
+            request: ScopeRequest<'_>,
+        ) -> Result<ScopeResolution, ProviderError> {
             self.lookup_started.add_permits(1);
             self.lookup_continue.acquire().await.unwrap().forget();
-            self.resolve_scopes(action, inputs)
+            agent_access_fake::FakeProvider
+                .echo_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources)
         }
         async fn invoke(
             &self,
@@ -463,7 +461,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::OperationTimeout)
+            Some(ReasonCode::OperationTimeout.into())
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(!control.dispatched());
@@ -564,7 +562,7 @@ mod tests {
             } else {
                 assert_eq!(
                     response.envelope.reason_code,
-                    Some(ReasonCode::UpstreamFailed)
+                    Some(ReasonCode::UpstreamFailed.into())
                 );
                 assert_eq!(response.envelope.result.unwrap()["knownOutcome"], true);
                 assert_eq!(record["providerAudit"]["knownOutcome"], true);
@@ -596,7 +594,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 response.envelope.reason_code,
-                Some(ReasonCode::OperationTimeout)
+                Some(ReasonCode::OperationTimeout.into())
             );
             assert_eq!(
                 response.envelope.result.unwrap()["executionState"],
@@ -637,7 +635,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::OperationCancelled)
+            Some(ReasonCode::OperationCancelled.into())
         );
         assert_eq!(
             response.envelope.result.unwrap()["executionState"],
@@ -694,7 +692,7 @@ mod tests {
         assert_eq!(response.envelope.decision, Decision::Error);
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::AuditUnavailable)
+            Some(ReasonCode::AuditUnavailable.into())
         );
         assert!(response.envelope.resource_scopes.is_empty());
         assert!(response.envelope.result.is_none());
@@ -718,7 +716,7 @@ mod tests {
         let response = operation.await.unwrap();
         assert_eq!(
             response.envelope.reason_code,
-            Some(ReasonCode::AuditUnavailable)
+            Some(ReasonCode::AuditUnavailable.into())
         );
         assert_ne!(response.envelope.service, "broker");
         let result = response.envelope.result.unwrap();

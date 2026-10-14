@@ -1,4 +1,6 @@
-use agent_access_provider::{ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderedBody};
+use agent_access_provider::presentation::{
+    ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderedBody,
+};
 use html5ever::{QualName, local_name, ns, parse_fragment, tendril::TendrilSink};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html::write_html_io};
@@ -38,6 +40,8 @@ impl From<RenderBudgetExhausted> for ContentRenderError {
         match exhausted {
             RenderBudgetExhausted::Nodes => Self::NodeLimitExceeded,
             RenderBudgetExhausted::WorkUnits => Self::WorkLimitExceeded,
+            // Any other exhausted shared budget fails the render the same way.
+            _ => Self::WorkLimitExceeded,
         }
     }
 }
@@ -159,7 +163,7 @@ pub fn render_gitlab_markdown_bounded_with_budget(
         ReadContentFormat::Markdown => {
             validate_gitlab_markdown_with_limits(source, DEFAULT_RENDER_LIMITS, budget)?;
             let value = BoundedString::from_str(source, max_output_bytes)?.into_string();
-            Ok(Some(RenderedBody { format, value }))
+            Ok(Some(RenderedBody::new(format, value)))
         }
         ReadContentFormat::Text => {
             let text = render_gitlab_text_with_limits(
@@ -168,10 +172,7 @@ pub fn render_gitlab_markdown_bounded_with_budget(
                 DEFAULT_RENDER_LIMITS,
                 budget,
             )?;
-            Ok(Some(RenderedBody {
-                format,
-                value: text.into_string(),
-            }))
+            Ok(Some(RenderedBody::new(format, text.into_string())))
         }
     }
 }
@@ -1091,10 +1092,7 @@ fn render_confluence_storage_with_limits_and_budget_and_heading_offset(
     if format == ReadContentFormat::Native {
         Ok(None)
     } else {
-        Ok(Some(RenderedBody {
-            format,
-            value: rendered.into_string(),
-        }))
+        Ok(Some(RenderedBody::new(format, rendered.into_string())))
     }
 }
 
@@ -1130,10 +1128,7 @@ fn render_gitlab_html_fragment_with_limits_and_budget(
         budget,
     };
     let rendered = renderer.render_children_block(&dom.document, 0)?;
-    Ok(Some(RenderedBody {
-        format,
-        value: rendered.into_string(),
-    }))
+    Ok(Some(RenderedBody::new(format, rendered.into_string())))
 }
 
 #[cfg(test)]
@@ -1558,10 +1553,7 @@ fn render_adf_with_limits(
     if format == ReadContentFormat::Native {
         Ok(None)
     } else {
-        Ok(Some(RenderedBody {
-            format,
-            value: rendered.into_string(),
-        }))
+        Ok(Some(RenderedBody::new(format, rendered.into_string())))
     }
 }
 
@@ -4917,10 +4909,7 @@ mod tests {
 
     #[test]
     fn serialization_uses_the_contract_shape() {
-        let rendered = RenderedBody {
-            format: ReadContentFormat::Markdown,
-            value: "hello".to_string(),
-        };
+        let rendered = RenderedBody::new(ReadContentFormat::Markdown, "hello".to_string());
         assert_eq!(
             serde_json::to_value(rendered).unwrap(),
             json!({ "format": "markdown", "value": "hello" })

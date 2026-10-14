@@ -55,6 +55,13 @@ checks the version and exercises table creation, insertion, and deletion, so
 required audit smoke coverage cannot silently skip on an older or feature-limited
 SQLite build.
 
+The public API gate also requires the `nightly-2026-07-13` Rust toolchain,
+installed with rustup, and `cargo-public-api` 0.52.0 on `PATH`. Set
+`AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is installed in a
+different rustup home from the active one. Preflight records both versions in
+`qualification.json` and fails if either tool is missing or has another version.
+See the [inventory prerequisites](../api/README.md#prerequisites).
+
 Preflight follows Cargo configuration includes and rejects configured target
 runners so native Rust tests execute directly. This check does not fully attest
 other Cargo configuration or the native build environment; the
@@ -68,9 +75,9 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
 The output directory must be new or empty and outside the checkout. The driver
-runs the required standalone Rust, portal build/unit/browser, script,
-documentation, sample-config, Unix signal, native release-provenance, and notice
-checks. It writes `qualification.json`, per-gate logs, and native Rust notices.
+runs the required standalone Rust, crate-boundary, public API, portal
+build/unit/browser, script, documentation, sample-config, Unix signal, native
+release-provenance, and notice checks. It writes `qualification.json`, per-gate logs, and native Rust notices.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
 exclusions and platform applicability are recorded explicitly.
@@ -100,6 +107,8 @@ npm --prefix apps/portal ci
 npm --prefix apps/portal run build
 npm --prefix apps/portal run test:unit
 node --test scripts/*.test.mjs
+node scripts/check-crate-boundaries.mjs
+node scripts/public-api.mjs check
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/release-prerequisites.test.py
 python3 scripts/local-broker-process.test.py
@@ -110,7 +119,7 @@ node scripts/check-doc-links.mjs
 On Unix, also run the required isolated real-signal parent fixture:
 
 ```bash
-cargo test --locked -p agent-access-broker --bin agent-access-broker tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
+cargo test --locked -p agent-access-broker-host --lib lifecycle::tests::unix_signal_smoke_in_isolated_child_processes -- --ignored --exact
 ```
 
 It tests SIGTERM/SIGINT shutdown and SIGUSR2 reload without live credentials.
@@ -163,6 +172,36 @@ evidence alongside accepted reruns. Further candidate edits or a different merge
 SHA require new qualification. Keep optional OAuth/live-provider results and
 platform-specific exclusions distinct from the required standalone gates.
 
+### Public API compatibility
+
+The required `public-api` gate runs `node scripts/public-api.mjs check`. It
+regenerates the supported API inventory from the candidate and fails when it
+differs from the checked-in `api/` files. The inventory covers the provider SDK
+and the Broker host with and without `test-support`, the assembly's
+`composition()` and `build_identity()`, the selection entry points of the shipped
+natives, OAuth dialects and import adapters, and the workspace and third-party
+types their signatures expose. It also records whether trait items are required
+or provided and how types are constructed, which signatures alone omit. A
+failure prints the differing lines; regenerate
+with `node scripts/public-api.mjs update` only for a reviewed, intended change.
+
+No released inventory precedes `0.2.0`, the first baseline, so the gate compares
+the candidate with its own checked-in inventory rather than with an earlier
+release. Before releasing on an existing compatible line, review
+`git diff <previous-release-tag> -- api/`:
+
+- A patch release must have no removed or changed lines: no removals and no
+  signature, bound, feature, or public dependency changes.
+- Review every addition. A new required trait method is breaking; a new default
+  method is compatible only if it preserves the documented semantics.
+- An incompatible change advances the 0.x minor version and documents the
+  required source and behavior changes in the changelog.
+
+The inventory diff is a compile-surface review. It does not replace descriptor,
+lifecycle, or feature-behavior checks. See the
+[inventory guide](../api/README.md) for its surfaces, file format, and update
+procedure.
+
 ## Build and distribute
 
 Production builds require immutable provenance. Follow
@@ -177,11 +216,13 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag>
 ```
 
 The local verifier checks the exact pinned compiler/Cargo versions and physical
-paths, rejects ambient compiler/flag/profile overrides, and builds both native
-executables under `target/<host-triple>/release` with locked dependencies. It
-checks CLI startup and authenticated Broker status and records discovered Cargo
-configuration digests. These are bounded provenance checks, not a hermetic-build
-attestation; configuration includes, profile/linker settings, native tools,
+paths, rejects ambient compiler/flag/profile overrides, rejects any resolved
+`test-support` feature or `reference` crate in the release dependency graph,
+checks that the stamped host, SDK and module packages resolve to tracked path
+packages in the checkout, and builds both native executables under
+`target/<host-triple>/release` with locked dependencies. It checks CLI startup
+and authenticated Broker status and records discovered Cargo configuration
+digests. These are bounded provenance checks, not a hermetic-build attestation; configuration includes, profile/linker settings, native tools,
 build scripts, and system libraries are not fully attested. See the
 [operator guide](operator-guide.md#build-provenance-and-deployed-status) for the
 full contract. The optional `--build-service` check leaves remote compiler/Cargo
