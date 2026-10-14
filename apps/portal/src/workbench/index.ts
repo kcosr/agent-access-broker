@@ -229,6 +229,12 @@ export {
   Tile,
 } from "./components/Pages";
 export type { TileDelta } from "./components/Pages";
+export { CopyBlock } from "./components/CopyBlock";
+export type { CopyBlockProps } from "./components/CopyBlock";
+export { MediaFrame } from "./components/MediaFrame";
+export type { MediaFrameProps } from "./components/MediaFrame";
+export { MediaZoomControls } from "./components/MediaZoomControls";
+export type { MediaZoomControlsProps } from "./components/MediaZoomControls";
 
 // icons, time
 export { Icon, iconNames } from "./components/Icon";

@@ -11,9 +11,10 @@ named `workbench-ui` or `workbench-ui-kit`.
 [`VENDORED.md`](../apps/portal/src/workbench/VENDORED.md) records the upstream
 commit, and [`VENDORED.json`](../apps/portal/src/workbench/VENDORED.json) records
 the copied file hashes. The current pin is
-`b7a3cafc4d685c7fe22f27253fee499d43b6bfa6`. The copied components, helpers and
+`8ad4cdde7e278b8fa4c100595b60368124afa63b`. The copied components, helpers and
 styles originated in `kcosr/gh-dash` and were extracted into the shared kit.
-The snapshot also includes local fonts and a portable verifier.
+The snapshot also includes the kit's MIT `LICENSE`, local fonts and a portable
+verifier.
 
 ## License and distribution
 
@@ -73,8 +74,9 @@ revision. The update refuses consumer drift and stages the replacement with
 rollback on failure. Preserve and investigate reported drift before proceeding.
 Do not edit generated provenance or checksum entries to bypass a refusal.
 
-Review the complete copied diff, keep `.gitattributes` and both font notices,
-and update the source pin in this document and the root `NOTICE`. Run the portal
-unit, build and browser checks from the [testing guide](testing.md). Commit the
-whole snapshot update with the Broker integration changes. Upstream access is
-needed only for this maintainer procedure.
+Review the complete copied diff, keep `.gitattributes`, the kit `LICENSE` and
+both font notices, and update the source pin in this document and the root
+`NOTICE`. Run the portal unit, build and browser checks from the
+[testing guide](testing.md). Commit the whole snapshot update with the Broker
+integration changes. Upstream access is needed only for this maintainer
+procedure.
