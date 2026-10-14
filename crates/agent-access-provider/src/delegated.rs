@@ -2,13 +2,17 @@
 //! such as an OAuth connection, lent to one invocation. The runtime acquires
 //! the credential after policy admits the invocation and confirms it is still
 //! current immediately before dispatch; the provider only presents it.
-use crate::ProviderError;
+use crate::authorization::Material;
+use crate::{CredentialPlacement, CredentialPlacementError, ProviderError, UpstreamAuthorization};
 use async_trait::async_trait;
 use std::sync::Arc;
 
 /// The access a delegated credential currently grants. Like static
 /// credential material it is read-only: a lease creates it, and providers
-/// read it through the accessors. The token never appears in Debug output.
+/// read its target, audience, version and expiry through the accessors. They
+/// never read the token: they present it upstream with
+/// [`Self::authorization`] or [`Self::authorization_as`]. The token never
+/// appears in Debug output.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq)]
 pub struct DelegatedAccess {
@@ -43,6 +47,23 @@ impl DelegatedAccess {
     /// The bearer token to present upstream.
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// The token as `Authorization: Bearer <token>`, presented as issued,
+    /// without further checks.
+    pub fn authorization(&self) -> UpstreamAuthorization {
+        Material::Token(&self.token).authorization()
+    }
+
+    /// The token presented in `placement`, after the placement's checks of
+    /// the token. Delegated access is a token, so
+    /// [`CredentialPlacement::basic`] fails with
+    /// [`CredentialPlacementError::KindMismatch`].
+    pub fn authorization_as(
+        &self,
+        placement: &CredentialPlacement,
+    ) -> Result<UpstreamAuthorization, CredentialPlacementError> {
+        Material::Token(&self.token).placed(placement)
     }
 
     /// The upstream resource the access is bound to.
@@ -306,6 +327,37 @@ mod tests {
                 Err(DelegatedAccessError::Revalidation(revoked()))
             );
         }
+    }
+
+    #[test]
+    fn delegated_access_presents_its_token_without_revealing_it() {
+        let access = DelegatedAccess::new("delegated-secret", TARGET, AUDIENCE, "v1", i64::MAX);
+        let header = |authorization: UpstreamAuthorization| {
+            let request = authorization
+                .apply(reqwest::Client::new().get(TARGET))
+                .build()
+                .unwrap();
+            let value = request.headers()[reqwest::header::AUTHORIZATION].clone();
+            assert!(value.is_sensitive());
+            value
+        };
+        assert_eq!(header(access.authorization()), "Bearer delegated-secret");
+        assert_eq!(
+            header(
+                access
+                    .authorization_as(&CredentialPlacement::bearer())
+                    .unwrap()
+            ),
+            "Bearer delegated-secret"
+        );
+        assert_eq!(
+            access
+                .authorization_as(&CredentialPlacement::basic())
+                .unwrap_err(),
+            CredentialPlacementError::KindMismatch
+        );
+        let rendered = format!("{access:?} {:?}", access.authorization());
+        assert!(!rendered.contains("delegated-secret"), "{rendered}");
     }
 
     #[test]

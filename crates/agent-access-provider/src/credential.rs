@@ -1,6 +1,9 @@
 //! Typed credential selection: the grant's credential mode and the execution
 //! material the host lends one invocation.
-use crate::DelegatedCredential;
+use crate::authorization::Material;
+use crate::{
+    CredentialPlacement, CredentialPlacementError, DelegatedCredential, UpstreamAuthorization,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -72,14 +75,20 @@ impl StaticCredentialKind {
 
 /// Static credential material selected by the host. Only the host
 /// construction port ([`crate::host`]) and test support construct it, so the
-/// material each kind requires is always present. Secrets are read-only and
-/// never appear in Debug output; the value does not serialize.
-#[derive(Clone)]
+/// material each kind requires is always present.
+///
+/// Providers never read the material. They present it upstream with
+/// [`Self::authorization`], in the kind's own HTTP authentication scheme, or
+/// [`Self::authorization_as`], in a [`CredentialPlacement`] the upstream
+/// requires; [`Self::kind`] is the only fact about it they can inspect. The
+/// value does not serialize, never appears in Debug output, and compares
+/// equal to a credential with the same kind and material.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExecutionCredential {
     material: CredentialMaterial,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 enum CredentialMaterial {
     Basic { username: String, token: String },
     Bearer { token: String },
@@ -91,6 +100,15 @@ enum CredentialMaterial {
 pub enum CredentialView<'a> {
     Basic { username: &'a str, token: &'a str },
     Bearer { token: &'a str },
+}
+
+impl fmt::Debug for CredentialView<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Basic { .. } => "CredentialView::Basic(<redacted>)",
+            Self::Bearer { .. } => "CredentialView::Bearer(<redacted>)",
+        })
+    }
 }
 
 impl ExecutionCredential {
@@ -113,6 +131,25 @@ impl ExecutionCredential {
         }
     }
 
+    /// The credential in its kind's own HTTP authentication scheme:
+    /// `Authorization: Basic` with the username and token for
+    /// `basic_api_token`, and `Authorization: Bearer` with the token for
+    /// `bearer_token`. It presents the material as stored, without further
+    /// checks. A provider that supports only some kinds checks
+    /// [`Self::kind`] first and rejects the others.
+    pub fn authorization(&self) -> UpstreamAuthorization {
+        self.material().authorization()
+    }
+
+    /// The credential presented in `placement`, after the placement's checks
+    /// of its kind and material.
+    pub fn authorization_as(
+        &self,
+        placement: &CredentialPlacement,
+    ) -> Result<UpstreamAuthorization, CredentialPlacementError> {
+        self.material().placed(placement)
+    }
+
     pub fn view(&self) -> CredentialView<'_> {
         match &self.material {
             CredentialMaterial::Basic { username, token } => CredentialView::Basic {
@@ -124,6 +161,13 @@ impl ExecutionCredential {
             },
         }
     }
+
+    fn material(&self) -> Material<'_> {
+        match &self.material {
+            CredentialMaterial::Basic { username, token } => Material::Basic { username, token },
+            CredentialMaterial::Bearer { token } => Material::Token(token),
+        }
+    }
 }
 
 impl fmt::Debug for ExecutionCredential {
@@ -132,15 +176,6 @@ impl fmt::Debug for ExecutionCredential {
             .debug_struct("ExecutionCredential")
             .field("kind", &self.kind().as_str())
             .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Debug for CredentialView<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Basic { .. } => "CredentialView::Basic(<redacted>)",
-            Self::Bearer { .. } => "CredentialView::Bearer(<redacted>)",
-        })
     }
 }
 
@@ -207,36 +242,75 @@ mod tests {
         }
     }
 
+    fn authorization_header(authorization: UpstreamAuthorization) -> String {
+        let request = authorization
+            .apply(reqwest::Client::new().get("https://service.example.test/"))
+            .build()
+            .unwrap();
+        let value = &request.headers()[reqwest::header::AUTHORIZATION];
+        assert!(value.is_sensitive());
+        value.to_str().unwrap().to_owned()
+    }
+
     #[test]
-    fn credentials_expose_typed_read_only_material_and_redact_debug() {
+    fn credentials_present_their_kind_and_redact_debug() {
         let basic = ExecutionCredential::basic("user@example.test".into(), "basic-secret".into());
         assert_eq!(basic.kind(), StaticCredentialKind::BasicApiToken);
         assert_eq!(basic.kind().as_str(), "basic_api_token");
-        assert!(matches!(
-            basic.view(),
-            CredentialView::Basic {
-                username: "user@example.test",
-                token: "basic-secret"
-            }
-        ));
+        assert_eq!(
+            authorization_header(basic.authorization()),
+            "Basic dXNlckBleGFtcGxlLnRlc3Q6YmFzaWMtc2VjcmV0"
+        );
         let bearer = ExecutionCredential::bearer("bearer-secret".into());
         assert_eq!(bearer.kind().as_str(), "bearer_token");
-        assert!(matches!(
-            bearer.view(),
-            CredentialView::Bearer {
-                token: "bearer-secret"
-            }
-        ));
+        assert_eq!(
+            authorization_header(bearer.authorization()),
+            "Bearer bearer-secret"
+        );
+        assert_eq!(
+            authorization_header(
+                bearer
+                    .authorization_as(&CredentialPlacement::bearer())
+                    .unwrap()
+            ),
+            "Bearer bearer-secret"
+        );
+        assert_eq!(
+            basic
+                .authorization_as(&CredentialPlacement::bearer())
+                .unwrap_err(),
+            CredentialPlacementError::KindMismatch
+        );
         let rendered = format!(
-            "{basic:?} {bearer:?} {:?} {:?} {:?}",
-            basic.view(),
-            bearer.view(),
+            "{basic:?} {bearer:?} {:?} {:?}",
+            basic.authorization(),
             ExecutionAccess::Static(bearer.clone())
         );
         for secret in ["user@example.test", "basic-secret", "bearer-secret"] {
             assert!(!rendered.contains(secret), "{rendered}");
         }
         assert!(rendered.contains("basic_api_token") && rendered.contains("bearer_token"));
+    }
+
+    #[test]
+    fn credentials_compare_by_kind_and_material() {
+        let basic = ExecutionCredential::basic("user".into(), "token".into());
+        assert_eq!(
+            basic,
+            ExecutionCredential::basic("user".into(), "token".into())
+        );
+        assert_ne!(
+            basic,
+            ExecutionCredential::basic("user".into(), "other".into())
+        );
+        assert_ne!(
+            basic,
+            ExecutionCredential::basic("other".into(), "token".into())
+        );
+        assert_ne!(
+            ExecutionCredential::bearer("token".into()),
+            ExecutionCredential::basic(String::new(), "token".into())
+        );
     }
 
     #[test]

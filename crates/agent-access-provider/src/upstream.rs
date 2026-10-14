@@ -296,9 +296,11 @@ impl UpstreamClient {
     /// Credentials stay on the service's origin: every send method refuses,
     /// before sending, a request to another origin that carries an
     /// `Authorization`, `Proxy-Authorization` or `Cookie` header or any
-    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Mark
-    /// another credential-bearing header sensitive
-    /// (`HeaderValue::set_sensitive`) so the client keeps it there too.
+    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Present
+    /// lent credentials with an [`UpstreamAuthorization`](crate::UpstreamAuthorization),
+    /// whose header is always sensitive; mark any other credential-bearing
+    /// header sensitive (`HeaderValue::set_sensitive`) so the client keeps it
+    /// there too.
     pub fn request(&self, method: Method, url: Url) -> RequestBuilder {
         let trusted = same_origin(&url, &self.base);
         let request = self.client.request(method, url);
@@ -512,8 +514,8 @@ impl UpstreamClient {
 
 /// Whether a request carries credentials: an `Authorization`,
 /// `Proxy-Authorization` or `Cookie` header, or any header value marked
-/// sensitive, as `basic_auth`, `bearer_auth` and credentials embedded in the
-/// URL produce.
+/// sensitive, as an [`UpstreamAuthorization`](crate::UpstreamAuthorization),
+/// `basic_auth`, `bearer_auth` and credentials embedded in the URL produce.
 fn carries_credentials(headers: &reqwest::header::HeaderMap) -> bool {
     use reqwest::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION};
     headers.iter().any(|(name, value)| {
@@ -907,6 +909,21 @@ mod tests {
         let item = |server: &MockServer| Url::parse(&format!("{}/item", server.uri())).unwrap();
         let mut api_key = reqwest::header::HeaderValue::from_static("service-secret");
         api_key.set_sensitive(true);
+        let static_credential =
+            crate::test_support::basic_credential("user", "service-secret").authorization();
+        let placed_key = crate::test_support::bearer_credential("service-secret")
+            .authorization_as(&crate::CredentialPlacement::header(
+                reqwest::header::HeaderName::from_static("x-api-key"),
+            ))
+            .unwrap();
+        let delegated = crate::DelegatedAccess::new(
+            "service-secret",
+            "https://service.example.test/",
+            "https://service.example.test/",
+            "v1",
+            i64::MAX,
+        )
+        .authorization();
         type Authorize = Box<dyn Fn(RequestBuilder) -> RequestBuilder>;
         let credentials: Vec<(&str, Authorize)> = vec![
             ("bearer", Box::new(|r| r.bearer_auth("service-secret"))),
@@ -930,6 +947,12 @@ mod tests {
                 "sensitive header",
                 Box::new(move |r| r.header("x-api-key", api_key.clone())),
             ),
+            (
+                "static credential",
+                Box::new(move |r| static_credential.apply(r)),
+            ),
+            ("placed api key", Box::new(move |r| placed_key.apply(r))),
+            ("delegated access", Box::new(move |r| delegated.apply(r))),
         ];
         let capture = crate::test_support::install_trace_capture().start();
         for (name, authorize) in &credentials {

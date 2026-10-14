@@ -61,10 +61,11 @@ pub mod futures_core {
     pub use ::futures_util::stream::Stream;
 }
 
-/// `http` 1, as `reqwest` 0.12 re-exports it: request methods and header maps.
+/// `http` 1, as `reqwest` 0.12 re-exports it: request methods, header maps
+/// and the header names credential placements use.
 pub mod http {
     pub use ::reqwest::Method;
-    pub use ::reqwest::header::HeaderMap;
+    pub use ::reqwest::header::{HeaderMap, HeaderName};
 }
 
 /// `reqwest` 0.12: the HTTP client, requests, responses and bodies that
