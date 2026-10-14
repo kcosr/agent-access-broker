@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ROLES, checkCrateBoundaries } from "./check-crate-boundaries.mjs";
+import { HOST_ONLY_ITEMS, ROLES, checkCrateBoundaries, hostOnlyUseViolations } from "./check-crate-boundaries.mjs";
 
 const id = (name) => `path+file:///workspace/crates/${name}#0.1.0`;
 
@@ -146,4 +146,32 @@ test("the CLI production closure excludes host, assembly, native, adapter and re
     }));
     assert.ok(result.errors.includes(`agent-access (cli) production closure must not include ${baseRoles[to]} crates; found ${to} (${baseRoles[to]})`), `${to}: ${result.errors}`);
   }
+});
+
+test("provider-side crates must not use host-only credential attachment", () => {
+  const sources = {
+    "agent-access-jira": [{ path: "crates/agent-access-jira/src/backend.rs", text: "fn send() {}\nlet request = host::authorize_host_request(builder, &auth);\n" }],
+    "agent-access-conformance": [{ path: "crates/agent-access-conformance/tests/it.rs", text: "use agent_access_provider::host::{authorize_host_request};\n" }],
+    "agent-access-mcp-upstream": [{ path: "crates/agent-access-mcp-upstream/src/lib.rs", text: "// authorize_host_request_like is another name\nfn presents() {}\n" }],
+    "agent-access-content": [{ path: "crates/agent-access-content/src/lib.rs", text: "authorize_host_request(request, &authorization)\n" }],
+    // Host-side crates may use it.
+    "agent-access-core": [{ path: "crates/agent-access-core/src/runtime.rs", text: "host::authorize_host_request(builder, &auth)\n" }],
+    "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/handlers/gateway.rs", text: "authorize_host_request(builder, &auth)\n" }],
+  };
+  const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []);
+  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request"]);
+  assert.deepEqual(errors, [
+    "agent-access-conformance (reference) must not use host-only authorize_host_request; found at crates/agent-access-conformance/tests/it.rs:1",
+    "agent-access-content (helper) must not use host-only authorize_host_request; found at crates/agent-access-content/src/lib.rs:1",
+    "agent-access-jira (native) must not use host-only authorize_host_request; found at crates/agent-access-jira/src/backend.rs:2",
+  ]);
+});
+
+test("only workspace members with fenced roles are scanned", () => {
+  const read = [];
+  hostOnlyUseViolations(metadata(baseRoles, {}, { external: ["serde"] }), (pkg) => {
+    read.push(pkg.name);
+    return [];
+  });
+  assert.deepEqual(read, ["agent-access-conformance", "agent-access-content", "agent-access-jira", "agent-access-mcp-upstream"]);
 });

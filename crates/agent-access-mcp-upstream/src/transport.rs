@@ -13,9 +13,9 @@ use crate::{
 };
 use agent_access_core::imports::HOST_IMPLEMENTATION;
 use agent_access_provider::{
-    DelegatedAccessError, DelegatedCredential, InvocationScope, ProviderError,
-    ProviderFinalizationContext, ReasonCode, UpstreamCall, UpstreamClient, UpstreamError,
-    UpstreamRetryAfter, complete_upstream_trace, current_provider_finalization,
+    CredentialPlacement, DelegatedAccessError, DelegatedCredential, InvocationScope, ProviderError,
+    ProviderFinalizationContext, ReasonCode, UpstreamAuthorization, UpstreamCall, UpstreamClient,
+    UpstreamError, UpstreamRetryAfter, complete_upstream_trace, current_provider_finalization,
     upstream_rate_limited,
 };
 use http::{HeaderMap, HeaderValue};
@@ -87,7 +87,7 @@ pub(crate) struct Operation {
 
 struct OperationContext {
     wire: WireClient,
-    auth: HeaderMap,
+    auth: Vec<UpstreamAuthorization>,
     delegated: Option<(DelegatedCredential, String)>,
     call: Option<Arc<CallArguments>>,
     state: Arc<Mutex<WireState>>,
@@ -100,7 +100,7 @@ struct OperationContext {
 impl Operation {
     pub fn new(
         wire: WireClient,
-        auth: HeaderMap,
+        auth: Vec<UpstreamAuthorization>,
         delegated: Option<(DelegatedCredential, String)>,
         call: Option<CallArguments>,
         timeout: Duration,
@@ -321,8 +321,13 @@ impl OperationContext {
         Ok(())
     }
 
-    async fn authentication(&self) -> Result<(HeaderMap, Option<String>), ProviderError> {
-        let mut headers = self.auth.clone();
+    /// The credentials the next request presents, in order, and the delegated
+    /// access version among them. Delegated access is revalidated for every
+    /// request and presented after the static credentials.
+    async fn authentication(
+        &self,
+    ) -> Result<(Vec<UpstreamAuthorization>, Option<String>), ProviderError> {
+        let mut authorization = self.auth.clone();
         let mut sent_version = None;
         if let Some((credential, resource)) = &self.delegated {
             let access = credential
@@ -332,31 +337,39 @@ impl OperationContext {
                     DelegatedAccessError::Revalidation(failure) => failure,
                     _ => crate::credential_error(),
                 })?;
-            if access.version().is_empty() || !crate::valid_token(access.token()) {
+            if access.version().is_empty() {
                 return Err(crate::credential_error());
             }
-            let mut bearer = HeaderValue::from_str(&format!("Bearer {}", access.token()))
-                .map_err(|_| crate::credential_error())?;
-            bearer.set_sensitive(true);
-            headers.insert("authorization", bearer);
+            authorization.push(
+                access
+                    .authorization_as(&CredentialPlacement::bearer())
+                    .map_err(|_| crate::credential_error())?,
+            );
             sent_version = Some(access.version().to_string());
         }
-        Ok((headers, sent_version))
+        Ok((authorization, sent_version))
+    }
+
+    /// A request to the endpoint with `headers`. Its credentials travel in
+    /// the send call, and the client adds them before these headers.
+    fn request(&self, method: reqwest::Method, headers: HeaderMap) -> reqwest::RequestBuilder {
+        self.wire
+            .client
+            .request(method, self.wire.endpoint.clone())
+            .headers(headers)
     }
 
     async fn post(
         &self,
         body: Value,
+        authorization: &[UpstreamAuthorization],
         headers: HeaderMap,
         method: &str,
         sent_version: Option<String>,
     ) -> Result<HttpReply, ProviderError> {
         let session_attached = headers.contains_key("mcp-session-id");
         let request = self
-            .wire
-            .client
-            .request(reqwest::Method::POST, self.wire.endpoint.clone())
-            .headers(headers)
+            .request(reqwest::Method::POST, headers)
             .header("accept", "application/json, text/event-stream")
             .json(&body);
         #[cfg(test)]
@@ -383,7 +396,10 @@ impl OperationContext {
         let mut response = self
             .wire
             .client
-            .send(request, UpstreamCall::new(method))
+            .send(
+                request,
+                UpstreamCall::new(method).with_authorizations(authorization),
+            )
             .await
             .map_err(|error| {
                 if matches!(
@@ -519,17 +535,15 @@ impl OperationContext {
                 return Ok(());
             }
         }
-        let (mut headers, _) = self.authentication().await?;
+        let (authorization, _) = self.authentication().await?;
+        let mut headers = HeaderMap::new();
         headers.insert("mcp-session-id", session);
         headers.insert(
             "mcp-protocol-version",
             HeaderValue::from_static(LEGACY_PROTOCOL_VERSION),
         );
         let request = self
-            .wire
-            .client
-            .request(reqwest::Method::DELETE, self.wire.endpoint.clone())
-            .headers(headers)
+            .request(reqwest::Method::DELETE, headers)
             .header("accept", "application/json, text/event-stream");
         {
             let mut state = self.state.lock().expect("wire state");
@@ -542,7 +556,10 @@ impl OperationContext {
         if let Ok(mut response) = self
             .wire
             .client
-            .send(request, UpstreamCall::new("session/delete"))
+            .send(
+                request,
+                UpstreamCall::new("session/delete").with_authorizations(&authorization),
+            )
             .await
         {
             let reason = (!response.status().is_success()).then(|| {
@@ -707,7 +724,8 @@ async fn send_message(
             state.call_attempted = true;
         }
     }
-    let (mut headers, sent_version) = context.authentication().await?;
+    let (authorization, sent_version) = context.authentication().await?;
+    let mut headers = HeaderMap::new();
     let modern = attempt.lifecycle == Lifecycle::Discover;
     if modern {
         headers.insert(
@@ -774,7 +792,7 @@ async fn send_message(
         }
     }
     let reply = context
-        .post(request, headers, &method, sent_version)
+        .post(request, &authorization, headers, &method, sent_version)
         .await?;
     if acknowledgement {
         context.state.lock().expect("wire state").protocol_version = Some(LEGACY_PROTOCOL_VERSION);
@@ -1015,7 +1033,7 @@ mod tests {
         let definition: ImportedServiceDefinition = serde_json::from_value(json!({"service":"race","displayName":"Race","adapterKind":"mcp_http","endpoint":endpoint,"executionBindings":[{"ownerMode":"service","mechanism":"static_token","delivery":{"kind":"bearer"},"status":"configured"}],"discovery":{"kind":"execution"}})).unwrap();
         let wire =
             crate::make_wire(&definition, &test_support::TestHost::default().context()).unwrap();
-        Operation::new(wire, HeaderMap::new(), None, None, timeout)
+        Operation::new(wire, Vec::new(), None, None, timeout)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1051,6 +1069,7 @@ mod tests {
                 context
                     .post(
                         json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+                        &[],
                         HeaderMap::new(),
                         method,
                         None,
@@ -1159,6 +1178,7 @@ mod tests {
                         .context
                         .post(
                             json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+                            &[],
                             HeaderMap::new(),
                             method,
                             None,

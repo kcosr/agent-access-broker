@@ -919,10 +919,13 @@ impl BrokerRuntime {
     /// Compile the changed service outside the DB transaction. Existing providers
     /// remain shared. An explicit transport override is used for slot rotation or
     /// deletion so no old secret can be paired with the newly published version.
+    /// A replacement is the token plaintext the store will write; its digest
+    /// binds the store's write proof, and the adapter receives it only as an
+    /// opaque credential.
     pub fn prepare_imported_service_change(
         &self,
         record: &ImportedServiceRecord,
-        transport_override: Option<Option<ExecutionCredential>>,
+        transport_override: Option<Option<String>>,
     ) -> Result<PreparedImportedProviders, ManagedStoreError> {
         let mut providers = self
             .imported_catalog
@@ -944,10 +947,7 @@ impl BrokerRuntime {
                     .cloned(),
             ),
             Some(None) => PreparedTransport::Deleted,
-            Some(Some(credential)) => {
-                let CredentialView::Bearer { token } = credential.view() else {
-                    return Err(preparation_mismatch());
-                };
+            Some(Some(token)) => {
                 PreparedTransport::ReplacementPending(Sha256::digest(token.as_bytes()).into())
             }
         };
@@ -968,7 +968,7 @@ impl BrokerRuntime {
         self.require_import_destination(definition)?;
         let transport = if definition.transport_auth {
             match transport_override {
-                Some(value) => value,
+                Some(value) => value.map(agent_access_provider::host::bearer_credential),
                 None => match record
                     .slot_versions
                     .get(&ImportedCredentialPurpose::Transport)

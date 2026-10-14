@@ -2,9 +2,9 @@
 //! validation, credential authorization and the tenant/gateway client routes.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, CredentialView, EgressDeclaration, EgressProxyConfig, ExecutionCredential,
-    ProviderBuildError, ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamClient,
-    UpstreamClientSpec,
+    ClientProfile, EgressDeclaration, EgressProxyConfig, ExecutionCredential, ProviderBuildError,
+    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthorization,
+    UpstreamClient, UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -80,28 +80,18 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
 }
 
 /// How an Atlassian execution credential authenticates a request: HTTP
-/// Basic for a tenant API token, a bearer token through the gateway.
-pub enum AtlassianAuthorization<'a> {
-    Basic { username: &'a str, token: &'a str },
-    Bearer(&'a str),
-}
-
-impl<'a> AtlassianAuthorization<'a> {
-    /// How `credential` authenticates, or `None` for a credential kind
-    /// Atlassian providers do not support, which the caller must reject.
-    pub fn new(credential: &'a ExecutionCredential) -> Option<Self> {
-        match credential.view() {
-            CredentialView::Basic { username, token } => Some(Self::Basic { username, token }),
-            CredentialView::Bearer { token } => Some(Self::Bearer(token)),
-            _ => None,
+/// Basic for a tenant API token, a bearer token through the gateway. Returns
+/// `None` for a credential kind Atlassian providers do not support, which the
+/// caller must reject. The SDK presents the authorization when the request is
+/// sent; this helper never reads the material.
+pub fn atlassian_credential_authorization(
+    credential: &ExecutionCredential,
+) -> Option<UpstreamAuthorization> {
+    match credential.kind() {
+        StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken => {
+            Some(credential.authorization())
         }
-    }
-
-    pub fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match self {
-            Self::Basic { username, token } => builder.basic_auth(username, Some(token)),
-            Self::Bearer(token) => builder.bearer_auth(token),
-        }
+        _ => None,
     }
 }
 
@@ -429,5 +419,23 @@ mod tests {
         let mut proxied = site(Some(CLOUD_ID), &gateway);
         proxied.egress_proxy = Some(&proxy);
         assert_eq!(proxied.route_fingerprint(), base);
+    }
+
+    /// Basic credentials authorize tenant requests and bearer credentials
+    /// gateway requests; the authorization reveals neither. The SDK's tests
+    /// and the Jira and Confluence mock-upstream tests check the bytes sent.
+    #[test]
+    fn authorization_accepts_basic_and_bearer_credentials() {
+        for credential in [
+            basic_credential("agent@example.com", "api-token"),
+            bearer_credential("gateway-token"),
+        ] {
+            let authorization = atlassian_credential_authorization(&credential).unwrap();
+            let rendered = format!("{authorization:?}");
+            assert!(
+                !rendered.contains("token") && !rendered.contains("agent@"),
+                "{rendered}"
+            );
+        }
     }
 }

@@ -154,8 +154,9 @@ Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
 `core`, `host`, `assembly`, `cli`, `native`, `reference`, `adapter`, or
 `helper`); declare one when adding a crate. The boundary check rejects an
 undeclared role and dependency edges that cross the roles, such as any
-production path from core or the host to a backend or import adapter. See
-`docs/testing.md` for the rules.
+production path from core or the host to a backend or import adapter, and any
+use of the host-only `host::authorize_host_request` in native, adapter,
+reference or helper sources. See `docs/testing.md` for the rules.
 
 `api/` holds the checked-in supported public API inventory: the SDK and host
 with and without `test-support`, the assembly library, the reviewed selection
@@ -232,10 +233,19 @@ and audit checks through the real `agent-access` binary.
   resource types, the `Provider` trait and its invocation/result/error types,
   reason codes and the hook contract the host checks provider failures, late
   streams and upstream traces against (`contract.rs`), the OAuth dialect and
-  delegated-credential contracts, and the host services backends use
-  (upstream HTTP clients built through the host's client factory, egress
-  declarations and sanitized routes, upstream allowlists, correlation,
-  upstream trace events, token signing and continuation envelopes). `lib.rs`
+  delegated-credential contracts, credential presentation
+  (`authorization.rs`: `UpstreamAuthorization` and `CredentialPlacement`) and
+  the host services backends use (upstream HTTP clients built through the
+  host's client factory, egress declarations and sanitized routes, upstream
+  allowlists, correlation, upstream trace events, token signing and
+  continuation envelopes). Static credentials and delegated access have no
+  plaintext accessor, and providers never hold a request carrying one: they
+  hand an `UpstreamAuthorization` to the send method (`UpstreamCall`,
+  `RedirectRules`), and the client adds the sensitive header to the request it
+  builds. Only the host's raw-client paths (Git gateway, Git verification) use
+  the host-only `host::authorize_host_request`; the boundary check rejects it
+  in native, adapter, reference and helper crates. Credential equality exists
+  only with `test-support`, in constant time. `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through
   `presentation`. The supported `host` module holds the host cooperation ports:
@@ -243,7 +253,8 @@ and audit checks through the real `agent-access` binary.
   host-owned request values (scope requests, static credentials, admitted
   requests, spooled body parts, final invocations), the initial correlation,
   hook (`HookContext`) and deadline scopes, service-scoped signer wrapping,
-  delegated-lease wrapping and the host-origin failure port. `deps` re-exports
+  delegated-lease wrapping, the host-origin failure port and host-only request
+  authorization. `deps` re-exports
   the third-party types and macros supported signatures name. The SDK resolves
   no secrets, loads no TLS files and reads no process environment.
   `docs/provider-sdk.md` documents its supported surface for provider authors.

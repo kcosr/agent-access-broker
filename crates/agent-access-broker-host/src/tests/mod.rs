@@ -24,7 +24,7 @@ use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use agent_access_gitlab::PositionInputCategory;
 use agent_access_jira::JIRA_PROJECT_RESOURCE;
 use agent_access_provider::test_support::{
-    credential_token, credential_username, install_trace_capture,
+    basic_credential, bearer_credential, install_trace_capture,
 };
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BROKER_REQUEST_ID_HEADER, BodyAdmission, BrokerBodyPartSpec,
@@ -14884,7 +14884,7 @@ impl Provider for TestManagedGitlabCredentialProvider {
             "managed-user-verify" => "gitlab-token-user-rotated",
             request_id => panic!("unexpected credential verification request: {request_id}"),
         };
-        assert_eq!(credential_token(credential), expected_token);
+        assert_eq!(*credential, bearer_credential(expected_token));
         Ok(Some(
             agent_access_provider::ProviderCredentialVerification::new(
                 200,
@@ -15103,8 +15103,8 @@ impl Provider for TestJiraParentInvokeProvider {
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
         assert_eq!(
-            request.lookup_credential().map(credential_token),
-            Some("lookup-token")
+            request.lookup_credential(),
+            Some(&basic_credential("lookup@example.com", "lookup-token"))
         );
         self.local_scopes(request.action(), request.inputs())
             .map(ScopeResolution::resources)
@@ -15112,11 +15112,8 @@ impl Provider for TestJiraParentInvokeProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(
-            request
-                .execution()
-                .static_credential()
-                .map(credential_token),
-            Some("service-token")
+            request.execution().static_credential(),
+            Some(&basic_credential("service@example.com", "service-token"))
         );
         assert_eq!(
             request.resource_scopes().unwrap()["project"],
@@ -15359,11 +15356,8 @@ impl Provider for TestJiraNormalizedWriteProvider {
         assert_eq!(request.action(), "issue.create");
         assert_eq!(request.inputs()["contentFormat"], "markdown");
         assert_eq!(
-            request
-                .execution()
-                .static_credential()
-                .map(credential_token),
-            Some("service-token")
+            request.execution().static_credential(),
+            Some(&basic_credential("service@example.com", "service-token"))
         );
         let source = request.inputs()["content"].as_str().unwrap();
         if source == JIRA_WRITE_INVALID_SOURCE_SENTINEL {
@@ -15471,11 +15465,8 @@ impl Provider for TestConfluenceNormalizedWriteProvider {
         assert_eq!(request.action(), "page.create");
         assert_eq!(request.inputs()["contentFormat"], "markdown");
         assert_eq!(
-            request
-                .execution()
-                .static_credential()
-                .map(credential_token),
-            Some("service-token")
+            request.execution().static_credential(),
+            Some(&basic_credential("service@example.com", "service-token"))
         );
         let source = request.inputs()["content"].as_str().unwrap();
         if source.len() > 128 {
@@ -15577,11 +15568,8 @@ impl Provider for TestGitlabNormalizedWriteProvider {
         assert_eq!(request.action(), "issue.create");
         assert_eq!(request.inputs()["contentFormat"], "plain_text");
         assert_eq!(
-            request
-                .execution()
-                .static_credential()
-                .map(credential_token),
-            Some("service-token")
+            request.execution().static_credential(),
+            Some(&bearer_credential("service-token"))
         );
         let source = request.inputs()["content"].as_str().unwrap();
         if source.len() > 128 {
@@ -15697,11 +15685,8 @@ impl Provider for TestGitlabReviewFailureProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         assert_eq!(request.action(), "merge_request.discussion.inline.add");
         assert_eq!(
-            request
-                .execution()
-                .static_credential()
-                .map(credential_token),
-            Some("service-token")
+            request.execution().static_credential(),
+            Some(&bearer_credential("service-token"))
         );
         match request.inputs()["content"].as_str().unwrap() {
             GITLAB_REVIEW_MUTATION_SECRET_SENTINEL => Err(ProviderError::error(
@@ -15870,8 +15855,10 @@ impl Provider for TestCredentialVerificationProvider {
         _correlation: &agent_access_provider::CorrelationContext,
     ) -> Result<Option<agent_access_provider::ProviderCredentialVerification>, ProviderError> {
         assert_eq!(credential.kind().as_str(), "basic_api_token");
-        assert_eq!(credential_username(credential), Some("alice@example.com"));
-        assert_eq!(credential_token(credential), "jira-token");
+        assert_eq!(
+            *credential,
+            basic_credential("alice@example.com", "jira-token")
+        );
         Ok(Some(
             agent_access_provider::ProviderCredentialVerification::new(
                 200,

@@ -17,7 +17,9 @@ use jql::*;
 use search_continuation::*;
 use validation::*;
 
-use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
+use agent_access_atlassian::{
+    atlassian_credential_authorization, validate_atlassian_gateway_credential,
+};
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
 #[allow(unused_imports)]

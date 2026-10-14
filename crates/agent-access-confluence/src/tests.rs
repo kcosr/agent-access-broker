@@ -1,6 +1,6 @@
 use super::*;
 use crate::{ActionIo, Decision, raw_download_io};
-use agent_access_provider::test_support::{InvocationBuilder, basic_credential, credential_token};
+use agent_access_provider::test_support::{InvocationBuilder, basic_credential};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1095,7 +1095,7 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
     assert!(
         observations.iter().any(|observation| {
             observation.operation == "comment"
-                && observation.credential_token == Some("lookup-token".to_string())
+                && observation.credential == credential_with_token("lookup-token")
                 && observation.body_format.is_none()
         }),
         "expected lookup credential to authorize comment ancestry: {observations:?}"
@@ -1103,7 +1103,7 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
     assert!(
         observations.iter().any(|observation| {
             observation.operation == "comment"
-                && observation.credential_token == Some("execute-token".to_string())
+                && observation.credential == credential_with_token("execute-token")
                 && observation.body_format == Some("storage".to_string())
         }),
         "expected execution credential to fetch requested comment body: {observations:?}"
@@ -4048,7 +4048,7 @@ async fn attachment_download_scope_lookup_defers_membership_checks() {
     assert!(!scopes.contains_key("page"));
     assert_eq!(
         *backend.credential_observations.lock().unwrap(),
-        vec![("page_metadata".to_string(), "token".to_string())]
+        vec![("page_metadata".to_string(), credential())]
     );
 }
 
@@ -4499,10 +4499,13 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
     assert_eq!(
         *backend.credential_observations.lock().unwrap(),
         vec![
-            ("page_metadata".to_string(), "lookup-token".to_string()),
+            (
+                "page_metadata".to_string(),
+                credential_with_token("lookup-token")
+            ),
             (
                 "page_attachments_page".to_string(),
-                "per-user-token".to_string()
+                credential_with_token("per-user-token")
             ),
         ]
     );
@@ -6146,10 +6149,12 @@ impl PageMoveTestBackend {
     }
 }
 
+/// One credential the stub backend received. Credentials compare by kind
+/// and material, so tests check which one arrived without reading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CredentialObservation {
     operation: String,
-    credential_token: Option<String>,
+    credential: ExecutionCredential,
     object_id: Option<String>,
     body_format: Option<String>,
 }
@@ -6246,9 +6251,10 @@ impl CommentStubConfluenceBackend {
         &self,
         credential: &ExecutionCredential,
     ) -> &BTreeMap<String, ConfluenceComment> {
-        Some(credential_token(credential))
-            .and_then(|token| self.comments_by_token.get(token))
-            .unwrap_or(&self.comments)
+        self.comments_by_token
+            .iter()
+            .find(|(token, _)| *credential == credential_with_token(token))
+            .map_or(&self.comments, |(_, comments)| comments)
     }
 
     fn observe(
@@ -6263,7 +6269,7 @@ impl CommentStubConfluenceBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential_token: Some(credential_token(credential).to_owned()),
+                credential: credential.clone(),
                 object_id,
                 body_format,
             });
@@ -6283,7 +6289,7 @@ struct AttachmentDownloadBackend {
 struct AttachmentListBackend {
     page: ConfluencePage,
     attachments: Vec<ConfluenceAttachment>,
-    credential_observations: std::sync::Mutex<Vec<(String, String)>>,
+    credential_observations: std::sync::Mutex<Vec<(String, ExecutionCredential)>>,
 }
 
 struct AttributionStubConfluenceBackend {
@@ -7009,10 +7015,10 @@ impl ConfluenceBackend for AttachmentListBackend {
 
 impl AttachmentListBackend {
     fn record_credential(&self, operation: &str, credential: &ExecutionCredential) {
-        self.credential_observations.lock().unwrap().push((
-            operation.to_string(),
-            credential_token(credential).to_owned(),
-        ));
+        self.credential_observations
+            .lock()
+            .unwrap()
+            .push((operation.to_string(), credential.clone()));
     }
 }
 

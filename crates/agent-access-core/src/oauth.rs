@@ -3695,6 +3695,21 @@ pub(crate) mod tests {
             .await;
     }
 
+    /// `access` presenting `token`: equal to `access` exactly when it presents
+    /// that token, so tests compare the lent token without reading it.
+    fn presenting(
+        access: &agent_access_provider::DelegatedAccess,
+        token: &str,
+    ) -> agent_access_provider::DelegatedAccess {
+        agent_access_provider::DelegatedAccess::new(
+            token,
+            access.target(),
+            access.audience(),
+            access.version(),
+            access.expires_at(),
+        )
+    }
+
     #[tokio::test]
     async fn delegated_leases_follow_superseded_access_and_recover_once() {
         let (_dir, _store, _ring, manager, server) = fixture().await;
@@ -3705,7 +3720,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         let first = credential.access();
-        assert_eq!(first.token(), "protected-access-0");
+        assert_eq!(first, presenting(&first, "protected-access-0"));
         assert_eq!(first.target(), "workspace-one");
         credential.revalidate().await.unwrap();
         assert_eq!(credential.access(), first);
@@ -3719,7 +3734,7 @@ pub(crate) mod tests {
         assert_eq!(credential.access().version(), current.access_version());
 
         let recovered = credential.recover_after_unauthorized().await.unwrap();
-        assert_eq!(recovered.token(), "protected-access-2");
+        assert_eq!(recovered, presenting(&recovered, "protected-access-2"));
         assert_eq!(credential.access(), recovered);
         let again = credential.recover_after_unauthorized().await.unwrap_err();
         assert_eq!(again.reason_code(), ReasonCode::CredentialInvalid);

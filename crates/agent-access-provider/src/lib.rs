@@ -19,7 +19,12 @@
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
 //!   allowlists, correlation ([`InvocationScope`]), upstream trace events
-//!   and signed continuation envelopes ([`ContinuationSigner`]). An OAuth
+//!   and signed continuation envelopes ([`ContinuationSigner`]). It turns
+//!   lent [`ExecutionCredential`]s and [`DelegatedAccess`] into opaque
+//!   [`UpstreamAuthorization`]s, in a [`CredentialPlacement`] when the
+//!   upstream needs one, and hands them to the client's send methods with
+//!   each request ([`UpstreamCall::with_authorization`]); it never reads the
+//!   material or holds a request that carries it. An OAuth
 //!   companion implements [`OAuthDialect`] and declares an
 //!   [`OAuthDialectRegistration`]. Every registration records its declaring
 //!   package with [`module_metadata!`].
@@ -44,7 +49,9 @@
 //! The SDK depends on no Broker crate. It resolves no secret references, loads
 //! no TLS files, reads no process environment and touches no store: the host
 //! keeps those, together with identity, policy, credential selection, audit,
-//! limits and network construction. Providers see only the narrow views here.
+//! limits and network construction. Providers see only the narrow views here,
+//! and no credential value has a plaintext accessor: the upstream client adds
+//! credential material to the request it builds, immediately before dispatch.
 //!
 //! # Trust model
 //!
@@ -121,7 +128,7 @@
 //!   [`ServiceDescriptor`];
 //! - extendable enums are non-exhaustive, and a match on one ends with an arm
 //!   that rejects what the module does not support, such as an unknown
-//!   [`CredentialView`], instead of treating it as success or as another
+//!   [`StaticCredentialKind`], instead of treating it as success or as another
 //!   variant.
 //!
 //! Data is read through those fields or inherent methods; no public trait
@@ -145,7 +152,7 @@
 //! | `bytes` | 1 | `Bytes` | [`deps::bytes`] |
 //! | `chrono` | 0.4 | `DateTime`, `Utc` | [`deps::chrono`] |
 //! | `futures-core` | 0.3 | `Stream` | [`deps::futures_core`] |
-//! | `http` | 1 | `Method`, `HeaderMap`, as `reqwest` re-exports them | [`deps::http`] |
+//! | `http` | 1 | `Method`, `HeaderMap`, `HeaderName`, as `reqwest` re-exports them | [`deps::http`] |
 //! | `reqwest` | 0.12 | `Body`, `Client`, `ClientBuilder`, `RequestBuilder`, `Response` | [`deps::reqwest`] |
 //! | `serde_json` | 1 | `Map`, `Value` | [`deps::serde_json`] |
 //! | `tokio` | 1 | `time::Instant`, `sync::watch::Receiver` | [`deps::tokio`] |
@@ -163,6 +170,7 @@
 
 mod admitted;
 mod attribution;
+mod authorization;
 mod backend;
 mod capabilities;
 mod config;
@@ -207,6 +215,7 @@ pub use attribution::{
     ProviderAttributionConfig, attribution_audit_applied, attribution_skip_target_absent_audit,
     matching_attribution_capabilities, merge_attribution_audit, validate_attribution_pattern,
 };
+pub use authorization::{CredentialPlacement, CredentialPlacementError, UpstreamAuthorization};
 pub use backend::{
     BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, ServiceCredentialKinds,
     ValidationContext, parse_backend_config,
@@ -233,7 +242,7 @@ pub use correlation::{
     current_correlation_context, current_provider_action,
 };
 pub use credential::{
-    CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
+    CredentialMode, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
     UnsupportedCredentialMode,
 };
 pub use delegated::{

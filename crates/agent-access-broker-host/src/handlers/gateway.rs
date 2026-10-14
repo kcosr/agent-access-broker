@@ -15,8 +15,8 @@ use agent_access_core::{
     PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
 };
 use agent_access_provider::{
-    BROKER_REQUEST_ID_HEADER, CredentialView, ExecutionCredential, ProviderError,
-    REQUEST_ID_HEADER, ReasonCode, ReasonCodeId, ResourceScopes, url_allowed_by_patterns,
+    BROKER_REQUEST_ID_HEADER, ExecutionCredential, ProviderError, REQUEST_ID_HEADER, ReasonCode,
+    ReasonCodeId, ResourceScopes, StaticCredentialKind, url_allowed_by_patterns,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -2126,9 +2126,13 @@ fn apply_gateway_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.view() {
-        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
-        CredentialView::Basic { username, token } => Ok(builder.basic_auth(username, Some(token))),
+    match credential.kind() {
+        StaticCredentialKind::BearerToken | StaticCredentialKind::BasicApiToken => {
+            Ok(agent_access_provider::host::authorize_host_request(
+                builder,
+                &credential.authorization(),
+            ))
+        }
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,
             "the Git gateway does not support this credential kind",

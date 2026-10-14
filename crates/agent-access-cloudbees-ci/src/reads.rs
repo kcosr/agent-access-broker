@@ -390,7 +390,7 @@ impl CloudbeesCiProvider {
         content_type: &str,
         filename: String,
     ) -> Result<ProviderResult, ProviderError> {
-        let (username, token) = basic_material(credential)?;
+        let authorization = basic_authorization(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {
@@ -402,13 +402,12 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 url.clone(),
-                RedirectRules::new(0, self.request_timeout, &|request| {
-                    request.basic_auth(username, Some(token))
-                })
-                .with_vet(&|candidate| *candidate == url)
-                .with_decorate(&|request| {
-                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                }),
+                RedirectRules::new(0, self.request_timeout)
+                    .with_authorization(&authorization)
+                    .with_vet(&|candidate| *candidate == url)
+                    .with_decorate(&|request| {
+                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                    }),
                 action,
             )
             .await

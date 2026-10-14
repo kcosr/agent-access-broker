@@ -2,7 +2,7 @@
 //! Only test registries select it; the broker binary never links it.
 use agent_access_core::BackendRegistry;
 use agent_access_core::imports::*;
-use agent_access_provider::test_support::credential_token;
+use agent_access_provider::test_support::bearer_credential;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -85,9 +85,9 @@ impl ImportedAdapter for ConformanceImportAdapter {
                 .map_err(ProviderBuildError::invalid)?;
         }
         let transport_authority = if definition.transport_auth {
-            Some(match transport.as_ref().map(credential_token) {
-                Some("import-transport-initial") => "initial",
-                Some("import-transport-rotated") => "rotated",
+            Some(match &transport {
+                Some(token) if *token == bearer_credential("import-transport-initial") => "initial",
+                Some(token) if *token == bearer_credential("import-transport-rotated") => "rotated",
                 _ => {
                     return Err(ProviderBuildError::invalid(
                         "conformance transport credential is unavailable",
@@ -110,27 +110,24 @@ impl ImportedAdapter for ConformanceImportAdapter {
         _host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         if let ImportedDiscoveryAuthentication::Static(credential) = authentication {
-            match credential_token(credential) {
-                UNREACHABLE_DISCOVERY_TOKEN => {
-                    return Err(ProviderError::error(
-                        ReasonCode::UpstreamConnectionFailed,
-                        "conformance upstream is unreachable",
-                    )
-                    .into());
-                }
-                HOST_ONLY_DISCOVERY_TOKEN => {
-                    return Err(ProviderError::error(
-                        ReasonCode::RateLimited,
-                        "conformance claims a broker rate limit",
-                    )
-                    .into());
-                }
-                INVALID_SETTINGS_DISCOVERY_TOKEN => {
-                    return Err(AdapterDiscoveryError::Configuration(
-                        "conformance settings are invalid".to_owned(),
-                    ));
-                }
-                _ => {}
+            if *credential == bearer_credential(UNREACHABLE_DISCOVERY_TOKEN) {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "conformance upstream is unreachable",
+                )
+                .into());
+            }
+            if *credential == bearer_credential(HOST_ONLY_DISCOVERY_TOKEN) {
+                return Err(ProviderError::error(
+                    ReasonCode::RateLimited,
+                    "conformance claims a broker rate limit",
+                )
+                .into());
+            }
+            if *credential == bearer_credential(INVALID_SETTINGS_DISCOVERY_TOKEN) {
+                return Err(AdapterDiscoveryError::Configuration(
+                    "conformance settings are invalid".to_owned(),
+                ));
             }
         }
         Ok(ImportedDiscovery {
@@ -177,14 +174,11 @@ impl Provider for ImportedConformanceProvider {
     }
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.local_scopes(request.action(), request.inputs())?;
-        let token = request
-            .execution()
-            .static_credential()
-            .map(credential_token);
+        let credential = request.execution().static_credential();
         // Tokens are synthetic test sentinels; responses never expose material.
-        let authority = match token {
-            Some("import-service-token") => "service",
-            Some("import-user-token") => "per_user",
+        let authority = match credential {
+            Some(token) if *token == bearer_credential("import-service-token") => "service",
+            Some(token) if *token == bearer_credential("import-user-token") => "per_user",
             _ => {
                 return Err(ProviderError::deny(
                     ReasonCode::CredentialNotProvisioned,

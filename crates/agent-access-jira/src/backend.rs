@@ -856,7 +856,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let mut response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url), credential)?
+            credential,
+            client
+                .request(Method::GET, url)
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue_type.list"),
         )
@@ -902,7 +904,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("current_user"),
         )
@@ -930,7 +934,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.metadata"),
         )
@@ -961,7 +967,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.get"),
         )
@@ -989,7 +997,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let mut response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::POST, url.clone())
                 .header("Accept", "application/json")
                 .json(&body),
             UpstreamCall::new("issue.create"),
@@ -1081,7 +1091,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::PUT, url.clone())
                 .header("Accept", "application/json")
                 .json(&body),
             UpstreamCall::new("issue.update"),
@@ -1113,7 +1125,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::PUT, url.clone())
                 .header("Accept", "application/json")
                 .json(&body),
             UpstreamCall::new("issue.parent.set"),
@@ -1145,7 +1159,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.parent.readback"),
         )
@@ -1171,7 +1187,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.link_types"),
         )
@@ -1199,7 +1217,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::POST, url.clone())
                 .header("Accept", "application/json")
                 .json(&body),
             UpstreamCall::new("issue.link.create"),
@@ -1231,7 +1251,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.links"),
         )
@@ -1271,7 +1293,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("search"),
         )
@@ -1308,7 +1332,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.list"),
         )
@@ -1336,7 +1362,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::POST, url.clone())
                 .header("Accept", "application/json")
                 .json(&comment_write_body(
                     request.body,
@@ -1380,7 +1408,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::PUT, url.clone())
                 .header("Accept", "application/json")
                 .json(&comment_write_body(
                     request.body,
@@ -1415,7 +1445,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::DELETE, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::DELETE, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.delete"),
         )
@@ -1447,7 +1479,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.stream_client(credential)?;
         let mut response = send_jira_upload(
             client,
-            authenticated_request(client.request(Method::POST, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::POST, url.clone())
                 .header("Accept", "application/json")
                 .header("X-Atlassian-Token", "no-check")
                 .multipart(form),
@@ -1507,7 +1541,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.attachments.metadata"),
         )
@@ -1536,7 +1572,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("issue.attachments.list"),
         )
@@ -1614,7 +1652,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.get"),
         )
@@ -1641,7 +1681,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.property.list"),
         )
@@ -1670,7 +1712,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::GET, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::GET, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.property.get"),
         )
@@ -1700,7 +1744,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::PUT, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::PUT, url.clone())
                 .header("Accept", "application/json")
                 .json(&value),
             UpstreamCall::new("comment.property.set"),
@@ -1732,7 +1778,9 @@ impl JiraBackend for HttpJiraBackend {
         let client = self.request_client(credential)?;
         let response = send_jira_request(
             client,
-            authenticated_request(client.request(Method::DELETE, url.clone()), credential)?
+            credential,
+            client
+                .request(Method::DELETE, url.clone())
                 .header("Accept", "application/json"),
             UpstreamCall::new("comment.property.delete"),
         )
@@ -1760,13 +1808,10 @@ impl HttpJiraBackend {
         client
             .get_following_redirects(
                 url,
-                RedirectRules::new(
-                    5,
-                    Duration::from_millis(self.limits.request_timeout_ms),
-                    &|request| authorization.apply(request),
-                )
-                // Atlassian media hosts join broker logs by these headers.
-                .correlating_other_origins(),
+                RedirectRules::new(5, Duration::from_millis(self.limits.request_timeout_ms))
+                    .with_authorization(&authorization)
+                    // Atlassian media hosts join broker logs by these headers.
+                    .correlating_other_origins(),
                 "attachment.download",
             )
             .await
@@ -1774,19 +1819,12 @@ impl HttpJiraBackend {
     }
 }
 
-/// `builder` with `credential`'s authorization; an unsupported credential
-/// kind fails before any request is sent.
-pub(crate) fn authenticated_request(
-    builder: reqwest::RequestBuilder,
-    credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, JiraBackendError> {
-    Ok(atlassian_authorization(credential)?.apply(builder))
-}
-
+/// `credential`'s authorization as the SDK presents it; an unsupported
+/// credential kind fails before any request is sent.
 fn atlassian_authorization(
     credential: &ExecutionCredential,
-) -> Result<AtlassianAuthorization<'_>, JiraBackendError> {
-    AtlassianAuthorization::new(credential)
+) -> Result<UpstreamAuthorization, JiraBackendError> {
+    atlassian_credential_authorization(credential)
         .ok_or_else(|| JiraBackendError::Protocol("unsupported Jira credential kind".to_string()))
 }
 
@@ -1877,14 +1915,18 @@ pub(crate) fn jira_visibility_to_value(visibility: &JiraCommentVisibility) -> Va
     }
 }
 
-/// Sends through `client`, mapping transport failures to Jira errors.
+/// Sends through `client` with `credential`'s authorization, mapping
+/// transport failures to Jira errors. An unsupported credential kind fails
+/// before anything is sent.
 pub(crate) async fn send_jira_request(
     client: &UpstreamClient,
+    credential: &ExecutionCredential,
     request: reqwest::RequestBuilder,
     call: UpstreamCall<'_>,
 ) -> Result<reqwest::Response, JiraBackendError> {
+    let authorization = atlassian_authorization(credential)?;
     client
-        .send(request, call)
+        .send(request, call.with_authorization(&authorization))
         .await
         .map_err(jira_upstream_error)
 }
@@ -2073,13 +2115,20 @@ pub(crate) async fn jira_upload_part(
 
 pub(crate) async fn send_jira_upload(
     client: &UpstreamClient,
+    credential: &ExecutionCredential,
     request: reqwest::RequestBuilder,
     progress: Option<UploadProgress>,
     idle_timeout: Duration,
     call: UpstreamCall<'_>,
 ) -> Result<reqwest::Response, JiraBackendError> {
+    let authorization = atlassian_authorization(credential)?;
     client
-        .send_upload(request, progress, idle_timeout, call)
+        .send_upload(
+            request,
+            progress,
+            idle_timeout,
+            call.with_authorization(&authorization),
+        )
         .await
         .map_err(jira_upstream_error)
 }

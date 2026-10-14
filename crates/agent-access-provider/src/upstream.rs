@@ -6,12 +6,14 @@
 //!
 //! Backends own their protocol (URLs, authentication scheme, status and body
 //! handling); they build clients and send requests through this module.
+use crate::authorization::{AuthorizationPosition, attach};
 use crate::correlation::apply_current_correlation_headers;
 use crate::host::{ClientTransportSpec, UpstreamClientFactory};
 use crate::trace::{checked_trace_reason, emit_upstream_request_completed_for};
 use crate::{
-    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode, UpstreamTrace,
-    current_provider_action, same_origin, url_allowed_by_patterns,
+    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode,
+    UpstreamAuthorization, UpstreamTrace, current_provider_action, same_origin,
+    url_allowed_by_patterns,
 };
 use futures_util::TryStreamExt;
 use reqwest::{Method, RequestBuilder, Response};
@@ -134,21 +136,24 @@ impl UpstreamError {
     }
 }
 
-/// Names one upstream request in its trace event.
+/// Names one upstream request in its trace event, and carries the
+/// credentials the client presents on it.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct UpstreamCall<'a> {
     pub operation: &'a str,
     /// 1 for the first request; redirect hops and retries count up.
     pub attempt: u32,
+    authorizations: &'a [UpstreamAuthorization],
 }
 
 impl<'a> UpstreamCall<'a> {
-    /// The first attempt of `operation`.
+    /// The first attempt of `operation`, presenting no credential.
     pub fn new(operation: &'a str) -> Self {
         Self {
             operation,
             attempt: 1,
+            authorizations: &[],
         }
     }
 
@@ -156,6 +161,25 @@ impl<'a> UpstreamCall<'a> {
     /// retries count up.
     pub fn with_attempt(mut self, attempt: u32) -> Self {
         self.attempt = attempt;
+        self
+    }
+
+    /// The request presents `authorization`. The client adds its header to
+    /// the request it builds from the provider's, immediately before
+    /// dispatch: in place of a header of the same name the provider set, or
+    /// otherwise right after the client's correlation headers, before the
+    /// provider's own headers. A request to another origin than the client's
+    /// base fails as [`UpstreamError::NotSent`] instead of carrying it.
+    /// Replaces any authorization set before.
+    pub fn with_authorization(self, authorization: &'a UpstreamAuthorization) -> Self {
+        self.with_authorizations(std::slice::from_ref(authorization))
+    }
+
+    /// The request presents every authorization in `authorizations`, added in
+    /// order as [`Self::with_authorization`] adds one, such as an API key and
+    /// a separate transport token. Replaces any authorization set before.
+    pub fn with_authorizations(mut self, authorizations: &'a [UpstreamAuthorization]) -> Self {
+        self.authorizations = authorizations;
         self
     }
 }
@@ -171,31 +195,35 @@ pub struct RedirectRules<'a> {
     correlate_other_origins: bool,
     vet: &'a (dyn Fn(&Url) -> bool + Sync),
     decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
-    authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
+    authorization: Option<&'a UpstreamAuthorization>,
 }
 
 impl<'a> RedirectRules<'a> {
     /// Follows at most `max_redirects` redirects after the first request
-    /// (one more is an error), waits at most `deadline` for each hop's
-    /// response headers, and applies `authorize`'s credentials only to hops
-    /// on the service's own origin.
+    /// (one more is an error) and waits at most `deadline` for each hop's
+    /// response headers.
     ///
-    /// Hops to other origins carry no correlation headers, every hop is
-    /// sent as built, and the chain needs only the allowlist and the absence
-    /// of embedded credentials, until the builders below change that.
-    pub fn new(
-        max_redirects: u32,
-        deadline: Duration,
-        authorize: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
-    ) -> Self {
+    /// Hops to other origins carry no correlation headers, no hop carries a
+    /// credential, every hop is sent as built, and the chain needs only the
+    /// allowlist and the absence of embedded credentials, until the builders
+    /// below change that.
+    pub fn new(max_redirects: u32, deadline: Duration) -> Self {
         Self {
             max_redirects,
             deadline,
             correlate_other_origins: false,
             vet: &accept_every_hop,
             decorate: &undecorated_hop,
-            authorize,
+            authorization: None,
         }
+    }
+
+    /// Hops on the service's own origin present `authorization`. The client
+    /// adds its header after the hop's decoration, immediately before
+    /// dispatch; hops to other origins never carry it.
+    pub fn with_authorization(mut self, authorization: &'a UpstreamAuthorization) -> Self {
+        self.authorization = Some(authorization);
+        self
     }
 
     /// Hops to other origins also carry the invocation's correlation
@@ -214,7 +242,8 @@ impl<'a> RedirectRules<'a> {
 
     /// Headers every hop carries. A credential-bearing header (see
     /// [`UpstreamClient::request`]) makes a hop to another origin fail as
-    /// [`UpstreamError::NotSent`]; authorize hops with `authorize` instead.
+    /// [`UpstreamError::NotSent`]; authorize hops with
+    /// [`Self::with_authorization`] instead.
     pub fn with_decorate(
         mut self,
         decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
@@ -296,9 +325,13 @@ impl UpstreamClient {
     /// Credentials stay on the service's origin: every send method refuses,
     /// before sending, a request to another origin that carries an
     /// `Authorization`, `Proxy-Authorization` or `Cookie` header or any
-    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Mark
-    /// another credential-bearing header sensitive
-    /// (`HeaderValue::set_sensitive`) so the client keeps it there too.
+    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Lent
+    /// credentials are not added here: hand their
+    /// [`UpstreamAuthorization`] to the send method
+    /// ([`UpstreamCall::with_authorization`]), which adds the sensitive header
+    /// to the request it builds. Mark any other credential-bearing header
+    /// sensitive (`HeaderValue::set_sensitive`) so the client keeps it there
+    /// too.
     pub fn request(&self, method: Method, url: Url) -> RequestBuilder {
         let trusted = same_origin(&url, &self.base);
         let request = self.client.request(method, url);
@@ -309,16 +342,18 @@ impl UpstreamClient {
         }
     }
 
-    /// Sends a request bounded by the client's profile. The response carries
-    /// a pending trace that [`complete_upstream_trace`] records once the
-    /// caller has classified the response; dropping the response records it
-    /// with its status alone.
+    /// Sends a request bounded by the client's profile, presenting the
+    /// credentials `call` carries ([`UpstreamCall::with_authorization`]). The
+    /// response carries a pending trace that [`complete_upstream_trace`]
+    /// records once the caller has classified the response; dropping the
+    /// response records it with its status alone.
     pub async fn send(
         &self,
         request: RequestBuilder,
         call: UpstreamCall<'_>,
     ) -> Result<Response, UpstreamError> {
-        self.send_bounded(request, None, call).await
+        self.send_bounded(request, None, call, AuthorizationPosition::AfterCorrelation)
+            .await
     }
 
     /// [`Self::send`] with a deadline for the response headers, for clients
@@ -329,7 +364,13 @@ impl UpstreamClient {
         deadline: Duration,
         call: UpstreamCall<'_>,
     ) -> Result<Response, UpstreamError> {
-        self.send_bounded(request, Some(deadline), call).await
+        self.send_bounded(
+            request,
+            Some(deadline),
+            call,
+            AuthorizationPosition::AfterCorrelation,
+        )
+        .await
     }
 
     /// Sends a request whose body is a streamed upload. The upload fails
@@ -346,7 +387,8 @@ impl UpstreamClient {
         let Some(mut progress) = progress else {
             return self.send(request, call).await;
         };
-        let (request, trace) = self.prepare(request, call)?;
+        let (request, trace) =
+            self.prepare(request, call, AuthorizationPosition::AfterCorrelation)?;
         let mut send = Box::pin(self.client.execute(request));
         loop {
             let deadline = *progress.borrow_and_update() + idle_timeout;
@@ -376,7 +418,8 @@ impl UpstreamClient {
 
     /// GETs `url`, following redirects by hand under `rules`. Every hop must
     /// be allowlisted, carry no embedded credentials, and pass `rules.vet`;
-    /// only hops on the service's own origin are authorized.
+    /// only hops on the service's own origin present the rules'
+    /// authorization.
     /// Each redirect hop records its own trace; the final response carries a
     /// pending one.
     pub async fn get_following_redirects(
@@ -398,16 +441,17 @@ impl UpstreamClient {
                 request
             };
             let request = (rules.decorate)(request);
-            let request = if trusted {
-                (rules.authorize)(request)
-            } else {
-                request
+            let call = UpstreamCall::new(operation).with_attempt(hop + 1);
+            let call = match rules.authorization {
+                Some(authorization) if trusted => call.with_authorization(authorization),
+                _ => call,
             };
             let mut response = self
-                .send_with_deadline(
+                .send_bounded(
                     request,
-                    rules.deadline,
-                    UpstreamCall::new(operation).with_attempt(hop + 1),
+                    Some(rules.deadline),
+                    call,
+                    AuthorizationPosition::End,
                 )
                 .await?;
             if !response.status().is_redirection() {
@@ -442,8 +486,9 @@ impl UpstreamClient {
         request: RequestBuilder,
         deadline: Option<Duration>,
         call: UpstreamCall<'_>,
+        position: AuthorizationPosition,
     ) -> Result<Response, UpstreamError> {
-        let (request, trace) = self.prepare(request, call)?;
+        let (request, trace) = self.prepare(request, call, position)?;
         let send = self.client.execute(request);
         let response = match deadline {
             Some(deadline) => match tokio::time::timeout(deadline, send).await {
@@ -455,12 +500,27 @@ impl UpstreamClient {
         trace.finish(response)
     }
 
+    /// Builds the provider's request and adds the call's authorizations at
+    /// `position`. The credential exists only in the built request, which
+    /// the client then checks and dispatches itself; the provider never holds
+    /// it.
     fn prepare(
         &self,
         request: RequestBuilder,
         call: UpstreamCall<'_>,
+        position: AuthorizationPosition,
     ) -> Result<(reqwest::Request, TraceEvent), UpstreamError> {
-        let request = match request.build() {
+        let (client, request) = request.build_split();
+        let request = request.and_then(|mut request| {
+            match attach(request.headers_mut(), call.authorizations, position) {
+                Ok(()) => Ok(request),
+                // Fail exactly as reqwest's own builder fails on such a value.
+                Err(unrepresentable) => unrepresentable
+                    .apply_to_builder(RequestBuilder::from_parts(client, request))
+                    .build(),
+            }
+        });
+        let request = match request {
             Ok(request) => request,
             Err(error) => {
                 // The request never left, but the attempt is still traced.
@@ -512,8 +572,8 @@ impl UpstreamClient {
 
 /// Whether a request carries credentials: an `Authorization`,
 /// `Proxy-Authorization` or `Cookie` header, or any header value marked
-/// sensitive, as `basic_auth`, `bearer_auth` and credentials embedded in the
-/// URL produce.
+/// sensitive, as a presented [`UpstreamAuthorization`], `basic_auth`,
+/// `bearer_auth` and credentials embedded in the URL produce.
 fn carries_credentials(headers: &reqwest::header::HeaderMap) -> bool {
     use reqwest::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION};
     headers.iter().any(|(name, value)| {
@@ -773,12 +833,17 @@ mod tests {
             .collect()
     }
 
+    /// The service's bearer token as the SDK presents it.
+    static SERVICE_SECRET: std::sync::LazyLock<UpstreamAuthorization> =
+        std::sync::LazyLock::new(|| {
+            crate::test_support::bearer_credential("service-secret").authorization()
+        });
+
     fn rules<'a>(max_redirects: u32, vet: &'a (dyn Fn(&Url) -> bool + Sync)) -> RedirectRules<'a> {
-        RedirectRules::new(max_redirects, Duration::from_secs(5), &|request| {
-            request.bearer_auth("service-secret")
-        })
-        .with_vet(vet)
-        .with_decorate(&|request| request.header("X-Every-Hop", "yes"))
+        RedirectRules::new(max_redirects, Duration::from_secs(5))
+            .with_authorization(&SERVICE_SECRET)
+            .with_vet(vet)
+            .with_decorate(&|request| request.header("X-Every-Hop", "yes"))
     }
 
     #[tokio::test]
@@ -931,6 +996,32 @@ mod tests {
                 Box::new(move |r| r.header("x-api-key", api_key.clone())),
             ),
         ];
+        // Lent credentials the client presents itself.
+        let authorizations = [
+            (
+                "static credential",
+                crate::test_support::basic_credential("user", "service-secret").authorization(),
+            ),
+            (
+                "placed api key",
+                crate::test_support::bearer_credential("service-secret")
+                    .authorization_as(&crate::CredentialPlacement::header(
+                        reqwest::header::HeaderName::from_static("x-api-key"),
+                    ))
+                    .unwrap(),
+            ),
+            (
+                "delegated access",
+                crate::DelegatedAccess::new(
+                    "service-secret",
+                    "https://service.example.test/",
+                    "https://service.example.test/",
+                    "v1",
+                    i64::MAX,
+                )
+                .authorization(),
+            ),
+        ];
         let capture = crate::test_support::install_trace_capture().start();
         for (name, authorize) in &credentials {
             let error = capture
@@ -959,6 +1050,27 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         }
+        for (name, authorization) in &authorizations {
+            let call = UpstreamCall::new("item.view").with_authorization(authorization);
+            let error = capture
+                .run(client.send(client.request(Method::GET, item(&elsewhere)), call))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    UpstreamError::NotSent {
+                        timed_out: false,
+                        ..
+                    }
+                ),
+                "{name}: {error:?}"
+            );
+            client
+                .send(client.request(Method::GET, item(&service)), call)
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        }
         // Credentials embedded in the URL become an Authorization header.
         let mut embedded = item(&elsewhere);
         embedded.set_username("user").unwrap();
@@ -973,7 +1085,11 @@ mod tests {
         assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
         // The refusals are traced as unsent attempts to the other origin.
         let events = capture.take_upstream_requests();
-        assert_eq!(events.len(), credentials.len(), "{events:?}");
+        assert_eq!(
+            events.len(),
+            credentials.len() + authorizations.len(),
+            "{events:?}"
+        );
         assert!(events.iter().all(|event| {
             event["upstreamOrigin"] == elsewhere.uri()
                 && event["reasonCode"] == "upstream_connection_failed"
@@ -994,9 +1110,20 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert!(!received[0].headers.contains_key("authorization"));
         let authorized = service.received_requests().await.unwrap();
-        assert_eq!(authorized.len(), credentials.len());
+        assert_eq!(authorized.len(), credentials.len() + authorizations.len());
         assert_eq!(
             authorized[0].headers["authorization"],
+            "Bearer service-secret"
+        );
+        // The client presented each lent credential on the service origin.
+        let presented = &authorized[credentials.len()..];
+        assert_eq!(
+            presented[0].headers["authorization"],
+            "Basic dXNlcjpzZXJ2aWNlLXNlY3JldA=="
+        );
+        assert_eq!(presented[1].headers["x-api-key"], "service-secret");
+        assert_eq!(
+            presented[2].headers["authorization"],
             "Bearer service-secret"
         );
     }
@@ -1027,7 +1154,7 @@ mod tests {
         let error = client
             .get_following_redirects(
                 url,
-                RedirectRules::new(3, Duration::from_secs(5), &|request| request)
+                RedirectRules::new(3, Duration::from_secs(5))
                     .with_decorate(&|request| request.bearer_auth("service-secret")),
                 "item.download",
             )

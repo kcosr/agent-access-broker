@@ -135,8 +135,11 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
             "{}",
             golden.service
         );
-        assert_eq!(credential_username(&credential), golden.username);
-        assert_eq!(credential_token(&credential), golden.token);
+        let expected = match golden.username {
+            Some(username) => basic_credential(username, golden.token),
+            None => bearer_credential(golden.token),
+        };
+        assert_eq!(credential, expected, "{}", golden.service);
     }
 }
 

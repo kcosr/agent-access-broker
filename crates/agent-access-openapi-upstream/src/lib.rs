@@ -9,7 +9,6 @@ use agent_access_provider::*;
 use async_trait::async_trait;
 use config::Settings;
 use document::Document;
-use http::HeaderMap;
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -146,10 +145,10 @@ impl ImportedAdapter for OpenApiAdapter {
         if transport_credential.is_some() {
             return Err(credential_error().into());
         }
-        let headers = match (&settings.document_delivery, authentication) {
-            (None, ImportedDiscoveryAuthentication::Anonymous) => HeaderMap::new(),
+        let authorization = match (&settings.document_delivery, authentication) {
+            (None, ImportedDiscoveryAuthentication::Anonymous) => None,
             (Some(delivery), ImportedDiscoveryAuthentication::Static(credential)) => {
-                auth(delivery, credential)?
+                Some(auth(delivery, credential)?)
             }
             _ => return Err(credential_error().into()),
         };
@@ -163,14 +162,12 @@ impl ImportedAdapter for OpenApiAdapter {
         let operation = async {
             let mut response = client
                 .send(
-                    client
-                        .request(Method::GET, settings.document)
-                        .headers(headers)
-                        .header(
-                            "Accept",
-                            "application/json, application/vnd.oai.openapi+json",
-                        ),
-                    UpstreamCall::new("openapi.discover"),
+                    client.request(Method::GET, settings.document).header(
+                        "Accept",
+                        "application/json, application/vnd.oai.openapi+json",
+                    ),
+                    UpstreamCall::new("openapi.discover")
+                        .with_authorizations(authorization.as_slice()),
                 )
                 .await
                 .map_err(|error| {
@@ -295,7 +292,7 @@ impl Provider for OpenApiProvider {
             return Err(input_error());
         }
         let action = self.actions.get(request.action()).ok_or_else(input_error)?;
-        let (url, mut headers) = action.request(&self.endpoint, request.inputs())?;
+        let (url, headers) = action.request(&self.endpoint, request.inputs())?;
         let binding = self
             .definition
             .execution_bindings
@@ -306,13 +303,15 @@ impl Provider for OpenApiProvider {
                     && binding.mechanism == ImportedAuthMechanism::StaticToken
             })
             .ok_or_else(credential_error)?;
-        headers.extend(auth(
+        let authorization = auth(
             &binding.delivery,
             request
                 .execution()
                 .static_credential()
                 .ok_or_else(credential_error)?,
-        )?);
+        )?;
+        // The client adds the credential when it sends the request, in place
+        // of a parameter header of the same name.
         let mut upstream = self
             .client
             .request(method(&action.plan), url)
@@ -339,7 +338,10 @@ impl Provider for OpenApiProvider {
             dispatched = true;
             let mut response = self
                 .client
-                .send(upstream, UpstreamCall::new(&action.definition.action))
+                .send(
+                    upstream,
+                    UpstreamCall::new(&action.definition.action).with_authorization(&authorization),
+                )
                 .await
                 .map_err(|error| {
                     if matches!(

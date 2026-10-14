@@ -242,7 +242,14 @@ these boundaries:
 - The CLI's normal and build closure contains no host, assembly, native,
   adapter, or reference crate. Its core dependency is reported as allowed.
 
-Its unit tests use synthetic metadata and run with the other script tests.
+It also scans the Rust sources (`src`, `tests`, `benches`, `examples` and
+`build.rs`) of native, adapter, reference, and helper crates and fails on any
+use of the SDK's host-only `host::authorize_host_request`, which returns a
+request carrying a credential. Those crates present credentials only through
+the upstream client's send methods.
+
+Its unit tests use synthetic metadata and sources and run with the other script
+tests.
 
 `node scripts/public-api.mjs check` regenerates the supported public API
 inventory and fails when it differs from the checked-in `api/` files. It covers

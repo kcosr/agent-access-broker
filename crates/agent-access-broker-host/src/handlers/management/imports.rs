@@ -665,11 +665,10 @@ async fn change(
                     if record.status == ImportedServiceStatus::Retired {
                         return Err(invalid("retired imports cannot receive credentials"));
                     }
-                    let token = agent_access_provider::host::bearer_credential(body.token.clone());
                     // The placeholder only signals presence; the store assigns the material version.
                     record.slot_versions.insert(purpose, "pending".into());
-                    let override_token =
-                        (purpose == ImportedCredentialPurpose::Transport).then_some(Some(token));
+                    let override_token = (purpose == ImportedCredentialPurpose::Transport)
+                        .then(|| Some(body.token.clone()));
                     let providers =
                         runtime.prepare_imported_service_change(&record, override_token)?;
                     let request = ImportedSecretWriteRequest {

@@ -8,7 +8,7 @@ use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
 use base64::{Engine, prelude::BASE64_STANDARD};
-use http::{HeaderMap, HeaderName, HeaderValue};
+use http::HeaderName;
 use protocol::{LEGACY_PROTOCOL_VERSION, Lifecycle};
 use rmcp::{
     RoleClient,
@@ -110,7 +110,7 @@ impl ImportedAdapter for McpAdapter {
             .delivery;
         let (auth, delegated) = match authentication {
             ImportedDiscoveryAuthentication::Static(credential) => (
-                auth_headers(
+                static_authorization(
                     definition,
                     delivery,
                     credential,
@@ -130,7 +130,7 @@ impl ImportedAdapter for McpAdapter {
                             && binding.is_supported()
                     }) =>
             {
-                (HeaderMap::new(), Some(credential.clone()))
+                (Vec::new(), Some(credential.clone()))
             }
             _ => return Err(credential_error().into()),
         };
@@ -261,7 +261,7 @@ impl Provider for McpProvider {
             .first()
             .ok_or_else(credential_error)?
             .delivery;
-        let auth = auth_headers(
+        let auth = static_authorization(
             &self.definition,
             delivery,
             credential,
@@ -299,7 +299,7 @@ impl Provider for McpProvider {
         let action = self.actions.get(request.action()).ok_or_else(input_error)?;
         let auth = match binding.mechanism {
             ImportedAuthMechanism::StaticToken if request.execution().delegated().is_none() => {
-                auth_headers(
+                static_authorization(
                     &self.definition,
                     &binding.delivery,
                     request
@@ -315,7 +315,7 @@ impl Provider for McpProvider {
                     && binding.delivery == ImportedCredentialDelivery::Bearer
                     && !self.definition.transport_auth =>
             {
-                HeaderMap::new()
+                Vec::new()
             }
             _ => return Err(credential_error()),
         };
@@ -415,52 +415,39 @@ fn credential_error() -> ProviderError {
     )
 }
 
-fn auth_headers(
+/// The static credentials every request of one operation presents, in order:
+/// the execution token in its delivery, then any transport token as
+/// `Authorization: Bearer`. The SDK checks and presents each token.
+fn static_authorization(
     definition: &ImportedServiceDefinition,
     delivery: &ImportedCredentialDelivery,
     execution: &ExecutionCredential,
     transport: Option<&ExecutionCredential>,
-) -> Result<HeaderMap, ProviderError> {
+) -> Result<Vec<UpstreamAuthorization>, ProviderError> {
     delivery.validate().map_err(|_| credential_error())?;
-    let token = |credential: &ExecutionCredential| match credential.view() {
-        CredentialView::Bearer { token } if valid_token(token) => Ok(token.to_owned()),
-        _ => Err(credential_error()),
-    };
-    let mut auth = HeaderMap::new();
-    let token = token(execution)?;
-    let (name, value) = match delivery {
-        ImportedCredentialDelivery::Bearer => (
-            HeaderName::from_static("authorization"),
-            format!("Bearer {token}"),
-        ),
-        ImportedCredentialDelivery::RawHeader { name } => (
+    let placement = match delivery {
+        ImportedCredentialDelivery::Bearer => CredentialPlacement::bearer(),
+        ImportedCredentialDelivery::RawHeader { name } => CredentialPlacement::header(
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
-            token,
         ),
     };
-    let mut value = HeaderValue::from_str(&value).map_err(|_| credential_error())?;
-    value.set_sensitive(true);
-    auth.insert(name, value);
+    let mut authorization = vec![
+        execution
+            .authorization_as(&placement)
+            .map_err(|_| credential_error())?,
+    ];
     if definition.transport_auth {
         if matches!(delivery, ImportedCredentialDelivery::Bearer) {
             return Err(credential_error());
         }
-        let token = match transport.map(ExecutionCredential::view) {
-            Some(CredentialView::Bearer { token }) if valid_token(token) => token,
-            _ => return Err(credential_error()),
-        };
-        let mut value =
-            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| credential_error())?;
-        value.set_sensitive(true);
-        auth.insert("authorization", value);
+        authorization.push(
+            transport
+                .ok_or_else(credential_error)?
+                .authorization_as(&CredentialPlacement::bearer())
+                .map_err(|_| credential_error())?,
+        );
     }
-    Ok(auth)
-}
-
-fn valid_token(token: &str) -> bool {
-    !token.is_empty()
-        && token.len() <= 32768
-        && token.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    Ok(authorization)
 }
 
 async fn connect(
@@ -509,7 +496,7 @@ fn take_result(state: &Mutex<WireState>) -> Result<Value, ProviderError> {
 
 async fn discover(
     mut wire: WireClient,
-    auth: HeaderMap,
+    auth: Vec<UpstreamAuthorization>,
     delegated: Option<DelegatedCredential>,
     resource: &str,
 ) -> Result<ImportedDiscovery, ProviderError> {

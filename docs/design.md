@@ -82,7 +82,13 @@ The execution credential exists only inside the `ProviderInvocation` handed to a
 provider for a single call. It is never placed in the response to the caller,
 never serializes, and its `Debug` representation shows only the credential kind
 (`ExecutionCredential { kind: "bearer_token", .. }`). The same redaction applies
-to proxy credentials (`EgressProxyConfig`).
+to proxy credentials (`EgressProxyConfig`). The provider cannot read the
+material either: static credentials and delegated access have no plaintext
+accessor. The provider hands an opaque `UpstreamAuthorization` to the upstream
+client's send method, and the client adds the sensitive header to the request
+it builds immediately before dispatch, so the provider never holds a request
+carrying the credential (see
+[static credentials](provider-sdk.md#static-credentials)).
 
 Execution credentials are resolved only **after** identity admission, scope
 resolution, deny-by-default policy authorization, and credential-mode selection
@@ -361,7 +367,7 @@ origin: the client refuses, before sending, any request to another origin that
 carries an `Authorization`, `Proxy-Authorization` or `Cookie` header or a header
 value marked sensitive, as proven unsent (see
 [credentials and origins](provider-sdk.md#credentials-and-origins)). The
-redirect helper applies the backend's credentials only to hops on that origin. Redirect
+redirect helper presents the backend's authorization only on hops to that origin. Redirect
 hops to other origins carry correlation headers only when the backend opts in
 (Jira does, for Atlassian media hosts; CloudBees CI does not, for artifact
 storage). Each request records one
@@ -474,7 +480,7 @@ are `const` statics, and results, descriptors and OAuth values use `new` with
 `AttachmentLimitsConfig`, are deserialized or built from `Default` with struct
 update syntax. Extendable SDK enums are non-exhaustive, so a backend's matches
 end with a fallback arm that rejects what it does not support, such as an
-unknown credential view. The policy and the intentionally exhaustive items are
+unknown credential kind. The policy and the intentionally exhaustive items are
 listed in the [inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
 
 ### Provider hook contract

@@ -1,7 +1,5 @@
 use super::*;
-use agent_access_provider::test_support::{
-    InvocationBuilder, basic_credential, bearer_credential, credential_token, credential_username,
-};
+use agent_access_provider::test_support::{InvocationBuilder, basic_credential, bearer_credential};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use std::collections::BTreeMap;
@@ -435,12 +433,12 @@ struct StubJiraBackend {
     credential_observations: Mutex<Vec<CredentialObservation>>,
 }
 
+/// One credential the stub backend received. Credentials compare by kind
+/// and material, so tests check which one arrived without reading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CredentialObservation {
     operation: String,
-    kind: String,
-    username: Option<String>,
-    token: Option<String>,
+    credential: ExecutionCredential,
 }
 
 impl StubJiraBackend {
@@ -450,9 +448,7 @@ impl StubJiraBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                kind: credential.kind().as_str().to_owned(),
-                username: credential_username(credential).map(str::to_owned),
-                token: Some(credential_token(credential).to_owned()),
+                credential: credential.clone(),
             });
     }
 }
@@ -8885,24 +8881,28 @@ fn seed_child_create_success(backend: &mut StubJiraBackend, child_description: O
     );
 }
 
+/// Asserts the operations the stub backend served and the test credential,
+/// named by its token, each one received.
 fn assert_credential_observations(backend: &StubJiraBackend, expected: &[(&str, &str)]) {
-    let actual = backend
-        .credential_observations
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|observation| {
-            (
-                observation.operation.clone(),
-                observation.token.clone().unwrap_or_default(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let actual = backend.credential_observations.lock().unwrap().clone();
     let expected = expected
         .iter()
-        .map(|(operation, token)| (operation.to_string(), token.to_string()))
+        .map(|(operation, token)| CredentialObservation {
+            operation: operation.to_string(),
+            credential: test_credential_with_token(token),
+        })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
+}
+
+/// The test credential whose token is `token`.
+fn test_credential_with_token(token: &str) -> ExecutionCredential {
+    match token {
+        "token" => test_credential(),
+        "per-user-token" => test_per_user_credential(),
+        "lookup-token" => test_lookup_credential(),
+        other => panic!("no test credential has the token {other}"),
+    }
 }
 
 #[tokio::test]
@@ -8926,11 +8926,7 @@ async fn credential_verification_uses_current_user_probe() {
     let observations = backend.credential_observations.lock().unwrap();
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].operation, "current_user");
-    assert_eq!(
-        observations[0].username.as_deref(),
-        Some("per-user@example.com")
-    );
-    assert_eq!(observations[0].token.as_deref(), Some("per-user-token"));
+    assert_eq!(observations[0].credential, test_per_user_credential());
 }
 
 #[test]

@@ -12,7 +12,7 @@ use agent_access_jira::{
     JiraPrioritySummary, JiraProvider, JiraProviderConfig, JiraSearchPage, JiraSearchRequest,
     JiraUserSummary,
 };
-use agent_access_provider::test_support::credential_token;
+use agent_access_provider::test_support::basic_credential;
 use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLimitsConfig};
 use async_trait::async_trait;
 use base64::Engine;
@@ -243,7 +243,7 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
             .unwrap()
             .iter()
             .all(|call| call.operation == "issue_types"
-                && call.token.as_deref() == Some("jira-token"))
+                && call.credential == jira_credential("jira-token"))
     );
 
     let id = first["result"]["issueTypes"][0]["id"].as_str().unwrap();
@@ -2830,10 +2830,12 @@ struct StubJiraBackend {
     credential_observations: Mutex<Vec<CredentialObservation>>,
 }
 
+/// One credential the stub backend received. Credentials compare by kind
+/// and material, so tests check which one arrived without reading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CredentialObservation {
     operation: String,
-    token: Option<String>,
+    credential: agent_access_provider::ExecutionCredential,
 }
 
 impl StubJiraBackend {
@@ -2847,7 +2849,7 @@ impl StubJiraBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: Some(credential_token(credential).to_owned()),
+                credential: credential.clone(),
             });
     }
 }
@@ -3627,24 +3629,30 @@ fn authenticated_jira_cli(base_url: &str) -> Command {
     command
 }
 
+/// Asserts the operations the stub backend served and the configured
+/// credential, named by its token, each one received.
 fn assert_credential_observations(backend: &StubJiraBackend, expected: &[(&str, &str)]) {
-    let actual = backend
-        .credential_observations
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|observation| {
-            (
-                observation.operation.clone(),
-                observation.token.clone().unwrap_or_default(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let actual = backend.credential_observations.lock().unwrap().clone();
     let expected = expected
         .iter()
-        .map(|(operation, token)| (operation.to_string(), token.to_string()))
+        .map(|(operation, token)| CredentialObservation {
+            operation: operation.to_string(),
+            credential: jira_credential(token),
+        })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
+}
+
+/// The configured Jira credential whose token is `token` (see
+/// `jira_document`).
+fn jira_credential(token: &str) -> agent_access_provider::ExecutionCredential {
+    let username = match token {
+        "jira-token" => "service@example.com",
+        "jira-lookup-token" => "lookup@example.com",
+        "jira-per-user-token" => "agent-one@example.com",
+        other => panic!("no configured Jira credential has the token {other}"),
+    };
+    basic_credential(username, token)
 }
 
 fn jira_provider_config(max_results: u32) -> JiraProviderConfig {

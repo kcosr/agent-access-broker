@@ -3,16 +3,16 @@
 //! against `cloudbees_ci_job` resources.
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BoundedDownload,
-    BuildContext, ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration,
+    BuildContext, ClientProfile, CredentialDescriptor, CredentialPlacement, EgressDeclaration,
     EgressProxyConfig, EgressRoute, ExecutionCredential, MutationReceipt, Provider,
     ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
     ProviderReasonDefinition, ProviderResult, ProviderResultStream, ReasonCode, RedirectRules,
     ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    UpstreamRetryAfter, ValidationContext, complete_upstream_trace, current_provider_action,
-    is_service_name, parse_backend_config, read_bounded_body, upstream_rate_limited,
-    url_allowed_by_patterns, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    ServiceDescriptor, UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
+    current_provider_action, is_service_name, parse_backend_config, read_bounded_body,
+    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -237,7 +237,7 @@ impl CloudbeesCiProvider {
         size_error: fn() -> ProviderError,
         mutation: Option<&Value>,
     ) -> Result<Reply, ProviderError> {
-        let (username, token) = basic_material(credential)?;
+        let authorization = basic_authorization(credential)?;
         if url.origin() != controller.base.origin()
             || !url.path().starts_with(controller.base.path())
         {
@@ -248,13 +248,13 @@ impl CloudbeesCiProvider {
         let operation = current_provider_action()
             .map(|(_, action)| action)
             .unwrap_or_else(|| "request".into());
-        let request = controller
-            .client
-            .request(method, url)
-            .basic_auth(username, Some(token));
+        let request = controller.client.request(method, url);
         let mut response = controller
             .client
-            .send(request, UpstreamCall::new(&operation))
+            .send(
+                request,
+                UpstreamCall::new(&operation).with_authorization(&authorization),
+            )
             .await
             .map_err(|error| send_failure(error, mutation))?;
         complete_upstream_trace(&mut response, None);
@@ -429,7 +429,7 @@ impl CloudbeesCiProvider {
         credential: &ExecutionCredential,
         initial: Url,
     ) -> Result<(reqwest::Response, u64), ProviderError> {
-        let (username, token) = basic_material(credential)?;
+        let authorization = basic_authorization(credential)?;
         let base = &controller.base;
         let same_artifact_path = |url: &Url| {
             url.path() == initial.path() || url.path().strip_suffix('/') == Some(initial.path())
@@ -445,13 +445,12 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 initial.clone(),
-                RedirectRules::new(3, self.request_timeout, &|request| {
-                    request.basic_auth(username, Some(token))
-                })
-                .with_vet(&vet)
-                .with_decorate(&|request| {
-                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                }),
+                RedirectRules::new(3, self.request_timeout)
+                    .with_authorization(&authorization)
+                    .with_vet(&vet)
+                    .with_decorate(&|request| {
+                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                    }),
                 "build.artifact.download",
             )
             .await
@@ -1222,16 +1221,14 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
         safe_locators.clone(),
     ))
 }
-/// CloudBees CI authenticates with a non-empty Basic username and API token.
-pub(crate) fn basic_material(
+/// CloudBees CI authenticates with a non-empty Basic username and API token,
+/// which the SDK checks and presents when each request is sent.
+pub(crate) fn basic_authorization(
     credential: &ExecutionCredential,
-) -> Result<(&str, &str), ProviderError> {
-    match credential.view() {
-        CredentialView::Basic { username, token } if !username.is_empty() && !token.is_empty() => {
-            Ok((username, token))
-        }
-        _ => Err(credential_invalid()),
-    }
+) -> Result<UpstreamAuthorization, ProviderError> {
+    credential
+        .authorization_as(&CredentialPlacement::basic())
+        .map_err(|_| credential_invalid())
 }
 
 fn credential_invalid() -> ProviderError {

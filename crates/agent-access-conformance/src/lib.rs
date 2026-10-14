@@ -16,12 +16,12 @@ use agent_access_provider::presentation::{
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
     BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
-    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
-    MutationReceipt, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
-    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, ReasonCode,
-    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, MutationReceipt,
+    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
+    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
+    StaticCredentialKind, UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec,
     UpstreamError, ValidationContext, attachment_upload_plan, complete_upstream_trace,
     file_upload_body, parse_backend_config, read_bounded_body, take_upstream_trace,
     validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
@@ -519,13 +519,14 @@ impl ConformanceProvider {
         url
     }
 
-    fn token(request: &ProviderInvocation) -> Result<&str, ProviderError> {
-        match request
-            .execution()
-            .static_credential()
-            .map(|credential| credential.view())
-        {
-            Some(CredentialView::Bearer { token }) => Ok(token),
+    /// The selected bearer token, which the SDK presents when the request is
+    /// sent. Every other kind, including one this version does not know, is
+    /// rejected.
+    fn authorization(request: &ProviderInvocation) -> Result<UpstreamAuthorization, ProviderError> {
+        match request.execution().static_credential() {
+            Some(credential) if credential.kind() == StaticCredentialKind::BearerToken => {
+                Ok(credential.authorization())
+            }
             _ => Err(ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "conformance needs a bearer token",
@@ -600,16 +601,14 @@ impl ConformanceProvider {
             .expect("base URLs have a path")
             .pop_if_empty()
             .extend(["endpoints", inputs.endpoint.as_str(), "ping"]);
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let response = self
             .pings
             .send(
-                self.pings
-                    .request(reqwest::Method::POST, url)
-                    .bearer_auth(Self::token(request)?)
-                    .header("X-Endpoint-Key", key)
+                endpoint_key(self.pings.request(reqwest::Method::POST, url), key)
                     .json(&json!({"message": inputs.message})),
-                UpstreamCall::new("endpoint.ping"),
+                UpstreamCall::new("endpoint.ping").with_authorization(&authorization),
             )
             .await
             .map_err(write_error)?;
@@ -638,14 +637,14 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let response = self
             .requests
             .send(
                 self.requests
-                    .request(reqwest::Method::GET, self.url(item, false))
-                    .bearer_auth(Self::token(request)?),
-                UpstreamCall::new("item.view"),
+                    .request(reqwest::Method::GET, self.url(item, false)),
+                UpstreamCall::new("item.view").with_authorization(&authorization),
             )
             .await
             .map_err(upstream_error)?;
@@ -676,15 +675,15 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let mut response = self
             .downloads
             .send_with_deadline(
                 self.downloads
-                    .request(reqwest::Method::GET, self.url(item, true))
-                    .bearer_auth(Self::token(request)?),
+                    .request(reqwest::Method::GET, self.url(item, true)),
                 self.idle_timeout,
-                UpstreamCall::new("item.download"),
+                UpstreamCall::new("item.download").with_authorization(&authorization),
             )
             .await
             .map_err(upstream_error)?;
@@ -745,11 +744,11 @@ impl ConformanceProvider {
             ));
         };
         check_part(part, attachment)?;
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let builder = self
             .uploads
             .request(reqwest::Method::PUT, self.url(item, true))
-            .bearer_auth(Self::token(request)?)
             .header(
                 reqwest::header::CONTENT_TYPE,
                 attachment.content_type.as_str(),
@@ -772,7 +771,7 @@ impl ConformanceProvider {
                 builder,
                 progress,
                 self.idle_timeout,
-                UpstreamCall::new("item.upload"),
+                UpstreamCall::new("item.upload").with_authorization(&authorization),
             )
             .await
             .map_err(write_error)?;
@@ -916,6 +915,19 @@ impl Provider for ConformanceProvider {
                 "conformance action is not supported",
             )),
         }
+    }
+}
+
+/// `request` with the endpoint's private key, marked sensitive so the client
+/// keeps it on the endpoint's own origin. A key no header value can hold
+/// fails the request build, as an unmarked header would.
+fn endpoint_key(request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
+    match reqwest::header::HeaderValue::from_str(key) {
+        Ok(mut value) => {
+            value.set_sensitive(true);
+            request.header("X-Endpoint-Key", value)
+        }
+        Err(_) => request.header("X-Endpoint-Key", key),
     }
 }
 
@@ -1340,6 +1352,29 @@ mod tests {
         assert_eq!(
             descriptor.credential_profile_kind("api_token"),
             Some("bearer_token")
+        );
+    }
+
+    /// The endpoint key is a secret: the client keeps it on the endpoint's
+    /// origin like any credential, and Debug output hides it.
+    #[test]
+    fn the_endpoint_key_header_is_sensitive() {
+        let request = endpoint_key(
+            reqwest::Client::new().post("https://pings.example.test/endpoints/primary/ping"),
+            "endpoint-secret",
+        )
+        .build()
+        .unwrap();
+        let value = &request.headers()["x-endpoint-key"];
+        assert_eq!(value, "endpoint-secret");
+        assert!(value.is_sensitive());
+        assert!(
+            endpoint_key(
+                reqwest::Client::new().post("https://pings.example.test/"),
+                "bad\nkey"
+            )
+            .build()
+            .is_err()
         );
     }
 }

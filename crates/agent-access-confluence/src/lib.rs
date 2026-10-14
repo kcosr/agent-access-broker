@@ -16,7 +16,9 @@ use continuation::*;
 use cql::*;
 use validation::*;
 
-use agent_access_atlassian::{AtlassianAuthorization, validate_atlassian_gateway_credential};
+use agent_access_atlassian::{
+    atlassian_credential_authorization, validate_atlassian_gateway_credential,
+};
 use agent_access_content::{
     ContentWriteError, markdown_to_confluence_storage_bounded,
     plain_text_to_confluence_storage_bounded,

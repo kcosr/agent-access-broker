@@ -6399,9 +6399,13 @@ fn apply_gateway_execution_credential(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.view() {
-        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
-        CredentialView::Basic { username, token } => Ok(builder.basic_auth(username, Some(token))),
+    match credential.kind() {
+        StaticCredentialKind::BearerToken | StaticCredentialKind::BasicApiToken => {
+            Ok(agent_access_provider::host::authorize_host_request(
+                builder,
+                &credential.authorization(),
+            ))
+        }
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,
             "the Git gateway does not support this credential kind",

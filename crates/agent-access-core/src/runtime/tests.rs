@@ -1,7 +1,5 @@
 use super::*;
-use agent_access_provider::test_support::{
-    bearer_credential, credential_token, credential_username,
-};
+use agent_access_provider::test_support::{basic_credential, bearer_credential};
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
 #[path = "trusted_user_tests.rs"]
@@ -2122,10 +2120,12 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
     }
 }
 
+/// One credential a trace provider received. Credentials compare by kind and
+/// material, so tests check which one arrived without reading it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CredentialObservation {
     operation: String,
-    token: Option<String>,
+    credential: Option<ExecutionCredential>,
 }
 
 struct LookupTraceProvider {
@@ -2178,7 +2178,7 @@ impl LookupTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.map(|credential| credential_token(credential).to_owned()),
+                credential: credential.cloned(),
             });
     }
 }
@@ -2363,7 +2363,7 @@ impl DependencyPolicyTraceProvider {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                token: credential.map(|credential| credential_token(credential).to_owned()),
+                credential: credential.cloned(),
             });
     }
 }
@@ -3135,7 +3135,7 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
         observations.lock().unwrap().as_slice(),
         &[CredentialObservation {
             operation: "pre_scope".to_string(),
-            token: Some("lookup-token".to_string()),
+            credential: Some(lookup_trace_credential("lookup-token")),
         }]
     );
 }
@@ -5074,8 +5074,7 @@ fn local_file_secret_store_resolves_per_user_material() {
         load_execution_credential("fake", "per_user", &credential, Some(&identity)).unwrap();
 
     assert_eq!(resolved.kind().as_str(), "bearer_token");
-    assert_eq!(credential_username(&resolved), None);
-    assert_eq!(credential_token(&resolved), "principal-token");
+    assert_eq!(resolved, bearer_credential("principal-token"));
 }
 
 #[test]
@@ -5107,8 +5106,10 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
         load_execution_credential("jira", "per_user", &credential, Some(&principal_identity))
             .unwrap();
     assert_eq!(resolved.kind().as_str(), "basic_api_token");
-    assert_eq!(credential_username(&resolved), Some("alice@example.com"));
-    assert_eq!(credential_token(&resolved), "alice-token");
+    assert_eq!(
+        resolved,
+        basic_credential("alice@example.com", "alice-token")
+    );
 
     let subject_identity = IdentityContext {
         caller_id: None,
@@ -5123,8 +5124,10 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
         load_execution_credential("jira", "per_user", &credential, Some(&subject_identity))
             .unwrap();
     assert_eq!(resolved.kind().as_str(), "basic_api_token");
-    assert_eq!(credential_username(&resolved), Some("subject@example.com"));
-    assert_eq!(credential_token(&resolved), "subject-token");
+    assert_eq!(
+        resolved,
+        basic_credential("subject@example.com", "subject-token")
+    );
 }
 
 #[test]
@@ -5943,7 +5946,7 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
     assert_eq!(prepared.action, "repo.fetch");
     assert_eq!(prepared.credential_mode, "service");
     assert_eq!(prepared.credential.kind().as_str(), "bearer_token");
-    assert_eq!(credential_token(&prepared.credential), "git-token");
+    assert_eq!(prepared.credential, bearer_credential("git-token"));
     assert_eq!(prepared.matched_grant.subject, "user:agent-one");
 
     runtime
@@ -8665,26 +8668,31 @@ fn shell_token_identity(scopes: Value) -> IdentityContext {
     }
 }
 
+/// Asserts the operations a trace provider served and the trace credential,
+/// named by its token, each one received; an empty token means none.
 fn assert_lookup_observations(
     observations: &Arc<Mutex<Vec<CredentialObservation>>>,
     expected: &[(&str, &str)],
 ) {
-    let actual = observations
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|observation| {
-            (
-                observation.operation.clone(),
-                observation.token.clone().unwrap_or_default(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let actual = observations.lock().unwrap().clone();
     let expected = expected
         .iter()
-        .map(|(operation, token)| (operation.to_string(), token.to_string()))
+        .map(|(operation, token)| CredentialObservation {
+            operation: operation.to_string(),
+            credential: (!token.is_empty()).then(|| lookup_trace_credential(token)),
+        })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
+}
+
+/// The lookup-trace credential with `token`: per-user credentials are bearer
+/// tokens, and service and lookup credentials are Basic API tokens for
+/// `trace@example.com` (see [`lookup_trace_basic_credential`]).
+fn lookup_trace_credential(token: &str) -> ExecutionCredential {
+    match token {
+        "per-user-token" | "user-token" => bearer_credential(token),
+        _ => basic_credential("trace@example.com", token),
+    }
 }
 
 fn static_identity_config(
