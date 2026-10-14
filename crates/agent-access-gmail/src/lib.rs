@@ -205,10 +205,9 @@ impl GmailProvider {
                 .revalidated_access_for(GMAIL_TARGET, GMAIL_AUDIENCE)
                 .await
                 .map_err(account_failure)?;
-            let mut request = self
-                .client
-                .request(method.clone(), url.clone())
-                .bearer_auth(access.token());
+            let mut request = access
+                .authorization()
+                .apply(self.client.request(method.clone(), url.clone()));
             if let Some(body) = &body {
                 request = request.json(body);
             }

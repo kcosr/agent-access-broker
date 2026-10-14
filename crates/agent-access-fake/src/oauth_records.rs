@@ -200,10 +200,9 @@ impl OAuthRecordsProvider {
         access: &DelegatedAccess,
         attempt: u32,
     ) -> Result<reqwest::Response, ProviderError> {
-        let request = self
-            .client
-            .request(reqwest::Method::GET, url.clone())
-            .bearer_auth(access.token())
+        let request = access
+            .authorization()
+            .apply(self.client.request(reqwest::Method::GET, url.clone()))
             .header("X-Stub-Target", access.target())
             .header("X-Stub-Audience", access.audience());
         self.client
