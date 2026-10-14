@@ -7,7 +7,6 @@ use agent_access_core::{
     ImportedActionWrite, ImportedSecretDeleteRequest, ImportedSecretWriteRequest,
     ImportedServiceStatus, ImportedServiceUpdateRequest, ManagedPolicyGrantCreateRequest,
 };
-use agent_access_provider::test_support::bearer_credential;
 
 /// Invokes through `runtime` itself. The test follows import publication
 /// across runtime instances, including superseded ones that no serving
@@ -176,10 +175,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
         *reloaded.imported_catalog()
     );
     let wrong_plaintext = reloaded
-        .prepare_imported_service_change(
-            record,
-            Some(Some(bearer_credential("import-transport-initial"))),
-        )
+        .prepare_imported_service_change(record, Some(Some("import-transport-initial".to_owned())))
         .unwrap();
     assert!(
         store
@@ -200,10 +196,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
     // transaction callback only assembles the immutable catalog and runtime.
     let record = reloaded.imported_catalog().service("transported").unwrap();
     let providers = reloaded
-        .prepare_imported_service_change(
-            record,
-            Some(Some(bearer_credential("import-transport-rotated"))),
-        )
+        .prepare_imported_service_change(record, Some(Some("import-transport-rotated".to_owned())))
         .unwrap();
     let request = ImportedSecretWriteRequest {
         service: "transported".into(),
