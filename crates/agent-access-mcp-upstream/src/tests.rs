@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use http::HeaderMap;
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
@@ -1028,7 +1029,7 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
         if failure == "resource" {
             let mut access = lease.access.lock().unwrap();
             *access = DelegatedAccess::new(
-                access.token(),
+                "initial-delegated-token",
                 "https://other.example/mcp",
                 access.audience(),
                 access.version(),
@@ -1038,7 +1039,7 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
         if failure == "audience" {
             let mut access = lease.access.lock().unwrap();
             *access = DelegatedAccess::new(
-                access.token(),
+                "initial-delegated-token",
                 access.target(),
                 "https://other.example/mcp",
                 access.version(),

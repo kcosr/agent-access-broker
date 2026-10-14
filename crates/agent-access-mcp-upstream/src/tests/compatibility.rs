@@ -1575,7 +1575,7 @@ impl DelegatedLease for ChangingBindingLease {
             let mut access = self.inner.access.lock().unwrap();
             *access = if self.change_audience {
                 DelegatedAccess::new(
-                    access.token(),
+                    "initial-delegated-token",
                     access.target(),
                     "https://different.example/mcp",
                     access.version(),
@@ -1583,7 +1583,7 @@ impl DelegatedLease for ChangingBindingLease {
                 )
             } else {
                 DelegatedAccess::new(
-                    access.token(),
+                    "initial-delegated-token",
                     "https://different.example/mcp",
                     access.audience(),
                     access.version(),

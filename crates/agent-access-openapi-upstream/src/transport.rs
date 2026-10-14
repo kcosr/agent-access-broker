@@ -309,37 +309,25 @@ pub(crate) fn client(
         host.clients(),
     )?))
 }
+/// The selected static token in its delivery, checked and presented by the
+/// SDK.
 pub(crate) fn auth(
     delivery: &ImportedCredentialDelivery,
     credential: &ExecutionCredential,
-) -> Result<HeaderMap, ProviderError> {
+) -> Result<UpstreamAuthorization, ProviderError> {
     delivery.validate().map_err(|_| credential_error())?;
-    if let ImportedCredentialDelivery::RawHeader { name } = delivery {
-        crate::config::parameter_header(name).map_err(|_| credential_error())?;
-    }
-    let token = match credential.view() {
-        CredentialView::Bearer { token }
-            if !token.is_empty()
-                && token.len() <= 32768
-                && token.bytes().all(|b| (0x21..=0x7e).contains(&b)) =>
-        {
-            token
+    let placement = match delivery {
+        ImportedCredentialDelivery::Bearer => CredentialPlacement::bearer(),
+        ImportedCredentialDelivery::RawHeader { name } => {
+            crate::config::parameter_header(name).map_err(|_| credential_error())?;
+            CredentialPlacement::header(
+                HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
+            )
         }
-        _ => return Err(credential_error()),
     };
-    let (name, text) = match delivery {
-        ImportedCredentialDelivery::Bearer => (
-            HeaderName::from_static("authorization"),
-            format!("Bearer {token}"),
-        ),
-        ImportedCredentialDelivery::RawHeader { name } => (
-            HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
-            token.to_owned(),
-        ),
-    };
-    let mut value = HeaderValue::from_str(&text).map_err(|_| credential_error())?;
-    value.set_sensitive(true);
-    Ok(HeaderMap::from_iter([(name, value)]))
+    credential
+        .authorization_as(&placement)
+        .map_err(|_| credential_error())
 }
 pub(crate) async fn read_body(response: Response, limit: usize) -> Result<Vec<u8>, ProviderError> {
     read_bounded_body(response, limit as u64, None)
