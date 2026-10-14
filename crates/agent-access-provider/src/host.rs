@@ -39,6 +39,12 @@
 //!   [`delegated_binding_id`] the host derived for it.
 //! - **The host-origin failure port**: [`port_failure`] marks a failure one of
 //!   the [`HostPort`]s produced, which providers pass on unchanged.
+//! - **Host request authorization**: [`authorize_host_request`] adds an
+//!   [`UpstreamAuthorization`](crate::UpstreamAuthorization) to a request the
+//!   host sends with its own client, such as the Git smart HTTP gateway's.
+//!   It is host-only: it returns a request that carries the credential, so
+//!   provider, adapter, reference and helper crates never call it, and
+//!   `scripts/check-crate-boundaries.mjs` rejects it there.
 //!
 //! Nothing here resolves secret references, loads keys or TLS files, reads the
 //! process environment or touches a store: those stay inside the host. Nothing
@@ -477,4 +483,22 @@ pub async fn with_hook_context<F: std::future::Future>(
 /// value. A domain failure, or an allow outcome, is returned unchanged.
 pub fn port_failure(port: HostPort, error: ProviderError) -> ProviderError {
     error.into_host_origin(port)
+}
+
+/// Host-only: `request` with `authorization`'s header, replacing any value it
+/// already has for that header, for a request the host sends with its own
+/// client rather than through an [`UpstreamClient`](crate::UpstreamClient),
+/// such as the Git smart HTTP gateway's. Material no header value can hold
+/// makes the request fail to build, as reqwest's `bearer_auth` would.
+///
+/// The returned request carries the credential. Provider, adapter, reference
+/// and helper code never calls this: it presents credentials only through the
+/// upstream client's send methods
+/// ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization)),
+/// and `scripts/check-crate-boundaries.mjs` rejects any use in those crates.
+pub fn authorize_host_request(
+    request: reqwest::RequestBuilder,
+    authorization: &crate::UpstreamAuthorization,
+) -> reqwest::RequestBuilder {
+    authorization.apply_to_builder(request)
 }

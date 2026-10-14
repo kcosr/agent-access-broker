@@ -484,8 +484,8 @@ impl CloudbeesCiProvider {
                 RedirectRules::new(
                     0,
                     deadline.saturating_duration_since(tokio::time::Instant::now()),
-                    &|r| authorization.apply(r),
                 )
+                .with_authorization(&authorization)
                 .with_vet(&|candidate| *candidate == url)
                 .with_decorate(&|r| r.header(reqwest::header::ACCEPT_ENCODING, "identity")),
                 "build.log.read",

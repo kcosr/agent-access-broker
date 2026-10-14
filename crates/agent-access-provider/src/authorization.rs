@@ -1,13 +1,17 @@
-//! Credential presentation: providers put lent credential material on
-//! upstream requests through the SDK and never read it.
+//! Credential presentation: the SDK puts lent credential material on upstream
+//! requests, and providers never read it or hold a request that carries it.
 //!
 //! An [`ExecutionCredential`](crate::ExecutionCredential) or
 //! [`DelegatedAccess`](crate::DelegatedAccess) yields an
 //! [`UpstreamAuthorization`], either in the credential's own HTTP
 //! authentication scheme or in a [`CredentialPlacement`] the provider names.
-//! The authorization applies one sensitive header to a request; the governed
-//! send methods of [`UpstreamClient`](crate::UpstreamClient) then keep it on
-//! the client's base origin.
+//! A provider hands the authorization to a send method of
+//! [`UpstreamClient`](crate::UpstreamClient) together with its request
+//! ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization),
+//! [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization));
+//! the client adds the sensitive header to the built request immediately
+//! before dispatch, and only on its base origin.
+use crate::correlation::{BROKER_REQUEST_ID_HEADER, REQUEST_ID_HEADER};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::RequestBuilder;
@@ -85,14 +89,17 @@ pub enum CredentialPlacementError {
     InvalidMaterial,
 }
 
-/// Credential material ready to present on upstream requests. Providers
-/// apply it with [`Self::apply`] and never read it.
+/// Credential material the SDK presents on upstream requests. It exposes
+/// nothing: a provider hands it to the send method with the request
+/// ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization)
+/// or [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization)),
+/// and the [`UpstreamClient`](crate::UpstreamClient) adds its header to the
+/// built request immediately before dispatch.
 ///
-/// It adds one header whose value is marked sensitive, so every send method
-/// of [`UpstreamClient`](crate::UpstreamClient) refuses to deliver it to
-/// another origin than the client's base (see
-/// [`UpstreamClient::request`](crate::UpstreamClient::request)). Its Debug
-/// output names only the header. Clones present the same material.
+/// The header value is marked sensitive, so the client refuses a request to
+/// another origin than its base that would carry it (see
+/// [`UpstreamClient::request`](crate::UpstreamClient::request)). Debug output
+/// names only the header. Clones present the same material.
 #[derive(Clone)]
 pub struct UpstreamAuthorization {
     name: HeaderName,
@@ -103,24 +110,13 @@ pub struct UpstreamAuthorization {
 enum Presented {
     Value(HeaderValue),
     /// Text no header value can hold, such as a stored token with a line
-    /// break. Applying it makes the request fail to build, so the send
+    /// break. Presenting it makes the request fail to build, so the send
     /// methods report [`UpstreamError::NotSent`](crate::UpstreamError::NotSent)
     /// before anything leaves.
     Unrepresentable(String),
 }
 
 impl UpstreamAuthorization {
-    /// `request` with this authorization's header, replacing any value it
-    /// already has for that header.
-    pub fn apply(&self, request: RequestBuilder) -> RequestBuilder {
-        match &self.value {
-            Presented::Value(value) => {
-                request.headers(HeaderMap::from_iter([(self.name.clone(), value.clone())]))
-            }
-            Presented::Unrepresentable(text) => request.header(self.name.clone(), text.clone()),
-        }
-    }
-
     fn sensitive(name: HeaderName, text: String) -> Self {
         let value = match HeaderValue::from_bytes(text.as_bytes()) {
             Ok(mut value) => {
@@ -131,6 +127,26 @@ impl UpstreamAuthorization {
         };
         Self { name, value }
     }
+
+    /// `request` with this authorization's header, replacing any value it
+    /// already has for that header. Remains only until every caller hands
+    /// the authorization to the send path instead.
+    pub fn apply(&self, request: RequestBuilder) -> RequestBuilder {
+        self.apply_to_builder(request)
+    }
+
+    /// `request` with this authorization's header, replacing any value it
+    /// already has for that header. Only the host's own clients use this
+    /// directly ([`crate::host::authorize_host_request`]); the upstream
+    /// client presents authorizations through [`attach`].
+    pub(crate) fn apply_to_builder(&self, request: RequestBuilder) -> RequestBuilder {
+        match &self.value {
+            Presented::Value(value) => {
+                request.headers(HeaderMap::from_iter([(self.name.clone(), value.clone())]))
+            }
+            Presented::Unrepresentable(text) => request.header(self.name.clone(), text.clone()),
+        }
+    }
 }
 
 impl fmt::Debug for UpstreamAuthorization {
@@ -140,6 +156,81 @@ impl fmt::Debug for UpstreamAuthorization {
             .field("header", &self.name.as_str())
             .finish_non_exhaustive()
     }
+}
+
+/// Where the upstream client adds authorizations to a built request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthorizationPosition {
+    /// Immediately after the client's correlation headers, before every
+    /// header the provider set: where a provider that authorized the request
+    /// right after [`UpstreamClient::request`](crate::UpstreamClient::request)
+    /// put it.
+    AfterCorrelation,
+    /// After every header already on the request: a redirect hop's
+    /// authorization follows its decoration.
+    End,
+}
+
+/// Adds `authorizations`, in order, to a request's `headers`. A header the
+/// request already has with an authorization's name is replaced in place;
+/// any other is inserted at `position`. Returns the first authorization whose
+/// material cannot be a header value, leaving the request to fail its build.
+pub(crate) fn attach<'a>(
+    headers: &mut HeaderMap,
+    authorizations: &'a [UpstreamAuthorization],
+    position: AuthorizationPosition,
+) -> Result<(), &'a UpstreamAuthorization> {
+    if authorizations.is_empty() {
+        return Ok(());
+    }
+    let mut entries: Vec<(HeaderName, HeaderValue)> = headers
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let mut insert_at = match position {
+        AuthorizationPosition::AfterCorrelation => entries
+            .iter()
+            .take_while(|(name, _)| {
+                name.as_str().eq_ignore_ascii_case(REQUEST_ID_HEADER)
+                    || name.as_str().eq_ignore_ascii_case(BROKER_REQUEST_ID_HEADER)
+            })
+            .count(),
+        AuthorizationPosition::End => entries.len(),
+    };
+    for authorization in authorizations {
+        let value = match &authorization.value {
+            Presented::Value(value) => value.clone(),
+            Presented::Unrepresentable(_) => return Err(authorization),
+        };
+        match entries
+            .iter()
+            .position(|(name, _)| *name == authorization.name)
+        {
+            Some(first) => {
+                entries[first].1 = value;
+                let mut index = first + 1;
+                while index < entries.len() {
+                    if entries[index].0 == authorization.name {
+                        entries.remove(index);
+                        if index < insert_at {
+                            insert_at -= 1;
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            None => {
+                entries.insert(insert_at, (authorization.name.clone(), value));
+                insert_at += 1;
+            }
+        }
+    }
+    headers.clear();
+    for (name, value) in entries {
+        headers.append(name, value);
+    }
+    Ok(())
 }
 
 /// Lent credential material as the SDK presents it.
@@ -212,62 +303,180 @@ mod tests {
     use super::*;
     use reqwest::Method;
 
-    fn headers(authorization: &UpstreamAuthorization, request: RequestBuilder) -> HeaderMap {
-        authorization
-            .apply(request)
-            .build()
-            .unwrap()
-            .headers()
-            .clone()
-    }
-
     fn request() -> RequestBuilder {
         reqwest::Client::new().request(Method::GET, "https://service.example.test/")
     }
 
-    /// The SDK presents exactly the bytes reqwest's own helpers produce, so
-    /// moving a provider onto it leaves the wire unchanged.
+    /// The headers of `request` once the client has attached
+    /// `authorizations` at `position`.
+    fn attached(
+        request: RequestBuilder,
+        authorizations: &[UpstreamAuthorization],
+        position: AuthorizationPosition,
+    ) -> Vec<(String, Vec<u8>)> {
+        let mut built = request.build().unwrap();
+        attach(built.headers_mut(), authorizations, position).unwrap();
+        listed(built.headers())
+    }
+
+    fn listed(headers: &HeaderMap) -> Vec<(String, Vec<u8>)> {
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
+            .collect()
+    }
+
+    fn correlated() -> RequestBuilder {
+        request()
+            .header(REQUEST_ID_HEADER, "agent-request")
+            .header(BROKER_REQUEST_ID_HEADER, "broker-request")
+    }
+
+    /// The client produces exactly the headers, in exactly the order, that a
+    /// provider authorizing right after `UpstreamClient::request` produced
+    /// with reqwest's own `basic_auth` and `bearer_auth`.
     #[test]
-    fn native_authorization_matches_reqwest_basic_and_bearer_bytes() {
+    fn attached_authorization_matches_reqwest_bytes_and_order() {
         for (material, expected) in [
             (
                 Material::Basic {
                     username: "user@example.test",
                     token: "basic:secret",
                 },
-                request().basic_auth("user@example.test", Some("basic:secret")),
+                correlated().basic_auth("user@example.test", Some("basic:secret")),
             ),
             (
                 Material::Basic {
                     username: "",
                     token: "",
                 },
-                request().basic_auth("", Some("")),
+                correlated().basic_auth("", Some("")),
             ),
             (
                 Material::Token("bearer-secret"),
-                request().bearer_auth("bearer-secret"),
+                correlated().bearer_auth("bearer-secret"),
             ),
             (
                 Material::Token("uni\u{e9}code token"),
-                request().bearer_auth("uni\u{e9}code token"),
+                correlated().bearer_auth("uni\u{e9}code token"),
             ),
         ] {
-            let expected = expected.build().unwrap();
-            let actual = headers(&material.authorization(), request());
-            let value = &actual[AUTHORIZATION];
-            assert_eq!(value, &expected.headers()[AUTHORIZATION]);
-            assert!(value.is_sensitive());
-            assert_eq!(actual.len(), 1);
+            let provider_headers = |request: RequestBuilder| {
+                request
+                    .header("Accept", "application/json")
+                    .json(&serde_json::json!({"field": "value"}))
+            };
+            let expected = provider_headers(expected).build().unwrap();
+            let actual = attached(
+                provider_headers(correlated()),
+                &[material.authorization()],
+                AuthorizationPosition::AfterCorrelation,
+            );
+            assert_eq!(actual, listed(expected.headers()));
+            let mut built = provider_headers(correlated()).build().unwrap();
+            attach(
+                built.headers_mut(),
+                &[material.authorization()],
+                AuthorizationPosition::AfterCorrelation,
+            )
+            .unwrap();
+            assert!(built.headers()[AUTHORIZATION].is_sensitive());
         }
     }
 
-    /// A token no header value can hold fails the request build, as
-    /// `bearer_auth` would, so it is never sent.
+    /// Without correlation headers the authorization goes first; at the end
+    /// position it follows every header, as a redirect hop's authorization
+    /// follows its decoration.
     #[test]
-    fn unrepresentable_material_fails_the_request_build() {
+    fn positions_place_the_header_before_or_after_the_provider_headers() {
+        let bearer = Material::Token("token-1").authorization();
+        let first = attached(
+            request().header("accept-encoding", "identity"),
+            std::slice::from_ref(&bearer),
+            AuthorizationPosition::AfterCorrelation,
+        );
+        assert_eq!(first[0].0, "authorization");
+        let hop = attached(
+            correlated().header("accept-encoding", "identity"),
+            std::slice::from_ref(&bearer),
+            AuthorizationPosition::End,
+        );
+        let expected = correlated()
+            .header("accept-encoding", "identity")
+            .bearer_auth("token-1")
+            .build()
+            .unwrap();
+        assert_eq!(hop, listed(expected.headers()));
+    }
+
+    /// An authorization replaces a header of the same name in its position,
+    /// as reqwest's `headers` does, and several authorizations keep their
+    /// order.
+    #[test]
+    fn authorizations_replace_same_named_headers_in_place_and_keep_their_order() {
+        let api_key = HeaderName::from_static("x-api-key");
+        let key = Material::Token("key-123")
+            .placed(&CredentialPlacement::header(api_key.clone()))
+            .unwrap();
+        let headers = attached(
+            correlated()
+                .header("count", "1")
+                .header("X-Api-Key", "caller-value")
+                .header("X-Api-Key", "second-value")
+                .header("accept", "application/json"),
+            std::slice::from_ref(&key),
+            AuthorizationPosition::AfterCorrelation,
+        );
+        let names: Vec<_> = headers.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "x-agent-access-request-id",
+                "x-agent-access-broker-request-id",
+                "count",
+                "x-api-key",
+                "accept"
+            ]
+        );
+        assert_eq!(headers[3].1, b"key-123");
+
+        let transport = Material::Token("transport-token")
+            .placed(&CredentialPlacement::bearer())
+            .unwrap();
+        let headers = attached(
+            correlated().header("mcp-protocol-version", "2026-07-28"),
+            &[key, transport],
+            AuthorizationPosition::AfterCorrelation,
+        );
+        let names: Vec<_> = headers.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "x-agent-access-request-id",
+                "x-agent-access-broker-request-id",
+                "x-api-key",
+                "authorization",
+                "mcp-protocol-version"
+            ]
+        );
+        assert_eq!(headers[3].1, b"Bearer transport-token");
+    }
+
+    /// A token no header value can hold is reported, so the client fails the
+    /// request build as `bearer_auth` would, and nothing is sent.
+    #[test]
+    fn unrepresentable_material_is_reported_and_fails_the_build() {
         let authorization = Material::Token("token\r\ninjected: header").authorization();
-        assert!(authorization.apply(request()).build().is_err());
+        let mut built = request().build().unwrap();
+        assert!(
+            attach(
+                built.headers_mut(),
+                std::slice::from_ref(&authorization),
+                AuthorizationPosition::AfterCorrelation
+            )
+            .is_err()
+        );
+        assert!(authorization.apply_to_builder(request()).build().is_err());
         assert!(
             request()
                 .bearer_auth("token\r\ninjected: header")
@@ -277,31 +486,27 @@ mod tests {
     }
 
     #[test]
-    fn placements_present_checked_material_and_replace_the_header() {
-        let api_key = HeaderName::from_static("x-api-key");
-        let presented = Material::Token("key-123")
-            .placed(&CredentialPlacement::header(api_key.clone()))
-            .unwrap();
-        let sent = headers(&presented, request().header("X-Api-Key", "caller-value"));
-        assert_eq!(sent.get_all(&api_key).iter().count(), 1);
-        assert_eq!(sent[&api_key], "key-123");
-        assert!(sent[&api_key].is_sensitive());
-
+    fn placements_present_checked_material() {
         let bearer = Material::Token("token-1")
             .placed(&CredentialPlacement::bearer())
             .unwrap();
-        assert_eq!(headers(&bearer, request())[AUTHORIZATION], "Bearer token-1");
-
+        assert_eq!(
+            attached(request(), &[bearer], AuthorizationPosition::End),
+            [("authorization".to_owned(), b"Bearer token-1".to_vec())]
+        );
         let basic = Material::Basic {
             username: "ci-user",
             token: "api-token",
         }
         .placed(&CredentialPlacement::basic())
         .unwrap();
-        let expected = request().basic_auth("ci-user", Some("api-token"));
+        let expected = request()
+            .basic_auth("ci-user", Some("api-token"))
+            .build()
+            .unwrap();
         assert_eq!(
-            headers(&basic, request())[AUTHORIZATION],
-            expected.build().unwrap().headers()[AUTHORIZATION]
+            attached(request(), &[basic], AuthorizationPosition::End),
+            listed(expected.headers())
         );
     }
 

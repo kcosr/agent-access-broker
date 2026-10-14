@@ -162,17 +162,12 @@ impl ImportedAdapter for OpenApiAdapter {
         let operation = async {
             let mut response = client
                 .send(
-                    authorization
-                        .iter()
-                        .fold(
-                            client.request(Method::GET, settings.document),
-                            |request, authorization| authorization.apply(request),
-                        )
-                        .header(
-                            "Accept",
-                            "application/json, application/vnd.oai.openapi+json",
-                        ),
-                    UpstreamCall::new("openapi.discover"),
+                    client.request(Method::GET, settings.document).header(
+                        "Accept",
+                        "application/json, application/vnd.oai.openapi+json",
+                    ),
+                    UpstreamCall::new("openapi.discover")
+                        .with_authorizations(authorization.as_slice()),
                 )
                 .await
                 .map_err(|error| {
@@ -315,13 +310,12 @@ impl Provider for OpenApiProvider {
                 .static_credential()
                 .ok_or_else(credential_error)?,
         )?;
-        // The credential follows the parameter headers and replaces any of
-        // the same name.
-        let mut upstream = authorization.apply(
-            self.client
-                .request(method(&action.plan), url)
-                .headers(headers),
-        );
+        // The client adds the credential when it sends the request, in place
+        // of a parameter header of the same name.
+        let mut upstream = self
+            .client
+            .request(method(&action.plan), url)
+            .headers(headers);
         let accepted_media = action
             .plan
             .responses
@@ -344,7 +338,10 @@ impl Provider for OpenApiProvider {
             dispatched = true;
             let mut response = self
                 .client
-                .send(upstream, UpstreamCall::new(&action.definition.action))
+                .send(
+                    upstream,
+                    UpstreamCall::new(&action.definition.action).with_authorization(&authorization),
+                )
                 .await
                 .map_err(|error| {
                     if matches!(

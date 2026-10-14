@@ -519,8 +519,9 @@ impl ConformanceProvider {
         url
     }
 
-    /// The selected bearer token as the SDK presents it. Every other kind,
-    /// including one this version does not know, is rejected.
+    /// The selected bearer token, which the SDK presents when the request is
+    /// sent. Every other kind, including one this version does not know, is
+    /// rejected.
     fn authorization(request: &ProviderInvocation) -> Result<UpstreamAuthorization, ProviderError> {
         match request.execution().static_credential() {
             Some(credential) if credential.kind() == StaticCredentialKind::BearerToken => {
@@ -600,15 +601,16 @@ impl ConformanceProvider {
             .expect("base URLs have a path")
             .pop_if_empty()
             .extend(["endpoints", inputs.endpoint.as_str(), "ping"]);
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let response = self
             .pings
             .send(
-                Self::authorization(request)?
-                    .apply(self.pings.request(reqwest::Method::POST, url))
+                self.pings
+                    .request(reqwest::Method::POST, url)
                     .header("X-Endpoint-Key", key)
                     .json(&json!({"message": inputs.message})),
-                UpstreamCall::new("endpoint.ping"),
+                UpstreamCall::new("endpoint.ping").with_authorization(&authorization),
             )
             .await
             .map_err(write_error)?;
@@ -637,15 +639,14 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let response = self
             .requests
             .send(
-                Self::authorization(request)?.apply(
-                    self.requests
-                        .request(reqwest::Method::GET, self.url(item, false)),
-                ),
-                UpstreamCall::new("item.view"),
+                self.requests
+                    .request(reqwest::Method::GET, self.url(item, false)),
+                UpstreamCall::new("item.view").with_authorization(&authorization),
             )
             .await
             .map_err(upstream_error)?;
@@ -676,16 +677,15 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let mut response = self
             .downloads
             .send_with_deadline(
-                Self::authorization(request)?.apply(
-                    self.downloads
-                        .request(reqwest::Method::GET, self.url(item, true)),
-                ),
+                self.downloads
+                    .request(reqwest::Method::GET, self.url(item, true)),
                 self.idle_timeout,
-                UpstreamCall::new("item.download"),
+                UpstreamCall::new("item.download").with_authorization(&authorization),
             )
             .await
             .map_err(upstream_error)?;
@@ -746,12 +746,11 @@ impl ConformanceProvider {
             ));
         };
         check_part(part, attachment)?;
+        let authorization = Self::authorization(request)?;
         let started = Instant::now();
-        let builder = Self::authorization(request)?
-            .apply(
-                self.uploads
-                    .request(reqwest::Method::PUT, self.url(item, true)),
-            )
+        let builder = self
+            .uploads
+            .request(reqwest::Method::PUT, self.url(item, true))
             .header(
                 reqwest::header::CONTENT_TYPE,
                 attachment.content_type.as_str(),
@@ -774,7 +773,7 @@ impl ConformanceProvider {
                 builder,
                 progress,
                 self.idle_timeout,
-                UpstreamCall::new("item.upload"),
+                UpstreamCall::new("item.upload").with_authorization(&authorization),
             )
             .await
             .map_err(write_error)?;

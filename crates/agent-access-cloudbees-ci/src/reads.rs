@@ -402,13 +402,12 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 url.clone(),
-                RedirectRules::new(0, self.request_timeout, &|request| {
-                    authorization.apply(request)
-                })
-                .with_vet(&|candidate| *candidate == url)
-                .with_decorate(&|request| {
-                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                }),
+                RedirectRules::new(0, self.request_timeout)
+                    .with_authorization(&authorization)
+                    .with_vet(&|candidate| *candidate == url)
+                    .with_decorate(&|request| {
+                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                    }),
                 action,
             )
             .await

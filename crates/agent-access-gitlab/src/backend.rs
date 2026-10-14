@@ -2179,11 +2179,10 @@ impl HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::GET, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::GET, url.clone())
+                .header("Accept", "application/json"),
             operation,
             None,
             self.limits.max_upstream_response_bytes,
@@ -2208,11 +2207,10 @@ impl HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::GET, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::GET, url.clone())
+                .header("Accept", "application/json"),
             operation,
             None,
             self.limits.max_upstream_response_bytes,
@@ -2252,11 +2250,10 @@ impl HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::POST, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::POST, url.clone())
+                .header("Accept", "application/json"),
             operation,
             None,
             self.limits.max_upstream_response_bytes,
@@ -2303,11 +2300,10 @@ impl HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::DELETE, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::DELETE, url.clone())
+                .header("Accept", "application/json"),
             operation,
             None,
             self.limits.max_upstream_response_bytes,
@@ -2348,9 +2344,8 @@ impl HttpGitlabBackend {
         };
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(builder, credential)?
-                .header("Accept", "application/json")
-                .json(&body),
+            credential,
+            builder.header("Accept", "application/json").json(&body),
             operation,
             gitlab_validation_fields(operation),
             self.limits.max_upstream_response_bytes,
@@ -2387,9 +2382,8 @@ impl HttpGitlabBackend {
         };
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(builder, credential)?
-                .header("Accept", "application/json")
-                .json(&body),
+            credential,
+            builder.header("Accept", "application/json").json(&body),
             operation,
             gitlab_validation_fields(operation),
             self.limits.max_upstream_response_bytes,
@@ -2416,11 +2410,10 @@ impl HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::GET, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/octet-stream"),
+            credential,
+            self.client
+                .request(Method::GET, url.clone())
+                .header("Accept", "application/octet-stream"),
             operation,
             None,
             byte_cap,
@@ -2539,12 +2532,11 @@ impl GitlabBackend for HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_upload(
             &self.upload_client,
-            authenticated_gitlab_request(
-                self.upload_client.request(Method::POST, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json")
-            .multipart(reqwest::multipart::Form::new().part("file", part)),
+            credential,
+            self.upload_client
+                .request(Method::POST, url.clone())
+                .header("Accept", "application/json")
+                .multipart(reqwest::multipart::Form::new().part("file", part)),
             "project.upload",
             progress,
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
@@ -2638,11 +2630,10 @@ impl GitlabBackend for HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::DELETE, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::DELETE, url.clone())
+                .header("Accept", "application/json"),
             "webhook.delete",
             None,
             self.limits.max_upstream_response_bytes,
@@ -3796,11 +3787,10 @@ impl GitlabBackend for HttpGitlabBackend {
         let started = Instant::now();
         let response = send_gitlab_request(
             &self.client,
-            authenticated_gitlab_request(
-                self.client.request(Method::GET, url.clone()),
-                credential,
-            )?
-            .header("Accept", "application/json"),
+            credential,
+            self.client
+                .request(Method::GET, url.clone())
+                .header("Accept", "application/json"),
             "protected_branch.list",
             None,
             self.limits.max_upstream_response_bytes,
@@ -4722,12 +4712,13 @@ pub(crate) fn normalized_api_base(value: &str) -> Result<Url, url::ParseError> {
     Ok(url)
 }
 
-pub(crate) fn authenticated_gitlab_request(
-    builder: reqwest::RequestBuilder,
+/// The GitLab bearer token as the SDK presents it; any other credential kind
+/// fails before any request is sent.
+pub(crate) fn gitlab_authorization(
     credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, GitlabBackendError> {
+) -> Result<UpstreamAuthorization, GitlabBackendError> {
     match credential.kind() {
-        StaticCredentialKind::BearerToken => Ok(credential.authorization().apply(builder)),
+        StaticCredentialKind::BearerToken => Ok(credential.authorization()),
         _ => Err(
             GitlabBackendError::Protocol("unsupported GitLab credential kind".to_string())
                 .unbuilt(),
@@ -4737,19 +4728,21 @@ pub(crate) fn authenticated_gitlab_request(
 
 pub(crate) async fn send_gitlab_upload(
     client: &UpstreamClient,
+    credential: &ExecutionCredential,
     request: reqwest::RequestBuilder,
     operation: &str,
     progress: UploadProgress,
     idle_timeout: Duration,
     response_byte_cap: u64,
 ) -> Result<reqwest::Response, GitlabBackendError> {
+    let authorization = gitlab_authorization(credential)?;
     // Upload responses expose no upstream validation bodies.
     let mut response = client
         .send_upload(
             request,
             Some(progress),
             idle_timeout,
-            UpstreamCall::new(operation),
+            UpstreamCall::new(operation).with_authorization(&authorization),
         )
         .await
         .map_err(gitlab_upstream_error)?;
@@ -4761,13 +4754,18 @@ pub(crate) async fn send_gitlab_upload(
 /// maps error statuses.
 pub(crate) async fn send_gitlab_request(
     client: &UpstreamClient,
+    credential: &ExecutionCredential,
     request: reqwest::RequestBuilder,
     operation: &str,
     validation_fields: Option<&'static [&'static str]>,
     response_byte_cap: u64,
 ) -> Result<reqwest::Response, GitlabBackendError> {
+    let authorization = gitlab_authorization(credential)?;
     let mut response = client
-        .send(request, UpstreamCall::new(operation))
+        .send(
+            request,
+            UpstreamCall::new(operation).with_authorization(&authorization),
+        )
         .await
         .map_err(gitlab_upstream_error)?;
     complete_upstream_trace(&mut response, None);

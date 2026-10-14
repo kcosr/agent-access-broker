@@ -248,10 +248,13 @@ impl CloudbeesCiProvider {
         let operation = current_provider_action()
             .map(|(_, action)| action)
             .unwrap_or_else(|| "request".into());
-        let request = authorization.apply(controller.client.request(method, url));
+        let request = controller.client.request(method, url);
         let mut response = controller
             .client
-            .send(request, UpstreamCall::new(&operation))
+            .send(
+                request,
+                UpstreamCall::new(&operation).with_authorization(&authorization),
+            )
             .await
             .map_err(|error| send_failure(error, mutation))?;
         complete_upstream_trace(&mut response, None);
@@ -442,13 +445,12 @@ impl CloudbeesCiProvider {
             .download_client
             .get_following_redirects(
                 initial.clone(),
-                RedirectRules::new(3, self.request_timeout, &|request| {
-                    authorization.apply(request)
-                })
-                .with_vet(&vet)
-                .with_decorate(&|request| {
-                    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
-                }),
+                RedirectRules::new(3, self.request_timeout)
+                    .with_authorization(&authorization)
+                    .with_vet(&vet)
+                    .with_decorate(&|request| {
+                        request.header(reqwest::header::ACCEPT_ENCODING, "identity")
+                    }),
                 "build.artifact.download",
             )
             .await
@@ -1220,7 +1222,7 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
     ))
 }
 /// CloudBees CI authenticates with a non-empty Basic username and API token,
-/// which the SDK checks and presents.
+/// which the SDK checks and presents when each request is sent.
 pub(crate) fn basic_authorization(
     credential: &ExecutionCredential,
 ) -> Result<UpstreamAuthorization, ProviderError> {

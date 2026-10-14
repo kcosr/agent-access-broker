@@ -2128,7 +2128,10 @@ fn apply_gateway_credential(
 ) -> Result<reqwest::RequestBuilder, ProviderError> {
     match credential.kind() {
         StaticCredentialKind::BearerToken | StaticCredentialKind::BasicApiToken => {
-            Ok(credential.authorization().apply(builder))
+            Ok(agent_access_provider::host::authorize_host_request(
+                builder,
+                &credential.authorization(),
+            ))
         }
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialInvalid,

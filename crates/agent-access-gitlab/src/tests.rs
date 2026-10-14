@@ -308,6 +308,7 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
         let started = Instant::now();
         let result = send_gitlab_upload(
             &backend.upload_client,
+            &bearer_credential("upload-token"),
             backend
                 .upload_client
                 .request(Method::POST, url.clone())

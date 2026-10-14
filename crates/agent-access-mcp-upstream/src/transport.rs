@@ -350,19 +350,12 @@ impl OperationContext {
         Ok((authorization, sent_version))
     }
 
-    /// A request to the endpoint carrying `authorization` before `headers`.
-    fn request(
-        &self,
-        method: reqwest::Method,
-        authorization: &[UpstreamAuthorization],
-        headers: HeaderMap,
-    ) -> reqwest::RequestBuilder {
-        authorization
-            .iter()
-            .fold(
-                self.wire.client.request(method, self.wire.endpoint.clone()),
-                |request, authorization| authorization.apply(request),
-            )
+    /// A request to the endpoint with `headers`. Its credentials travel in
+    /// the send call, and the client adds them before these headers.
+    fn request(&self, method: reqwest::Method, headers: HeaderMap) -> reqwest::RequestBuilder {
+        self.wire
+            .client
+            .request(method, self.wire.endpoint.clone())
             .headers(headers)
     }
 
@@ -376,7 +369,7 @@ impl OperationContext {
     ) -> Result<HttpReply, ProviderError> {
         let session_attached = headers.contains_key("mcp-session-id");
         let request = self
-            .request(reqwest::Method::POST, authorization, headers)
+            .request(reqwest::Method::POST, headers)
             .header("accept", "application/json, text/event-stream")
             .json(&body);
         #[cfg(test)]
@@ -403,7 +396,10 @@ impl OperationContext {
         let mut response = self
             .wire
             .client
-            .send(request, UpstreamCall::new(method))
+            .send(
+                request,
+                UpstreamCall::new(method).with_authorizations(authorization),
+            )
             .await
             .map_err(|error| {
                 if matches!(
@@ -547,7 +543,7 @@ impl OperationContext {
             HeaderValue::from_static(LEGACY_PROTOCOL_VERSION),
         );
         let request = self
-            .request(reqwest::Method::DELETE, &authorization, headers)
+            .request(reqwest::Method::DELETE, headers)
             .header("accept", "application/json, text/event-stream");
         {
             let mut state = self.state.lock().expect("wire state");
@@ -560,7 +556,10 @@ impl OperationContext {
         if let Ok(mut response) = self
             .wire
             .client
-            .send(request, UpstreamCall::new("session/delete"))
+            .send(
+                request,
+                UpstreamCall::new("session/delete").with_authorizations(&authorization),
+            )
             .await
         {
             let reason = (!response.status().is_success()).then(|| {

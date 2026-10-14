@@ -19,10 +19,12 @@
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
 //!   allowlists, correlation ([`InvocationScope`]), upstream trace events
-//!   and signed continuation envelopes ([`ContinuationSigner`]). It presents
-//!   lent [`ExecutionCredential`]s and [`DelegatedAccess`] upstream as
+//!   and signed continuation envelopes ([`ContinuationSigner`]). It turns
+//!   lent [`ExecutionCredential`]s and [`DelegatedAccess`] into opaque
 //!   [`UpstreamAuthorization`]s, in a [`CredentialPlacement`] when the
-//!   upstream needs one, and never reads their material. An OAuth
+//!   upstream needs one, and hands them to the client's send methods with
+//!   each request ([`UpstreamCall::with_authorization`]); it never reads the
+//!   material or holds a request that carries it. An OAuth
 //!   companion implements [`OAuthDialect`] and declares an
 //!   [`OAuthDialectRegistration`]. Every registration records its declaring
 //!   package with [`module_metadata!`].
@@ -48,8 +50,8 @@
 //! no TLS files, reads no process environment and touches no store: the host
 //! keeps those, together with identity, policy, credential selection, audit,
 //! limits and network construction. Providers see only the narrow views here,
-//! and no credential value has a plaintext accessor: the SDK attaches
-//! credential material to upstream requests itself.
+//! and no credential value has a plaintext accessor: the upstream client adds
+//! credential material to the request it builds, immediately before dispatch.
 //!
 //! # Trust model
 //!
