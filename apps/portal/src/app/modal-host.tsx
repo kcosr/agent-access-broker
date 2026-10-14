@@ -9,6 +9,7 @@ import { useAgentTokenActions, useManagementTokenActions } from "../mutations/to
 import { IssueTokenModal } from "../features/tokens/issue-token-modal";
 import { ManagementTokenModal } from "../features/tokens/management-token-modal";
 import { TokenBoundary } from "../features/tokens/token-boundary";
+import { McpSetup, tokenMcpUrl } from "../features/tokens/mcp-setup";
 import { CreateGroupModal, CreatePrincipalModal } from "../features/principals/create-modals";
 import { AssignManagerModal } from "../features/policies/assign-manager-modal";
 import { adminSubject, useSelfSubject } from "./active-route";
@@ -49,13 +50,15 @@ function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
           }
         />
       );
-    case "reveal":
+    case "reveal": {
+      const mcpUrl = tokenMcpUrl(modal.record, modal.options);
       return (
         <SecretRevealModal
           title="Token created"
           secretLabel="Token"
           secret={modal.token}
           onClose={closeModal}
+          size={mcpUrl ? "lg" : "md"}
           details={
             <>
               <KeyValue
@@ -78,8 +81,11 @@ function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
               ) : null}
             </>
           }
-        />
+        >
+          {mcpUrl ? <McpSetup url={mcpUrl} token={modal.token} /> : null}
+        </SecretRevealModal>
       );
+    }
     case "confirm":
       return (
         // Close only this confirmation: its action may already have opened the next dialog (a one-time secret).

@@ -35,7 +35,7 @@ function fixture(session = admin): PaletteEntities {
     ],
     resourceGroups: [{ id: "project-group", name: "Delivery projects", includedResourceIds: ["main-project"], excludedResourceIds: ["secret-project", "missing-id"], version: 1 }],
     imports: [imported("jira", "enabled"), imported("metrics", "draft")],
-    tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }] },
+    tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }], mcp: null },
     tokens: [{ tokenId: "token-123", principalId: "alice", name: "My Agent", tokenClass: "agent", scopes: {}, createdAt: "", createdBy: "" }], credentials: [credential], credentialTargets: [target]
   };
 }

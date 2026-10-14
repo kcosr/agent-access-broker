@@ -702,6 +702,15 @@ classifies upstream effects and never grants access. `displayName`,
 `brokerHosts`, and `readOnly` describe the configured service and action, so
 they do not depend on the caller's execution context or grants. This
 effective-policy projection also backs the portal's **Your Access** page.
+
+The response also contains `mcp`, where an issued token connects MCP clients:
+`{"url": "https://broker.example.com/mcp"}` with the configured
+[`mcp.public_url`](configuration.md#mcp) when the HTTP MCP endpoint is enabled
+and a `broker_tokens` identity source reads `Authorization` with scheme
+`Bearer`, otherwise `null`. The URL is serialized as the broker parses it, with
+an ASCII (punycode) host and normalized separators. Like `brokerHosts`, it is configuration rather than
+policy. The portal uses it for client setup after issuing an agent token.
+
 `POST /v1/tokens` requires `allowedExecutionContexts` with one or
 more unique configured contexts. Optional `allowedServices` and
 `serviceRestrictions` only narrow the token; requested contexts, services,
@@ -994,7 +1003,8 @@ effective choices, while optional `allowedServices` and
 `serviceRestrictions` may only narrow access. Options and subset validation
 are calculated for the target principal, not the administrative actor. The
 response has the same shape as `GET /v1/tokens/options`, including each
-service's `displayName` and `brokerHosts` and each action's `readOnly`.
+service's `displayName` and `brokerHosts` and each action's `readOnly`. Its
+`mcp` is `null` for auditors, who cannot issue the token.
 
 `POST /v1/admin/principals/{principal}/tokens` is the generic admin broker-token
 issue route. It accepts `tokenClass`, optional `scopes`, and at most one of

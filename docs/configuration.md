@@ -242,6 +242,8 @@ admit managed username or fingerprint identities respectively; direct username
 callers additionally require `credential_transport = "authorization_user"` and
 fixed context. Every request requires an invocation identity;
 ordinary anonymous service discovery and browser cookies do not apply here.
+With a Bearer `broker_tokens` source, token options report this URL and the
+portal shows MCP client setup after issuing an agent token.
 
 `allowed_origins` contains exact canonical HTTP(S) origins, without paths or
 wildcards. An empty list permits clients that omit Origin and rejects all

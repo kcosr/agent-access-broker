@@ -480,7 +480,8 @@ test("token boundaries use live resource references and allow empty effective ac
     services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
       external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
-    } }] }]
+    } }] }],
+    mcp: null
   };
   await mockUnlistedApis(page);
   await mockResourceTypes(page);
@@ -524,6 +525,8 @@ test("token boundaries use live resource references and allow empty effective ac
   expect((await issued).postDataJSON()).toMatchObject({ allowedExecutionContexts: ["external"], serviceRestrictions: { confluence: { actions: ["page.view"], resources: { resourceIds: [], resourceGroupIds: ["docs"] } } } });
   const reveal = page.getByRole("dialog", { name: "Token created" });
   await expect(reveal.getByRole("group", { name: "confluence" }).getByText("Documentation", { exact: true })).toBeVisible();
+  // No HTTP MCP endpoint accepts the token, so there is no client setup.
+  await expect(reveal.getByRole("region", { name: "Connect an MCP client" })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1211,6 +1214,7 @@ test("local browser login supports administration, self-service credentials, tok
     expect(await setupReveal.innerText()).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
     const setupRawToken = (await setupReveal.getByLabel("Token", { exact: true }).innerText()).trim();
     expect(setupRawToken).toMatch(/^aab_um_/);
+    await expect(setupReveal.getByRole("region", { name: "Connect an MCP client", exact: true })).toHaveCount(0);
     expect(page.url()).not.toContain(setupRawToken.slice(0, 12));
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(setupRawToken);
     expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain(setupRawToken);
@@ -1575,6 +1579,8 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(reveal.getByText("default, internal", { exact: true }).first()).toBeVisible();
     const managedRawToken = await reveal.getByLabel("Token", { exact: true }).innerText();
     expect(managedRawToken.length).toBeGreaterThan(20);
+    const managedMcp = reveal.getByRole("region", { name: "Connect an MCP client", exact: true });
+    await expect(managedMcp.getByText(`export AGENT_ACCESS_TOKEN=${managedRawToken}`, { exact: true })).toBeVisible();
     await reveal.getByRole("button", { name: "Done", exact: true }).click();
     await page.evaluate((path) => {
       history.pushState({}, "", path);
@@ -1755,6 +1761,47 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(reveal.getByText("All actions and resources allowed by current grants.", { exact: true })).toBeVisible();
     rawToken = await reveal.getByLabel("Token", { exact: true }).innerText();
     expect(rawToken.length).toBeGreaterThan(20);
+
+    // Connecting MCP clients: snippets name the token's variable; only the environment line holds the token.
+    const mcpUrl = `${baseUrl}/mcp`;
+    const mcp = reveal.getByRole("region", { name: "Connect an MCP client", exact: true });
+    await expect(mcp.getByText(mcpUrl, { exact: true })).toBeVisible();
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
+    const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    await mcp.getByRole("button", { name: "Copy server URL", exact: true }).click();
+    await expect.poll(clipboard).toBe(mcpUrl);
+    await expect(mcp.getByText(`export AGENT_ACCESS_TOKEN=${rawToken}`, { exact: true })).toBeVisible();
+    await mcp.getByRole("group", { name: "Operating system", exact: true }).getByRole("button", { name: "Windows PowerShell", exact: true }).click();
+    await mcp.getByRole("button", { name: "Copy the Windows PowerShell line", exact: true }).click();
+    await expect.poll(clipboard).toBe(`setx AGENT_ACCESS_TOKEN ${rawToken}; $env:AGENT_ACCESS_TOKEN = "${rawToken}"`);
+    const clients = mcp.getByRole("tablist", { name: "MCP client", exact: true });
+    await expect(clients.getByRole("tab")).toHaveText(["Pi", "OpenCode", "Claude Code", "Codex", "Cursor"]);
+    await expect(clients.getByRole("tab", { name: "Pi", exact: true })).toHaveAttribute("aria-selected", "true");
+    await clients.getByRole("tab", { name: "Codex", exact: true }).click();
+    await expect(mcp.getByText("~/.codex/config.toml", { exact: true })).toBeVisible();
+    await mcp.getByRole("button", { name: "Copy the Codex config file", exact: true }).click();
+    await expect.poll(clipboard).toBe(`[mcp_servers.agent_access]\nurl = "${mcpUrl}"\nbearer_token_env_var = "AGENT_ACCESS_TOKEN"`);
+    await expect(mcp.getByRole("tabpanel")).not.toContainText(rawToken);
+    // Claude Code: only the user-scope command, which covers all projects; no configuration file.
+    await clients.getByRole("tab", { name: "Claude Code", exact: true }).click();
+    const claude = mcp.getByRole("tabpanel");
+    await expect(claude.getByText("Command (adds it for all your projects)", { exact: true })).toBeVisible();
+    await claude.getByRole("button", { name: "Copy the Claude Code command", exact: true }).click();
+    await expect.poll(clipboard).toBe(`claude mcp add --scope user --transport http agent_access ${mcpUrl} --header 'Authorization: Bearer \${AGENT_ACCESS_TOKEN}'`);
+    await expect(claude.getByRole("button", { name: "Copy the Claude Code config file", exact: true })).toHaveCount(0);
+    await expect(claude).not.toContainText("Or add it to");
+    await clients.getByRole("tab", { name: "Cursor", exact: true }).click();
+    await expect(mcp.getByRole("link", { name: "Add to Cursor", exact: true })).toHaveAttribute("href", /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=agent_access&config=[^&]+$/);
+    await expect(mcp.getByRole("tabpanel")).not.toContainText(rawToken);
+    // Snippets wrap instead of hiding text behind a horizontal scroll.
+    const overflowingSnippets = () => mcp.evaluate((section) => [...section.querySelectorAll("code, pre")].filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent));
+    for (const name of ["Pi", "OpenCode", "Claude Code", "Codex", "Cursor"]) {
+      await clients.getByRole("tab", { name, exact: true }).click();
+      expect(await overflowingSnippets(), name).toEqual([]);
+    }
+    expect(await page.evaluate(() => localStorage.getItem("aab.portal.mcp-client"))).toBe("cursor");
+    await expectNoHorizontalOverflow(page);
+
     expect(page.url()).not.toContain(rawToken.slice(0, 12));
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(rawToken);
     expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain(rawToken);
@@ -2883,6 +2930,10 @@ enabled = true
 mode = "create_if_empty"
 principal_id = "admin"
 initial_password = ${tomlString(initialAdminPassword)}
+
+[mcp]
+enabled = true
+public_url = "http://127.0.0.1:${port}/mcp"
 
 [credentials.per_user.jira]
 type = "managed_store"

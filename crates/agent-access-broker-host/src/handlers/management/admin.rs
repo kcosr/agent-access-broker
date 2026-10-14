@@ -2645,10 +2645,14 @@ pub(crate) async fn admin_principal_agent_token_options(
     };
     let identity =
         managed_principal_identity(&context.snapshot.runtime, principal_record, policy_groups);
-    let options = context
+    let mut options = context
         .snapshot
         .runtime
         .agent_token_options_for_identity(&identity);
+    // Where an issued token connects is only for callers that can issue one.
+    if context.principal_role == Some(PrincipalRole::Auditor) {
+        options.mcp = None;
+    }
     management_success_response(&context, operation, target, json!(options)).await
 }
 

@@ -164,6 +164,17 @@ settings follow the [Codex HTTP MCP documentation](https://learn.chatgpt.com/doc
 and [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
 Pi requires an MCP-capable integration.
 
+The portal shows this setup after it issues an `agent_invoke` token, when the
+endpoint is enabled with `public_url` and a `broker_tokens` identity source reads
+`Authorization` with scheme `Bearer`. Its **Connect an MCP client** section
+gives the `/mcp` URL, the line that sets `AGENT_ACCESS_TOKEN` to the new token for
+macOS/Linux or Windows PowerShell, and setup for Pi, OpenCode, Claude Code, Codex,
+or Cursor, each using server name `agent_access`: a command (Cursor: an install
+link) and a configuration file. For Claude Code it gives only
+`claude mcp add --scope user`, which adds the server for all your projects;
+Claude Code manages that configuration file itself. Only the environment line
+contains the token.
+
 Every HTTP request authenticates a current static principal, managed
 `agent_invoke` token, or enabled username/fingerprint identity through an
 authenticated trusted caller. Cookies, anonymous discovery, management tokens,

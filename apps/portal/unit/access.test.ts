@@ -21,7 +21,8 @@ const options: AgentTokenOptions = {
         { included: [{ kind: "exact", value: "private/approved" }], excluded: [] }
       ]
     }
-  }] }]
+  }] }],
+  mcp: null
 };
 
 describe("effective access presentation", () => {
@@ -98,6 +99,6 @@ describe("resource type metadata", () => {
 });
 
 test("scope-free actions remain visible with explicit action grants", () => {
-  const gmail: AgentTokenOptions = {policyGeneration:1,resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}]};
+  const gmail: AgentTokenOptions = {policyGeneration:1,resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}],mcp:null};
   expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",resourceType:null,contexts:["default"]});
 });

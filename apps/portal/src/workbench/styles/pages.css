@@ -335,7 +335,7 @@
     margin-top: 14px;
   }
 
-  /* ---------- code, disclosure */
+  /* ---------- code, copy block, disclosure */
   .wb-code {
     margin: 0 0 12px;
     padding: 12px 14px;
@@ -357,6 +357,80 @@
   }
   .wb-code-key {
     color: var(--wb-accent-text);
+  }
+  /* copy block: wb-code text with a copy button; one line scrolls, not wraps */
+  .wb-copy {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-md);
+    background: var(--wb-page);
+    color: var(--wb-fg);
+  }
+  .wb-copy-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: 5px 8px 5px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: calc(var(--wb-radius-md) - 1px);
+    background: none;
+    color: inherit;
+    font: var(--wb-fs-12-5) / 1.6 var(--wb-font-mono);
+    white-space: pre;
+    scrollbar-width: thin;
+    user-select: text;
+  }
+  .wb-copy-text:focus-visible {
+    outline-offset: -2px;
+  }
+  .wb-copy--multiline {
+    align-items: flex-start;
+  }
+  .wb-copy--multiline .wb-copy-text {
+    max-height: 320px;
+    padding: 10px 8px 10px 12px;
+    overflow: auto;
+  }
+  .wb-copy-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    padding: 2px 3px 2px 0;
+  }
+  .wb-copy--multiline .wb-copy-actions {
+    padding: 6px 6px 6px 0;
+  }
+  /* wrap: soft wraps instead of horizontal scrolling; the button stays with
+     the first line */
+  .wb-copy--wrap {
+    align-items: flex-start;
+  }
+  .wb-copy--wrap .wb-copy-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .wb-copy-status {
+    color: var(--wb-fg-2);
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-medium);
+    white-space: nowrap;
+  }
+  /* The live region stays mounted (and announced) while empty. */
+  .wb-copy-status:not(:empty) {
+    padding: 0 6px 0 4px;
+  }
+  .wb-copy-btn {
+    color: var(--wb-fg-2);
+  }
+  .wb-copy-btn:hover {
+    color: var(--wb-fg);
+  }
+  .wb-copy.is-copied :is(.wb-copy-status, .wb-copy-btn) {
+    color: var(--wb-success-text);
   }
   .wb-disclosure > summary {
     display: inline-flex;
