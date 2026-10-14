@@ -1,7 +1,9 @@
 // "Connect an MCP client" in the Token created dialog: the broker's HTTP MCP
 // endpoint, the line that puts the new token in the environment, and setup
 // for each supported client. Only the environment line carries the token.
-import { useId, useState } from "react";
+// The section is optional help: if it cannot be built or rendered it is left
+// out, and the one-time token around it is unaffected.
+import { Component, useId, useMemo, useState, type ReactNode } from "react";
 import type { AgentTokenOptions, BrokerTokenRecord } from "../../types";
 import { buttonClass, CopyBlock, readStorage, Seg, Tabs, writeStorage } from "../../workbench";
 import { MCP_TOKEN_ENV, mcpClients, tokenEnvironment, type McpClient, type McpClientId } from "./mcp-clients";
@@ -12,6 +14,8 @@ export const MCP_CLIENT_KEY = "aab.portal.mcp-client";
 const SYSTEMS = { unix: "macOS, Linux", windows: "Windows PowerShell" } as const;
 type System = keyof typeof SYSTEMS;
 
+type Snippets = { clients: McpClient[]; environment: Record<System, string> };
+
 /**
  * The MCP endpoint to offer after issuing this token: agent tokens only, when
  * the broker reports an endpoint that accepts them; otherwise null.
@@ -20,15 +24,49 @@ export function tokenMcpUrl(record: Pick<BrokerTokenRecord, "tokenClass">, optio
   return record.tokenClass === "agent_invoke" ? (options?.mcp?.url ?? null) : null;
 }
 
+/** Every client's setup and the environment lines, or null when they cannot be built. */
+function buildSnippets(url: string, token: string): Snippets | null {
+  try {
+    const clients = mcpClients(url);
+    return clients.length ? { clients, environment: tokenEnvironment(token) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Hides the section, rather than the dialog, if it fails to render. */
+class HideOnError extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+export function McpSetup({ url, token }: { url: string; token: string }) {
+  return (
+    <HideOnError>
+      <McpSetupSnippets url={url} token={token} />
+    </HideOnError>
+  );
+}
+
+function McpSetupSnippets({ url, token }: { url: string; token: string }) {
+  const snippets = useMemo(() => buildSnippets(url, token), [url, token]);
+  return snippets ? <McpSetupSection url={url} snippets={snippets} /> : null;
+}
+
 function storedClient(clients: McpClient[]): McpClientId {
   const stored = readStorage(MCP_CLIENT_KEY);
   return clients.find((client) => client.id === stored)?.id ?? clients[0].id;
 }
 
-export function McpSetup({ url, token }: { url: string; token: string }) {
+function McpSetupSection({ url, snippets: { clients, environment } }: { url: string; snippets: Snippets }) {
   const heading = useId();
-  const clients = mcpClients(url);
-  const environment = tokenEnvironment(token);
   const [system, setSystem] = useState<System>("unix");
   const [clientId, setClientId] = useState(() => storedClient(clients));
   const client = clients.find((item) => item.id === clientId) ?? clients[0];

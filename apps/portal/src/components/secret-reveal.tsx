@@ -47,16 +47,35 @@ export function SecretRevealModal({
         </>
       }
     >
-      <div className="wb-form-stack">
-        <Banner tone="warning" slim>
-          Copy this {secretLabel.toLowerCase()} now. It cannot be shown again after you close this dialog.
-        </Banner>
-        {details}
-        <pre className="wb-code pt-reveal" aria-label={secretLabel}>
-          {secret}
-        </pre>
+      <SecretRevealBody secretLabel={secretLabel} secret={secret} details={details}>
         {children}
-      </div>
+      </SecretRevealBody>
     </Modal>
+  );
+}
+
+/** The dialog body: the warning, details, the secret, then `children`. */
+export function SecretRevealBody({
+  secretLabel,
+  secret,
+  details,
+  children
+}: {
+  secretLabel: string;
+  secret: string;
+  details?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="wb-form-stack">
+      <Banner tone="warning" slim>
+        Copy this {secretLabel.toLowerCase()} now. It cannot be shown again after you close this dialog.
+      </Banner>
+      {details}
+      <pre className="wb-code pt-reveal" aria-label={secretLabel}>
+        {secret}
+      </pre>
+      {children}
+    </div>
   );
 }

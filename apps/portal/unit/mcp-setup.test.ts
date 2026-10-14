@@ -31,4 +31,11 @@ describe("MCP setup after token issuance", () => {
     // The environment line is the only place the token appears.
     expect(markup.split(TOKEN)).toHaveLength(2);
   });
+
+  it("renders for an internationalized endpoint URL", () => {
+    const url = "https://例え.test/mcp";
+    const markup = renderToStaticMarkup(createElement(McpSetup, { url, token: TOKEN }));
+    expect(markup).toContain("Connect an MCP client");
+    expect(markup).toContain(`>${url}<`);
+  });
 });

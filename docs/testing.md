@@ -657,8 +657,9 @@ immutable review/reveal, existing coarse-token display, unavailable-value
 warnings and restoration, and lifecycle orthogonality. The portal fixture enables
 loopback HTTP MCP, so the reveal journeys also copy the MCP client setup and check
 that client snippets omit the token; unit tests cover each client's
-snippets and the Cursor install link, and host tests cover when token options
-report the endpoint. Audit
+snippets and the Cursor install link, including internationalized and escaped
+URLs, and that a failing setup section leaves the token reveal intact. Host
+tests cover when token options report the endpoint and its parsed URL. Audit
 assertions require canonical safe boundary metadata and forbid raw secrets.
 Deployment smoke covers one fine-grained token and one existing coarse token;
 no database migration or configuration change is expected.
