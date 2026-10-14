@@ -206,6 +206,7 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::Upst
 pub trait agent_access_provider::host::UpstreamClientFactory: core::marker::Send + core::marker::Sync
 pub fn agent_access_provider::host::UpstreamClientFactory::build_client(&self, &agent_access_provider::host::ClientTransportSpec<'_>) -> core::result::Result<agent_access_provider::host::TransportClient, agent_access_provider::host::UpstreamClientFactoryError>
 pub fn agent_access_provider::host::admitted_request(agent_access_provider::host::AdmittedRequestParts) -> agent_access_provider::AdmittedRequest
+pub fn agent_access_provider::host::authorize_host_request(reqwest::async_impl::request::RequestBuilder, &agent_access_provider::UpstreamAuthorization) -> reqwest::async_impl::request::RequestBuilder
 pub fn agent_access_provider::host::basic_credential(alloc::string::String, alloc::string::String) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::bearer_credential(alloc::string::String) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::build_context<'a>(&'a agent_access_provider::ProviderLimits, &'a dyn agent_access_provider::host::UpstreamClientFactory, agent_access_provider::ProviderAttributionConfig, core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> agent_access_provider::BuildContext<'a>
@@ -2234,12 +2235,8 @@ pub fn agent_access_provider::DelegatedAccess::target(&self) -> &str
 pub fn agent_access_provider::DelegatedAccess::version(&self) -> &str
 impl core::clone::Clone for agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedAccess::clone(&self) -> agent_access_provider::DelegatedAccess
-impl core::cmp::Eq for agent_access_provider::DelegatedAccess
-impl core::cmp::PartialEq for agent_access_provider::DelegatedAccess
-pub fn agent_access_provider::DelegatedAccess::eq(&self, &agent_access_provider::DelegatedAccess) -> bool
 impl core::fmt::Debug for agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedAccess::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::DelegatedAccess
 impl core::marker::Freeze for agent_access_provider::DelegatedAccess
 impl core::marker::Send for agent_access_provider::DelegatedAccess
 impl core::marker::Sync for agent_access_provider::DelegatedAccess
@@ -2351,12 +2348,8 @@ pub fn agent_access_provider::ExecutionCredential::authorization_as(&self, &agen
 pub fn agent_access_provider::ExecutionCredential::kind(&self) -> agent_access_provider::StaticCredentialKind
 impl core::clone::Clone for agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::clone(&self) -> agent_access_provider::ExecutionCredential
-impl core::cmp::Eq for agent_access_provider::ExecutionCredential
-impl core::cmp::PartialEq for agent_access_provider::ExecutionCredential
-pub fn agent_access_provider::ExecutionCredential::eq(&self, &agent_access_provider::ExecutionCredential) -> bool
 impl core::fmt::Debug for agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::ExecutionCredential
 impl core::marker::Freeze for agent_access_provider::ExecutionCredential
 impl core::marker::Send for agent_access_provider::ExecutionCredential
 impl core::marker::Sync for agent_access_provider::ExecutionCredential
@@ -3145,7 +3138,8 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ReasonCodeI
 #[non_exhaustive] pub struct agent_access_provider::RedirectRules<'a>
 impl<'a> agent_access_provider::RedirectRules<'a>
 pub fn agent_access_provider::RedirectRules<'a>::correlating_other_origins(self) -> Self
-pub fn agent_access_provider::RedirectRules<'a>::new(u32, core::time::Duration, &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::new(u32, core::time::Duration) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::with_authorization(self, &'a agent_access_provider::UpstreamAuthorization) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::with_decorate(self, &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::with_vet(self, &'a (dyn core::ops::function::Fn(&url::Url) -> bool + core::marker::Sync)) -> Self
 impl<'a> core::marker::Freeze for agent_access_provider::RedirectRules<'a>
@@ -3604,8 +3598,6 @@ impl core::marker::UnsafeUnpin for agent_access_provider::UnsupportedCredentialM
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UnsupportedCredentialMode
 pub struct agent_access_provider::UpstreamAuthorization
-impl agent_access_provider::UpstreamAuthorization
-pub fn agent_access_provider::UpstreamAuthorization::apply(&self, reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder
 impl core::clone::Clone for agent_access_provider::UpstreamAuthorization
 pub fn agent_access_provider::UpstreamAuthorization::clone(&self) -> agent_access_provider::UpstreamAuthorization
 impl core::fmt::Debug for agent_access_provider::UpstreamAuthorization
@@ -3623,6 +3615,8 @@ pub agent_access_provider::UpstreamCall::operation: &'a str
 impl<'a> agent_access_provider::UpstreamCall<'a>
 pub fn agent_access_provider::UpstreamCall<'a>::new(&'a str) -> Self
 pub fn agent_access_provider::UpstreamCall<'a>::with_attempt(self, u32) -> Self
+pub fn agent_access_provider::UpstreamCall<'a>::with_authorization(self, &'a agent_access_provider::UpstreamAuthorization) -> Self
+pub fn agent_access_provider::UpstreamCall<'a>::with_authorizations(self, &'a [agent_access_provider::UpstreamAuthorization]) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::UpstreamCall<'a>
 pub fn agent_access_provider::UpstreamCall<'a>::clone(&self) -> agent_access_provider::UpstreamCall<'a>
 impl<'a> core::fmt::Debug for agent_access_provider::UpstreamCall<'a>
@@ -4010,7 +4004,7 @@ struct agent_access_provider::SigningError: unit
 struct agent_access_provider::TokenGrant: named fields, non-exhaustive
 struct agent_access_provider::UnsupportedCredentialMode: unit
 struct agent_access_provider::UpstreamAuthorization: named fields, private fields
-struct agent_access_provider::UpstreamCall: named fields, non-exhaustive
+struct agent_access_provider::UpstreamCall: named fields, private fields, non-exhaustive
 struct agent_access_provider::UpstreamClient: named fields, private fields
 struct agent_access_provider::UpstreamClientSpec: named fields, private fields, non-exhaustive
 struct agent_access_provider::UpstreamRetryAfter: named fields, private fields
