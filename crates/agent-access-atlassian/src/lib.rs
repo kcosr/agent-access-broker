@@ -2,9 +2,9 @@
 //! validation, credential authorization and the tenant/gateway client routes.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, CredentialView, EgressDeclaration, EgressProxyConfig, ExecutionCredential,
-    ProviderBuildError, ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamClient,
-    UpstreamClientSpec,
+    ClientProfile, EgressDeclaration, EgressProxyConfig, ExecutionCredential, ProviderBuildError,
+    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthorization,
+    UpstreamClient, UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -80,28 +80,25 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
 }
 
 /// How an Atlassian execution credential authenticates a request: HTTP
-/// Basic for a tenant API token, a bearer token through the gateway.
-pub enum AtlassianAuthorization<'a> {
-    Basic { username: &'a str, token: &'a str },
-    Bearer(&'a str),
-}
+/// Basic for a tenant API token, a bearer token through the gateway. The SDK
+/// presents the credential; this helper never reads its material.
+#[derive(Debug, Clone)]
+pub struct AtlassianAuthorization(UpstreamAuthorization);
 
-impl<'a> AtlassianAuthorization<'a> {
+impl AtlassianAuthorization {
     /// How `credential` authenticates, or `None` for a credential kind
     /// Atlassian providers do not support, which the caller must reject.
-    pub fn new(credential: &'a ExecutionCredential) -> Option<Self> {
-        match credential.view() {
-            CredentialView::Basic { username, token } => Some(Self::Basic { username, token }),
-            CredentialView::Bearer { token } => Some(Self::Bearer(token)),
+    pub fn new(credential: &ExecutionCredential) -> Option<Self> {
+        match credential.kind() {
+            StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken => {
+                Some(Self(credential.authorization()))
+            }
             _ => None,
         }
     }
 
     pub fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match self {
-            Self::Basic { username, token } => builder.basic_auth(username, Some(token)),
-            Self::Bearer(token) => builder.bearer_auth(token),
-        }
+        self.0.apply(builder)
     }
 }
 
@@ -429,5 +426,30 @@ mod tests {
         let mut proxied = site(Some(CLOUD_ID), &gateway);
         proxied.egress_proxy = Some(&proxy);
         assert_eq!(proxied.route_fingerprint(), base);
+    }
+
+    /// Basic credentials authorize tenant requests and bearer credentials
+    /// gateway requests, with the bytes reqwest's own helpers produce.
+    #[test]
+    fn authorization_presents_basic_and_bearer_credentials_unchanged() {
+        let request = || reqwest::Client::new().get("https://example.atlassian.net/wiki/rest/api/");
+        for (credential, expected) in [
+            (
+                basic_credential("agent@example.com", "api-token"),
+                request().basic_auth("agent@example.com", Some("api-token")),
+            ),
+            (
+                bearer_credential("gateway-token"),
+                request().bearer_auth("gateway-token"),
+            ),
+        ] {
+            let authorization = AtlassianAuthorization::new(&credential).unwrap();
+            let sent = authorization.apply(request()).build().unwrap();
+            let expected = expected.build().unwrap();
+            let header = &sent.headers()[reqwest::header::AUTHORIZATION];
+            assert_eq!(header, &expected.headers()[reqwest::header::AUTHORIZATION]);
+            assert!(header.is_sensitive());
+            assert!(!format!("{authorization:?}").contains("token"));
+        }
     }
 }

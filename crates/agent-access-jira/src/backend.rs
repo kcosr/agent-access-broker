@@ -1785,7 +1785,7 @@ pub(crate) fn authenticated_request(
 
 fn atlassian_authorization(
     credential: &ExecutionCredential,
-) -> Result<AtlassianAuthorization<'_>, JiraBackendError> {
+) -> Result<AtlassianAuthorization, JiraBackendError> {
     AtlassianAuthorization::new(credential)
         .ok_or_else(|| JiraBackendError::Protocol("unsupported Jira credential kind".to_string()))
 }

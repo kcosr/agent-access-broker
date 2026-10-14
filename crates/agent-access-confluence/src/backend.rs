@@ -3003,7 +3003,7 @@ pub(crate) fn authenticated_request(
 
 fn atlassian_authorization(
     credential: &ExecutionCredential,
-) -> Result<AtlassianAuthorization<'_>, ConfluenceBackendError> {
+) -> Result<AtlassianAuthorization, ConfluenceBackendError> {
     AtlassianAuthorization::new(credential).ok_or_else(|| {
         ConfluenceBackendError::Protocol("unsupported Confluence credential kind".to_string())
     })

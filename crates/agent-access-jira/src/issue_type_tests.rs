@@ -1,5 +1,4 @@
 use super::*;
-use agent_access_provider::test_support::{credential_token, credential_username};
 
 fn invocation(inputs: Value) -> ProviderInvocation {
     let mut invocation = issue_create_invocation(inputs);
@@ -136,14 +135,7 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         let observations = backend.credential_observations.lock().unwrap();
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0].operation, "issue_types");
-        assert_eq!(
-            observations[0].token.as_deref(),
-            Some(credential_token(&credential))
-        );
-        assert_eq!(
-            observations[0].username.as_deref(),
-            credential_username(&credential)
-        );
+        assert_eq!(observations[0].credential, credential);
         assert_eq!(response.upstream_status, Some(200));
         assert_eq!(response.upstream_duration_ms, Some(7));
         let audit = response.audit.unwrap();
