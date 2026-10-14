@@ -16,12 +16,12 @@ use agent_access_provider::presentation::{
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
     BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
-    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
-    MutationReceipt, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
-    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, ReasonCode,
-    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, MutationReceipt,
+    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
+    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
+    StaticCredentialKind, UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec,
     UpstreamError, ValidationContext, attachment_upload_plan, complete_upstream_trace,
     file_upload_body, parse_backend_config, read_bounded_body, take_upstream_trace,
     validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
@@ -519,13 +519,13 @@ impl ConformanceProvider {
         url
     }
 
-    fn token(request: &ProviderInvocation) -> Result<&str, ProviderError> {
-        match request
-            .execution()
-            .static_credential()
-            .map(|credential| credential.view())
-        {
-            Some(CredentialView::Bearer { token }) => Ok(token),
+    /// The selected bearer token as the SDK presents it. Every other kind,
+    /// including one this version does not know, is rejected.
+    fn authorization(request: &ProviderInvocation) -> Result<UpstreamAuthorization, ProviderError> {
+        match request.execution().static_credential() {
+            Some(credential) if credential.kind() == StaticCredentialKind::BearerToken => {
+                Ok(credential.authorization())
+            }
             _ => Err(ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "conformance needs a bearer token",
@@ -604,9 +604,8 @@ impl ConformanceProvider {
         let response = self
             .pings
             .send(
-                self.pings
-                    .request(reqwest::Method::POST, url)
-                    .bearer_auth(Self::token(request)?)
+                Self::authorization(request)?
+                    .apply(self.pings.request(reqwest::Method::POST, url))
                     .header("X-Endpoint-Key", key)
                     .json(&json!({"message": inputs.message})),
                 UpstreamCall::new("endpoint.ping"),
@@ -642,9 +641,10 @@ impl ConformanceProvider {
         let response = self
             .requests
             .send(
-                self.requests
-                    .request(reqwest::Method::GET, self.url(item, false))
-                    .bearer_auth(Self::token(request)?),
+                Self::authorization(request)?.apply(
+                    self.requests
+                        .request(reqwest::Method::GET, self.url(item, false)),
+                ),
                 UpstreamCall::new("item.view"),
             )
             .await
@@ -680,9 +680,10 @@ impl ConformanceProvider {
         let mut response = self
             .downloads
             .send_with_deadline(
-                self.downloads
-                    .request(reqwest::Method::GET, self.url(item, true))
-                    .bearer_auth(Self::token(request)?),
+                Self::authorization(request)?.apply(
+                    self.downloads
+                        .request(reqwest::Method::GET, self.url(item, true)),
+                ),
                 self.idle_timeout,
                 UpstreamCall::new("item.download"),
             )
@@ -746,10 +747,11 @@ impl ConformanceProvider {
         };
         check_part(part, attachment)?;
         let started = Instant::now();
-        let builder = self
-            .uploads
-            .request(reqwest::Method::PUT, self.url(item, true))
-            .bearer_auth(Self::token(request)?)
+        let builder = Self::authorization(request)?
+            .apply(
+                self.uploads
+                    .request(reqwest::Method::PUT, self.url(item, true)),
+            )
             .header(
                 reqwest::header::CONTENT_TYPE,
                 attachment.content_type.as_str(),
