@@ -50,21 +50,23 @@ fn http_mcp_bearer_source(source: &IdentitySourceConfig) -> bool {
         && matches!(source.kind.as_str(), "static_principals" | "broker_tokens")
 }
 
-/// The canonical HTTP MCP URL at which an issued `agent_invoke` token
-/// authenticates as `Authorization: Bearer <token>`: the endpoint is enabled
-/// with a public URL and a Bearer `broker_tokens` source accepts the token.
-pub fn agent_token_mcp_url(config: &BrokerConfig) -> Option<&str> {
+/// The HTTP MCP URL at which an issued `agent_invoke` token authenticates as
+/// `Authorization: Bearer <token>`: the endpoint is enabled with a public URL
+/// and a Bearer `broker_tokens` source accepts the token. The URL is the
+/// parsed URL's serialization (an ASCII host and normalized separators), as
+/// the endpoint matches it, never the configured spelling.
+pub fn agent_token_mcp_url(config: &BrokerConfig) -> Option<String> {
     let mcp = &config.mcp;
     let accepts_agent_tokens = config
         .identity
         .sources
         .iter()
         .any(|source| source.kind == "broker_tokens" && http_mcp_bearer_source(source));
-    if mcp.enabled && accepts_agent_tokens {
-        mcp.public_url.as_deref()
-    } else {
-        None
+    if !mcp.enabled || !accepts_agent_tokens {
+        return None;
     }
+    let url = Url::parse(mcp.public_url.as_deref()?).ok()?;
+    Some(url.into())
 }
 
 pub(crate) fn validate(config: &BrokerConfig, errors: &mut Vec<String>) {
@@ -280,15 +282,10 @@ upload_spool_dir="upload-spool"
         // Static principals authenticate here, but the broker issues no tokens to them.
         assert_eq!(agent_token_mcp_url(&config), None);
         config.identity.sources[0].kind = "broker_tokens".into();
-        assert_eq!(
-            agent_token_mcp_url(&config),
-            Some("https://broker.example.com/mcp")
-        );
+        let expected = Some("https://broker.example.com/mcp".to_string());
+        assert_eq!(agent_token_mcp_url(&config), expected);
         config.identity.sources[0].header = "authorization".into();
-        assert_eq!(
-            agent_token_mcp_url(&config),
-            Some("https://broker.example.com/mcp")
-        );
+        assert_eq!(agent_token_mcp_url(&config), expected);
         for (header, scheme) in [
             ("X-Identity", "Bearer"),
             ("Authorization", "raw"),
@@ -304,6 +301,34 @@ upload_spool_dir="upload-spool"
         assert_eq!(agent_token_mcp_url(&without_url), None);
         config.mcp.enabled = false;
         assert_eq!(agent_token_mcp_url(&config), None);
+    }
+    #[test]
+    fn issued_tokens_receive_the_parsed_endpoint_url_not_its_configured_spelling() {
+        let mut config = config();
+        config.identity.sources[0].kind = "broker_tokens".into();
+        for (configured, canonical) in [
+            ("https://例え.test/mcp", "https://xn--r8jz45g.test/mcp"),
+            (
+                "https://broker.example.com\\mcp",
+                "https://broker.example.com/mcp",
+            ),
+            (
+                "https:\\\\broker.example.com\\mcp",
+                "https://broker.example.com/mcp",
+            ),
+            (
+                "HTTPS://Broker.EXAMPLE.com:443/mcp",
+                "https://broker.example.com/mcp",
+            ),
+        ] {
+            config.mcp.public_url = Some(configured.into());
+            assert!(errors(&config).is_empty(), "{configured}");
+            assert_eq!(
+                agent_token_mcp_url(&config).as_deref(),
+                Some(canonical),
+                "{configured}"
+            );
+        }
     }
     #[test]
     fn origins_are_exact_canonical_origins_not_paths_or_patterns() {

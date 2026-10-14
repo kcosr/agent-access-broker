@@ -3336,9 +3336,7 @@ impl BrokerRuntime {
             resource_groups,
             execution_contexts,
             services,
-            mcp: crate::agent_token_mcp_url(self.config()).map(|url| AgentTokenMcpEndpoint {
-                url: url.to_owned(),
-            }),
+            mcp: crate::agent_token_mcp_url(self.config()).map(|url| AgentTokenMcpEndpoint { url }),
         }
     }
 

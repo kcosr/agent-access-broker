@@ -707,7 +707,8 @@ The response also contains `mcp`, where an issued token connects MCP clients:
 `{"url": "https://broker.example.com/mcp"}` with the configured
 [`mcp.public_url`](configuration.md#mcp) when the HTTP MCP endpoint is enabled
 and a `broker_tokens` identity source reads `Authorization` with scheme
-`Bearer`, otherwise `null`. Like `brokerHosts`, it is configuration rather than
+`Bearer`, otherwise `null`. The URL is serialized as the broker parses it, with
+an ASCII (punycode) host and normalized separators. Like `brokerHosts`, it is configuration rather than
 policy. The portal uses it for client setup after issuing an agent token.
 
 `POST /v1/tokens` requires `allowedExecutionContexts` with one or

@@ -450,8 +450,9 @@ All notable changes to this project are documented in this file.
   `MutationStatus` names the non-exhaustive status vocabulary.
 - Agent token options (`GET /v1/tokens/options` and
   `GET /v1/admin/principals/{principal}/agent-token-options`) report `mcp`:
-  `{"url": ...}` with `mcp.public_url` when the HTTP MCP endpoint is enabled and
-  a `broker_tokens` identity source reads `Authorization: Bearer`, otherwise
+  `{"url": ...}` with `mcp.public_url`, serialized as the broker parses it
+  (punycode host, normalized separators), when the HTTP MCP endpoint is enabled
+  and a `broker_tokens` identity source reads `Authorization: Bearer`, otherwise
   `null`. Auditors receive `null`.
 - After issuing an agent token, the portal's **Token created** dialog shows
   **Connect an MCP client** when token options report an HTTP MCP endpoint: the

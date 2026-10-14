@@ -361,6 +361,25 @@ async fn token_options_offer_the_bearer_mcp_endpoint_to_token_issuers() {
 }
 
 #[tokio::test]
+async fn token_options_offer_the_endpoint_as_the_broker_parses_it() {
+    let fixture = metadata_fixture_with(|config| {
+        enable_mcp(config);
+        config.mcp.public_url = Some("https://例え.test\\mcp".to_string());
+    })
+    .await;
+    for (uri, options) in AGENT_TOKEN_OPTIONS
+        .iter()
+        .zip(issuer_token_options(&fixture).await)
+    {
+        assert_eq!(
+            options["mcp"],
+            json!({"url": "https://xn--r8jz45g.test/mcp"}),
+            "{uri}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn token_options_offer_no_mcp_endpoint_while_it_is_disabled() {
     let fixture = metadata_fixture_with(|config| {
         enable_mcp(config);
