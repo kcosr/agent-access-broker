@@ -44,11 +44,6 @@ impl DelegatedAccess {
         }
     }
 
-    /// The bearer token to present upstream.
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
     /// The token as `Authorization: Bearer <token>`, presented as issued,
     /// without further checks.
     pub fn authorization(&self) -> UpstreamAuthorization {

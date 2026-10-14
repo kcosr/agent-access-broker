@@ -5,10 +5,10 @@ use crate::host::{
     UpstreamClientFactoryError, scope_request,
 };
 use crate::{
-    BuildContext, ClientProfile, CorrelationContext, CredentialView, DelegatedBindingId,
-    EgressDeclaration, EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity,
-    Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor,
-    ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
+    BuildContext, ClientProfile, CorrelationContext, DelegatedBindingId, EgressDeclaration,
+    EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity, Provider,
+    ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor, ServiceProvider,
+    SigningError, StableSigningKey, is_literal_loopback,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -207,7 +207,9 @@ fn test_tls() -> &'static Arc<rustls::ClientConfig> {
     })
 }
 
-/// A `basic_api_token` credential for tests.
+/// A `basic_api_token` credential for tests. Credentials compare with `==`,
+/// so a test double records the credential it received and compares it with
+/// the one the test expects, without reading its material.
 pub fn basic_credential(username: &str, token: &str) -> ExecutionCredential {
     ExecutionCredential::basic(username.to_owned(), token.to_owned())
 }
@@ -215,14 +217,6 @@ pub fn basic_credential(username: &str, token: &str) -> ExecutionCredential {
 /// A `bearer_token` credential for tests.
 pub fn bearer_credential(token: &str) -> ExecutionCredential {
     ExecutionCredential::bearer(token.to_owned())
-}
-
-/// The token of either credential kind, for test assertions about which
-/// credential reached a fake upstream.
-pub fn credential_token(credential: &ExecutionCredential) -> &str {
-    match credential.view() {
-        CredentialView::Basic { token, .. } | CredentialView::Bearer { token } => token,
-    }
 }
 
 /// Runs `future` as the invocation hook of `service`'s `action`, as the host
@@ -238,14 +232,6 @@ pub async fn in_invocation_hook<F: std::future::Future>(
         future,
     )
     .await
-}
-
-/// The username of a `basic_api_token` credential, for test assertions.
-pub fn credential_username(credential: &ExecutionCredential) -> Option<&str> {
-    match credential.view() {
-        CredentialView::Basic { username, .. } => Some(username),
-        CredentialView::Bearer { .. } => None,
-    }
 }
 
 /// A delegated binding identity derived from `seed`, for lease doubles.

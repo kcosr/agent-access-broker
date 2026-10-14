@@ -41,7 +41,10 @@
 //!   the [`HostPort`]s produced, which providers pass on unchanged.
 //!
 //! Nothing here resolves secret references, loads keys or TLS files, reads the
-//! process environment or touches a store: those stay inside the host.
+//! process environment or touches a store: those stay inside the host. Nothing
+//! here returns credential material either. The host keeps the plaintext it
+//! decrypts, and the credentials these ports build present it upstream only
+//! as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
     ClientProfile, CorrelationContext, CredentialMode, Decision, DelegatedBindingId,

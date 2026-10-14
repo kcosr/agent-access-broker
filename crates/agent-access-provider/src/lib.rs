@@ -240,7 +240,7 @@ pub use correlation::{
     current_correlation_context, current_provider_action,
 };
 pub use credential::{
-    CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
+    CredentialMode, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
     UnsupportedCredentialMode,
 };
 pub use delegated::{

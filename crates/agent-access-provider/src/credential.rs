@@ -94,23 +94,6 @@ enum CredentialMaterial {
     Bearer { token: String },
 }
 
-/// Read-only access to an [`ExecutionCredential`]'s material.
-#[non_exhaustive]
-#[derive(Clone, Copy)]
-pub enum CredentialView<'a> {
-    Basic { username: &'a str, token: &'a str },
-    Bearer { token: &'a str },
-}
-
-impl fmt::Debug for CredentialView<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Basic { .. } => "CredentialView::Basic(<redacted>)",
-            Self::Bearer { .. } => "CredentialView::Bearer(<redacted>)",
-        })
-    }
-}
-
 impl ExecutionCredential {
     pub(crate) fn basic(username: String, token: String) -> Self {
         Self {
@@ -148,18 +131,6 @@ impl ExecutionCredential {
         placement: &CredentialPlacement,
     ) -> Result<UpstreamAuthorization, CredentialPlacementError> {
         self.material().placed(placement)
-    }
-
-    pub fn view(&self) -> CredentialView<'_> {
-        match &self.material {
-            CredentialMaterial::Basic { username, token } => CredentialView::Basic {
-                username: username.as_str(),
-                token: token.as_str(),
-            },
-            CredentialMaterial::Bearer { token } => CredentialView::Bearer {
-                token: token.as_str(),
-            },
-        }
     }
 
     fn material(&self) -> Material<'_> {
