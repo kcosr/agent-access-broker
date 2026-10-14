@@ -16,7 +16,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::RequestBuilder;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+#[cfg(any(test, feature = "test-support"))]
+use sha2::{Digest, Sha256};
 use std::fmt;
+#[cfg(any(test, feature = "test-support"))]
+use subtle::ConstantTimeEq;
 
 /// The largest token, in bytes, that a [`CredentialPlacement`] presents.
 const PLACED_TOKEN_MAX_BYTES: usize = 32 * 1024;
@@ -271,6 +275,36 @@ impl Material<'_> {
             }
         }
     }
+
+    /// A digest of the kind and material under an unambiguous,
+    /// length-delimited encoding, for constant-time comparison in tests.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn digest(self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"agent-access/credential-material/v1\0");
+        let fields: &[&str] = match self {
+            Self::Basic { username, token } => {
+                digest.update([1]);
+                &[username, token]
+            }
+            Self::Token(token) => {
+                digest.update([2]);
+                &[token]
+            }
+        };
+        for field in fields {
+            digest.update((field.len() as u64).to_be_bytes());
+            digest.update(field.as_bytes());
+        }
+        digest.finalize().into()
+    }
+}
+
+/// Whether two material digests are equal, in time independent of where they
+/// differ.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn digests_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.ct_eq(right).into()
 }
 
 fn basic(username: &str, token: &str) -> UpstreamAuthorization {
@@ -546,6 +580,37 @@ mod tests {
                     .unwrap_err(),
                 CredentialPlacementError::InvalidMaterial
             );
+        }
+    }
+
+    /// Digests separate kinds and field boundaries, and compare equal only
+    /// for the same kind and material.
+    #[test]
+    fn material_digests_are_unambiguous() {
+        let digest = |material: Material<'_>| material.digest();
+        let basic = digest(Material::Basic {
+            username: "ab",
+            token: "c",
+        });
+        assert!(digests_equal(
+            &basic,
+            &digest(Material::Basic {
+                username: "ab",
+                token: "c"
+            })
+        ));
+        for other in [
+            Material::Basic {
+                username: "a",
+                token: "bc",
+            },
+            Material::Basic {
+                username: "ab",
+                token: "d",
+            },
+            Material::Token("ab:c"),
+        ] {
+            assert!(!digests_equal(&basic, &digest(other)));
         }
     }
 

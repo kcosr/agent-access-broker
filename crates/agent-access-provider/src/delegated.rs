@@ -13,8 +13,10 @@ use std::sync::Arc;
 /// never read the token: they obtain an [`UpstreamAuthorization`] with
 /// [`Self::authorization`] or [`Self::authorization_as`] and hand it to the
 /// upstream client's send methods. The token never appears in Debug output.
+/// Only with the `test-support` feature does access compare (`==`), with the
+/// token compared in constant time over digests.
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct DelegatedAccess {
     token: String,
     target: String,
@@ -81,6 +83,26 @@ impl DelegatedAccess {
         self.expires_at
     }
 }
+
+/// Test support only: equal when every field is. The token is compared in
+/// constant time over digests, and the comparison never stops early at it.
+#[cfg(any(test, feature = "test-support"))]
+impl PartialEq for DelegatedAccess {
+    fn eq(&self, other: &Self) -> bool {
+        let token = crate::authorization::digests_equal(
+            &Material::Token(&self.token).digest(),
+            &Material::Token(&other.token).digest(),
+        );
+        token
+            & (self.target == other.target)
+            & (self.audience == other.audience)
+            & (self.version == other.version)
+            & (self.expires_at == other.expires_at)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Eq for DelegatedAccess {}
 
 impl std::fmt::Debug for DelegatedAccess {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -355,6 +377,14 @@ mod tests {
         );
         let rendered = format!("{access:?} {:?}", access.authorization());
         assert!(!rendered.contains("delegated-secret"), "{rendered}");
+        let with_token =
+            |token: &str| DelegatedAccess::new(token, TARGET, AUDIENCE, "v1", i64::MAX);
+        assert_eq!(access, with_token("delegated-secret"));
+        assert_ne!(access, with_token("delegated-secreT"));
+        assert_ne!(
+            access,
+            DelegatedAccess::new("delegated-secret", TARGET, AUDIENCE, "v2", i64::MAX)
+        );
     }
 
     #[test]

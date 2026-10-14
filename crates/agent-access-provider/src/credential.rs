@@ -82,15 +82,17 @@ impl StaticCredentialKind {
 /// HTTP authentication scheme, or [`Self::authorization_as`], in a
 /// [`CredentialPlacement`] the upstream requires, and hand it to the upstream
 /// client's send methods, which add it to the request. [`Self::kind`] is the
-/// only fact about it they can inspect. The
-/// value does not serialize, never appears in Debug output, and compares
-/// equal to a credential with the same kind and material.
-#[derive(Clone, PartialEq, Eq)]
+/// only fact about it they can inspect. The value does not serialize and
+/// never appears in Debug output. Only with the `test-support` feature does
+/// it compare (`==`), in constant time over digests of its kind and
+/// material, so tests can check which credential a double received; release
+/// builds have no comparison.
+#[derive(Clone)]
 pub struct ExecutionCredential {
     material: CredentialMaterial,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 enum CredentialMaterial {
     Basic { username: String, token: String },
     Bearer { token: String },
@@ -142,6 +144,19 @@ impl ExecutionCredential {
         }
     }
 }
+
+/// Test support only: equal when the kind and material are, compared in
+/// constant time over digests so that no secret byte decides how long the
+/// comparison takes.
+#[cfg(any(test, feature = "test-support"))]
+impl PartialEq for ExecutionCredential {
+    fn eq(&self, other: &Self) -> bool {
+        crate::authorization::digests_equal(&self.material().digest(), &other.material().digest())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Eq for ExecutionCredential {}
 
 impl fmt::Debug for ExecutionCredential {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -215,6 +230,7 @@ mod tests {
         }
     }
 
+    /// The Authorization header the host presents for `authorization`.
     fn authorization_header(authorization: UpstreamAuthorization) -> String {
         let request = crate::host::authorize_host_request(
             reqwest::Client::new().get("https://service.example.test/"),
@@ -285,6 +301,11 @@ mod tests {
         assert_ne!(
             ExecutionCredential::bearer("token".into()),
             ExecutionCredential::basic(String::new(), "token".into())
+        );
+        // Field boundaries are part of the comparison.
+        assert_ne!(
+            ExecutionCredential::basic("ab".into(), "c".into()),
+            ExecutionCredential::basic("a".into(), "bc".into())
         );
     }
 
