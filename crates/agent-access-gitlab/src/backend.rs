@@ -4726,8 +4726,8 @@ pub(crate) fn authenticated_gitlab_request(
     builder: reqwest::RequestBuilder,
     credential: &ExecutionCredential,
 ) -> Result<reqwest::RequestBuilder, GitlabBackendError> {
-    match credential.view() {
-        CredentialView::Bearer { token } => Ok(builder.bearer_auth(token)),
+    match credential.kind() {
+        StaticCredentialKind::BearerToken => Ok(credential.authorization().apply(builder)),
         _ => Err(
             GitlabBackendError::Protocol("unsupported GitLab credential kind".to_string())
                 .unbuilt(),
