@@ -459,9 +459,12 @@ material a kind requires is always present. Provider-defined kinds, credential
 JSON and delegated lookup credentials are not supported. A lookup credential is
 static, is used only for lookup, and never stands in for execution material.
 
-Provider code never reads credential material. Neither an
-`ExecutionCredential` nor `DelegatedAccess` has a plaintext accessor; the SDK
-attaches the material to upstream requests as an `UpstreamAuthorization`:
+Provider code never reads credential material and never holds a request that
+carries it. Neither an `ExecutionCredential` nor `DelegatedAccess` has a
+plaintext accessor. The provider turns the credential into an opaque
+`UpstreamAuthorization` and hands it to the upstream client's send method with
+the request; the client adds the header to the request it builds, immediately
+before dispatch:
 
 - `credential.authorization()` presents the credential in its kind's own HTTP
   authentication scheme, as stored: `Authorization: Basic` with the username
@@ -479,19 +482,26 @@ attaches the material to upstream requests as an `UpstreamAuthorization`:
   | `CredentialPlacement::basic()` | `Authorization: Basic <base64 of username:token>` | A `basic_api_token` credential with a non-empty username and token. |
   | `CredentialPlacement::header(name)` | `<name>: <token>` | The same tokens as `bearer()`, as the whole header value, such as an API key. |
 
-- `authorization.apply(request)` adds the header to a request built by an
-  `UpstreamClient`, replacing any value the request already has for it. The
-  value is marked sensitive, so every send method refuses to deliver it to
-  another origin than the client's base (see
-  [credentials and origins](#credentials-and-origins)), and Debug output names
-  only the header. Keep the authorization for every request of an operation,
-  including in the `authorize` callback of a redirect chain.
+- `UpstreamCall::new(operation).with_authorization(&authorization)` sends a
+  request with the credential; `with_authorizations(&[..])` sends several,
+  such as an API key and a separate transport token, in order. The client adds
+  each header right after its correlation headers, before the headers the
+  provider set, or in place of a provider header with the same name. For a
+  redirect chain, `RedirectRules::with_authorization` presents it on every hop
+  to the service's own origin, after the hop's decoration.
+- The header value is marked sensitive, so the client refuses a request to
+  another origin than its base that would carry it (see
+  [credentials and origins](#credentials-and-origins)). An
+  `UpstreamAuthorization` exposes nothing, and its Debug output names only the
+  header.
 
-The SDK produces the same bytes as reqwest's `basic_auth` and `bearer_auth`.
+The client sends the same bytes as reqwest's `basic_auth` and `bearer_auth`.
 A provider has no other way to present a credential: there is no query
 parameter or cookie placement, and no request signing with the material.
-Credentials compare with `==` by kind and material, so a test double records
-the credential it received and compares it with the one the test expects.
+Release builds offer no credential comparison. With the `test-support` feature,
+credentials and delegated access compare with `==`, in constant time over
+digests of their material, so a test double records the credential it received
+and compares it with the one the test expects.
 
 When the selected kind is not one the provider can use, deny with
 `credential_not_provisioned`. `StaticCredentialKind` is non-exhaustive, so a
@@ -500,20 +510,20 @@ accepted service kinds and managed profiles in the descriptor so administrators
 see the right forms.
 
 ```rust check
-use agent_access_provider::deps::http::HeaderName;
-use agent_access_provider::deps::reqwest::RequestBuilder;
+use agent_access_provider::deps::http::{HeaderName, Method};
+use agent_access_provider::deps::reqwest::Response;
+use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
     CredentialPlacement, ExecutionCredential, ProviderError, ReasonCode, StaticCredentialKind,
-    UpstreamAuthorization,
+    UpstreamAuthorization, UpstreamCall, UpstreamClient,
 };
 
-/// `request` authorized with the selected bearer token.
-fn bearer_authorized(
-    request: RequestBuilder,
+/// The selected bearer token, or a denial for any other kind.
+fn bearer_authorization(
     credential: &ExecutionCredential,
-) -> Result<RequestBuilder, ProviderError> {
+) -> Result<UpstreamAuthorization, ProviderError> {
     match credential.kind() {
-        StaticCredentialKind::BearerToken => Ok(credential.authorization().apply(request)),
+        StaticCredentialKind::BearerToken => Ok(credential.authorization()),
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "notes needs a bearer token",
@@ -534,6 +544,24 @@ fn api_key(credential: &ExecutionCredential) -> Result<UpstreamAuthorization, Pr
             )
         })
 }
+
+/// GETs `url` with the credential; the client adds it when it sends.
+async fn get_note(
+    client: &UpstreamClient,
+    url: Url,
+    credential: &ExecutionCredential,
+) -> Result<Response, ProviderError> {
+    let authorization = bearer_authorization(credential)?;
+    client
+        .send(
+            client
+                .request(Method::GET, url)
+                .header("Accept", "application/json"),
+            UpstreamCall::new("note.view").with_authorization(&authorization),
+        )
+        .await
+        .map_err(|error| ProviderError::error(error.reason_code(), "notes request failed"))
+}
 ```
 
 ### Delegated access
@@ -551,13 +579,13 @@ token serves, so the provider must check that on every use:
    exactly the audience the provider requires.
 2. Return a `DelegatedAccessError::Revalidation` failure unchanged. Deny a
    `DelegatedAccessError::Mismatch` with `credential_invalid`.
-3. Present the access it returned with `access.authorization()`, as
-   `Authorization: Bearer`, or `access.authorization_as(&placement)` (see
-   [static credentials](#static-credentials)), only to requests for the
-   provider's own origin; the origin check in
-   [credentials and origins](#credentials-and-origins) enforces this. The
-   provider reads the access's target, audience, version and expiry, never its
-   token.
+3. Send the request with the access it returned, as `access.authorization()`
+   (`Authorization: Bearer`) or `access.authorization_as(&placement)`, through
+   `UpstreamCall::with_authorization` (see
+   [static credentials](#static-credentials)). The client presents it only to
+   the provider's own origin (see
+   [credentials and origins](#credentials-and-origins)). The provider reads the
+   access's target, audience, version and expiry, never its token.
 
 ```rust check
 use agent_access_provider::{
@@ -695,9 +723,10 @@ local test servers; it is not a general proxy bypass.
   [outcomes and receipts](#outcomes-and-receipts)).
 - Clients never follow redirects. `get_following_redirects(url, rules,
   operation)` follows a GET chain by hand under
-  `RedirectRules::new(max_redirects, deadline, authorize)`. Every hop must be
+  `RedirectRules::new(max_redirects, deadline)`. Every hop must be
   allowlisted, carry no embedded credentials and pass any `with_vet` check.
-  The helper calls `authorize` only for hops on the service's own origin.
+  The authorization given with `with_authorization` is presented only on hops
+  to the service's own origin.
   Other origins receive correlation headers only with
   `correlating_other_origins()`. Atlassian attachment downloads opt in for
   media hosts; CloudBees CI artifact downloads do not.
@@ -720,9 +749,10 @@ each hop of `get_following_redirects`, refuses a request whose URL is on
 another origin while it carries an `Authorization`, `Proxy-Authorization` or
 `Cookie` header or any header value marked sensitive. The request fails before
 it is sent with `UpstreamError::NotSent`, and its trace records
-`upstream_connection_failed`. Every `UpstreamAuthorization` adds a sensitive
-header, including a `CredentialPlacement::header` API key, so lent credentials
-are always covered. Credentials embedded in a URL also produce a sensitive
+`upstream_connection_failed`. The client adds every `UpstreamAuthorization` a
+call carries as a sensitive header, including a `CredentialPlacement::header`
+API key, so lent credentials are always covered. Credentials embedded in a URL
+also produce a sensitive
 `Authorization` header. Mark any other header that carries a secret the
 provider holds itself sensitive with `HeaderValue::set_sensitive(true)`. A
 secret in a URL query is not a header: keep such URLs on the base origin
@@ -737,33 +767,39 @@ gateway route and each OAuth destination do.
   or a caller input, such as a pagination link or a download location, as
   untrusted, and check its origin first, as `same_origin(&url, client.base())`
   does, when you want to report your own reason instead of `NotSent`.
-- For a redirect chain, apply the authorization in the `authorize` callback of
-  `get_following_redirects`, as `&|request| authorization.apply(request)`,
-  which applies it only to hops on the base origin. Headers from
+- For a redirect chain, give the authorization to
+  `RedirectRules::with_authorization`; the client presents it only on hops to
+  the base origin, after `with_decorate`'s headers. Headers from
   `with_decorate` go to every hop, so they must not carry credentials.
 
 ```rust check
 use agent_access_provider::deps::http::Method;
-use agent_access_provider::deps::reqwest::RequestBuilder;
+use agent_access_provider::deps::reqwest::Response;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
-    ProviderError, ReasonCode, UpstreamAuthorization, UpstreamClient, same_origin,
+    ProviderError, ReasonCode, UpstreamAuthorization, UpstreamCall, UpstreamClient, same_origin,
 };
 
-/// A GET for an upstream-supplied link that reports a link on another origin
-/// as a protocol failure before the client would refuse it.
-fn authorized_get(
+/// GETs an upstream-supplied link with the credential, reporting a link on
+/// another origin as a protocol failure before the client would refuse it.
+async fn authorized_get(
     client: &UpstreamClient,
     link: Url,
     authorization: &UpstreamAuthorization,
-) -> Result<RequestBuilder, ProviderError> {
+) -> Result<Response, ProviderError> {
     if !same_origin(&link, client.base()) {
         return Err(ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "the upstream returned a link on another origin",
         ));
     }
-    Ok(authorization.apply(client.request(Method::GET, link)))
+    client
+        .send(
+            client.request(Method::GET, link),
+            UpstreamCall::new("note.attachment").with_authorization(authorization),
+        )
+        .await
+        .map_err(|error| ProviderError::error(error.reason_code(), "notes request failed"))
 }
 ```
 
@@ -1263,8 +1299,9 @@ behavior:
   attributes and state.
 - `basic_credential`, `bearer_credential`, `delegated_binding_id` and
   `test_signing_key` construct host values. Test support reads no credential
-  material either: compare a credential a test double received with `==`, or
-  assert the header a mock upstream received.
+  material either: with this feature, compare a credential a test double
+  received with `==` (constant time, over digests), or assert the header a
+  mock upstream received.
 - `in_invocation_hook(service, action, future)` runs a future as the host runs
   an invocation hook, so upstream traces are checked as they would be in the
   Broker. It does not include the provider's domain reasons.
@@ -1632,7 +1669,8 @@ impl Provider for NotesProvider {
                 "the admitted notebook does not match the request",
             ));
         }
-        // The SDK presents the token; the provider never reads it.
+        // The client presents the token when it sends; the provider never
+        // reads it.
         // `StaticCredentialKind` is non-exhaustive: every other kind is rejected.
         let authorization = match request.execution().static_credential() {
             Some(credential) if credential.kind() == StaticCredentialKind::BearerToken => {
@@ -1661,8 +1699,8 @@ impl Provider for NotesProvider {
         let mut response = self
             .client
             .send(
-                authorization.apply(self.client.request(Method::GET, url)),
-                UpstreamCall::new("note.view"),
+                self.client.request(Method::GET, url),
+                UpstreamCall::new("note.view").with_authorization(&authorization),
             )
             .await
             .map_err(|error| ProviderError::error(error.reason_code(), "notes request failed"))?;

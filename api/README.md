@@ -84,8 +84,10 @@ contracts section of each inventory shows the result per type.
   `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`,
   `CredentialPlacement`) and lent credential material (`DelegatedAccess`,
   like `ExecutionCredential`) have private fields and constructors. Lent
-  material has no plaintext accessor: providers present it through the
-  privately constructed `UpstreamAuthorization`.
+  material has no plaintext accessor: providers hand the privately constructed,
+  opaque `UpstreamAuthorization` to the upstream client's send methods, and
+  only the host-only `host::authorize_host_request` returns a request carrying
+  it. Credential equality exists only with `test-support`.
 - Other data types keep public fields where those fields are the data the
   other side reads (`ProviderResult`, `ProviderLimits`, `ServiceDescriptor`,
   `TokenGrant`, `ConnectedIdentity`, `OAuthTarget` and the rest). They are

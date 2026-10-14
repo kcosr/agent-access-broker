@@ -33,16 +33,23 @@ All notable changes to this project are documented in this file.
     all-except-to-`"*"` helper is removed from the provider API.
   - **Execution credentials.** These are typed, privately constructed and
     opaque: provider code reads only `ExecutionCredential::kind()`, never the
-    material. `authorization()` presents a credential in its kind's own scheme
-    (HTTP Basic or Bearer), and `authorization_as(&CredentialPlacement)`
-    presents it in a checked `bearer()`, `basic()` or named `header(name)`
-    placement or fails with `CredentialPlacementError`. The resulting
-    `UpstreamAuthorization` applies one sensitive header to a request, with
-    the bytes `basic_auth` and `bearer_auth` produce. Debug output is redacted,
-    and credentials compare with `==`. Execution material is selected through
-    `ExecutionAccess::{None, Static, Delegated}`. Lookup credentials are
-    static-only. Stored credential rows and the `basic_api_token`/`bearer_token`
-    kind spellings are unchanged, so stored credentials keep working.
+    material, and never holds a request carrying it. `authorization()`
+    presents a credential in its kind's own scheme (HTTP Basic or Bearer), and
+    `authorization_as(&CredentialPlacement)` in a checked `bearer()`,
+    `basic()` or named `header(name)` placement or fails with
+    `CredentialPlacementError`. The resulting opaque `UpstreamAuthorization`
+    travels with the send call (`UpstreamCall::with_authorization`,
+    `with_authorizations`, `RedirectRules::with_authorization`); the upstream
+    client adds the sensitive header to the request it builds, with the bytes
+    `basic_auth` and `bearer_auth` produce. Only the host's own clients attach
+    one directly, through the host-only `host::authorize_host_request`, which
+    the crate-boundary check rejects in native, adapter, reference and helper
+    crates. Debug output is redacted. Credentials compare with `==` only under
+    the `test-support` feature, in constant time. Execution material is
+    selected through `ExecutionAccess::{None, Static, Delegated}`. Lookup
+    credentials are static-only. Stored credential rows and the
+    `basic_api_token`/`bearer_token` kind spellings are unchanged, so stored
+    credentials keep working.
   - **Delegated leases.** `DelegatedLease` gains the required
     `binding_identity() -> DelegatedBindingId`. The identity survives routine
     refresh, and changes on new consent, replacement or reconnect.
@@ -194,8 +201,10 @@ All notable changes to this project are documented in this file.
     `EmbeddedBody::new(owner_path, codec)`.
   - `UpstreamClientSpec::new(label, provider, base, egress, allowed_hosts,
     profile)` with `.with_status_reasons(..)`, and `RedirectRules::new(max,
-    deadline, authorize)` with `.correlating_other_origins()`, `.with_vet(..)`
-    and `.with_decorate(..)`, have private fields. `DelegatedAccess::new(token,
+    deadline)` with `.with_authorization(..)`, `.correlating_other_origins()`,
+    `.with_vet(..)` and `.with_decorate(..)`, have private fields.
+    `UpstreamCall::new(operation)` carries `.with_attempt(..)` and the
+    credentials it presents. `DelegatedAccess::new(token,
     target, audience, version, expires_at)` has private fields read through
     `target()`, `audience()`, `version()` and `expires_at()`; its token is
     presented only through `authorization()` (`Authorization: Bearer`) and
@@ -253,7 +262,7 @@ All notable changes to this project are documented in this file.
 - `UpstreamClient` now keeps credentials on its base origin. Every send
   method, including each hop of `get_following_redirects`, refuses a request to
   another origin that carries an `Authorization`, `Proxy-Authorization` or
-  `Cookie` header or a header value marked sensitive (as every
+  `Cookie` header or a header value marked sensitive (as every presented
   `UpstreamAuthorization`, `bearer_auth`, `basic_auth` and URL-embedded
   credentials produce), failing before it is
   sent with `UpstreamError::NotSent`. Previously only the redirect helper kept
