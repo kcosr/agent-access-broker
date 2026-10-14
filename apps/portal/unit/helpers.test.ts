@@ -91,7 +91,8 @@ const tokenOptions: AgentTokenOptions = {
     { service: "github", displayName: "Github", brokerHosts: [], executionContexts: ["workstation", "internal"], actions: [{ action: "issues.list", readOnly: false, description: "List issues", requiredScopeTypes: ["project"], resourceType: "jira_project", executionContexts: ["workstation", "internal"], effectiveAccessByExecutionContext: { internal: [{ included: [{ kind: "all" }], excluded: [] }] } }] },
     { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ action: "page.view", readOnly: false, description: "View pages", requiredScopeTypes: ["space"], resourceType: "confluence_space", executionContexts: ["external"], effectiveAccessByExecutionContext: { external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }] } }] },
     { service: "shared", displayName: "Shared", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "read", readOnly: false, description: "Read shared data", requiredScopeTypes: ["project"], resourceType: "jira_project", executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: { internal: [{ included: [{ kind: "all" }], excluded: [] }] } }] }
-  ]
+  ],
+  mcp: null
 };
 
 test("keeps restricted references and wizard state when access becomes empty", () => {

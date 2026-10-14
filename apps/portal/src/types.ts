@@ -81,7 +81,14 @@ export type AgentTokenOptions = {
   resourceGroups: ResourceGroupSummary[];
   executionContexts: string[];
   services: AgentTokenServiceOption[];
+  /**
+   * The HTTP MCP endpoint that accepts an issued token as `Authorization:
+   * Bearer`; null when there is none, or for callers that cannot issue one.
+   */
+  mcp: AgentTokenMcpEndpoint | null;
 };
+
+export type AgentTokenMcpEndpoint = { url: string };
 
 /**
  * A service the principal holds grants for. Display name and broker hosts do

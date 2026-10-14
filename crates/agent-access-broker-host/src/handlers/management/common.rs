@@ -2155,6 +2155,7 @@ mod tests {
                     effective_access_by_execution_context: BTreeMap::new(),
                 }],
             }],
+            mcp: None,
         }
     }
 
@@ -2211,8 +2212,18 @@ mod tests {
         assert_eq!(service["displayName"], "Jira");
         assert_eq!(service["brokerHosts"], json!([]));
         assert_eq!(service["actions"][0]["readOnly"], true);
+        // Always serialized: null when issued tokens have no HTTP MCP endpoint.
+        assert_eq!(options["mcp"], Value::Null);
         let round_trip: AgentTokenOptions = serde_json::from_value(options).unwrap();
         assert_eq!(round_trip, restricted_token_options());
+        let mut connected = restricted_token_options();
+        connected.mcp = Some(agent_access_core::AgentTokenMcpEndpoint {
+            url: "https://broker.example.com/mcp".to_string(),
+        });
+        assert_eq!(
+            serde_json::to_value(connected).unwrap()["mcp"],
+            json!({"url": "https://broker.example.com/mcp"})
+        );
     }
 
     #[test]

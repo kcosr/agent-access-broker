@@ -267,6 +267,16 @@ pub struct AgentTokenOptions {
     pub resource_groups: Vec<ResourceGroupOption>,
     pub execution_contexts: Vec<ExecutionContext>,
     pub services: Vec<AgentTokenServiceOption>,
+    /// Where an issued token connects MCP clients; see
+    /// [`crate::agent_token_mcp_url`]. Not policy-derived.
+    pub mcp: Option<AgentTokenMcpEndpoint>,
+}
+
+/// The HTTP MCP endpoint that accepts an issued token as `Authorization: Bearer`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTokenMcpEndpoint {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3326,6 +3336,9 @@ impl BrokerRuntime {
             resource_groups,
             execution_contexts,
             services,
+            mcp: crate::agent_token_mcp_url(self.config()).map(|url| AgentTokenMcpEndpoint {
+                url: url.to_owned(),
+            }),
         }
     }
 

@@ -1,5 +1,5 @@
 //! Configuration for the downstream, authenticated HTTP MCP ingress.
-use crate::BrokerConfig;
+use crate::{BrokerConfig, IdentitySourceConfig};
 use serde::Deserialize;
 use url::Url;
 
@@ -42,6 +42,31 @@ impl Default for McpConfig {
     }
 }
 
+/// Whether the HTTP MCP endpoint authenticates this source's principal
+/// credentials: an `Authorization` header with canonical scheme `Bearer`.
+fn http_mcp_bearer_source(source: &IdentitySourceConfig) -> bool {
+    source.header.eq_ignore_ascii_case("Authorization")
+        && source.scheme == "Bearer"
+        && matches!(source.kind.as_str(), "static_principals" | "broker_tokens")
+}
+
+/// The canonical HTTP MCP URL at which an issued `agent_invoke` token
+/// authenticates as `Authorization: Bearer <token>`: the endpoint is enabled
+/// with a public URL and a Bearer `broker_tokens` source accepts the token.
+pub fn agent_token_mcp_url(config: &BrokerConfig) -> Option<&str> {
+    let mcp = &config.mcp;
+    let accepts_agent_tokens = config
+        .identity
+        .sources
+        .iter()
+        .any(|source| source.kind == "broker_tokens" && http_mcp_bearer_source(source));
+    if mcp.enabled && accepts_agent_tokens {
+        mcp.public_url.as_deref()
+    } else {
+        None
+    }
+}
+
 pub(crate) fn validate(config: &BrokerConfig, errors: &mut Vec<String>) {
     let mcp = &config.mcp;
     if !mcp.enabled {
@@ -79,11 +104,7 @@ pub(crate) fn validate(config: &BrokerConfig, errors: &mut Vec<String>) {
         .trusted_callers
         .values()
         .any(|caller| caller.allow_forwarded_identity)
-        && !config.identity.sources.iter().any(|source| {
-            source.header.eq_ignore_ascii_case("Authorization")
-                && source.scheme == "Bearer"
-                && matches!(source.kind.as_str(), "static_principals" | "broker_tokens")
-        })
+        && !config.identity.sources.iter().any(http_mcp_bearer_source)
     {
         errors.push("mcp.enabled requires an Authorization Bearer static_principals or broker_tokens identity source with canonical scheme = \"Bearer\"".into());
     }
@@ -252,6 +273,37 @@ upload_spool_dir="upload-spool"
         );
         config.identity.sources[0].kind = "broker_tokens".into();
         assert!(errors(&config).is_empty());
+    }
+    #[test]
+    fn issued_tokens_connect_only_to_an_enabled_endpoint_with_a_bearer_token_source() {
+        let mut config = config();
+        // Static principals authenticate here, but the broker issues no tokens to them.
+        assert_eq!(agent_token_mcp_url(&config), None);
+        config.identity.sources[0].kind = "broker_tokens".into();
+        assert_eq!(
+            agent_token_mcp_url(&config),
+            Some("https://broker.example.com/mcp")
+        );
+        config.identity.sources[0].header = "authorization".into();
+        assert_eq!(
+            agent_token_mcp_url(&config),
+            Some("https://broker.example.com/mcp")
+        );
+        for (header, scheme) in [
+            ("X-Identity", "Bearer"),
+            ("Authorization", "raw"),
+            ("Authorization", "bearer"),
+        ] {
+            let mut other = config.clone();
+            other.identity.sources[0].header = header.into();
+            other.identity.sources[0].scheme = scheme.into();
+            assert_eq!(agent_token_mcp_url(&other), None, "{header} {scheme}");
+        }
+        let mut without_url = config.clone();
+        without_url.mcp.public_url = None;
+        assert_eq!(agent_token_mcp_url(&without_url), None);
+        config.mcp.enabled = false;
+        assert_eq!(agent_token_mcp_url(&config), None);
     }
     #[test]
     fn origins_are_exact_canonical_origins_not_paths_or_patterns() {

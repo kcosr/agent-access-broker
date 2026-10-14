@@ -448,6 +448,11 @@ All notable changes to this project are documented in this file.
   `mutation_verification_failed`), and `MutationReceipt::write_into` writes one
   into a result value.
   `MutationStatus` names the non-exhaustive status vocabulary.
+- Agent token options (`GET /v1/tokens/options` and
+  `GET /v1/admin/principals/{principal}/agent-token-options`) report `mcp`:
+  `{"url": ...}` with `mcp.public_url` when the HTTP MCP endpoint is enabled and
+  a `broker_tokens` identity source reads `Authorization: Bearer`, otherwise
+  `null`. Auditors receive `null`.
 
 ### Changed
 

@@ -31,7 +31,8 @@ const options: AgentTokenOptions = {
   services: [
     { service: "cloudbees_ci", displayName: "CloudBees CI", brokerHosts: [], executionContexts: ["internal"], actions: [action("build.list", true), action("build.trigger", false)] },
     { service: "gitlab_git", displayName: "GitLab Git", brokerHosts: ["git.example.test"], executionContexts: ["internal"], actions: [action("repo.fetch", true)] }
-  ]
+  ],
+  mcp: null
 };
 
 const target = (service: string, displayName: string, credentialVerificationInputs: string[]): CredentialTarget => ({
