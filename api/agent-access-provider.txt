@@ -13,6 +13,7 @@ pub mod agent_access_provider::deps::futures_core
 pub use agent_access_provider::deps::futures_core::Stream
 pub mod agent_access_provider::deps::http
 pub use agent_access_provider::deps::http::HeaderMap
+pub use agent_access_provider::deps::http::HeaderName
 pub use agent_access_provider::deps::http::Method
 pub mod agent_access_provider::deps::reqwest
 pub use agent_access_provider::deps::reqwest::Body
@@ -804,24 +805,28 @@ impl core::marker::Unpin for agent_access_provider::CredentialMode
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialMode
-#[non_exhaustive] pub enum agent_access_provider::CredentialView<'a>
-pub agent_access_provider::CredentialView::Basic
-pub agent_access_provider::CredentialView::Basic::token: &'a str
-pub agent_access_provider::CredentialView::Basic::username: &'a str
-pub agent_access_provider::CredentialView::Bearer
-pub agent_access_provider::CredentialView::Bearer::token: &'a str
-impl core::fmt::Debug for agent_access_provider::CredentialView<'_>
-pub fn agent_access_provider::CredentialView<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a> core::clone::Clone for agent_access_provider::CredentialView<'a>
-pub fn agent_access_provider::CredentialView<'a>::clone(&self) -> agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::Copy for agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::Freeze for agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::Send for agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::Sync for agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::Unpin for agent_access_provider::CredentialView<'a>
-impl<'a> core::marker::UnsafeUnpin for agent_access_provider::CredentialView<'a>
-impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialView<'a>
-impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialView<'a>
+#[non_exhaustive] pub enum agent_access_provider::CredentialPlacementError
+pub agent_access_provider::CredentialPlacementError::InvalidMaterial
+pub agent_access_provider::CredentialPlacementError::KindMismatch
+impl core::clone::Clone for agent_access_provider::CredentialPlacementError
+pub fn agent_access_provider::CredentialPlacementError::clone(&self) -> agent_access_provider::CredentialPlacementError
+impl core::cmp::Eq for agent_access_provider::CredentialPlacementError
+impl core::cmp::PartialEq for agent_access_provider::CredentialPlacementError
+pub fn agent_access_provider::CredentialPlacementError::eq(&self, &agent_access_provider::CredentialPlacementError) -> bool
+impl core::error::Error for agent_access_provider::CredentialPlacementError
+impl core::fmt::Debug for agent_access_provider::CredentialPlacementError
+pub fn agent_access_provider::CredentialPlacementError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::CredentialPlacementError
+pub fn agent_access_provider::CredentialPlacementError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::CredentialPlacementError
+impl core::marker::StructuralPartialEq for agent_access_provider::CredentialPlacementError
+impl core::marker::Freeze for agent_access_provider::CredentialPlacementError
+impl core::marker::Send for agent_access_provider::CredentialPlacementError
+impl core::marker::Sync for agent_access_provider::CredentialPlacementError
+impl core::marker::Unpin for agent_access_provider::CredentialPlacementError
+impl core::marker::UnsafeUnpin for agent_access_provider::CredentialPlacementError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialPlacementError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialPlacementError
 pub enum agent_access_provider::Decision
 pub agent_access_provider::Decision::Allow
 pub agent_access_provider::Decision::Deny
@@ -2178,6 +2183,26 @@ impl core::marker::Unpin for agent_access_provider::CredentialDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialDescriptor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialDescriptor
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialDescriptor
+pub struct agent_access_provider::CredentialPlacement
+impl agent_access_provider::CredentialPlacement
+pub const fn agent_access_provider::CredentialPlacement::basic() -> Self
+pub const fn agent_access_provider::CredentialPlacement::bearer() -> Self
+pub fn agent_access_provider::CredentialPlacement::header(http::header::name::HeaderName) -> Self
+impl core::clone::Clone for agent_access_provider::CredentialPlacement
+pub fn agent_access_provider::CredentialPlacement::clone(&self) -> agent_access_provider::CredentialPlacement
+impl core::cmp::Eq for agent_access_provider::CredentialPlacement
+impl core::cmp::PartialEq for agent_access_provider::CredentialPlacement
+pub fn agent_access_provider::CredentialPlacement::eq(&self, &agent_access_provider::CredentialPlacement) -> bool
+impl core::fmt::Debug for agent_access_provider::CredentialPlacement
+pub fn agent_access_provider::CredentialPlacement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::CredentialPlacement
+impl !core::marker::Freeze for agent_access_provider::CredentialPlacement
+impl core::marker::Send for agent_access_provider::CredentialPlacement
+impl core::marker::Sync for agent_access_provider::CredentialPlacement
+impl core::marker::Unpin for agent_access_provider::CredentialPlacement
+impl core::marker::UnsafeUnpin for agent_access_provider::CredentialPlacement
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialPlacement
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialPlacement
 #[non_exhaustive] pub struct agent_access_provider::CredentialProfile
 pub agent_access_provider::CredentialProfile::kind: &'static str
 pub agent_access_provider::CredentialProfile::name: alloc::string::String
@@ -2201,10 +2226,11 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialP
 #[non_exhaustive] pub struct agent_access_provider::DelegatedAccess
 impl agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedAccess::audience(&self) -> &str
+pub fn agent_access_provider::DelegatedAccess::authorization(&self) -> agent_access_provider::UpstreamAuthorization
+pub fn agent_access_provider::DelegatedAccess::authorization_as(&self, &agent_access_provider::CredentialPlacement) -> core::result::Result<agent_access_provider::UpstreamAuthorization, agent_access_provider::CredentialPlacementError>
 pub fn agent_access_provider::DelegatedAccess::expires_at(&self) -> i64
 pub fn agent_access_provider::DelegatedAccess::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, i64) -> Self
 pub fn agent_access_provider::DelegatedAccess::target(&self) -> &str
-pub fn agent_access_provider::DelegatedAccess::token(&self) -> &str
 pub fn agent_access_provider::DelegatedAccess::version(&self) -> &str
 impl core::clone::Clone for agent_access_provider::DelegatedAccess
 pub fn agent_access_provider::DelegatedAccess::clone(&self) -> agent_access_provider::DelegatedAccess
@@ -2320,12 +2346,17 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::EgressRo
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::EgressRoute
 pub struct agent_access_provider::ExecutionCredential
 impl agent_access_provider::ExecutionCredential
+pub fn agent_access_provider::ExecutionCredential::authorization(&self) -> agent_access_provider::UpstreamAuthorization
+pub fn agent_access_provider::ExecutionCredential::authorization_as(&self, &agent_access_provider::CredentialPlacement) -> core::result::Result<agent_access_provider::UpstreamAuthorization, agent_access_provider::CredentialPlacementError>
 pub fn agent_access_provider::ExecutionCredential::kind(&self) -> agent_access_provider::StaticCredentialKind
-pub fn agent_access_provider::ExecutionCredential::view(&self) -> agent_access_provider::CredentialView<'_>
 impl core::clone::Clone for agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::clone(&self) -> agent_access_provider::ExecutionCredential
+impl core::cmp::Eq for agent_access_provider::ExecutionCredential
+impl core::cmp::PartialEq for agent_access_provider::ExecutionCredential
+pub fn agent_access_provider::ExecutionCredential::eq(&self, &agent_access_provider::ExecutionCredential) -> bool
 impl core::fmt::Debug for agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ExecutionCredential
 impl core::marker::Freeze for agent_access_provider::ExecutionCredential
 impl core::marker::Send for agent_access_provider::ExecutionCredential
 impl core::marker::Sync for agent_access_provider::ExecutionCredential
@@ -3572,6 +3603,20 @@ impl core::marker::Unpin for agent_access_provider::UnsupportedCredentialMode
 impl core::marker::UnsafeUnpin for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UnsupportedCredentialMode
+pub struct agent_access_provider::UpstreamAuthorization
+impl agent_access_provider::UpstreamAuthorization
+pub fn agent_access_provider::UpstreamAuthorization::apply(&self, reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder
+impl core::clone::Clone for agent_access_provider::UpstreamAuthorization
+pub fn agent_access_provider::UpstreamAuthorization::clone(&self) -> agent_access_provider::UpstreamAuthorization
+impl core::fmt::Debug for agent_access_provider::UpstreamAuthorization
+pub fn agent_access_provider::UpstreamAuthorization::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for agent_access_provider::UpstreamAuthorization
+impl core::marker::Send for agent_access_provider::UpstreamAuthorization
+impl core::marker::Sync for agent_access_provider::UpstreamAuthorization
+impl core::marker::Unpin for agent_access_provider::UpstreamAuthorization
+impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamAuthorization
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamAuthorization
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamAuthorization
 #[non_exhaustive] pub struct agent_access_provider::UpstreamCall<'a>
 pub agent_access_provider::UpstreamCall::attempt: u32
 pub agent_access_provider::UpstreamCall::operation: &'a str
@@ -3840,7 +3885,7 @@ enum agent_access_provider::ContinuationError: non-exhaustive
 enum agent_access_provider::ContinuationLifetime: non-exhaustive
 enum agent_access_provider::ContinuationOwner: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
-enum agent_access_provider::CredentialView: non-exhaustive
+enum agent_access_provider::CredentialPlacementError: non-exhaustive
 enum agent_access_provider::Decision: exhaustive
 enum agent_access_provider::DelegatedAccessError: non-exhaustive
 enum agent_access_provider::EgressDeclaration: non-exhaustive
@@ -3900,6 +3945,7 @@ struct agent_access_provider::ContinuationFamily: named fields, private fields
 struct agent_access_provider::ContinuationSigner: named fields, private fields
 struct agent_access_provider::CorrelationContext: named fields, non-exhaustive
 struct agent_access_provider::CredentialDescriptor: named fields, non-exhaustive
+struct agent_access_provider::CredentialPlacement: named fields, private fields
 struct agent_access_provider::CredentialProfile: named fields, non-exhaustive
 struct agent_access_provider::DelegatedAccess: named fields, private fields, non-exhaustive
 struct agent_access_provider::DelegatedBindingId: tuple fields, private fields
@@ -3963,6 +4009,7 @@ struct agent_access_provider::ServiceProvider: named fields, non-exhaustive
 struct agent_access_provider::SigningError: unit
 struct agent_access_provider::TokenGrant: named fields, non-exhaustive
 struct agent_access_provider::UnsupportedCredentialMode: unit
+struct agent_access_provider::UpstreamAuthorization: named fields, private fields
 struct agent_access_provider::UpstreamCall: named fields, non-exhaustive
 struct agent_access_provider::UpstreamClient: named fields, private fields
 struct agent_access_provider::UpstreamClientSpec: named fields, private fields, non-exhaustive
