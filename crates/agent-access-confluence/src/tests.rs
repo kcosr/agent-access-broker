@@ -2,7 +2,7 @@ use super::*;
 use crate::{ActionIo, Decision, raw_download_io};
 use agent_access_provider::test_support::{InvocationBuilder, basic_credential, credential_token};
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;

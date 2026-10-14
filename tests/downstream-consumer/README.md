@@ -8,6 +8,8 @@ checkout's workspace, target directory or lockfile.
 
 `scripts/verify-downstream-consumer.mjs` stages and runs it. Release
 qualification runs the same driver as its required `downstream-consumer` gate.
+In the same stage the driver builds and tests the code of the provider SDK and
+downstream assembly guides; see [guide examples](#guide-examples).
 
 ## Templates
 
@@ -22,7 +24,9 @@ root.
   `agent-access-provider` becomes the provider repository's own pin, and the
   driver appends the third-party `[workspace.dependencies]` entries the crate
   inherits, copied verbatim from the candidate root manifest. The provider
-  repository versions its crate independently (`0.7.0`).
+  repository versions its crate independently (`0.7.0`). Its members are
+  `crates/*`, so the provider SDK guide's example crates staged beside the
+  conformance crate join the workspace.
 - `assembly-repo/` is a downstream distribution, `downstream-broker` `0.3.0`,
   following the [downstream assembly guide](../../docs/downstream-assembly.md).
   It links `agent-access-broker-host` and production `agent-access-cloudbees-ci`
@@ -81,35 +85,43 @@ file may exist in `.cargo` directories above it.
    repository with `git clone --bare --no-local --no-hardlinks`. The clone has no
    alternates file and no remote; it advertises only a detached `HEAD` and
    `refs/heads/candidate` at the candidate commit.
-3. It builds the candidate's `agent-access` CLI in the stage from `git archive`
+3. It reads the two guides from the candidate commit and extracts their marked
+   code, checking every Rust block's marker and the files the assembly guide
+   shares with the assembly template.
+4. It builds the candidate's `agent-access` CLI in the stage from `git archive`
    of the candidate commit, so the CLI used for acceptance is bound to that
    commit; `status.json` records its digest.
-4. It builds the provider repository and the assembly as two local Git
-   repositories from `git archive` of the candidate. Only staged manifests are
-   rewritten: the canonical upstream URL becomes the clone's `file://` URL, the
-   provider URL becomes the provider repository's `file://` URL, and each
-   sentinel becomes the matching full commit. `source-mapping.json` records every
-   rewrite.
-5. Each staged `Cargo.lock` is seeded with the candidate's third-party entries.
+5. It builds the provider repository, with the provider guide's crates, and the
+   assembly as two local Git repositories from `git archive` of the candidate,
+   and stages the assembly guide's example beside them. Only staged manifests
+   are rewritten: the canonical upstream URL becomes the clone's `file://` URL,
+   the provider URLs become the provider repository's `file://` URL, and each
+   sentinel or guide placeholder becomes the matching full commit.
+   `source-mapping.json` records every rewrite.
+6. Each staged `Cargo.lock` is seeded with the candidate's third-party entries.
    A setup `cargo fetch` adds the Git packages; the provider repository is
-   committed with its lockfile before the assembly pins it.
-6. The lockfile review requires every upstream package to resolve to
-   `git+file://<stage>/upstream?rev=<sha>#<sha>`, the conformance crate to
-   resolve only to the provider repository, exactly one `agent-access-provider`
-   package ID across both graphs, no path or registry copies of upstream
-   packages, and third-party entries equal to candidate entries, including
-   checksums.
-7. The provider repository runs its own unit tests with SDK `test-support`, and
-   its resolved graph, including development dependencies, contains no core,
-   host, assembly, CLI or import-adapter crate.
-8. The assembly passes `rustfmt --check` and `cargo test`, then `cargo build`
+   committed with its lockfile before the assemblies pin it.
+7. The lockfile review requires every upstream package to resolve to
+   `git+file://<stage>/upstream?rev=<sha>#<sha>`, the provider repository's
+   packages to resolve only to that repository, exactly one
+   `agent-access-provider` package ID across the three graphs, no path or
+   registry copies of upstream packages, and third-party entries equal to
+   candidate entries, including checksums.
+8. The provider repository runs the conformance crate's unit tests with SDK
+   `test-support`, and its resolved graph, including development dependencies
+   and the guide's crates, contains no core, host, assembly, CLI or
+   import-adapter crate. The guide's code passes `rustfmt --check` and its
+   crates' `cargo test`, and the build's dep-info shows that rustc read every
+   staged guide Rust file.
+9. The assembly passes `rustfmt --check` and `cargo test`, then `cargo build`
    builds the executable last, so it carries no development features. For the
    host target, `cargo tree -e normal,build --format '{p}\t{f}'` lists every
    unit of the release graph with its resolved feature set, including features
    the assembly's own defaults enable; no package may resolve `test-support`,
    although the assembly's tests enable the host's through a development
-   dependency.
-9. Process acceptance starts the built assembly executable with a generated
+   dependency. The assembly guide's example passes `rustfmt --check` and
+   `cargo test`, with every staged Rust file compiled.
+10. Process acceptance starts the built assembly executable with a generated
    development configuration: CloudBees CI pointed at a synthetic loopback
    controller, the conformance provider configured, a synthetic static
    principal and a synthetic `basic_api_token` credential. It checks that the
@@ -124,9 +136,9 @@ file may exist in `.cargo` directories above it.
    with the controller receiving the expected Basic credential, an ungranted
    job's denial, SIGTERM shutdown with exit 0, and the allow and deny audit
    records.
-10. It copies the staged manifests and lockfiles, logs, cargo trees, lock
-    review, acceptance outputs and `status.json` into the evidence directory and
-    deletes the stage.
+11. It copies the staged manifests and lockfiles, the staged guide files, logs,
+    cargo trees, lock review, acceptance outputs and `status.json` into the
+    evidence directory and deletes the stage.
 
 All Cargo commands after setup use `--locked --offline`, and builds name an
 explicit target directory inside each staged repository.
@@ -135,6 +147,33 @@ SIGINT or SIGTERM stops every child process tree the driver started (Cargo and
 its compilers, the broker, the CLI), closes the synthetic controller, records
 the interruption in `status.json` with the evidence gathered so far, removes the
 stage, and exits with 128 plus the signal number.
+
+### Guide examples
+
+The provider SDK guide and the downstream assembly guide mark each code block
+for this check; [testing](../../docs/testing.md#guide-code-blocks) describes
+the markers. The driver stages:
+
+- the provider guide's example crate (`example-notes`) at
+  `crates/example-notes` of the provider repository, and a generated
+  `provider-sdk-snippets` crate there with one module per standalone
+  `rust check` block, which depends only on the SDK's workspace pin;
+- the assembly guide's example (`team-broker`) as its own workspace beside the
+  assembly, with its notes provider URL,
+  `https://git.example.com/notes-team/notes-provider.git`, mapped to the
+  provider repository. Its `build.rs` is `assembly-repo/build.rs` with the
+  renames the guide states, and the guide's `src/main.rs` must equal
+  `assembly-repo/src/main.rs` with the crate name changed. It builds with the
+  templates' development profile (no debug information or incremental
+  compilation), set through Cargo's profile environment because the guide's
+  manifest has none, and is not started as a process.
+
+The guide manifests keep their own dependency lists; only their Git pins are
+rewritten. Third-party packages they name must be in the candidate
+`Cargo.lock`, like every other staged package. The evidence's `guides/`
+directory holds the staged guide files, and `guides/blocks.json` lists every
+block of both guides with its marker and maps each staged file's lines back to
+the guide.
 
 ### Offline dependency source
 

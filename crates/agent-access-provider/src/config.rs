@@ -196,48 +196,140 @@ pub fn validate_egress_proxy_config(
     }
 }
 
+/// Validates an upstream allowlist: URL patterns in the shared grammar
+/// ([`validate_url_patterns`]), at least one of them, and with
+/// `requires_https` only `https` ones.
 pub fn validate_upstream_allowlist(
     label: &str,
     patterns: &[String],
     requires_https: bool,
     errors: &mut Vec<String>,
 ) {
-    if patterns.is_empty() {
+    let policy = if requires_https {
+        UrlPatternPolicy::new().with_schemes(&["https"])
+    } else {
+        UrlPatternPolicy::new()
+    };
+    validate_url_patterns(label, patterns, policy, errors);
+}
+
+/// What a list of URL patterns accepts beyond the shared grammar that
+/// [`validate_url_patterns`] always applies.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UrlPatternPolicy {
+    schemes: &'static [&'static str],
+    allow_empty: bool,
+    reject_query_and_fragment: bool,
+    reject_duplicates: bool,
+}
+
+impl UrlPatternPolicy {
+    /// At least one pattern, with any scheme, query or fragment, and
+    /// repeats allowed.
+    pub const fn new() -> Self {
+        Self {
+            schemes: &[],
+            allow_empty: false,
+            reject_query_and_fragment: false,
+            reject_duplicates: false,
+        }
+    }
+
+    /// Only these schemes, such as `&["http", "https"]`.
+    pub const fn with_schemes(mut self, schemes: &'static [&'static str]) -> Self {
+        self.schemes = schemes;
+        self
+    }
+
+    /// An empty list is valid.
+    pub const fn allowing_empty(mut self) -> Self {
+        self.allow_empty = true;
+        self
+    }
+
+    /// Patterns carry no query or fragment.
+    pub const fn without_query_or_fragment(mut self) -> Self {
+        self.reject_query_and_fragment = true;
+        self
+    }
+
+    /// Two patterns that are the same URL once normalized, such as with and
+    /// without the scheme's default port, are an error. Distinct nondefault
+    /// ports stay distinct.
+    pub const fn rejecting_duplicates(mut self) -> Self {
+        self.reject_duplicates = true;
+        self
+    }
+}
+
+/// Validates URL patterns as [`url_allowed_by_patterns`](crate::url_allowed_by_patterns)
+/// matches them: each parses as a URL with a fixed host (no wildcard), no
+/// embedded credentials, and path segments that are literal, `*` or `**`.
+/// `policy` adds its own rules. Each violation is reported under `label`.
+pub fn validate_url_patterns(
+    label: &str,
+    patterns: &[String],
+    policy: UrlPatternPolicy,
+    errors: &mut Vec<String>,
+) {
+    if patterns.is_empty() && !policy.allow_empty {
         errors.push(format!("{label} must not be empty"));
     }
+    let mut seen = BTreeSet::new();
     for pattern in patterns {
-        match Url::parse(pattern) {
-            Ok(url) => {
-                match url.host_str() {
-                    Some(host) if host.contains('*') => {
-                        errors.push(format!(
-                            "{label} entry {pattern} must not wildcard the host"
-                        ));
-                    }
-                    Some(_) => {}
-                    None => {
-                        errors.push(format!("{label} entry {pattern} must include a host"));
-                    }
-                }
-                if requires_https && url.scheme() != "https" {
-                    errors.push(format!("{label} entry {pattern} must use https"));
-                }
-                if !url.username().is_empty() || url.password().is_some() {
-                    errors.push(format!(
-                        "{label} entry {pattern} must not include credentials"
-                    ));
-                }
-                for segment in url.path_segments().into_iter().flatten() {
-                    if segment.contains('*') && segment != "*" && segment != "**" {
-                        errors.push(format!(
-                            "{label} entry {pattern} has invalid wildcard path segment {segment}"
-                        ));
-                    }
-                }
-            }
-            Err(_) => errors.push(format!(
+        let Ok(mut url) = Url::parse(pattern) else {
+            errors.push(format!(
                 "{label} entry {pattern} must be a valid URL pattern"
-            )),
+            ));
+            continue;
+        };
+        if !policy.schemes.is_empty() && !policy.schemes.contains(&url.scheme()) {
+            errors.push(format!(
+                "{label} entry {pattern} must use {}",
+                policy.schemes.join(" or ")
+            ));
+        }
+        match url.host_str() {
+            Some(host) if host.contains('*') => {
+                errors.push(format!(
+                    "{label} entry {pattern} must not wildcard the host"
+                ));
+            }
+            Some(_) => {}
+            None => errors.push(format!("{label} entry {pattern} must include a host")),
+        }
+        if !url.username().is_empty() || url.password().is_some() {
+            errors.push(format!(
+                "{label} entry {pattern} must not include credentials"
+            ));
+        }
+        if policy.reject_query_and_fragment {
+            if url.query().is_some() {
+                errors.push(format!("{label} entry {pattern} must not include a query"));
+            }
+            if url.fragment().is_some() {
+                errors.push(format!(
+                    "{label} entry {pattern} must not include a fragment"
+                ));
+            }
+        }
+        for segment in url.path_segments().into_iter().flatten() {
+            if segment.contains('*') && segment != "*" && segment != "**" {
+                errors.push(format!(
+                    "{label} entry {pattern} has invalid wildcard path segment {segment}"
+                ));
+            }
+        }
+        if policy.reject_duplicates {
+            // Parsing already lowercases the host and drops a scheme's
+            // default port; any port left is significant.
+            url.set_fragment(None);
+            if !seen.insert(url.to_string()) {
+                errors.push(format!(
+                    "{label} contains duplicate normalized entry {pattern}"
+                ));
+            }
         }
     }
 }
@@ -509,5 +601,79 @@ mod tests {
                 "{value}: {errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn url_patterns_share_one_grammar_under_each_policy() {
+        let validate = |patterns: &[&str], policy| {
+            let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
+            let mut errors = Vec::new();
+            validate_url_patterns("list", &patterns, policy, &mut errors);
+            errors
+        };
+        let destinations = UrlPatternPolicy::new()
+            .with_schemes(&["http", "https"])
+            .allowing_empty()
+            .without_query_or_fragment()
+            .rejecting_duplicates();
+
+        // The shared grammar applies under every policy.
+        for policy in [UrlPatternPolicy::new(), destinations] {
+            let errors = validate(
+                &[
+                    "not a url",
+                    "https://*.example.com/**",
+                    "https://user:pass@hooks.example.com/**",
+                    "https://hooks.example.com/git*lab",
+                ],
+                policy,
+            );
+            assert_eq!(
+                errors,
+                [
+                    "list entry not a url must be a valid URL pattern",
+                    "list entry https://*.example.com/** must not wildcard the host",
+                    "list entry https://user:pass@hooks.example.com/** must not include credentials",
+                    "list entry https://hooks.example.com/git*lab has invalid wildcard path segment git*lab",
+                ]
+            );
+        }
+
+        // The policy decides emptiness, schemes, query and fragment, and repeats.
+        let repeated = [
+            "ftp://hooks.example.com/**?tenant=one#part",
+            "https://HOOKS.example.com:443/gitlab/**",
+            "https://hooks.example.com/gitlab/**",
+            "https://hooks.example.com:8443/gitlab/**",
+            "https://hooks.example.com:9443/gitlab/**",
+            "https://hooks.example.com:8443/gitlab/**",
+        ];
+        assert_eq!(
+            validate(&[], UrlPatternPolicy::new()),
+            ["list must not be empty"]
+        );
+        assert!(validate(&repeated, UrlPatternPolicy::new()).is_empty());
+        assert!(validate(&[], destinations).is_empty());
+        assert_eq!(
+            validate(&repeated, destinations),
+            [
+                "list entry ftp://hooks.example.com/**?tenant=one#part must use http or https",
+                "list entry ftp://hooks.example.com/**?tenant=one#part must not include a query",
+                "list entry ftp://hooks.example.com/**?tenant=one#part must not include a fragment",
+                "list contains duplicate normalized entry https://hooks.example.com/gitlab/**",
+                "list contains duplicate normalized entry https://hooks.example.com:8443/gitlab/**",
+            ]
+        );
+        let mut errors = Vec::new();
+        validate_upstream_allowlist(
+            "list",
+            &["http://hooks.example.com/**".to_string()],
+            true,
+            &mut errors,
+        );
+        assert_eq!(
+            errors,
+            ["list entry http://hooks.example.com/** must use https"]
+        );
     }
 }

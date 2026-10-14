@@ -87,7 +87,8 @@
 //! and its normalized settings with a [`ContinuationBinding`], and seals and
 //! opens tokens with its [`ContinuationSigner`]. The binding lives only in the
 //! MAC context, a token never carries authority, and the host authorizes every
-//! continuation again.
+//! continuation again. [`ContinuationFailures`] reports each
+//! [`ContinuationError`] as the provider's failure.
 //!
 //! # Compatibility
 //!
@@ -212,18 +213,18 @@ pub use capabilities::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
 };
 pub use config::{
-    AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, default_attachment_max_bytes,
-    default_attachment_max_total_bytes, default_download_max_bytes, is_env_name,
-    is_literal_loopback, is_loopback_or_localhost, is_secret_ref, validate_attachment_limits,
-    validate_egress_proxy_config, validate_formats_allow_empty,
+    AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, UrlPatternPolicy,
+    default_attachment_max_bytes, default_attachment_max_total_bytes, default_download_max_bytes,
+    is_env_name, is_literal_loopback, is_loopback_or_localhost, is_secret_ref,
+    validate_attachment_limits, validate_egress_proxy_config, validate_formats_allow_empty,
     validate_non_empty_control_free_string, validate_provider_limit_relation,
     validate_provider_upload_limit_relation, validate_tenant_host, validate_upload_limits,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    validate_upstream_allowlist, validate_upstream_base_url, validate_url_patterns,
 };
 pub use continuation::{
-    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFamily,
-    ContinuationLifetime, ContinuationOwner, ContinuationSigner, ContinuationStage,
-    ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
+    AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFailures,
+    ContinuationFamily, ContinuationLifetime, ContinuationOwner, ContinuationSigner,
+    ContinuationStage, ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
 };
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,
@@ -233,7 +234,9 @@ pub use credential::{
     CredentialMode, CredentialView, ExecutionAccess, ExecutionCredential, StaticCredentialKind,
     UnsupportedCredentialMode,
 };
-pub use delegated::{DelegatedAccess, DelegatedBindingId, DelegatedCredential, DelegatedLease};
+pub use delegated::{
+    DelegatedAccess, DelegatedAccessError, DelegatedBindingId, DelegatedCredential, DelegatedLease,
+};
 pub use descriptor::{
     ActionDescriptor, ActionIo, CredentialDescriptor, CredentialProfile, DelegatedConnection,
     HeaderEncoding, LookupRequirement, MultipartUploadSpec, RESULT_METADATA_HEADER,
@@ -271,17 +274,17 @@ pub use resource::{
     is_repository_selector_path,
 };
 pub use result::{
-    ProviderByteStream, ProviderCredentialVerification, ProviderError, ProviderResult,
-    ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
+    BoundedDownload, ProviderByteStream, ProviderCredentialVerification, ProviderError,
+    ProviderResult, ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
 pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{
-    ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace, file_upload_body,
-    take_upstream_trace,
+    BodyReadError, ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
+    file_upload_body, read_bounded_body, take_upstream_trace,
 };
 pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
 pub use upstream_rate_limit::{

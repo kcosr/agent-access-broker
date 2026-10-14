@@ -1,9 +1,10 @@
 # Workspace root of the staged provider repository. The staging driver adds
-# `crates/agent-access-conformance` from the candidate commit and appends the
-# third-party dependencies that crate inherits to `[workspace.dependencies]`,
+# `crates/agent-access-conformance` from the candidate commit and the example
+# crates of docs/provider-sdk.md beside it, and appends the third-party
+# dependencies the conformance crate inherits to `[workspace.dependencies]`,
 # which therefore stays the last table in this file.
 [workspace]
-members = ["crates/agent-access-conformance"]
+members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]

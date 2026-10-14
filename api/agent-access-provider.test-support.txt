@@ -792,6 +792,30 @@ impl core::marker::Unpin for agent_access_provider::AuthorityMismatch
 impl core::marker::UnsafeUnpin for agent_access_provider::AuthorityMismatch
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuthorityMismatch
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuthorityMismatch
+#[non_exhaustive] pub enum agent_access_provider::BodyReadError
+pub agent_access_provider::BodyReadError::IdleTimeout
+pub agent_access_provider::BodyReadError::TooLarge
+pub agent_access_provider::BodyReadError::Transport
+pub agent_access_provider::BodyReadError::Transport::detail: alloc::string::String
+pub agent_access_provider::BodyReadError::Transport::timed_out: bool
+impl core::clone::Clone for agent_access_provider::BodyReadError
+pub fn agent_access_provider::BodyReadError::clone(&self) -> agent_access_provider::BodyReadError
+impl core::cmp::Eq for agent_access_provider::BodyReadError
+impl core::cmp::PartialEq for agent_access_provider::BodyReadError
+pub fn agent_access_provider::BodyReadError::eq(&self, &agent_access_provider::BodyReadError) -> bool
+impl core::error::Error for agent_access_provider::BodyReadError
+impl core::fmt::Debug for agent_access_provider::BodyReadError
+pub fn agent_access_provider::BodyReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::BodyReadError
+pub fn agent_access_provider::BodyReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::BodyReadError
+impl core::marker::Freeze for agent_access_provider::BodyReadError
+impl core::marker::Send for agent_access_provider::BodyReadError
+impl core::marker::Sync for agent_access_provider::BodyReadError
+impl core::marker::Unpin for agent_access_provider::BodyReadError
+impl core::marker::UnsafeUnpin for agent_access_provider::BodyReadError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BodyReadError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::BodyReadError
 #[non_exhaustive] pub enum agent_access_provider::ClientProfile
 pub agent_access_provider::ClientProfile::Bounded
 pub agent_access_provider::ClientProfile::Bounded::connect: core::time::Duration
@@ -966,6 +990,27 @@ impl core::marker::Unpin for agent_access_provider::Decision
 impl core::marker::UnsafeUnpin for agent_access_provider::Decision
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Decision
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::Decision
+#[non_exhaustive] pub enum agent_access_provider::DelegatedAccessError
+pub agent_access_provider::DelegatedAccessError::Mismatch
+pub agent_access_provider::DelegatedAccessError::Revalidation(agent_access_provider::ProviderError)
+impl core::clone::Clone for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::clone(&self) -> agent_access_provider::DelegatedAccessError
+impl core::cmp::Eq for agent_access_provider::DelegatedAccessError
+impl core::cmp::PartialEq for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::eq(&self, &agent_access_provider::DelegatedAccessError) -> bool
+impl core::error::Error for agent_access_provider::DelegatedAccessError
+impl core::fmt::Debug for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::DelegatedAccessError
+pub fn agent_access_provider::DelegatedAccessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::DelegatedAccessError
+impl core::marker::Freeze for agent_access_provider::DelegatedAccessError
+impl core::marker::Send for agent_access_provider::DelegatedAccessError
+impl core::marker::Sync for agent_access_provider::DelegatedAccessError
+impl core::marker::Unpin for agent_access_provider::DelegatedAccessError
+impl core::marker::UnsafeUnpin for agent_access_provider::DelegatedAccessError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::DelegatedAccessError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::DelegatedAccessError
 #[non_exhaustive] pub enum agent_access_provider::EgressDeclaration<'a>
 pub agent_access_provider::EgressDeclaration::LiteralLoopback
 pub agent_access_provider::EgressDeclaration::Ordinary(core::option::Option<&'a agent_access_provider::EgressProxyConfig>)
@@ -1973,6 +2018,22 @@ impl core::marker::Unpin for agent_access_provider::BodyAdmission
 impl core::marker::UnsafeUnpin for agent_access_provider::BodyAdmission
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BodyAdmission
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::BodyAdmission
+#[non_exhaustive] pub struct agent_access_provider::BoundedDownload
+impl agent_access_provider::BoundedDownload
+pub fn agent_access_provider::BoundedDownload::new(&'static str, u64, impl core::convert::Into<agent_access_provider::ProviderReason>, core::time::Duration) -> Self
+pub fn agent_access_provider::BoundedDownload::with_expected_size(self, core::option::Option<u64>) -> Self
+impl core::clone::Clone for agent_access_provider::BoundedDownload
+pub fn agent_access_provider::BoundedDownload::clone(&self) -> agent_access_provider::BoundedDownload
+impl core::fmt::Debug for agent_access_provider::BoundedDownload
+pub fn agent_access_provider::BoundedDownload::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::BoundedDownload
+impl core::marker::Freeze for agent_access_provider::BoundedDownload
+impl core::marker::Send for agent_access_provider::BoundedDownload
+impl core::marker::Sync for agent_access_provider::BoundedDownload
+impl core::marker::Unpin for agent_access_provider::BoundedDownload
+impl core::marker::UnsafeUnpin for agent_access_provider::BoundedDownload
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::BoundedDownload
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::BoundedDownload
 #[non_exhaustive] pub struct agent_access_provider::BrokerBodyPart
 pub agent_access_provider::BrokerBodyPart::bytes: alloc::vec::Vec<u8>
 pub agent_access_provider::BrokerBodyPart::content_type: core::option::Option<alloc::string::String>
@@ -2109,6 +2170,20 @@ impl<Stage> core::marker::Unpin for agent_access_provider::ContinuationBinding<S
 impl<Stage> core::marker::UnsafeUnpin for agent_access_provider::ContinuationBinding<Stage> where Stage: core::marker::UnsafeUnpin
 impl<Stage> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::RefUnwindSafe
 impl<Stage> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationBinding<Stage> where Stage: core::panic::unwind_safe::UnwindSafe
+pub struct agent_access_provider::ContinuationFailures<P>
+impl<P: core::ops::function::FnOnce(usize) -> agent_access_provider::ProviderError> agent_access_provider::ContinuationFailures<P>
+pub fn agent_access_provider::ContinuationFailures<P>::durable_key_unavailable(self, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::expired(self, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::new(agent_access_provider::ProviderError, P, agent_access_provider::ProviderError) -> Self
+pub fn agent_access_provider::ContinuationFailures<P>::report(self, agent_access_provider::ContinuationError) -> agent_access_provider::ProviderError
+pub fn agent_access_provider::ContinuationFailures<P>::upstream_query_changed(self, agent_access_provider::ProviderError) -> Self
+impl<P> core::marker::Freeze for agent_access_provider::ContinuationFailures<P> where P: core::marker::Freeze
+impl<P> core::marker::Send for agent_access_provider::ContinuationFailures<P> where P: core::marker::Send
+impl<P> core::marker::Sync for agent_access_provider::ContinuationFailures<P> where P: core::marker::Sync
+impl<P> core::marker::Unpin for agent_access_provider::ContinuationFailures<P> where P: core::marker::Unpin
+impl<P> core::marker::UnsafeUnpin for agent_access_provider::ContinuationFailures<P> where P: core::marker::UnsafeUnpin
+impl<P> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContinuationFailures<P> where P: core::panic::unwind_safe::RefUnwindSafe
+impl<P> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContinuationFailures<P> where P: core::panic::unwind_safe::UnwindSafe
 pub struct agent_access_provider::ContinuationFamily
 impl agent_access_provider::ContinuationFamily
 pub fn agent_access_provider::ContinuationFamily::bind(&self, &agent_access_provider::AdmittedContext, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding
@@ -2307,10 +2382,12 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::DelegatedCo
 pub struct agent_access_provider::DelegatedCredential(_)
 impl agent_access_provider::DelegatedCredential
 pub fn agent_access_provider::DelegatedCredential::access(&self) -> agent_access_provider::DelegatedAccess
+pub fn agent_access_provider::DelegatedCredential::access_for(&self, &str, &str) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::DelegatedAccessError>
 pub fn agent_access_provider::DelegatedCredential::binding_identity(&self) -> agent_access_provider::DelegatedBindingId
 pub fn agent_access_provider::DelegatedCredential::mark_rejected(&self, &str) -> core::result::Result<(), agent_access_provider::ProviderError>
 pub async fn agent_access_provider::DelegatedCredential::recover_after_unauthorized(&self) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::ProviderError>
 pub async fn agent_access_provider::DelegatedCredential::revalidate(&self) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub async fn agent_access_provider::DelegatedCredential::revalidated_access_for(&self, &str, &str) -> core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::DelegatedAccessError>
 impl core::clone::Clone for agent_access_provider::DelegatedCredential
 pub fn agent_access_provider::DelegatedCredential::clone(&self) -> agent_access_provider::DelegatedCredential
 impl core::fmt::Debug for agent_access_provider::DelegatedCredential
@@ -3023,6 +3100,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderRes
 pub agent_access_provider::ProviderResultStream::content_type: alloc::string::String
 pub agent_access_provider::ProviderResultStream::source: agent_access_provider::ProviderResultStreamSource
 impl agent_access_provider::ProviderResultStream
+pub fn agent_access_provider::ProviderResultStream::from_bounded_response(impl core::convert::Into<alloc::string::String>, reqwest::async_impl::response::Response, agent_access_provider::BoundedDownload) -> Self
 pub fn agent_access_provider::ProviderResultStream::from_bytes(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<u8>) -> Self
 pub fn agent_access_provider::ProviderResultStream::from_stream(impl core::convert::Into<alloc::string::String>, impl futures_core::stream::Stream<Item = core::result::Result<bytes::bytes::Bytes, agent_access_provider::ProviderStreamError>> + core::marker::Send + 'static) -> Self
 pub fn agent_access_provider::ProviderResultStream::is_ready(&self) -> bool
@@ -3690,6 +3768,27 @@ impl<'a> core::marker::Unpin for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamTrace<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamTrace<'a>
+#[non_exhaustive] pub struct agent_access_provider::UrlPatternPolicy
+impl agent_access_provider::UrlPatternPolicy
+pub const fn agent_access_provider::UrlPatternPolicy::allowing_empty(self) -> Self
+pub const fn agent_access_provider::UrlPatternPolicy::new() -> Self
+pub const fn agent_access_provider::UrlPatternPolicy::rejecting_duplicates(self) -> Self
+pub const fn agent_access_provider::UrlPatternPolicy::with_schemes(self, &'static [&'static str]) -> Self
+pub const fn agent_access_provider::UrlPatternPolicy::without_query_or_fragment(self) -> Self
+impl core::clone::Clone for agent_access_provider::UrlPatternPolicy
+pub fn agent_access_provider::UrlPatternPolicy::clone(&self) -> agent_access_provider::UrlPatternPolicy
+impl core::default::Default for agent_access_provider::UrlPatternPolicy
+pub fn agent_access_provider::UrlPatternPolicy::default() -> agent_access_provider::UrlPatternPolicy
+impl core::fmt::Debug for agent_access_provider::UrlPatternPolicy
+pub fn agent_access_provider::UrlPatternPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::UrlPatternPolicy
+impl core::marker::Freeze for agent_access_provider::UrlPatternPolicy
+impl core::marker::Send for agent_access_provider::UrlPatternPolicy
+impl core::marker::Sync for agent_access_provider::UrlPatternPolicy
+impl core::marker::Unpin for agent_access_provider::UrlPatternPolicy
+impl core::marker::UnsafeUnpin for agent_access_provider::UrlPatternPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UrlPatternPolicy
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UrlPatternPolicy
 #[non_exhaustive] pub struct agent_access_provider::ValidationContext<'a>
 pub agent_access_provider::ValidationContext::credentials: agent_access_provider::ServiceCredentialKinds<'a>
 pub agent_access_provider::ValidationContext::environment: &'a str
@@ -3789,6 +3888,7 @@ pub fn agent_access_provider::parse_backend_config<T>(toml::de::deserializer::va
 pub fn agent_access_provider::path_matches_pattern(&[&str], &[&str]) -> bool
 pub fn agent_access_provider::push_message_part(&mut alloc::vec::Vec<alloc::string::String>, core::option::Option<alloc::string::String>, core::option::Option<&str>)
 pub fn agent_access_provider::raw_download_io() -> agent_access_provider::ActionIo
+pub async fn agent_access_provider::read_bounded_body(reqwest::async_impl::response::Response, u64, core::option::Option<core::time::Duration>) -> core::result::Result<alloc::vec::Vec<u8>, agent_access_provider::BodyReadError>
 pub async fn agent_access_provider::read_validation_json(reqwest::async_impl::response::Response, u64) -> core::option::Option<serde_json::value::Value>
 pub fn agent_access_provider::response_has_json_content_type(&reqwest::async_impl::response::Response) -> bool
 pub fn agent_access_provider::same_origin(&url::Url, &url::Url) -> bool
@@ -3810,6 +3910,7 @@ pub fn agent_access_provider::validate_tenant_host(&str, &str, &mut alloc::vec::
 pub fn agent_access_provider::validate_upload_limits(&str, u64, u64, &[alloc::string::String], &mut alloc::vec::Vec<alloc::string::String>)
 pub fn agent_access_provider::validate_upstream_allowlist(&str, &[alloc::string::String], bool, &mut alloc::vec::Vec<alloc::string::String>)
 pub fn agent_access_provider::validate_upstream_base_url(&str, &str, bool, &mut alloc::vec::Vec<alloc::string::String>) -> core::option::Option<url::Url>
+pub fn agent_access_provider::validate_url_patterns(&str, &[alloc::string::String], agent_access_provider::UrlPatternPolicy, &mut alloc::vec::Vec<alloc::string::String>)
 pub type agent_access_provider::BackendConfigParser = fn(toml::de::deserializer::value::ValueDeserializer<'_>) -> core::result::Result<alloc::boxed::Box<dyn agent_access_provider::BackendConfig>, toml::de::error::Error>
 pub type agent_access_provider::ProviderByteStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<bytes::bytes::Bytes, agent_access_provider::ProviderStreamError>> + core::marker::Send + 'static)>>
 pub type agent_access_provider::ResourceActionInputs = fn(&agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
@@ -3829,6 +3930,7 @@ enum agent_access_provider::ActionIo: non-exhaustive
 enum agent_access_provider::AttributionRepresentation: non-exhaustive
 enum agent_access_provider::AttributionVerb: non-exhaustive
 enum agent_access_provider::AuthorityMismatch: non-exhaustive
+enum agent_access_provider::BodyReadError: non-exhaustive
 enum agent_access_provider::ClientProfile: non-exhaustive
 enum agent_access_provider::ContinuationError: non-exhaustive
 enum agent_access_provider::ContinuationLifetime: non-exhaustive
@@ -3836,6 +3938,7 @@ enum agent_access_provider::ContinuationOwner: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
 enum agent_access_provider::CredentialView: non-exhaustive
 enum agent_access_provider::Decision: exhaustive
+enum agent_access_provider::DelegatedAccessError: non-exhaustive
 enum agent_access_provider::EgressDeclaration: non-exhaustive
 enum agent_access_provider::EgressProxySource: non-exhaustive
 enum agent_access_provider::ExecutionAccess: non-exhaustive
@@ -3879,6 +3982,7 @@ struct agent_access_provider::AttributionMutation: named fields, non-exhaustive
 struct agent_access_provider::AuthorizationRequest: named fields, non-exhaustive
 struct agent_access_provider::BackendRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::BodyAdmission: named fields, private fields
+struct agent_access_provider::BoundedDownload: named fields, private fields, non-exhaustive
 struct agent_access_provider::BrokerBodyPart: named fields, non-exhaustive
 struct agent_access_provider::BrokerBodyPartFile: named fields, private fields
 struct agent_access_provider::BrokerBodyPartSpec: named fields, non-exhaustive
@@ -3886,6 +3990,7 @@ struct agent_access_provider::BuildContext: named fields, private fields
 struct agent_access_provider::CodeExchange: named fields, non-exhaustive
 struct agent_access_provider::ConnectedIdentity: named fields, non-exhaustive
 struct agent_access_provider::ContinuationBinding: named fields, private fields
+struct agent_access_provider::ContinuationFailures: named fields, private fields
 struct agent_access_provider::ContinuationFamily: named fields, private fields
 struct agent_access_provider::ContinuationSigner: named fields, private fields
 struct agent_access_provider::CorrelationContext: named fields, non-exhaustive
@@ -3957,6 +4062,7 @@ struct agent_access_provider::UpstreamClient: named fields, private fields
 struct agent_access_provider::UpstreamClientSpec: named fields, private fields, non-exhaustive
 struct agent_access_provider::UpstreamRetryAfter: named fields, private fields
 struct agent_access_provider::UpstreamTrace: named fields, non-exhaustive
+struct agent_access_provider::UrlPatternPolicy: named fields, private fields, non-exhaustive
 struct agent_access_provider::ValidationContext: named fields, non-exhaustive
 struct agent_access_provider::host::AdmittedRequestParts: named fields
 struct agent_access_provider::host::ClientTransportSpec: named fields, private fields

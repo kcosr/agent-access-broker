@@ -2,13 +2,13 @@
 //! delegated OAuth reads against the independent OAuth test server.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig, Provider,
-    ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits, ProviderResult,
-    ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType, ResourceTypeDescriptor,
-    ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, ValidationContext, complete_upstream_trace, is_literal_loopback,
-    parse_backend_config, take_upstream_trace,
+    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BuildContext,
+    ClientProfile, CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig,
+    Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
+    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, ValidationContext, complete_upstream_trace,
+    is_literal_loopback, parse_backend_config, read_bounded_body, take_upstream_trace,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -225,48 +225,29 @@ impl OAuthRecordsProvider {
                 "OAuth records request failed",
             ));
         }
-        let too_large = || {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "OAuth records response exceeds limit",
-            )
-        };
-        if response
-            .content_length()
-            .is_some_and(|n| n > self.max_bytes)
-        {
-            complete_upstream_trace(
-                &mut response,
-                Some(ReasonCode::UpstreamProtocolFailed.into()),
-            );
-            return Err(too_large());
-        }
         let trace = take_upstream_trace(&mut response);
         let finish = |reason: Option<ReasonCode>| {
             if let Some(trace) = trace {
                 trace.complete(reason.map(Into::into));
             }
         };
-        let mut bytes = Vec::new();
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) => {
-                    if bytes.len() as u64 + chunk.len() as u64 > self.max_bytes {
-                        finish(Some(ReasonCode::UpstreamProtocolFailed));
-                        return Err(too_large());
-                    }
-                    bytes.extend_from_slice(&chunk);
-                }
-                Ok(None) => break,
-                Err(_) => {
-                    finish(Some(ReasonCode::UpstreamConnectionFailed));
-                    return Err(ProviderError::error(
-                        ReasonCode::UpstreamConnectionFailed,
-                        "OAuth records response unavailable",
-                    ));
-                }
+        let bytes = match read_bounded_body(response, self.max_bytes, None).await {
+            Ok(bytes) => bytes,
+            Err(BodyReadError::TooLarge) => {
+                finish(Some(ReasonCode::UpstreamProtocolFailed));
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "OAuth records response exceeds limit",
+                ));
             }
-        }
+            Err(_) => {
+                finish(Some(ReasonCode::UpstreamConnectionFailed));
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "OAuth records response unavailable",
+                ));
+            }
+        };
         match serde_json::from_slice(&bytes) {
             Ok(value) => {
                 finish(None);

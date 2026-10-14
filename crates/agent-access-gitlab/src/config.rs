@@ -91,58 +91,19 @@ pub(crate) fn default_gitlab_raw_download_max_bytes() -> u64 {
     100 * 1024 * 1024
 }
 
+/// Webhook destinations are http or https URL patterns without a query or
+/// fragment, may be empty, and must not repeat once normalized.
 pub(crate) fn validate_gitlab_webhook_destinations(patterns: &[String], errors: &mut Vec<String>) {
-    let label = "providers.gitlab.webhooks.allowed_destinations";
-    let mut seen = BTreeSet::new();
-    for pattern in patterns {
-        let Ok(mut url) = Url::parse(pattern) else {
-            errors.push(format!(
-                "{label} entry {pattern} must be a valid URL pattern"
-            ));
-            continue;
-        };
-        if !matches!(url.scheme(), "http" | "https") {
-            errors.push(format!("{label} entry {pattern} must use http or https"));
-        }
-        match url.host_str() {
-            Some(host) if host.contains('*') => {
-                errors.push(format!(
-                    "{label} entry {pattern} must not wildcard the host"
-                ));
-            }
-            Some(_) => {}
-            None => errors.push(format!("{label} entry {pattern} must include a host")),
-        }
-        if !url.username().is_empty() || url.password().is_some() {
-            errors.push(format!(
-                "{label} entry {pattern} must not include credentials"
-            ));
-        }
-        if url.query().is_some() {
-            errors.push(format!("{label} entry {pattern} must not include a query"));
-        }
-        if url.fragment().is_some() {
-            errors.push(format!(
-                "{label} entry {pattern} must not include a fragment"
-            ));
-        }
-        for segment in url.path_segments().into_iter().flatten() {
-            if segment.contains('*') && segment != "*" && segment != "**" {
-                errors.push(format!(
-                    "{label} entry {pattern} has invalid wildcard path segment {segment}"
-                ));
-            }
-        }
-        if url.port().is_some() && url.port() == url.port_or_known_default() {
-            let _ = url.set_port(None);
-        }
-        url.set_fragment(None);
-        if !seen.insert(url.to_string()) {
-            errors.push(format!(
-                "{label} contains duplicate normalized destination {pattern}"
-            ));
-        }
-    }
+    validate_url_patterns(
+        "providers.gitlab.webhooks.allowed_destinations",
+        patterns,
+        UrlPatternPolicy::new()
+            .with_schemes(&["http", "https"])
+            .allowing_empty()
+            .without_query_or_fragment()
+            .rejecting_duplicates(),
+        errors,
+    );
 }
 
 pub static GITLAB_BACKEND: BackendRegistration = BackendRegistration::new(

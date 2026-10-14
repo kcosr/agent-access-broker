@@ -107,7 +107,8 @@ impl<'a> UpstreamClientSpec<'a> {
 pub enum UpstreamError {
     #[error("upstream URL is not allowlisted")]
     NotAllowed,
-    /// The request never reached the upstream: it could not be built, or no
+    /// The request never reached the upstream: it could not be built, it
+    /// carried credentials to another origin than the service's, or no
     /// connection was established. Nothing upstream acted on it.
     #[error("upstream request was not sent: {detail}")]
     NotSent { timed_out: bool, detail: String },
@@ -211,7 +212,9 @@ impl<'a> RedirectRules<'a> {
         self
     }
 
-    /// Headers every hop carries.
+    /// Headers every hop carries. A credential-bearing header (see
+    /// [`UpstreamClient::request`]) makes a hop to another origin fail as
+    /// [`UpstreamError::NotSent`]; authorize hops with `authorize` instead.
     pub fn with_decorate(
         mut self,
         decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
@@ -289,6 +292,13 @@ impl UpstreamClient {
 
     /// Starts a request. Requests to the service's own origin carry the
     /// invocation's correlation headers; requests elsewhere carry none.
+    ///
+    /// Credentials stay on the service's origin: every send method refuses,
+    /// before sending, a request to another origin that carries an
+    /// `Authorization`, `Proxy-Authorization` or `Cookie` header or any
+    /// header value marked sensitive, with [`UpstreamError::NotSent`]. Mark
+    /// another credential-bearing header sensitive
+    /// (`HeaderValue::set_sensitive`) so the client keeps it there too.
     pub fn request(&self, method: Method, url: Url) -> RequestBuilder {
         let trusted = same_origin(&url, &self.base);
         let request = self.client.request(method, url);
@@ -471,6 +481,12 @@ impl UpstreamClient {
             request.url().origin().ascii_serialization(),
             request.method().as_str(),
         );
+        if !same_origin(request.url(), &self.base) && carries_credentials(request.headers()) {
+            return Err(trace.fail(UpstreamError::NotSent {
+                timed_out: false,
+                detail: "credentials are sent only to the service origin".to_string(),
+            }));
+        }
         Ok((request, trace))
     }
 
@@ -494,6 +510,17 @@ impl UpstreamClient {
     }
 }
 
+/// Whether a request carries credentials: an `Authorization`,
+/// `Proxy-Authorization` or `Cookie` header, or any header value marked
+/// sensitive, as `basic_auth`, `bearer_auth` and credentials embedded in the
+/// URL produce.
+fn carries_credentials(headers: &reqwest::header::HeaderMap) -> bool {
+    use reqwest::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION};
+    headers.iter().any(|(name, value)| {
+        value.is_sensitive() || [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE].contains(name)
+    })
+}
+
 /// A body streaming the file at `path`, with its upload progress.
 pub async fn file_upload_body(path: &Path) -> std::io::Result<(reqwest::Body, UploadProgress)> {
     let file = tokio::fs::File::open(path).await?;
@@ -502,6 +529,59 @@ pub async fn file_upload_body(path: &Path) -> std::io::Result<(reqwest::Body, Up
         let _ = progress_tx.send(tokio::time::Instant::now());
     });
     Ok((reqwest::Body::wrap_stream(stream), progress))
+}
+
+/// Why [`read_bounded_body`] returned no body. The caller maps each case to
+/// its own outcome.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BodyReadError {
+    /// The declared `Content-Length`, or the bytes read, exceed the cap.
+    #[error("upstream response body exceeds the byte cap")]
+    TooLarge,
+    /// No chunk arrived within the idle timeout.
+    #[error("upstream response body stalled")]
+    IdleTimeout,
+    /// Reading the body failed. `timed_out` is set when the client's own
+    /// deadline expired while reading.
+    #[error("upstream response body could not be read: {detail}")]
+    Transport { timed_out: bool, detail: String },
+}
+
+/// Reads `response`'s whole body into memory: a declared `Content-Length`
+/// over `byte_cap` fails before reading, and so does reading more than
+/// `byte_cap` bytes. With an `idle_timeout`, each chunk must arrive within it.
+pub async fn read_bounded_body(
+    mut response: Response,
+    byte_cap: u64,
+    idle_timeout: Option<Duration>,
+) -> Result<Vec<u8>, BodyReadError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > byte_cap)
+    {
+        return Err(BodyReadError::TooLarge);
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = match idle_timeout {
+            Some(idle_timeout) => tokio::time::timeout(idle_timeout, response.chunk())
+                .await
+                .map_err(|_| BodyReadError::IdleTimeout)?,
+            None => response.chunk().await,
+        }
+        .map_err(|error| BodyReadError::Transport {
+            timed_out: error.is_timeout(),
+            detail: error.without_url().to_string(),
+        })?;
+        let Some(chunk) = chunk else {
+            return Ok(body);
+        };
+        if (body.len() as u64).saturating_add(chunk.len() as u64) > byte_cap {
+            return Err(BodyReadError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
 }
 
 /// Records the trace [`UpstreamClient`] attached to `response`, with the
@@ -806,6 +886,158 @@ mod tests {
         assert_eq!(hops[1].headers[REQUEST_ID_HEADER], "test-agent-request-id");
     }
 
+    /// Credentials reach only the service's origin: a request carrying them
+    /// anywhere else is refused before it is sent, while the same request
+    /// without them, such as a media or artifact download, still goes out.
+    #[tokio::test(flavor = "current_thread")]
+    async fn credentials_never_leave_the_service_origin() {
+        let service = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        for server in [&service, &elsewhere] {
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(server)
+                .await;
+        }
+        let client = client(
+            &service.uri(),
+            &allow(&[&service, &elsewhere]),
+            ClientProfile::Request,
+        );
+        let item = |server: &MockServer| Url::parse(&format!("{}/item", server.uri())).unwrap();
+        let mut api_key = reqwest::header::HeaderValue::from_static("service-secret");
+        api_key.set_sensitive(true);
+        type Authorize = Box<dyn Fn(RequestBuilder) -> RequestBuilder>;
+        let credentials: Vec<(&str, Authorize)> = vec![
+            ("bearer", Box::new(|r| r.bearer_auth("service-secret"))),
+            (
+                "basic",
+                Box::new(|r| r.basic_auth("user", Some("service-secret"))),
+            ),
+            (
+                "raw authorization",
+                Box::new(|r| r.header("authorization", "Token service-secret")),
+            ),
+            (
+                "proxy authorization",
+                Box::new(|r| r.header("proxy-authorization", "Basic c2VjcmV0")),
+            ),
+            (
+                "cookie",
+                Box::new(|r| r.header("cookie", "session=service-secret")),
+            ),
+            (
+                "sensitive header",
+                Box::new(move |r| r.header("x-api-key", api_key.clone())),
+            ),
+        ];
+        let capture = crate::test_support::install_trace_capture().start();
+        for (name, authorize) in &credentials {
+            let error = capture
+                .run(client.send(
+                    authorize(client.request(Method::GET, item(&elsewhere))),
+                    UpstreamCall::new("item.view"),
+                ))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    UpstreamError::NotSent {
+                        timed_out: false,
+                        ..
+                    }
+                ),
+                "{name}: {error:?}"
+            );
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+            client
+                .send(
+                    authorize(client.request(Method::GET, item(&service))),
+                    UpstreamCall::new("item.view"),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        }
+        // Credentials embedded in the URL become an Authorization header.
+        let mut embedded = item(&elsewhere);
+        embedded.set_username("user").unwrap();
+        embedded.set_password(Some("service-secret")).unwrap();
+        let error = client
+            .send(
+                client.request(Method::GET, embedded),
+                UpstreamCall::new("item.view"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
+        // The refusals are traced as unsent attempts to the other origin.
+        let events = capture.take_upstream_requests();
+        assert_eq!(events.len(), credentials.len(), "{events:?}");
+        assert!(events.iter().all(|event| {
+            event["upstreamOrigin"] == elsewhere.uri()
+                && event["reasonCode"] == "upstream_connection_failed"
+        }));
+        assert!(elsewhere.received_requests().await.unwrap().is_empty());
+
+        // Without credentials, another allowlisted origin is reachable.
+        client
+            .send(
+                client
+                    .request(Method::GET, item(&elsewhere))
+                    .header("accept", "application/octet-stream"),
+                UpstreamCall::new("item.download"),
+            )
+            .await
+            .unwrap();
+        let received = elsewhere.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(!received[0].headers.contains_key("authorization"));
+        let authorized = service.received_requests().await.unwrap();
+        assert_eq!(authorized.len(), credentials.len());
+        assert_eq!(
+            authorized[0].headers["authorization"],
+            "Bearer service-secret"
+        );
+    }
+
+    /// A redirect hop to another origin cannot carry credentials through
+    /// `with_decorate`; `authorize` keeps them on the service's origin.
+    #[tokio::test]
+    async fn redirect_hops_cannot_decorate_other_origins_with_credentials() {
+        let service = MockServer::start().await;
+        let storage = MockServer::start().await;
+        Mock::given(path("/download"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/blob", storage.uri())),
+            )
+            .mount(&service)
+            .await;
+        Mock::given(path("/blob"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("bytes"))
+            .mount(&storage)
+            .await;
+        let client = client(
+            &service.uri(),
+            &allow(&[&service, &storage]),
+            ClientProfile::Stream,
+        );
+        let url = Url::parse(&format!("{}/download", service.uri())).unwrap();
+        let error = client
+            .get_following_redirects(
+                url,
+                RedirectRules::new(3, Duration::from_secs(5), &|request| request)
+                    .with_decorate(&|request| request.bearer_auth("service-secret")),
+                "item.download",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
+        assert_eq!(service.received_requests().await.unwrap().len(), 1);
+        assert!(storage.received_requests().await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn redirect_chains_fail_closed() {
         let service = MockServer::start().await;
@@ -914,6 +1146,91 @@ mod tests {
         assert_eq!(error, UpstreamError::Timeout);
         assert_eq!(started.elapsed(), idle / 2 + idle);
         recorder.abort();
+    }
+
+    /// A server answering one request with `response`, then holding the
+    /// connection open or closing it.
+    fn raw_server(response: &'static [u8], hold: bool) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match socket.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                }
+            }
+            socket.write_all(response).unwrap();
+            socket.flush().unwrap();
+            if hold {
+                std::thread::sleep(Duration::from_secs(30));
+            }
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        });
+        format!("http://{address}/body")
+    }
+
+    #[tokio::test]
+    async fn bounded_body_reads_stop_at_the_cap_and_type_their_failures() {
+        let server = MockServer::start().await;
+        Mock::given(path("/body"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("12345678"))
+            .mount(&server)
+            .await;
+        let fetch = |url: String| async move {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+        };
+        let declared = format!("{}/body", server.uri());
+        assert_eq!(
+            read_bounded_body(fetch(declared.clone()).await, 8, None)
+                .await
+                .unwrap(),
+            b"12345678"
+        );
+        // Over the cap by its declared length, and by the bytes read.
+        assert_eq!(
+            read_bounded_body(fetch(declared).await, 4, None).await,
+            Err(BodyReadError::TooLarge)
+        );
+        let chunked = raw_server(
+            b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n8\r\n12345678\r\n0\r\n\r\n",
+            false,
+        );
+        assert_eq!(
+            read_bounded_body(fetch(chunked).await, 4, None).await,
+            Err(BodyReadError::TooLarge)
+        );
+        let truncated = b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nab";
+        let stalled = raw_server(truncated, true);
+        assert_eq!(
+            read_bounded_body(fetch(stalled).await, 1024, Some(Duration::from_millis(100))).await,
+            Err(BodyReadError::IdleTimeout)
+        );
+        let closed = raw_server(truncated, false);
+        let error = read_bounded_body(fetch(closed).await, 1024, Some(Duration::from_secs(10)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                BodyReadError::Transport {
+                    timed_out: false,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

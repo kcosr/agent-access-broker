@@ -330,9 +330,11 @@ and audit checks through the real `agent-access` binary.
   `scripts/verify-downstream-consumer.mjs` stages them as independent Git
   repositories pinned to a clean commit, builds them `--locked --offline` from the
   shared Cargo download cache, and runs the assembled executable; release
-  qualification runs it as the `downstream-consumer` gate. Keep the templates
-  valid TOML with package names distinct from upstream crates, and pin upstream
-  only by the canonical URL with the all-zero sentinel `rev`. See its README.
+  qualification runs it as the `downstream-consumer` gate. In the same stage it
+  builds and tests the marked code of `docs/provider-sdk.md` and
+  `docs/downstream-assembly.md`. Keep the templates valid TOML with package
+  names distinct from upstream crates, and pin upstream only by the canonical
+  URL with the all-zero sentinel `rev`. See its README.
 - `skills/`: self-contained agent-facing usage skills split by access surface.
 - `scripts/`: release, portal build, and local portal smoke helpers (smoke tests
   are cargo integration tests under `crates/agent-access/tests/`). Trusted-ingress
@@ -427,13 +429,16 @@ and audit checks through the real `agent-access` binary.
   provider state, admitted authority and static/delegated credential
   obligations, governed HTTP and the loopback rule, continuation tokens,
   standard and domain reasons, outcomes, test support, the compatibility policy
-  and a worked example. Every `rust` block must compile against the current SDK;
-  update the guide with SDK changes.
+  and a worked example. Mark every `rust` block as described in
+  `docs/testing.md#guide-code-blocks`; the `downstream-consumer` gate compiles
+  and tests them against the candidate, so update the guide with SDK changes.
 - `docs/downstream-assembly.md`: building another distribution from the host:
   composition, application lifecycle and exit statuses, assembly identity and
   module provenance, canonical Git pins, coordinated upgrades, source overrides,
   lockfile review, CLI/portal assets and notices, the release-feature check, and
-  what qualification covers. Keep its `rust` blocks compiling against the host.
+  what qualification covers. Its example assembly is marked and checked like the
+  provider guide's code; keep the files it states it shares with the fixture's
+  assembly template in step with `ASSEMBLY_GUIDE_SHARED_FILES`.
 - `docs/imported-services.md`: generic MCP import setup, administrator review,
   credential ownership, refresh, limits, and invocation outcomes.
 - `docs/imported-openapi.md`: OpenAPI document/API destination setup, discovery

@@ -154,7 +154,7 @@ Google OAuth dialect and the MCP import adapter from upstream, together with the
 [SDK guide's worked example](provider-sdk.md#worked-example), which a separate
 repository owns. Its manifest pins both repositories by full revision:
 
-```toml
+```toml file=team-broker/Cargo.toml
 [package]
 name = "team-broker"
 version = "1.4.0"
@@ -179,11 +179,15 @@ The binary and the assembly's acceptance tests both start from them. The
 assembly's own build script reads its `Cargo.lock` and emits
 `TEAM_BROKER_UPSTREAM_REVISION`, `TEAM_BROKER_UPSTREAM_VERSION`,
 `TEAM_BROKER_NOTES_REVISION` and `TEAM_BROKER_NOTES_VERSION`
-(`cargo:rustc-env=...`) from the locked upstream and provider sources. The
-release pipeline sets `TEAM_BROKER_REVISION` and `TEAM_BROKER_QUALIFICATION`
-only for a build from a verified clean checkout that it qualifies.
+(`cargo:rustc-env=...`) from the locked upstream and provider sources. It is
+the [`build.rs`](../tests/downstream-consumer/assembly-repo/build.rs) of
+upstream's [downstream consumer fixture](#qualification) with the `TEAM_BROKER_`
+prefix in place of `DOWNSTREAM_BROKER_` and `("NOTES", "example-notes")` as its
+provider repository entry. The release pipeline sets `TEAM_BROKER_REVISION` and
+`TEAM_BROKER_QUALIFICATION` only for a build from a verified clean checkout that
+it qualifies.
 
-```rust
+```rust file=team-broker/src/lib.rs
 //! The modules this distribution links, and its identity.
 use agent_access_broker_host::{
     AssemblyIdentity, BrokerComposition, CompositionError, ModuleProvenance, SourceRevision,
@@ -256,14 +260,17 @@ mod tests {
 ```
 
 `src/main.rs` runs the application; a rejected composition or identity exits
-`3` with its problems on standard error:
+`3` with its problems on standard error. It is the fixture's
+[`main.rs`](../tests/downstream-consumer/assembly-repo/src/main.rs) with this
+crate's name:
 
-```rust
+```rust file=team-broker/src/main.rs
 use agent_access_broker_host::{BrokerApplication, BrokerExit};
+use team_broker::{build_identity, composition};
 
 fn main() -> BrokerExit {
-    match team_broker::composition()
-        .and_then(|composition| BrokerApplication::new(composition, team_broker::build_identity()))
+    match composition()
+        .and_then(|composition| BrokerApplication::new(composition, build_identity()))
     {
         Ok(application) => application.run_from_env(),
         Err(error) => error.into(),
@@ -439,9 +446,12 @@ repository with its own manifest, lockfile and full-revision pins.
 reviews the lockfiles for one SDK package identity and exact sources, runs the
 provider's tests with SDK test support, checks the release feature graph, and
 starts the assembled executable against a synthetic CloudBees CI controller,
-exercising it with the candidate's CLI. Upstream release qualification runs it
-as the `downstream-consumer` gate; after publication, `--source canonical`
-qualifies the canonical remote pins.
+exercising it with the candidate's CLI. In the same stage, pinned the same way,
+it builds and tests this guide's [example assembly](#example-assembly) and the
+code of the [provider SDK guide](provider-sdk.md), including its worked example,
+and checks the files the example shares with the fixture. Upstream release
+qualification runs it as the `downstream-consumer` gate; after publication,
+`--source canonical` qualifies the canonical remote pins.
 
 For in-process acceptance tests, enable the host's `test-support` feature in
 development dependencies only and start the assembly's own

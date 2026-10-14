@@ -241,6 +241,17 @@ All notable changes to this project are documented in this file.
   `ContinuationLifetime::Durable` family replaces `sign_durable` and
   `verify_durable`. `StableSigningKey` and `host::service_signing_key` remain
   the host's signing-key port.
+- `UpstreamClient` now keeps credentials on its base origin. Every send
+  method, including each hop of `get_following_redirects`, refuses a request to
+  another origin that carries an `Authorization`, `Proxy-Authorization` or
+  `Cookie` header or a header value marked sensitive (as `bearer_auth`,
+  `basic_auth` and URL-embedded credentials produce), failing before it is
+  sent with `UpstreamError::NotSent`. Previously only the redirect helper kept
+  credentials on the base origin, and `send` delivered them to any allowlisted
+  origin. Requests without credentials still reach every allowlisted origin.
+  A provider that needs credentials on another origin builds a client whose
+  base is that origin, and marks custom credential headers sensitive. The
+  shipped providers already met this rule.
 
 ### Added
 
@@ -291,6 +302,19 @@ All notable changes to this project are documented in this file.
   owner carried as a keyed commitment; `ContinuationBinding` records its stage
   as a `ContinuationStage` type parameter (`AdmissionStage` by default, or
   `ScopeResolutionStage`).
+- `ContinuationFailures` reports each `ContinuationError` as a provider's
+  failure for rejected tokens, oversized payloads (given the family's cap) or
+  unavailable signing keys, optionally wording `Expired`,
+  `UpstreamQueryChanged` or `DurableKeyUnavailable` differently. CloudBees,
+  GitLab, Gmail, Jira and Confluence report their continuation failures
+  through it, with unchanged reasons, decisions and messages.
+- `DelegatedCredential::revalidated_access_for(target, audience)` revalidates
+  a delegated lease and returns its access only for exactly that target and
+  audience, and `access_for` makes the same comparison without revalidating.
+  `DelegatedAccessError` separates the host's revalidation failure, returned
+  unchanged, from a mismatch the provider reports. Gmail and imported MCP
+  check their delegated access through them, with unchanged errors and order
+  of checks.
 - The provider SDK exports `SDK_PACKAGE`, its own package name and version,
   which the host reports as the status's `sdk`.
 - `scripts/verify-release-provenance.mjs` checks the release dependency graph
@@ -351,7 +375,29 @@ All notable changes to this project are documented in this file.
   and runs it against a synthetic CloudBees CI controller through that CLI.
   Every crate in `Cargo.lock` must already be in the download cache, and Cargo
   configuration outside the driver's private Cargo home must not apply to its
-  stage.
+  stage. In the same stage it builds and tests the code of the provider SDK and
+  downstream assembly guides, which marks every Rust block: `rust check` blocks
+  compile as modules of a generated SDK-only crate, `rust file=` and
+  `toml file=` blocks form the guides' example crates, staged in the provider
+  repository and beside the assembly, and `rust fragment` blocks are
+  deliberately not compiled. Guide code blocks may not open inside a
+  blockquote or on a list item's marker line, and every staged Rust file must
+  be read by a compiled target. The assembly guide's example must share its
+  `main.rs` and `build.rs` with the fixture's assembly as the guide states.
+- The provider SDK streams a bounded raw download with
+  `ProviderResultStream::from_bounded_response` and a `BoundedDownload`: a
+  label, a byte cap with the late reason it reports, an idle timeout and an
+  optional expected size. Stalls, read failures, cap overruns and size
+  mismatches fail late with code-only reasons.
+- The provider SDK reads a bounded response body into memory with
+  `read_bounded_body(response, byte_cap, idle_timeout)`, which rejects a
+  declared `Content-Length` over the cap before reading and returns a typed
+  `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with `timed_out`)
+  for the provider to map.
+- The provider SDK validates URL pattern lists with `validate_url_patterns`
+  and a `UrlPatternPolicy`: the allowlist grammar (a fixed host, no embedded
+  credentials, literal, `*` or `**` path segments) plus the policy's schemes,
+  emptiness, query and fragment, and repeat rules.
 
 ### Changed
 
@@ -414,6 +460,18 @@ All notable changes to this project are documented in this file.
   proved the target unchanged; other writes returned the same error without a
   receipt. Failures after the request may have been sent keep their existing
   outcome.
+- Late raw-download failures of GitLab, Jira, Confluence and CloudBees CI
+  record uniform messages in their terminal audit record, such as
+  `GitLab download exceeded the download limit` or
+  `Jira attachment download stalled`, without upstream error detail. Reason
+  codes are unchanged, except that a GitLab repository file download whose
+  request deadline expires mid-body reports `upstream_timeout` instead of
+  `upstream_connection_failed`. A GitLab, Jira or Confluence download whose
+  body overruns its `Content-Length` now fails before the excess is delivered
+  instead of at the end, still with `upstream_protocol_failed`.
+- The GitLab webhook destination diagnostic for repeated patterns now reads
+  `contains duplicate normalized entry` instead of
+  `contains duplicate normalized destination`.
 
 ### Fixed
 
@@ -425,6 +483,11 @@ All notable changes to this project are documented in this file.
   failures preparing discovery, such as an unavailable store or a missing
   encryption key, still report `deny`. Reason codes and HTTP statuses are
   unchanged.
+- GitLab webhook destination patterns that differ only in a nondefault port,
+  such as `https://hooks.example.com:8443/**` and
+  `https://hooks.example.com:9443/**`, are no longer rejected as duplicates.
+  A pattern with an explicit default port, such as `:443` for `https`, is still
+  a duplicate of the same pattern without it.
 
 ### Removed
 

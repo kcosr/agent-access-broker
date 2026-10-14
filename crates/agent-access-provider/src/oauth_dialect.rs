@@ -6,11 +6,11 @@
 //! authorization server family can live outside core.
 use crate::host::UpstreamClientFactory;
 use crate::{
-    ClientProfile, EgressDeclaration, ModuleMetadata, ProviderBuildError, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
+    BodyReadError, ClientProfile, EgressDeclaration, ModuleMetadata, ProviderBuildError,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
+    read_bounded_body,
 };
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -711,22 +711,12 @@ impl OAuthResponse {
 
     /// The body as JSON, read within [`OAUTH_MAX_RESPONSE_BYTES`].
     pub async fn json(self) -> Result<Value, OAuthDialectError> {
-        if self
-            .response
-            .content_length()
-            .is_some_and(|length| length > OAUTH_MAX_RESPONSE_BYTES as u64)
-        {
-            return Err(OAuthDialectError::InvalidResponse);
-        }
-        let mut stream = self.response.bytes_stream();
-        let mut body = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|_| OAuthDialectError::Failed)?;
-            if body.len() + chunk.len() > OAUTH_MAX_RESPONSE_BYTES {
-                return Err(OAuthDialectError::InvalidResponse);
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(self.response, OAUTH_MAX_RESPONSE_BYTES as u64, None)
+            .await
+            .map_err(|error| match error {
+                BodyReadError::TooLarge => OAuthDialectError::InvalidResponse,
+                _ => OAuthDialectError::Failed,
+            })?;
         serde_json::from_slice(&body).map_err(|_| OAuthDialectError::InvalidResponse)
     }
 }

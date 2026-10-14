@@ -127,6 +127,24 @@ pub trait DelegatedLease: Send + Sync + 'static {
     async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError>;
 }
 
+/// Why [`DelegatedCredential::revalidated_access_for`] or
+/// [`DelegatedCredential::access_for`] returned no access. A provider returns
+/// a revalidation failure unchanged and reports a mismatch as its own
+/// failure, usually `credential_invalid`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DelegatedAccessError {
+    /// The lease could not be revalidated. This is the host's failure, such
+    /// as a revoked connection or a refresh already in progress; return it
+    /// unchanged.
+    #[error("delegated access could not be revalidated")]
+    Revalidation(ProviderError),
+    /// The access is bound to another upstream target or issued for another
+    /// audience than the provider requires.
+    #[error("delegated access is bound to another target or audience")]
+    Mismatch,
+}
+
 /// A delegated credential lent to one invocation. Clones share the lease.
 #[derive(Clone)]
 pub struct DelegatedCredential(Arc<dyn DelegatedLease>);
@@ -149,6 +167,40 @@ impl DelegatedCredential {
         self.0.revalidate().await
     }
 
+    /// Revalidates the lease, then returns its access only when that access
+    /// is bound to exactly `target` and issued for exactly `audience`. Call
+    /// it before each upstream request, including each page or detail call
+    /// of one invocation, and present only the access it returns.
+    pub async fn revalidated_access_for(
+        &self,
+        target: &str,
+        audience: &str,
+    ) -> Result<DelegatedAccess, DelegatedAccessError> {
+        self.revalidate()
+            .await
+            .map_err(DelegatedAccessError::Revalidation)?;
+        self.access_for(target, audience)
+    }
+
+    /// The access the invocation holds now, only when it is bound to
+    /// exactly `target` and issued for exactly `audience`; otherwise
+    /// [`DelegatedAccessError::Mismatch`]. It does not revalidate the lease,
+    /// so it suits checks that send nothing upstream, such as comparing a
+    /// continuation's binding with the selected lease; use
+    /// [`Self::revalidated_access_for`] before an upstream request.
+    pub fn access_for(
+        &self,
+        target: &str,
+        audience: &str,
+    ) -> Result<DelegatedAccess, DelegatedAccessError> {
+        let access = self.access();
+        if access.target() == target && access.audience() == audience {
+            Ok(access)
+        } else {
+            Err(DelegatedAccessError::Mismatch)
+        }
+    }
+
     pub fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
         self.0.mark_rejected(version)
     }
@@ -161,5 +213,109 @@ impl DelegatedCredential {
 impl std::fmt::Debug for DelegatedCredential {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.debug_tuple("DelegatedCredential").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ReasonCode;
+    use crate::test_support::delegated_binding_id;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: &str = "https://notes.example.test/";
+    const AUDIENCE: &str = "https://notes.example.test/api";
+
+    struct Lease {
+        target: &'static str,
+        audience: &'static str,
+        revoked: bool,
+        validations: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DelegatedLease for Lease {
+        fn access(&self) -> DelegatedAccess {
+            DelegatedAccess::new("token", self.target, self.audience, "version-1", i64::MAX)
+        }
+        fn binding_identity(&self) -> DelegatedBindingId {
+            delegated_binding_id("notes")
+        }
+        async fn revalidate(&self) -> Result<(), ProviderError> {
+            self.validations.fetch_add(1, Ordering::SeqCst);
+            if self.revoked { Err(revoked()) } else { Ok(()) }
+        }
+        fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+            Err(revoked())
+        }
+    }
+
+    fn revoked() -> ProviderError {
+        ProviderError::deny(ReasonCode::CredentialInvalid, "connection revoked")
+    }
+
+    fn credential(
+        target: &'static str,
+        audience: &'static str,
+        revoked: bool,
+    ) -> (DelegatedCredential, Arc<Lease>) {
+        let lease = Arc::new(Lease {
+            target,
+            audience,
+            revoked,
+            validations: AtomicUsize::new(0),
+        });
+        (DelegatedCredential::new(lease.clone()), lease)
+    }
+
+    #[tokio::test]
+    async fn revalidated_access_is_returned_only_for_the_exact_target_and_audience() {
+        let (exact, lease) = credential(TARGET, AUDIENCE, false);
+        assert_eq!(
+            exact.revalidated_access_for(TARGET, AUDIENCE).await,
+            Ok(exact.access())
+        );
+        assert_eq!(lease.validations.load(Ordering::SeqCst), 1);
+        for (target, audience) in [
+            ("https://other.example.test/", AUDIENCE),
+            (TARGET, "https://other.example.test/api"),
+            ("https://notes.example.test", AUDIENCE),
+            (TARGET, "https://notes.example.test/api/"),
+        ] {
+            let (other, lease) = credential(target, audience, false);
+            assert_eq!(
+                other.revalidated_access_for(TARGET, AUDIENCE).await,
+                Err(DelegatedAccessError::Mismatch),
+                "{target} {audience}"
+            );
+            assert_eq!(lease.validations.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    /// A revalidation failure is returned unchanged, before the access is
+    /// compared.
+    #[tokio::test]
+    async fn revalidation_failures_come_first_and_unchanged() {
+        for target in [TARGET, "https://other.example.test/"] {
+            let (credential, _) = credential(target, AUDIENCE, true);
+            assert_eq!(
+                credential.revalidated_access_for(TARGET, AUDIENCE).await,
+                Err(DelegatedAccessError::Revalidation(revoked()))
+            );
+        }
+    }
+
+    #[test]
+    fn access_for_compares_without_revalidating() {
+        let (exact, lease) = credential(TARGET, AUDIENCE, true);
+        assert_eq!(exact.access_for(TARGET, AUDIENCE), Ok(exact.access()));
+        assert_eq!(
+            exact.access_for(TARGET, "https://other.example.test/api"),
+            Err(DelegatedAccessError::Mismatch)
+        );
+        assert_eq!(lease.validations.load(Ordering::SeqCst), 0);
     }
 }

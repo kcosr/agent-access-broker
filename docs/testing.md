@@ -285,8 +285,9 @@ No Cargo configuration may apply to its stage under `$TMPDIR` other than the
 private one it writes. The provider repository runs the conformance crate's
 unit tests, and the assembly's executable is started against a synthetic
 CloudBees CI controller and exercised through the candidate's CLI, which the
-driver builds in the stage. SIGINT or SIGTERM stops its child processes and
-removes the stage. The
+driver builds in the stage. The same stage builds and tests the provider SDK
+and downstream assembly guides' [code blocks](#guide-code-blocks). SIGINT or
+SIGTERM stops its child processes and removes the stage. The
 [fixture README](../tests/downstream-consumer/README.md) describes the templates,
 pin rules, lockfile review, offline dependency source and evidence. The pure
 functions of the driver are tested with the other script tests.
@@ -512,6 +513,57 @@ token redaction from diagnostics. A temporary URL-scoped Git configuration also
 proves that the matching gateway host receives the fixed `agent-access` username
 and fake token while a different host receives no credentials from the helper.
 That integration test requires a local `git` executable on `PATH`.
+
+### Guide code blocks
+
+The [provider SDK guide](provider-sdk.md) and the
+[downstream assembly guide](downstream-assembly.md) show code that the
+downstream consumer check builds and tests. Each fenced block says in its info
+string, after the language and a space, what the check does with it:
+
+| Info string | Meaning |
+| --- | --- |
+| `rust check` | Self-contained items using only the SDK and the standard library. Each block compiles as its own module of a generated crate. Only the provider SDK guide has these. |
+| `rust file=<crate>/<path>` | Part of a file of an example crate: `src/...`, `tests/...` or `build.rs`. Blocks naming one file are joined in document order, one blank line apart. |
+| `toml file=<crate>/Cargo.toml` | The example crate's manifest: exactly one per crate, declaring the package `<crate>`, with each Git pin written as the canonical URL and a placeholder such as `rev = "<full 40-character commit>"`. |
+| `rust fragment` | Deliberately incomplete code, never compiled. |
+
+Every `rust` block in the two guides carries exactly one of these markers. An
+unmarked block, an unknown marker or a comma-joined info string such as
+`rust,ignore` fails the check, so leaving code out of it is always explicit.
+Other blocks, such as configuration `toml` and `bash`, are not compiled. A
+guide code block must start at the top level or be indented under a list item;
+one opened inside a blockquote or on a list item's marker line fails the check.
+Markdown elsewhere in the repository may contain only `rust fragment` blocks,
+wherever they appear.
+
+The check reads both guides from the candidate commit. The provider guide's
+example crates and the generated crate for its `rust check` blocks become
+members of the staged provider repository, pinned to the candidate like the
+conformance crate. The assembly guide's single example crate is staged as its
+own workspace, with its provider repository URL mapped to that staged provider
+repository. Their placeholder pins are mapped like the fixture's sentinel pins,
+their lockfiles are reviewed with the fixture's, and they build in the fixture
+templates' development profile. It runs `rustfmt --check` on the code the
+guides show and `cargo test --locked --offline` on every example crate. Cargo
+compiles only the files a target's module tree reaches, so the check then reads
+the build's dep-info and fails if any staged Rust file, such as a marked
+`src/extra.rs` that no `mod` declares, was not compiled.
+
+Where the assembly guide says its example shares a file with the fixture's
+assembly template, the check holds it to that: the guide's `src/main.rs` must
+equal the fixture's with the crate name changed, and the example's `build.rs`
+is the fixture's with the renames the guide states (`ASSEMBLY_GUIDE_SHARED_FILES`
+in the driver). Change those statements and the list together. The evidence's
+`guides/` directory holds every staged guide file and `blocks.json`, which maps
+each block to the file and line it was staged at.
+
+The script tests check the markers of the checked-in guides and the files they
+share with the fixture without building them:
+
+```bash
+node --test scripts/verify-downstream-consumer.test.mjs
+```
 
 ### Execution-context matrix
 

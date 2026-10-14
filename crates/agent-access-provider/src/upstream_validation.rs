@@ -25,25 +25,13 @@ pub fn response_has_json_content_type(response: &reqwest::Response) -> bool {
 }
 
 pub async fn read_validation_json(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     configured_byte_cap: u64,
 ) -> Option<Value> {
-    let byte_cap = usize::try_from(configured_byte_cap)
-        .unwrap_or(usize::MAX)
-        .min(VALIDATION_BODY_MAX_BYTES);
-    if response
-        .content_length()
-        .is_some_and(|length| length > byte_cap as u64)
-    {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len().saturating_add(chunk.len()) > byte_cap {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+    let byte_cap = configured_byte_cap.min(VALIDATION_BODY_MAX_BYTES as u64);
+    let bytes = crate::read_bounded_body(response, byte_cap, None)
+        .await
+        .ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 

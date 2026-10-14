@@ -475,50 +475,17 @@ impl CloudbeesCiProvider {
             &reply,
             controller.download_client.egress_route(),
         );
-        let cap = self.download_limit;
-        let idle = self.download_idle_timeout;
-        let source =
-            stream::try_unfold((response, 0u64), move |(mut response, count)| async move {
-                let chunk = tokio::time::timeout(idle, response.chunk())
-                    .await
-                    .map_err(|_| {
-                        ProviderStreamError::new(
-                            ReasonCode::UpstreamTimeout,
-                            "CloudBees CI download stalled",
-                        )
-                    })?
-                    .map_err(|error| {
-                        ProviderStreamError::new(
-                            if error.is_timeout() {
-                                ReasonCode::UpstreamTimeout
-                            } else {
-                                ReasonCode::UpstreamConnectionFailed
-                            },
-                            "CloudBees CI download failed",
-                        )
-                    })?;
-                let Some(chunk) = chunk else {
-                    return Ok(None);
-                };
-                let next = count
-                    .checked_add(chunk.len() as u64)
-                    .filter(|n| *n <= cap)
-                    .ok_or_else(|| {
-                        ProviderStreamError::new(
-                            ReasonCode::AttachmentSizeDenied,
-                            "CloudBees CI download exceeds size limit",
-                        )
-                    })?;
-                Ok(Some((chunk, (response, next))))
-            });
-        let mut stream = ProviderResultStream::from_stream(content_type, source);
-        if let Some(size) = size {
-            stream = stream.with_expected_size(
-                size,
-                "CloudBees CI download size did not match Content-Length",
-            );
-        }
-        result.stream = Some(stream);
+        result.stream = Some(ProviderResultStream::from_bounded_response(
+            content_type,
+            response,
+            BoundedDownload::new(
+                "CloudBees CI download",
+                self.download_limit,
+                ReasonCode::AttachmentSizeDenied,
+                self.download_idle_timeout,
+            )
+            .with_expected_size(size),
+        ));
         Ok(result)
     }
 }

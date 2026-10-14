@@ -4827,44 +4827,34 @@ pub(crate) fn gitlab_validation_fields(operation: &str) -> Option<&'static [&'st
 // Uploads have no fixed request deadline: active transfers may outlast the idle
 // window. Bound each response read separately after headers have arrived.
 pub(crate) async fn gitlab_upload_response_value(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     byte_cap: u64,
     idle_timeout: Duration,
 ) -> Result<Value, GitlabBackendError> {
-    validate_gitlab_body_response(&response, byte_cap)?;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = tokio::time::timeout(idle_timeout, response.chunk())
+    let bytes = read_bounded_body(response, byte_cap, Some(idle_timeout))
         .await
-        .map_err(|_| GitlabBackendError::Timeout)?
-        .map_err(|error| GitlabBackendError::Transport(error.to_string()))?
-    {
-        if bytes.len().saturating_add(chunk.len()) as u64 > byte_cap {
-            return Err(GitlabBackendError::ResponseTooLarge);
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+        .map_err(gitlab_body_read_error)?;
     serde_json::from_slice(&bytes)
         .map_err(|_| GitlabBackendError::Protocol("GitLab upload response is invalid".to_string()))
 }
 
 pub(crate) async fn gitlab_response_value(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     byte_cap: u64,
 ) -> Result<Value, GitlabBackendError> {
-    validate_gitlab_body_response(&response, byte_cap)?;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+    let bytes = read_bounded_body(response, byte_cap, None)
         .await
-        .map_err(|error| GitlabBackendError::Transport(error.to_string()))?
-    {
-        let next_len = bytes.len() + chunk.len();
-        if next_len as u64 > byte_cap {
-            return Err(GitlabBackendError::ResponseTooLarge);
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+        .map_err(gitlab_body_read_error)?;
     serde_json::from_slice(&bytes).map_err(|error| GitlabBackendError::Protocol(error.to_string()))
+}
+
+fn gitlab_body_read_error(error: BodyReadError) -> GitlabBackendError {
+    match error {
+        BodyReadError::TooLarge => GitlabBackendError::ResponseTooLarge,
+        BodyReadError::IdleTimeout => GitlabBackendError::Timeout,
+        BodyReadError::Transport { detail, .. } => GitlabBackendError::Transport(detail),
+        other => GitlabBackendError::Transport(other.to_string()),
+    }
 }
 
 pub(crate) async fn gitlab_response_empty(
@@ -4907,55 +4897,17 @@ pub(crate) fn gitlab_response_stream(
     expected_size: Option<u64>,
     content_type: String,
 ) -> ProviderResultStream {
-    let stream = stream::try_unfold((response, 0_u64), move |(mut response, size)| async move {
-        let chunk = tokio::time::timeout(idle_timeout, response.chunk())
-            .await
-            .map_err(|_| {
-                ProviderStreamError::new(ReasonCode::UpstreamTimeout, "GitLab download stalled")
-            })?
-            .map_err(|error| {
-                ProviderStreamError::new(
-                    ReasonCode::UpstreamConnectionFailed,
-                    format!("GitLab download failed: {error}"),
-                )
-            })?;
-        let Some(chunk) = chunk else {
-            if expected_size.is_some_and(|expected_size| expected_size != size) {
-                return Err(ProviderStreamError::new(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "GitLab download response size did not match Content-Length",
-                ));
-            }
-            return Ok(None);
-        };
-        let next_size = size.checked_add(chunk.len() as u64).ok_or_else(|| {
-            ProviderStreamError::new(
-                ReasonCode::UpstreamProtocolFailed,
-                "GitLab download response exceeded the configured byte cap",
-            )
-        })?;
-        if next_size > byte_cap {
-            return Err(ProviderStreamError::new(
-                ReasonCode::UpstreamProtocolFailed,
-                "GitLab download response exceeded the configured byte cap",
-            ));
-        }
-        Ok(Some((chunk, (response, next_size))))
-    });
-    ProviderResultStream::from_stream(content_type, stream)
-}
-
-pub(crate) fn validate_gitlab_body_response(
-    response: &reqwest::Response,
-    byte_cap: u64,
-) -> Result<(), GitlabBackendError> {
-    if response
-        .content_length()
-        .is_some_and(|content_length| content_length > byte_cap)
-    {
-        return Err(GitlabBackendError::ResponseTooLarge);
-    }
-    Ok(())
+    ProviderResultStream::from_bounded_response(
+        content_type,
+        response,
+        BoundedDownload::new(
+            "GitLab download",
+            byte_cap,
+            ReasonCode::UpstreamProtocolFailed,
+            idle_timeout,
+        )
+        .with_expected_size(expected_size),
+    )
 }
 
 pub(crate) fn user_from_value(value: Value) -> Result<GitlabUser, GitlabBackendError> {

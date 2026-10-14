@@ -203,8 +203,13 @@ derives `Deserialize`. Reject unknown fields with
 The SDK provides pure validators for common fields:
 `validate_upstream_base_url` (HTTPS, or loopback HTTP outside production),
 `validate_upstream_allowlist`, `validate_egress_proxy_config`,
-`validate_tenant_host` and the attachment and limit relation checks. None of
-them reads files, the process environment or secret references; the host
+`validate_tenant_host` and the attachment and limit relation checks. For any
+other list of URL patterns, such as destinations a provider lets the upstream
+deliver to, `validate_url_patterns` applies the allowlist grammar (a fixed
+host, no embedded credentials, path segments that are literal, `*` or `**`)
+under a `UrlPatternPolicy` that chooses the schemes, whether the list may be
+empty, and whether queries, fragments and normalized repeats are rejected. None
+of them reads files, the process environment or secret references; the host
 resolves secret references such as a proxy's `password_ref`.
 
 ### Building a provider
@@ -339,7 +344,7 @@ another type, is a `ProviderStateError`. Returned with `?`, it becomes the host'
 `broker_provider_contract_failed` with a diagnostic code; the state's contents
 are never logged.
 
-```rust
+```rust check
 use agent_access_provider::{
     ProviderError, ProviderInvocation, ProviderState, ResourceScopes, ScopeResolution,
 };
@@ -467,36 +472,45 @@ OAuth registration does not prove which upstream resource or API audience the
 token serves, so the provider must check that on every use:
 
 1. Before each upstream request, including each page or detail call of one
-   invocation, call `revalidate().await?`. It confirms the connection is still
-   current and renews stale access.
-2. Read `access()` and check its `target()` and `audience()` against the values
-   the provider requires. Deny with `credential_invalid` when they differ.
+   invocation, call `revalidated_access_for(target, audience).await`. It
+   confirms the connection is still current and renews stale access, then
+   returns the access only when it is bound to exactly the target and issued for
+   exactly the audience the provider requires.
+2. Return a `DelegatedAccessError::Revalidation` failure unchanged. Deny a
+   `DelegatedAccessError::Mismatch` with `credential_invalid`.
 3. Attach its `token()` only to requests for the provider's own origin, after
    the origin check in [credentials and origins](#credentials-and-origins).
 
-```rust
-use agent_access_provider::{DelegatedCredential, ProviderError, ReasonCode};
+```rust check
+use agent_access_provider::{DelegatedAccessError, DelegatedCredential, ProviderError, ReasonCode};
 
 const NOTES_TARGET: &str = "https://notes.example.com/";
 const NOTES_AUDIENCE: &str = "https://notes.example.com/api";
 
 /// The token to present for the next upstream request.
 async fn delegated_token(credential: &DelegatedCredential) -> Result<String, ProviderError> {
-    credential.revalidate().await?;
-    let access = credential.access();
-    if access.target() != NOTES_TARGET || access.audience() != NOTES_AUDIENCE {
-        return Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "the connected account does not grant access to the notes service",
-        ));
-    }
+    let access = credential
+        .revalidated_access_for(NOTES_TARGET, NOTES_AUDIENCE)
+        .await
+        .map_err(|error| match error {
+            DelegatedAccessError::Revalidation(failure) => failure,
+            _ => ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "the connected account does not grant access to the notes service",
+            ),
+        })?;
     Ok(access.token().to_owned())
 }
 ```
 
-Return lease failures unchanged with `?`. They are host-origin failures; a
-refresh already in progress, for example, reports `concurrency_limited` (HTTP
-429), which a provider cannot report itself.
+`access_for(target, audience)` makes the same comparison without revalidating,
+for a check that sends nothing upstream, such as comparing a continuation's
+binding with the selected lease before opening it.
+
+Return lease failures unchanged, from `revalidated_access_for` as above and from
+the other lease methods with `?`. They are host-origin failures; a refresh
+already in progress, for example, reports `concurrency_limited` (HTTP 429), which
+a provider cannot report itself.
 
 An upstream 401 does not license a retry. `mark_rejected(version)` invalidates
 only the rejected access version for later calls, without refreshing or
@@ -535,8 +549,8 @@ UpstreamClient::build(
   decides nothing.
 - `provider` is the name traces record.
 - `base` is the service's base URL. `request()` adds the invocation's
-  correlation headers only on this origin. The client does not decide where
-  credentials go; see [credentials and origins](#credentials-and-origins).
+  correlation headers only on this origin, and the send methods deliver
+  credentials only to it; see [credentials and origins](#credentials-and-origins).
 - `egress` declares the route the client needs; see below.
 - `allowed_upstream_hosts` are URL patterns. The client's send methods and its
   redirect helper refuse every request and redirect hop outside them.
@@ -617,29 +631,39 @@ correlation, hook, deadline and tracing span, so its traces stay attributed.
 
 ### Credentials and origins
 
-`UpstreamClient` enforces the allowlist and places correlation headers by
-origin, but credential placement is the provider's obligation. `send` delivers
-every header the provider added to the builder to any allowlisted URL,
-including a secondary origin such as a media or artifact host. A token attached
-with `bearer_auth` to a request for such a URL reaches that host.
+Credentials stay on the client's base origin. Every send method, including
+each hop of `get_following_redirects`, refuses a request whose URL is on
+another origin while it carries an `Authorization`, `Proxy-Authorization` or
+`Cookie` header or any header value marked sensitive. The request fails before
+it is sent with `UpstreamError::NotSent`, and its trace records
+`upstream_connection_failed`. `bearer_auth`, `basic_auth` and credentials
+embedded in a URL produce a sensitive `Authorization` header. Mark any other
+header that carries a secret, such as an API-key header, sensitive with
+`HeaderValue::set_sensitive(true)` so the rule covers it. A credential in a URL
+query is not a header: keep such URLs on the base origin yourself.
+
+A request without credentials may still go to any allowlisted origin, such as a
+media or artifact host. There is no opt-in for sending credentials to a second
+origin; build another client whose base is that origin, as the Atlassian
+gateway route and each OAuth destination do.
 
 - Build request URLs from `client.base()`. Treat a URL from an upstream response
   or a caller input, such as a pagination link or a download location, as
-  untrusted.
-- Attach credentials to an ordinary request only when the URL's origin equals
-  the client's base origin, as `same_origin(&url, client.base())` checks.
+  untrusted, and check its origin first, as `same_origin(&url, client.base())`
+  does, when you want to report your own reason instead of `NotSent`.
 - For a redirect chain, pass credentials in the `authorize` callback of
-  `get_following_redirects` rather than on the first request. The helper
-  applies it only to hops on the base origin.
+  `get_following_redirects`, which applies them only to hops on the base
+  origin. Headers from `with_decorate` go to every hop, so they must not carry
+  credentials.
 
-```rust
+```rust check
 use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::RequestBuilder;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{ProviderError, ReasonCode, UpstreamClient, same_origin};
 
-/// A GET for an upstream-supplied link that carries the token only on the
-/// client's own origin.
+/// A GET for an upstream-supplied link that reports a link on another origin
+/// as a protocol failure before the client would refuse it.
 fn authorized_get(
     client: &UpstreamClient,
     link: Url,
@@ -667,7 +691,61 @@ Respect the `ProviderLimits` the build context lends: `max_upstream_response_byt
 for JSON bodies read into memory, `max_download_bytes` and
 `streaming_idle_timeout_ms` for streams, `request_timeout_ms` and
 `max_http_body_bytes`. Read bodies chunk by chunk against the cap; never trust
-a `Content-Length` alone.
+a `Content-Length` alone. `read_bounded_body(response, byte_cap, idle_timeout)`
+does both: it rejects a declared length over the cap before reading, stops
+reading past the cap, optionally bounds each chunk by an idle timeout, and
+returns a `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with
+`timed_out` set when the client's deadline expired) for you to map to your own
+outcome.
+
+Return a raw download with `ProviderResultStream::from_bounded_response`,
+bounded by a `BoundedDownload` with a label, the byte cap, the reason an overrun
+reports and the idle timeout. The stream fails once no chunk arrives within the
+idle timeout, past the byte cap with that reason, and when the body overruns or
+falls short of the expected size, each as a
+[late stream failure](#late-stream-failures) whose message names only the
+label. Read the declared length before the response moves into the stream, and
+reject one over the cap first, while it can still be an ordinary error:
+
+```rust check
+use agent_access_provider::deps::reqwest::Response;
+use agent_access_provider::deps::serde_json::Value;
+use agent_access_provider::{
+    BoundedDownload, ProviderError, ProviderLimits, ProviderResult, ProviderResultStream,
+    ReasonCode,
+};
+use std::time::Duration;
+
+/// Returns `response`'s body as a raw download, with `metadata` as its result.
+fn attachment_download(
+    response: Response,
+    limits: &ProviderLimits,
+    metadata: Value,
+) -> Result<ProviderResult, ProviderError> {
+    let expected_size = response.content_length();
+    if expected_size.is_some_and(|size| size > limits.max_download_bytes) {
+        return Err(ProviderError::deny(
+            ReasonCode::AttachmentSizeDenied,
+            "the attachment exceeds the download limit",
+        ));
+    }
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let download = BoundedDownload::new(
+        "Notes attachment download",
+        limits.max_download_bytes,
+        ReasonCode::AttachmentSizeDenied,
+        Duration::from_millis(limits.streaming_idle_timeout_ms),
+    )
+    .with_expected_size(expected_size);
+    let stream = ProviderResultStream::from_bounded_response(content_type, response, download);
+    Ok(ProviderResult::new(metadata).with_stream(stream))
+}
+```
 
 Report upstream throttling with `upstream_rate_limited(service, retry_after)`,
 where `UpstreamRetryAfter::from_headers` reads a bounded `Retry-After`. Its
@@ -737,10 +815,10 @@ policy, and the provider applies its containment and result checks again on
 every page. When a newly rewritten query is incompatible with an upstream
 cursor, reject the token or restart rather than weakening a restriction.
 
-```rust
+```rust check
 use agent_access_provider::{
-    ContinuationError, ContinuationFamily, ContinuationLifetime, ContinuationSigner, ProviderError,
-    ProviderInvocation, ReasonCode,
+    ContinuationError, ContinuationFailures, ContinuationFamily, ContinuationLifetime,
+    ContinuationSigner, ProviderError, ProviderInvocation, ReasonCode,
 };
 use std::time::Duration;
 
@@ -799,19 +877,20 @@ fn invalid_page_token() -> ProviderError {
 }
 
 fn page_token_failure(error: ContinuationError) -> ProviderError {
-    match error {
-        _ if error.is_token_rejection() => invalid_page_token(),
-        ContinuationError::SigningUnavailable | ContinuationError::DurableKeyUnavailable => {
+    ContinuationFailures::new(
+        invalid_page_token(),
+        |_| {
             ProviderError::error(
-                ReasonCode::CursorSigningUnavailable,
-                "page token signing is unavailable",
+                ReasonCode::OperationFailed,
+                "page token could not be sealed",
             )
-        }
-        _ => ProviderError::error(
-            ReasonCode::OperationFailed,
-            "page token could not be sealed",
+        },
+        ProviderError::error(
+            ReasonCode::CursorSigningUnavailable,
+            "page token signing is unavailable",
         ),
-    }
+    )
+    .report(error)
 }
 ```
 
@@ -826,10 +905,20 @@ instead; see [relayed upstream cursors](#relayed-upstream-cursors).
 
 ### Errors
 
-`ContinuationError::is_token_rejection()` separates a token the caller must not
-reuse (invalid, tampered, rebound, obsolete version, expired or too large) from a
-Broker-side failure. Report rejections as a caller error such as `input_invalid`
-with `decision = deny`, and a missing signing key as `cursor_signing_unavailable`.
+`ContinuationFailures` reports each `ContinuationError` as one of three provider
+failures:
+
+- A rejected token, which the caller must not reuse: invalid, tampered, rebound,
+  an obsolete version, expired, too large, or for a changed upstream query
+  (`ContinuationError::is_token_rejection()`). Report it as a caller error such
+  as `input_invalid` with `decision = deny`.
+- An oversized payload. Its failure is built from the family's cap.
+- An unavailable signing key, such as `cursor_signing_unavailable`.
+
+`.expired(..)`, `.upstream_query_changed(..)` and `.durable_key_unavailable(..)`
+word one variant differently from the rest of its category, for example to ask
+the caller to repeat a search whose authorization changed. The SDK assigns every
+variant to a category, so the provider's mapping needs no fallback arm.
 
 ### Relayed upstream cursors
 
@@ -939,7 +1028,11 @@ A raw download that fails after its response started reports a
 response and its own late-failure decision and records the code in the terminal
 audit record. Standard codes are limited to `attachment_size_denied`,
 `upstream_connection_failed`, `upstream_protocol_failed` and `upstream_timeout`;
-the provider's domain reasons are also accepted.
+the provider's domain reasons are also accepted. A bounded download
+(`ProviderResultStream::from_bounded_response`) reports a stall or an expired
+client deadline as `upstream_timeout`, another read failure as
+`upstream_connection_failed`, a size mismatch as `upstream_protocol_failed` and
+an overrun of its byte cap with the reason its `BoundedDownload` names.
 
 ### Upstream traces
 
@@ -967,9 +1060,11 @@ lease's failures, and the SDK's own `ProviderStateError` and
 A successful invocation returns `ProviderResult::new(result)`, with optional
 `with_stream` for a single-consumption raw download body, `with_audit` for safe
 provider audit data, `with_upstream` for the upstream status and duration, and
-`with_object_ids`. Build streams with
+`with_object_ids`. Return an upstream download with
+`ProviderResultStream::from_bounded_response` (see
+[limits and throttling](#limits-and-throttling)). Build any other stream with
 `ProviderResultStream::from_stream`, bound each chunk, and add
-`with_expected_size` when the upstream declared a length. A stream is handed to
+`with_expected_size` when its length is known. A stream is handed to
 the host once; it is never buffered into base64 JSON or replayed. Provider audit
 data cannot replace host-owned identity, admission, decision or provenance
 fields.
@@ -1118,7 +1213,7 @@ attribute and the `reqwest` and `url` types come from the SDK's `deps` module;
 the crate depends directly only on `serde` for its derives and on `serde_json`
 for the `json!` macro, on the SDK's semver lines.
 
-```toml
+```toml file=example-notes/Cargo.toml
 [package]
 name = "example-notes"
 version = "0.1.0"
@@ -1137,20 +1232,21 @@ wiremock = "0.6"
 
 ### Registration, resource type and configuration
 
-```rust
+```rust file=example-notes/src/lib.rs
 use agent_access_provider::deps::async_trait;
 use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::Response;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, ClientProfile,
-    CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig, Provider,
-    ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
+    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BuildContext,
+    ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
+    Provider, ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
     ProviderReasonDefinition, ProviderResult, ReasonCode, ResourceScopeCapabilities,
     ResourceScopes, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
     ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext,
-    complete_upstream_trace, module_metadata, parse_backend_config, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    complete_upstream_trace, module_metadata, parse_backend_config, read_bounded_body,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1261,7 +1357,7 @@ impl BackendConfig for NotesConfig {
 
 ### Descriptor
 
-```rust
+```rust file=example-notes/src/lib.rs
 /// The notes service. It depends on nothing but constants, so offline
 /// validation can call it before a provider exists.
 pub fn notes_descriptor() -> ServiceDescriptor {
@@ -1301,7 +1397,7 @@ pub fn notes_descriptor() -> ServiceDescriptor {
 
 ### Provider
 
-```rust
+```rust file=example-notes/src/lib.rs
 struct NotesProvider {
     client: UpstreamClient,
     max_response_bytes: u64,
@@ -1338,20 +1434,18 @@ fn note_inputs(action: &str, inputs: &Value) -> Result<NoteInputs, ProviderError
 
 impl NotesProvider {
     /// Reads a JSON body within the response limit.
-    async fn read_json(&self, mut response: Response) -> Result<Value, ProviderError> {
+    async fn read_json(&self, response: Response) -> Result<Value, ProviderError> {
         let protocol = |message| ProviderError::error(ReasonCode::UpstreamProtocolFailed, message);
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| {
-            ProviderError::error(
-                ReasonCode::UpstreamConnectionFailed,
-                "notes response failed",
-            )
-        })? {
-            if (body.len() + chunk.len()) as u64 > self.max_response_bytes {
-                return Err(protocol("notes response exceeds the response limit"));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(response, self.max_response_bytes, None)
+            .await
+            .map_err(|error| match error {
+                BodyReadError::TooLarge => protocol("notes response exceeds the response limit"),
+                // A transport failure, or a failure this version does not know.
+                _ => ProviderError::error(
+                    ReasonCode::UpstreamConnectionFailed,
+                    "notes response failed",
+                ),
+            })?;
         serde_json::from_slice(&body).map_err(|_| protocol("notes response is not JSON"))
     }
 }
@@ -1473,7 +1567,7 @@ The tests build the provider through `TestHost`, resolve scopes with
 `ScopeRequestFixture` and invoke it against a local mock upstream with
 `InvocationBuilder`, inside an invocation hook as the Broker runs it.
 
-```rust
+```rust file=example-notes/src/lib.rs
 #[cfg(test)]
 mod tests {
     use super::*;

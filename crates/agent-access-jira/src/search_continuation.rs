@@ -145,24 +145,24 @@ pub(crate) fn search_page_token_invalid() -> ProviderError {
 }
 
 fn search_page_token_failure(error: ContinuationError) -> ProviderError {
-    if error == ContinuationError::UpstreamQueryChanged {
-        ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "the effective Jira project scope changed since nextPageToken was issued; repeat the search without nextPageToken",
-        )
-    } else if let ContinuationError::PayloadTooLarge { limit } = error {
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            format!("Jira returned a nextPageToken longer than the broker's {limit}-byte limit"),
-        )
-    } else if error.is_token_rejection() {
-        search_page_token_invalid()
-    } else {
+    ContinuationFailures::new(
+        search_page_token_invalid(),
+        |limit| {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                format!("Jira returned a nextPageToken longer than the broker's {limit}-byte limit"),
+            )
+        },
         ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Jira search continuation signing is unavailable",
-        )
-    }
+        ),
+    )
+    .upstream_query_changed(ProviderError::deny(
+        ReasonCode::InputInvalid,
+        "the effective Jira project scope changed since nextPageToken was issued; repeat the search without nextPageToken",
+    ))
+    .report(error)
 }
 
 #[cfg(test)]

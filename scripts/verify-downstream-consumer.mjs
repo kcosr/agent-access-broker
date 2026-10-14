@@ -270,6 +270,316 @@ export function inheritedWorkspaceDependencies(rootManifest, names) {
   });
 }
 
+// The `[package]` value of `field` in a manifest, or null.
+export function manifestPackageField(text, field) {
+  let table = "";
+  for (const line of text.split("\n")) {
+    const header = TABLE_HEADER.exec(line);
+    if (header) {
+      table = header[1];
+    } else if (table === "package") {
+      const value = new RegExp(`^\\s*${field}\\s*=\\s*"([^"\\\\]*)"\\s*(?:#.*)?$`).exec(line);
+      if (value) return value[1];
+    }
+  }
+  return null;
+}
+
+// A fence line: indentation, any blockquote (`>`) or list-item (`-`, `+`,
+// `*`, `1.`, `1)`) markers, the fence run and the info string.
+const FENCE_LINE = /^([ \t]*(?:(?:>|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t]))[ \t]*)*)(`{3,}|~{3,})(.*)$/;
+
+// The fenced code blocks of a Markdown document, with the 1-based line of
+// each opening fence and its info string split into the language and the
+// whitespace-separated attributes after it. A fence indented only by
+// whitespace, as under a list item, is ordinary; its indentation is removed
+// from the block's lines. A fence opened after a blockquote or list-item
+// marker is reported with `container` set, so that callers can refuse code
+// they would otherwise read differently from a Markdown renderer; a
+// blockquote's fence also ends where the blockquote does.
+export function markdownCodeBlocks(text) {
+  const blocks = [];
+  let open = null;
+  const finish = () => {
+    const { line, info, language, attributes, container, lines } = open;
+    blocks.push({ line, info, language, attributes, container, text: `${lines.join("\n")}\n` });
+    open = null;
+  };
+  text.split("\n").forEach((line, index) => {
+    if (open?.container === "blockquote" && !/^[ \t]*>/.test(line)) finish();
+    const fence = FENCE_LINE.exec(line);
+    if (open) {
+      const closes = fence && fence[2][0] === open.fence[0] && fence[2].length >= open.fence.length && !fence[3].trim()
+        && (open.container === "blockquote" ? /^[ \t>]*$/.test(fence[1]) : /^[ \t]*$/.test(fence[1]));
+      if (closes) finish();
+      else open.lines.push(open.container === "blockquote" ? line.replace(/^[ \t]*(?:>[ \t]?)+/, "")
+        : line.slice(Math.min(open.indent, /^[ \t]*/.exec(line)[0].length)));
+      return;
+    }
+    if (!fence || (fence[2][0] === "`" && fence[3].includes("`"))) return;
+    const info = fence[3].trim();
+    const [language = "", ...attributes] = info.split(/\s+/).filter(Boolean);
+    const container = fence[1].includes(">") ? "blockquote" : /[^ \t]/.test(fence[1]) ? "list item" : null;
+    open = { line: index + 1, indent: fence[1].length, fence: fence[2], info, language, attributes, container, lines: [] };
+  });
+  if (open?.container === "blockquote") finish();
+  if (open) throw new Error(`The code block opened at line ${open.line} is not closed`);
+  return blocks;
+}
+
+// The Rust blocks of a Markdown document outside the checked guides that are
+// not marked `rust fragment`: code there is never compiled.
+export function unmarkedRustBlocks(text) {
+  return markdownCodeBlocks(text).filter((block) => /^(?:rust|rs)(?![a-z0-9_-])/i.test(block.language) && block.info !== "rust fragment");
+}
+
+// The guides whose code the driver builds. Their markers are described in
+// docs/testing.md#guide-code-blocks.
+export const PROVIDER_GUIDE = "docs/provider-sdk.md";
+export const ASSEMBLY_GUIDE = "docs/downstream-assembly.md";
+// The generated crate holding the provider guide's standalone blocks.
+export const GUIDE_SNIPPET_PACKAGE = "provider-sdk-snippets";
+// The repository the assembly guide's example pins its provider by. Staging
+// maps it to the provider repository, which holds the provider guide's crates.
+export const GUIDE_PROVIDER_URL = "https://git.example.com/notes-team/notes-provider.git";
+const ASSEMBLY_TEMPLATE_DIRECTORY = `${FIXTURE_DIRECTORY}/assembly-repo`;
+// Files the assembly guide states its example shares with the fixture's
+// assembly template: the template's file with these renames. A file the guide
+// shows must equal that text exactly; a file it only describes is staged as it.
+export const ASSEMBLY_GUIDE_SHARED_FILES = Object.freeze([
+  Object.freeze({ path: "build.rs", renames: Object.freeze([["DOWNSTREAM_BROKER_", "TEAM_BROKER_"],
+    ['("PROVIDER", "agent-access-conformance")', '("NOTES", "example-notes")']]) }),
+  Object.freeze({ path: "src/main.rs", renames: Object.freeze([["downstream_broker", "team_broker"]]) }),
+]);
+const GUIDE_MARKER = /^(?:check|fragment|file=.*)$/;
+const GUIDE_CRATE = /^[a-z][a-z0-9-]*$/;
+const GUIDE_RUST_FILE = /^(?:build\.rs|(?:src|tests)\/(?:[a-z0-9_]+\/)*[a-z0-9_]+\.rs)$/;
+
+// What a guide code block's marker asks for: `check` (a Rust block compiled
+// as its own module), `fragment` (a Rust block deliberately not compiled),
+// `file` (`rust file=<crate>/<path>` or `toml file=<crate>/Cargo.toml`, part
+// of an example crate), or `unchecked` for an unmarked block in another
+// language. Every Rust block carries exactly one marker, so no Rust block is
+// left out of the check by omission.
+export function guideBlockMarker(block) {
+  const where = `the ${block.language ? `\`${block.language}\`` : "unlabeled"} block at line ${block.line}`;
+  if (block.language !== "rust" && /^(?:rust|rs)(?![a-z0-9_-])/i.test(block.language)) {
+    throw new Error(`${where}: write the info string as \`rust <marker>\`, with the marker after whitespace`);
+  }
+  const markers = block.attributes.filter((attribute) => GUIDE_MARKER.test(attribute));
+  if (block.language === "rust") {
+    if (block.attributes.length !== 1 || markers.length !== 1) {
+      throw new Error(`${where}: a Rust block needs exactly one marker, check, fragment or file=<crate>/<path>; found "${block.info}"`);
+    }
+  } else if (!markers.length) {
+    return { kind: "unchecked" };
+  } else if (block.language !== "toml" || block.attributes.length !== 1 || !markers[0].startsWith("file=")) {
+    throw new Error(`${where}: only \`toml file=<crate>/Cargo.toml\` marks a block other than Rust; found "${block.info}"`);
+  }
+  const [marker] = markers;
+  if (block.language === "rust" && (marker === "check" || marker === "fragment")) return { kind: marker };
+  const target = /^file=([^/]+)\/(.+)$/.exec(marker);
+  const valid = target && GUIDE_CRATE.test(target[1])
+    && (block.language === "rust" ? GUIDE_RUST_FILE.test(target[2]) : block.language === "toml" && target[2] === "Cargo.toml");
+  if (!valid) {
+    throw new Error(`${where}: unsupported marker "${marker}"; Rust files are file=<crate>/src/...rs, tests/...rs or build.rs, `
+      + "and a manifest is `toml file=<crate>/Cargo.toml`");
+  }
+  return { kind: "file", crate: target[1], path: target[2] };
+}
+
+// A guide's example crates and standalone blocks. Blocks marked with one file
+// are concatenated in document order, one blank line apart. Each crate needs
+// exactly one manifest declaring the crate's name and a library or binary
+// root. `standalone` allows `rust check` blocks.
+export function extractGuide(guide, text, { standalone = false } = {}) {
+  const crates = new Map();
+  const checks = [];
+  const blocks = [];
+  for (const block of markdownCodeBlocks(text)) {
+    if (block.container) {
+      throw new Error(`${guide}: the code block at line ${block.line} opens inside a ${block.container} marker line ("${block.info}"); `
+        + "start guide code blocks at the top level or indent them under a list item");
+    }
+    let marker;
+    try {
+      marker = guideBlockMarker(block);
+    } catch (error) {
+      throw new Error(`${guide}: ${error.message}`);
+    }
+    blocks.push({ line: block.line, info: block.info, ...marker });
+    if (marker.kind === "check") {
+      if (!standalone) {
+        throw new Error(`${guide}: the Rust block at line ${block.line} is marked check, but only ${PROVIDER_GUIDE} compiles `
+          + "standalone blocks; make it part of an example crate's file or mark it fragment");
+      }
+      checks.push({ line: block.line, text: block.text });
+    } else if (marker.kind === "file") {
+      if (!crates.has(marker.crate)) crates.set(marker.crate, { manifest: null, sources: new Map() });
+      const crate = crates.get(marker.crate);
+      if (marker.path === "Cargo.toml") {
+        if (crate.manifest) {
+          throw new Error(`${guide}: the block at line ${block.line} defines ${marker.crate}/Cargo.toml again; line ${crate.manifest.line} defines it`);
+        }
+        crate.manifest = { line: block.line, text: block.text };
+      } else {
+        if (!crate.sources.has(marker.path)) crate.sources.set(marker.path, []);
+        crate.sources.get(marker.path).push({ line: block.line, text: block.text });
+      }
+    }
+  }
+  const examples = [...crates].map(([name, crate]) => {
+    if (!crate.manifest) throw new Error(`${guide}: example crate ${name} has no \`toml file=${name}/Cargo.toml\` block`);
+    const declared = manifestPackageField(crate.manifest.text, "name");
+    if (declared !== name) {
+      throw new Error(`${guide}: ${name}/Cargo.toml at line ${crate.manifest.line} must declare package ${name}; found ${declared ?? "none"}`);
+    }
+    if (!crate.sources.has("src/lib.rs") && !crate.sources.has("src/main.rs")) {
+      throw new Error(`${guide}: example crate ${name} has no src/lib.rs or src/main.rs block`);
+    }
+    const files = [...crate.sources].map(([path, parts]) => {
+      let fileLine = 1;
+      const origins = parts.map((part) => {
+        const origin = { guideLine: part.line + 1, fileLine };
+        fileLine += part.text.split("\n").length;
+        return origin;
+      });
+      return { path, text: parts.map((part) => part.text).join("\n"), origins };
+    });
+    return { guide, name, manifest: crate.manifest.text, manifestLine: crate.manifest.line, files };
+  });
+  return { guide, blocks, checks, crates: examples };
+}
+
+// The crate the standalone `rust check` blocks compile in, each block one
+// module named after its fence line. The blocks may use only the SDK and std.
+export function snippetCrate(guide, checks, name = GUIDE_SNIPPET_PACKAGE) {
+  const modules = checks.map((check) => ({ module: `line_${check.line}`, ...check }));
+  const manifest = `# Generated by scripts/verify-downstream-consumer.mjs for the standalone
+# \`rust check\` blocks of ${guide}, which may use only the SDK and std.
+[package]
+name = "${name}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+agent-access-provider.workspace = true
+`;
+  const lib = [`//! The standalone \`rust check\` blocks of ${guide}, one module each.`,
+    "//! Generated by scripts/verify-downstream-consumer.mjs; a block need not use its items.",
+    "#![allow(dead_code)]", "",
+    ...modules.flatMap((module) => [`/// ${guide}, the block whose fence opens at line ${module.line}.`, `mod ${module.module};`]), ""].join("\n");
+  return { guide, name, manifest, manifestLine: null, files: [{ path: "src/lib.rs", text: lib, origins: [] },
+    ...modules.map((module) => ({ path: `src/${module.module}.rs`, text: module.text, origins: [{ guideLine: module.line + 1, fileLine: 1 }] }))] };
+}
+
+// The prerequisites named by a Makefile-style dep-info file, unescaped.
+export function dependencyInfoFiles(text) {
+  const files = new Set();
+  for (const line of text.split("\n")) {
+    if (line.startsWith("#")) continue;
+    const separator = /(?<!\\):(?=[ \t]|$)/.exec(line);
+    if (!separator) continue;
+    for (const token of line.slice(separator.index + 1).match(/(?:\\.|[^\s\\])+/g) ?? []) files.add(token.replace(/\\(.)/g, "$1"));
+  }
+  return files;
+}
+
+// Every source file rustc read for the units built in a target directory's
+// debug profile: the dep-info of its dependency and build-script units, with
+// relative paths resolved against the workspace root Cargo runs rustc in.
+export function compiledSourceFiles(targetDirectory, workspaceRoot) {
+  const compiled = new Set();
+  const read = (directory) => {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".d")) continue;
+      for (const file of dependencyInfoFiles(readFileSync(join(directory, entry.name), "utf8"))) compiled.add(resolve(workspaceRoot, file));
+    }
+  };
+  const debug = join(targetDirectory, "debug");
+  read(join(debug, "deps"));
+  const build = join(debug, "build");
+  if (existsSync(build)) {
+    for (const unit of readdirSync(build, { withFileTypes: true })) if (unit.isDirectory()) read(join(build, unit.name));
+  }
+  return compiled;
+}
+
+// Guide manifests write each Git revision as a placeholder such as
+// `rev = "<full 40-character commit>"`; staging reads it as the sentinel.
+export function guideManifestPins(text) {
+  return text.replace(/\brev = "<[^"<>]+>"/g, `rev = "${SENTINEL_REV}"`);
+}
+
+// Applies the assembly guide's stated correspondence with the fixture's
+// assembly template. Returns the example's files: the guide's own, plus each
+// shared file the guide only describes.
+export function sharedAssemblyFiles({ guideFiles, fixtureFiles, shared = ASSEMBLY_GUIDE_SHARED_FILES }) {
+  const files = new Map(guideFiles);
+  const checks = [];
+  for (const { path, renames } of shared) {
+    let text = fixtureFiles.get(path);
+    if (text === undefined) throw new Error(`The fixture assembly template has no ${path}`);
+    for (const [from, to] of renames) {
+      if (!text.includes(from)) {
+        throw new Error(`The fixture's ${path} no longer contains ${JSON.stringify(from)}; update what ${ASSEMBLY_GUIDE} `
+          + "states about it and ASSEMBLY_GUIDE_SHARED_FILES together");
+      }
+      text = text.replaceAll(from, to);
+    }
+    const shown = guideFiles.get(path);
+    if (shown === undefined) {
+      files.set(path, text);
+      checks.push({ path, renames, staged: "fixture file with the renames" });
+    } else if (shown !== text) {
+      const ours = shown.split("\n");
+      const theirs = text.split("\n");
+      let index = 0;
+      while (ours[index] === theirs[index]) index += 1;
+      throw new Error(`${ASSEMBLY_GUIDE} shows a ${path} that differs from the fixture's with the renames ${JSON.stringify(renames)}, `
+        + `first at its line ${index + 1}: ${JSON.stringify(ours[index] ?? null)} instead of ${JSON.stringify(theirs[index] ?? null)}`);
+    } else {
+      checks.push({ path, renames, staged: "guide block, equal to the fixture file with the renames" });
+    }
+  }
+  return { files, checks };
+}
+
+// What the driver stages from the guides: the provider guide's example crates
+// and its standalone blocks' crate, for the provider repository; the assembly
+// guide's one example assembly, completed with the files it shares with the
+// fixture template (`fixtureFiles`, by template path); and an inventory of
+// every block and where each staged file comes from.
+export function guideExamples({ providerGuide, assemblyGuide, fixtureFiles, reservedNames }) {
+  const provider = extractGuide(PROVIDER_GUIDE, providerGuide, { standalone: true });
+  const assembly = extractGuide(ASSEMBLY_GUIDE, assemblyGuide);
+  if (!provider.crates.length) throw new Error(`${PROVIDER_GUIDE} marks no example crate`);
+  if (assembly.crates.length !== 1) {
+    throw new Error(`${ASSEMBLY_GUIDE} must mark exactly one example assembly crate; found ${assembly.crates.map((crate) => crate.name).join(", ") || "none"}`);
+  }
+  const providerCrates = [...provider.crates, ...(provider.checks.length ? [snippetCrate(PROVIDER_GUIDE, provider.checks)] : [])];
+  const [example] = assembly.crates;
+  const names = [...providerCrates, example].map((crate) => crate.name);
+  const taken = names.filter((name, index) => reservedNames.has(name) || names.indexOf(name) !== index);
+  if (taken.length) throw new Error(`Guide example crates must not reuse an upstream, fixture or other guide crate name: ${taken.join(", ")}`);
+  const shown = new Map(example.files.map((file) => [file.path, file]));
+  const shared = sharedAssemblyFiles({ guideFiles: new Map(example.files.map((file) => [file.path, file.text])), fixtureFiles });
+  const assemblyCrate = { ...example, files: [...shared.files].map(([path, text]) => shown.get(path)
+    ?? { path, text, origins: [], fixture: `${ASSEMBLY_TEMPLATE_DIRECTORY}/${path}` }) };
+  const destinations = [...providerCrates.map((crate) => ({ crate, repository: "provider", directory: `crates/${crate.name}` })),
+    { crate: assemblyCrate, repository: "guide-assembly", directory: "." }];
+  const inventory = {
+    guides: [provider, assembly].map(({ guide, blocks }) => ({ path: guide, blocks })),
+    crates: destinations.map(({ crate, repository, directory }) => ({ name: crate.name, guide: crate.guide, repository, directory,
+      manifest: crate.manifestLine ? { guideLine: crate.manifestLine } : { generated: true },
+      files: crate.files.map(({ path, origins, fixture }) => ({ path, ...(fixture ? { fixture } : origins.length ? { origins } : { generated: true }) })) })),
+    sharedWithFixture: shared.checks,
+  };
+  return { providerCrates, assemblyCrate, destinations, inventory };
+}
+
 export function parseLockfile(text) {
   const [header, ...blocks] = text.split(/^\[\[package\]\]$/m);
   const version = Number(/^version = (\d+)$/m.exec(header)?.[1]);
@@ -303,10 +613,10 @@ export function thirdPartyLockSeed(text) {
 export const gitSourceId = (url, rev) => `git+${url}?rev=${rev}#${rev}`;
 
 // Reviews the staged lockfiles against the candidate: upstream packages come
-// only from the one upstream source, the provider crate only from its own
-// repository, one SDK package ID spans both graphs, and every third-party
-// entry is a candidate entry with the same version and checksum.
-export function reviewLockfiles({ candidate, staged, upstreamSource, providerSource }) {
+// only from the one upstream source, the provider repository's packages only
+// from that repository, one SDK package ID spans every graph, and every
+// third-party entry is a candidate entry with the same version and checksum.
+export function reviewLockfiles({ candidate, staged, upstreamSource, providerSource, providerPackages }) {
   const upstreamNames = new Set(candidate.packages.filter((entry) => entry.source === null).map((entry) => entry.name));
   const thirdParty = new Map(candidate.packages.filter((entry) => entry.source !== null)
     .map((entry) => [`${entry.name} ${entry.version} ${entry.source}`, entry]));
@@ -322,10 +632,10 @@ export function reviewLockfiles({ candidate, staged, upstreamSource, providerSou
         if (members.includes(entry.name)) counts.workspace += 1;
         else errors.push(`${repository}: ${id} is a path package outside the staged workspace`);
       } else if (entry.source === providerSource) {
-        if (entry.name === PROVIDER_PACKAGE) counts.provider += 1;
+        if (providerPackages.has(entry.name)) counts.provider += 1;
         else errors.push(`${repository}: ${id} is not a provider repository package`);
       } else if (entry.source === upstreamSource) {
-        if (entry.name === PROVIDER_PACKAGE) errors.push(`${repository}: ${id} must come from the provider repository`);
+        if (providerPackages.has(entry.name)) errors.push(`${repository}: ${id} must come from the provider repository`);
         else if (upstreamNames.has(entry.name)) counts.upstream += 1;
         else errors.push(`${repository}: ${id} is not a candidate workspace package`);
       } else if (upstreamNames.has(entry.name)) {
@@ -464,9 +774,10 @@ export function toolchainChannel(text) {
   return /^\s*channel\s*=\s*"([^"]+)"\s*$/m.exec(text)?.[1] ?? null;
 }
 
-// Removes inherited Cargo, compiler and broker settings. The driver supplies
-// its own Cargo home, compiler paths and process configuration; only the
-// build parallelism passes through.
+// Removes inherited Cargo, compiler and broker settings and the staged
+// assemblies' build inputs. The driver supplies its own Cargo home, compiler
+// paths, process configuration and assembly revision and label; only the build
+// parallelism passes through.
 export function sanitizedEnvironment(env) {
   const removed = [];
   const result = {};
@@ -476,7 +787,7 @@ export function sanitizedEnvironment(env) {
     } else if (/^CARGO(?:_|$)/.test(name) || /^RUSTC(?:_|$)/.test(name) || /^RUSTDOC(?:_|$)/.test(name)
         || ["RUSTFLAGS", "RUSTDOCFLAGS", "RUSTUP_TOOLCHAIN", "RUST_TARGET_PATH", "RUST_LOG"].includes(name)
         || /^(?:(?:HOST|TARGET)_)?(?:CC|CXX|AR|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS)(?:_|$)/.test(name)
-        || name.startsWith("AGENT_ACCESS_") || name.startsWith("AAB_")) {
+        || ["AGENT_ACCESS_", "AAB_", "DOWNSTREAM_BROKER_", "TEAM_BROKER_"].some((prefix) => name.startsWith(prefix))) {
       removed.push(name);
     } else {
       result[name] = value;
@@ -956,9 +1267,10 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
   const evidence = qualificationOutputDirectory(root, evidenceDir);
   mkdirSync(join(evidence, "logs"), { recursive: true, mode: 0o700 });
   const report = { schemaVersion: 1, status: "running", mode: source, commit, startedAt: stamp(), finishedAt: null, steps: [],
-    scope: "Independent provider repository and downstream assembly staged from one clean candidate commit; locked offline Cargo against the shared download cache; process acceptance of the assembled broker with the candidate's CLI built in the stage.",
+    scope: "Independent provider repository and downstream assembly staged from one clean candidate commit; locked offline Cargo against the shared download cache; process acceptance of the assembled broker with the candidate's CLI built in the stage; the provider SDK and downstream assembly guides' marked code built and tested in the same stage.",
     limitations: [
       "Portal assets are not served or checked by this fixture.",
+      "The assembly guide's example is built and its tests run; it is not started as a process.",
       ...(source === "staged" ? ["Upstream is a staged local clone; the canonical remote pin needs a separate --source canonical run after publication."] : []),
       ...(platform === "win32" ? ["Graceful POSIX-signal shutdown and process-group termination are not exercised on Windows."] : []),
     ] };
@@ -968,6 +1280,9 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
   let stage = null;
   let logIndex = 0;
   const paths = {};
+  // Staged files copied into the evidence, as [repository, path] pairs.
+  const stagedFiles = [["provider", "Cargo.lock"], ["provider", "Cargo.toml"], ["provider", `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`],
+    ["assembly", "Cargo.lock"], ["assembly", "Cargo.toml"]];
   const step = async (id, action) => {
     supervisor.assertRunning();
     const record = { id, status: "running", startedAt: stamp(), finishedAt: null };
@@ -1037,8 +1352,8 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       chmodSync(stage, 0o700);
       if (isInside(realpathSync(root), stage)) throw new Error("The stage must be outside the candidate checkout; set TMPDIR elsewhere");
       Object.assign(paths, { upstream: join(stage, "upstream"), candidate: join(stage, "candidate"), provider: join(stage, "provider"),
-        assembly: join(stage, "assembly"), registry: join(stage, "registry"), cargoHome: join(stage, "cargo-home"),
-        home: join(stage, "home"), run: join(stage, "run") });
+        assembly: join(stage, "assembly"), guideAssembly: join(stage, "guide-assembly"), registry: join(stage, "registry"),
+        cargoHome: join(stage, "cargo-home"), home: join(stage, "home"), run: join(stage, "run") });
       report.stage = { path: stage, deleted: false };
       mkdirSync(paths.home, { mode: 0o700 });
       gitEnv = isolatedGitEnvironment(clean, { home: paths.home, protocols: source === "canonical" ? "file:https" : "file" });
@@ -1074,6 +1389,31 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       if (!upstreamNames.has(name)) throw new Error(`The candidate workspace has no ${name} package`);
     }
     const seed = thirdPartyLockSeed(candidateLockText);
+
+    // The guides' marked code, read from the candidate commit: the provider
+    // guide's crates join the provider repository and its example assembly is
+    // staged beside the fixture's.
+    let guides;
+    await step("guide-extract", (record) => {
+      const show = (path) => execFileSync("git", ["show", `${commit}:${path}`], { cwd: paths.upstream, env: gitEnv, encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+      const examples = guideExamples({ providerGuide: show(PROVIDER_GUIDE), assemblyGuide: show(ASSEMBLY_GUIDE),
+        fixtureFiles: new Map(ASSEMBLY_GUIDE_SHARED_FILES.map(({ path }) => [path, show(`${ASSEMBLY_TEMPLATE_DIRECTORY}/${path}`)])),
+        reservedNames: new Set([...upstreamNames, PROVIDER_PACKAGE, ASSEMBLY_PACKAGE]) });
+      guides = examples;
+      for (const { crate, repository, directory } of examples.destinations) {
+        for (const { path, text } of [{ path: "Cargo.toml", text: crate.manifest }, ...crate.files]) {
+          const file = join(evidence, "guides", repository, directory, path);
+          mkdirSync(dirname(file), { recursive: true });
+          writeFileSync(file, text);
+        }
+      }
+      writeFileSync(join(evidence, "guides", "blocks.json"), `${JSON.stringify({ commit, ...examples.inventory }, null, 2)}\n`);
+      report.guides = { crates: examples.inventory.crates.map(({ name, guide, repository }) => ({ name, guide, repository })),
+        sharedWithFixture: examples.inventory.sharedWithFixture.map(({ path, staged }) => ({ path, staged })) };
+      record.detail = { blocks: examples.inventory.guides.map(({ path, blocks }) => `${path}: ${blocks.length}`),
+        crates: report.guides.crates.map(({ name }) => name) };
+    });
 
     await step("registry-source", async (record) => {
       const cacheRoot = join(sharedCargoHome, "registry", "cache");
@@ -1150,7 +1490,41 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
           + `${foreign.map((config) => config.path).join(", ")}. Remove it, or set TMPDIR to a directory without Cargo configuration in its ancestors.`);
       }
     };
+    // Writes a guide crate with its manifest pins mapped like the fixture's.
+    const stageGuideCrate = (directory, crate, sources) => {
+      let manifest;
+      try {
+        manifest = rewriteStagedManifest(guideManifestPins(crate.manifest), sources);
+      } catch (error) {
+        throw new Error(`${crate.guide} ${crate.name}/Cargo.toml: ${error.message}`);
+      }
+      for (const { path, text } of [{ path: "Cargo.toml", text: manifest.text }, ...crate.files]) {
+        mkdirSync(dirname(join(directory, path)), { recursive: true, mode: 0o700 });
+        writeFileSync(join(directory, path), text);
+      }
+      return manifest.rewrites;
+    };
+    // Each example crate is checked with rustfmt for the edition its manifest declares.
+    const formatGuideFiles = async (label, directory, crate) => {
+      const edition = manifestPackageField(crate.manifest, "edition");
+      if (!edition) throw new Error(`${crate.guide} ${crate.name}/Cargo.toml declares no edition`);
+      const shown = crate.files.filter((file) => file.origins.length).map((file) => file.path);
+      if (shown.length) await execute(label, rustfmt, ["--check", "--edition", edition, ...shown], { cwd: directory, env: cargoEnv });
+    };
+    // Cargo compiles only the files a target's module tree reaches, so a guide
+    // file that no compiled target reads would otherwise pass unchecked.
+    const assertGuideFilesCompiled = (root, crates) => {
+      const compiled = compiledSourceFiles(join(root, "target"), root);
+      const files = crates.flatMap(({ crate, directory }) => crate.files.map((file) => join(directory, file.path)));
+      const missing = files.filter((path) => !compiled.has(path));
+      if (missing.length) {
+        throw new Error(`No compiled target reads ${missing.map((path) => relative(root, path)).join(", ")}, so that guide code is not checked; `
+          + "declare each file as a module of a compiled target, or mark its blocks fragment");
+      }
+      return files.length;
+    };
     const upstreamSource = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamSourceUrl, rev: commit, packages: upstreamNames };
+    const providerPackages = new Set([PROVIDER_PACKAGE, ...guides.providerCrates.map((crate) => crate.name)]);
     const mapping = { schemaVersion: 1, mode: source, candidate: { commit, committedAt: report.upstream.committedAt },
       sources: [], manifests: [] };
     let cli;
@@ -1193,14 +1567,23 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       const crate = rewriteStagedManifest(normalized.text, [upstreamSource]);
       writeFileSync(rootPath, rootManifest.text);
       writeFileSync(crateManifestPath, crate.text);
-      writeFileSync(join(paths.provider, "Cargo.lock"), seed);
       mapping.manifests.push({ repository: "provider", path: "Cargo.toml", rewrites: rootManifest.rewrites, inheritedFromCandidate: normalized.inherited },
         { repository: "provider", path: `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`, rewrites: crate.rewrites,
           normalized: `${SDK_PACKAGE} path dependency replaced by the provider workspace pin` });
+      for (const guideCrate of guides.providerCrates) {
+        const directory = `crates/${guideCrate.name}`;
+        if (existsSync(join(paths.provider, directory))) throw new Error(`The provider repository already has ${directory}`);
+        const rewrites = stageGuideCrate(join(paths.provider, directory), guideCrate, [upstreamSource]);
+        mapping.manifests.push({ repository: "provider", path: `${directory}/Cargo.toml`, rewrites,
+          guide: guideCrate.manifestLine ? `${guideCrate.guide} line ${guideCrate.manifestLine}` : `generated for ${guideCrate.guide}` });
+        stagedFiles.push(["provider", `${directory}/Cargo.toml`]);
+      }
+      writeFileSync(join(paths.provider, "Cargo.lock"), seed);
       await cargo("provider-setup-fetch", paths.provider, ["fetch"]);
       providerCommit = await commitRepository("provider", paths.provider,
-        `Provider repository staged from ${commit}\n\nContains ${PROVIDER_CRATE_DIRECTORY} and ${FIXTURE_DIRECTORY}/provider-repo.`);
-      record.detail = { commit: providerCommit };
+        `Provider repository staged from ${commit}\n\nContains ${PROVIDER_CRATE_DIRECTORY}, ${FIXTURE_DIRECTORY}/provider-repo `
+        + `and the example crates of ${PROVIDER_GUIDE}: ${guides.providerCrates.map((guideCrate) => guideCrate.name).join(", ")}.`);
+      record.detail = { commit: providerCommit, guideCrates: guides.providerCrates.map((guideCrate) => guideCrate.name) };
     });
 
     const providerSourceUrl = pathToFileURL(paths.provider).href;
@@ -1224,6 +1607,25 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       record.detail = { commit: assemblyCommit };
     });
 
+    // The assembly guide's example pins upstream like the fixture and its
+    // notes provider repository to the staged provider repository. Nothing
+    // pins the example itself, so it needs no commit.
+    await step("stage-guide-assembly", async (record) => {
+      mkdirSync(paths.guideAssembly, { mode: 0o700 });
+      const { assemblyCrate } = guides;
+      const sources = [
+        { canonical: GUIDE_PROVIDER_URL, url: providerSourceUrl, rev: providerCommit, packages: new Set(guides.providerCrates.map((crate) => crate.name)) },
+        upstreamSource,
+      ];
+      const rewrites = stageGuideCrate(paths.guideAssembly, assemblyCrate, sources);
+      assertCargoConfiguration(paths.guideAssembly);
+      writeFileSync(join(paths.guideAssembly, "Cargo.lock"), seed);
+      mapping.manifests.push({ repository: "guide-assembly", path: "Cargo.toml", rewrites, guide: `${ASSEMBLY_GUIDE} line ${assemblyCrate.manifestLine}` });
+      stagedFiles.push(["guide-assembly", "Cargo.lock"], ["guide-assembly", "Cargo.toml"]);
+      await cargo("guide-assembly-setup-fetch", paths.guideAssembly, ["fetch"]);
+      record.detail = { crate: assemblyCrate.name };
+    });
+
     mapping.sources.push(
       { role: "upstream", canonical: { git: CANONICAL_UPSTREAM_URL, rev: SENTINEL_REV }, staged: { git: upstreamSourceUrl, rev: commit },
         lockSource: gitSourceId(upstreamSourceUrl, commit), advertisedRefs: report.upstream.advertisedRefs },
@@ -1231,6 +1633,11 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
         lockSource: gitSourceId(providerSourceUrl, providerCommit),
         contents: [`${PROVIDER_CRATE_DIRECTORY} at ${commit}`, `${FIXTURE_DIRECTORY}/provider-repo at ${commit}`] },
       { role: "assembly", repository: "local only", commit: assemblyCommit, contents: [`${FIXTURE_DIRECTORY}/assembly-repo at ${commit}`] },
+      { role: "guide-provider", canonical: { git: GUIDE_PROVIDER_URL, rev: SENTINEL_REV }, staged: { git: providerSourceUrl, rev: providerCommit },
+        lockSource: gitSourceId(providerSourceUrl, providerCommit),
+        contents: guides.providerCrates.map((crate) => `crates/${crate.name} from ${crate.guide} at ${commit}`) },
+      { role: "guide-assembly", repository: "local only, not committed", contents: [`${guides.assemblyCrate.name} from ${ASSEMBLY_GUIDE} at ${commit}`,
+        ...guides.assemblyCrate.files.filter((file) => file.fixture).map((file) => `${file.path} from ${file.fixture} at ${commit} with the guide's renames`)] },
       { role: "cli", builtFrom: commit, sha256: report.cli.sha256 },
     );
     mapping.registry = report.registry;
@@ -1239,17 +1646,19 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     await step("lock-review", (record) => {
       const review = reviewLockfiles({ candidate: candidateLock,
         staged: [
-          { repository: "provider", lock: parseLockfile(readFileSync(join(paths.provider, "Cargo.lock"), "utf8")), members: [PROVIDER_PACKAGE] },
+          { repository: "provider", lock: parseLockfile(readFileSync(join(paths.provider, "Cargo.lock"), "utf8")), members: [...providerPackages] },
           { repository: "assembly", lock: parseLockfile(readFileSync(join(paths.assembly, "Cargo.lock"), "utf8")), members: [ASSEMBLY_PACKAGE] },
+          { repository: "guide-assembly", lock: parseLockfile(readFileSync(join(paths.guideAssembly, "Cargo.lock"), "utf8")),
+            members: [guides.assemblyCrate.name] },
         ],
-        upstreamSource: gitSourceId(upstreamSourceUrl, commit), providerSource: gitSourceId(providerSourceUrl, providerCommit) });
+        upstreamSource: gitSourceId(upstreamSourceUrl, commit), providerSource: gitSourceId(providerSourceUrl, providerCommit), providerPackages });
       writeFileSync(join(evidence, "lock-review.json"), `${JSON.stringify(review, null, 2)}\n`);
       record.detail = { summary: review.summary, sdkPackageIds: review.sdkPackageIds };
       if (review.errors.length) throw new Error(`Lockfile review failed:\n${review.errors.join("\n")}`);
     });
 
     await step("provider-tests", async () => {
-      await cargo("provider-test", paths.provider, ["test", "--locked", "--offline", ...targetDirectory(paths.provider)]);
+      await cargo("provider-test", paths.provider, ["test", "--locked", "--offline", "-p", PROVIDER_PACKAGE, ...targetDirectory(paths.provider)]);
     });
 
     await step("provider-boundaries", async (record) => {
@@ -1261,6 +1670,17 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       const violations = providerBoundaryViolations(metadata);
       record.detail = { packages: metadata.packages.length };
       if (violations.length) throw new Error(`The provider repository reaches forbidden upstream crates:\n${violations.join("\n")}`);
+    });
+
+    await step("guide-provider-tests", async (record) => {
+      for (const crate of guides.providerCrates) {
+        await formatGuideFiles(`guide-format-${crate.name}`, join(paths.provider, "crates", crate.name), crate);
+      }
+      await cargo("guide-provider-test", paths.provider, ["test", "--locked", "--offline",
+        ...guides.providerCrates.flatMap((crate) => ["-p", crate.name]), ...targetDirectory(paths.provider)]);
+      const compiledFiles = assertGuideFilesCompiled(paths.provider,
+        guides.providerCrates.map((crate) => ({ crate, directory: join(paths.provider, "crates", crate.name) })));
+      record.detail = { crates: guides.providerCrates.map((crate) => crate.name), compiledFiles };
     });
 
     const binary = join(paths.assembly, "target", "debug", executable(ASSEMBLY_PACKAGE));
@@ -1288,6 +1708,16 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       const violations = assemblyFeatureViolations(tree);
       record.detail = { target: toolchain.host, packages: parseCargoTree(tree).length };
       if (violations.length) throw new Error(`The assembly release graph enables test support:\n${violations.join("\n")}`);
+    });
+
+    // The example builds with the fixture templates' development profile,
+    // which its own manifest does not set.
+    await step("guide-assembly-tests", async (record) => {
+      await formatGuideFiles("guide-format-assembly", paths.guideAssembly, guides.assemblyCrate);
+      await execute("guide-assembly-test", toolchain.cargoPath, ["test", "--locked", "--offline", ...targetDirectory(paths.guideAssembly)],
+        { cwd: paths.guideAssembly, env: { ...cargoEnv, CARGO_PROFILE_DEV_DEBUG: "false", CARGO_PROFILE_DEV_INCREMENTAL: "false" } });
+      const compiledFiles = assertGuideFilesCompiled(paths.guideAssembly, [{ crate: guides.assemblyCrate, directory: paths.guideAssembly }]);
+      record.detail = { crate: guides.assemblyCrate.name, compiledFiles };
     });
 
     await step("process-acceptance", async (record) => {
@@ -1329,15 +1759,13 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       } catch (error) {
         report.cleanupError = error.message;
       }
-      for (const [repository, files] of [["provider", ["Cargo.lock", "Cargo.toml", `${PROVIDER_CRATE_DIRECTORY}/Cargo.toml`]],
-        ["assembly", ["Cargo.lock", "Cargo.toml"]]]) {
-        for (const file of files) {
-          const from = paths[repository] && join(paths[repository], file);
-          if (from && existsSync(from)) {
-            const to = join(evidence, "staged", repository, file);
-            mkdirSync(dirname(to), { recursive: true });
-            copyFileSync(from, to);
-          }
+      const roots = { provider: paths.provider, assembly: paths.assembly, "guide-assembly": paths.guideAssembly };
+      for (const [repository, file] of stagedFiles) {
+        const from = roots[repository] && join(roots[repository], file);
+        if (from && existsSync(from)) {
+          const to = join(evidence, "staged", repository, file);
+          mkdirSync(dirname(to), { recursive: true });
+          copyFileSync(from, to);
         }
       }
     } finally {
