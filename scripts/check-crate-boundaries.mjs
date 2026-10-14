@@ -2,7 +2,8 @@
 // Check workspace crate dependency boundaries from locked Cargo metadata.
 // Every member declares `[package.metadata.agent-access] role`; see docs/testing.md.
 import { execFileSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -27,6 +28,14 @@ const FORBIDDEN_EDGES = Object.freeze({
 });
 // Roles that an adapter's production edges may reach.
 const ADAPTER_PRODUCTION_TARGETS = new Set(["sdk", "helper", "core"]);
+// Host-only SDK items that hand back a request carrying a credential. Provider,
+// adapter, reference and helper code presents credentials only through the
+// upstream client's send methods, so none of their sources, tests included,
+// may name these.
+export const HOST_ONLY_ITEMS = Object.freeze(["authorize_host_request"]);
+const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper"]);
+// The Rust source locations of a package, relative to its manifest directory.
+const SOURCE_ROOTS = Object.freeze(["src", "tests", "benches", "examples", "build.rs"]);
 
 // Builds the workspace-member dependency graph. Edge kinds come from the
 // resolved graph, so optional dependencies count when metadata enables all features.
@@ -120,6 +129,44 @@ export function checkCrateBoundaries(metadata) {
   return { errors, notes };
 }
 
+// Every Rust file of a package: [{ path, text }] with paths relative to `root`.
+export function packageRustSources(manifestPath, root = ROOT) {
+  const files = [];
+  const visit = (path) => {
+    if (!existsSync(path)) return;
+    if (statSync(path).isDirectory()) {
+      for (const entry of readdirSync(path).sort()) visit(join(path, entry));
+    } else if (path.endsWith(".rs")) {
+      files.push({ path: relative(root, path), text: readFileSync(path, "utf8") });
+    }
+  };
+  for (const source of SOURCE_ROOTS) visit(join(dirname(manifestPath), source));
+  return files;
+}
+
+// Uses of host-only SDK items in provider-side crates. `readSources(pkg)` returns
+// the package's Rust files as [{ path, text }].
+export function hostOnlyUseViolations(metadata, readSources = (pkg) => packageRustSources(pkg.manifest_path)) {
+  const memberIds = new Set(metadata.workspace_members ?? []);
+  const pattern = new RegExp(`\\b(${HOST_ONLY_ITEMS.join("|")})\\b`);
+  const errors = [];
+  const packages = (metadata.packages ?? [])
+    .filter((pkg) => memberIds.has(pkg.id) && HOST_ONLY_FENCED_ROLES.includes(pkg.metadata?.["agent-access"]?.role))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  for (const pkg of packages) {
+    const role = pkg.metadata["agent-access"].role;
+    for (const { path, text } of readSources(pkg)) {
+      text.split("\n").forEach((line, index) => {
+        const found = line.match(pattern);
+        if (found) {
+          errors.push(`${pkg.name} (${role}) must not use host-only ${found[1]}; found at ${path}:${index + 1}`);
+        }
+      });
+    }
+  }
+  return errors;
+}
+
 export function cargoMetadata(root = ROOT, env = process.env) {
   const cargo = env.CARGO || "cargo";
   return JSON.parse(execFileSync(cargo, ["metadata", "--locked", "--format-version", "1", "--all-features"], {
@@ -130,6 +177,7 @@ export function cargoMetadata(root = ROOT, env = process.env) {
 function main() {
   const metadata = cargoMetadata();
   const { errors, notes } = checkCrateBoundaries(metadata);
+  errors.push(...hostOnlyUseViolations(metadata));
   for (const note of notes) console.log(`note: ${note}`);
   if (errors.length) {
     console.error(errors.map((error) => `error: ${error}`).join("\n"));
