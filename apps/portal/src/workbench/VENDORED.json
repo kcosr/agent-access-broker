@@ -1,5 +1,5 @@
 {
-  "commit": "e52e84eccfb252aeea1d54dff7d7eba11e475c97",
+  "commit": "8518a257617f81eab4a974105a5cc42153763c69",
   "files": {
     ".gitattributes": "b204f987d9c4231fe20681f6c0c36db0f558a3ff0b4e9a1072881864c43ade29",
     "components/AppShell.tsx": "159b387b5536761e536c785122900856820f4eab1cfad1366b3e6d9b8e3dd121",
@@ -7,7 +7,7 @@
     "components/Chips.tsx": "7818a5932d7c5708a8a97166b1cb3b0b22e9403949ca168307f990e68cafff54",
     "components/Combobox.tsx": "0aaf55fd0b13b1ec80532dfd9afdc01531f64931a1f21d21bcb88a4021b20e06",
     "components/CommandPalette.tsx": "119af3a96cbae758a9121fbef9299db3ebec0aece303f6871c477db654f8ebc2",
-    "components/CopyBlock.tsx": "2a914868f41764c1195dc911906a46bc1765542d6ac42b362be31f2a5b4295ee",
+    "components/CopyBlock.tsx": "286aac649b6206d56b7561bee811bf56367c973b29aeab8908ec717bfed4fe48",
     "components/Drawer.tsx": "24f21d1dcd9841fd3c051845592398d27d0ceb5be022e4a915c9a0f23bfc72f4",
     "components/FilterInput.tsx": "601e9c43a2a7f97d20f024661fd4ba71124d66ba908a100a18a03b325090eaab",
     "components/Form.tsx": "b9b4f765b5b0141f321ed7b22af15dfdbc66fb0a4c2b014cc70da770e4913353",
@@ -74,7 +74,7 @@
     "styles/list.css": "6ccb20b70f701ab4c3be2354000e6617990970b5ce05d0665023e617cc07ec1e",
     "styles/media-frame.css": "deb3a888f2b717f500566241c9f6bda305c5ba86543c4ba1096d9dc7217af7fe",
     "styles/overlays.css": "956cf15bbdb5ce5cf6370299bfd4015fcdcc9f971f4bc20c09a7b84047a271e1",
-    "styles/pages.css": "58027959699c1408f3f7b81c07a08251b446c3858ea2c8e86e8390e5b52f6aa4",
+    "styles/pages.css": "d701d321c30485972ca84f77fe9b88410759b9638089b32e12932eb24be2081f",
     "styles/shell.css": "47b09a8c8c967783a3b18ef04a0df9e3190484804fbfbbc1dbc74789f7645f45",
     "styles/states.css": "a43ec96514cec2779eb751a65ef1a15190b27bcaa14455e0a8580a735e68a207",
     "styles/table.css": "afd62a219cc25365552c037f026239304604d9439fda130886d24c2d67e2f6b2",

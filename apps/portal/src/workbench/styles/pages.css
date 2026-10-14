@@ -404,6 +404,15 @@
   .wb-copy--multiline .wb-copy-actions {
     padding: 6px 6px 6px 0;
   }
+  /* wrap: soft wraps instead of horizontal scrolling; the button stays with
+     the first line */
+  .wb-copy--wrap {
+    align-items: flex-start;
+  }
+  .wb-copy--wrap .wb-copy-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
   .wb-copy-status {
     color: var(--wb-fg-2);
     font-size: var(--wb-fs-12);

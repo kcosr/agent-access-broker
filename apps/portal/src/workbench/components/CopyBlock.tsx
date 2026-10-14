@@ -20,6 +20,13 @@ export interface CopyBlockProps {
    * one line that scrolls horizontally instead of wrapping.
    */
   multiline?: boolean | undefined;
+  /**
+   * Wrap long lines inside the block instead of scrolling horizontally, so
+   * the whole value stays visible (overlay scrollbars give no cue that more
+   * text follows). Applies to single-line and multiline blocks; line breaks
+   * in `text` are kept and the copied text is unchanged.
+   */
+  wrap?: boolean | undefined;
   /** Extra class on the root element. */
   className?: string | undefined;
 }
@@ -43,12 +50,14 @@ function selectText(el: HTMLElement) {
  * file. The button writes `text` to the clipboard and shows "Copied" for
  * two seconds. Without clipboard access it selects the text and asks for a
  * manual copy instead of failing. The text stays selectable: Tab focuses it
- * (arrows scroll it) and Ctrl/⌘ A selects only this block.
+ * (arrows scroll it) and Ctrl/⌘ A selects only this block. `wrap` trades
+ * horizontal scrolling for soft line wraps that are not part of the text.
  */
 export function CopyBlock({
   text,
   label,
   multiline = false,
+  wrap = false,
   className,
 }: CopyBlockProps) {
   const textRef = useRef<HTMLElement | null>(null);
@@ -122,6 +131,7 @@ export function CopyBlock({
       className={cx(
         "wb-copy",
         multiline && "wb-copy--multiline",
+        wrap && "wb-copy--wrap",
         status === "copied" && "is-copied",
         status === "manual" && "is-manual",
         className,
