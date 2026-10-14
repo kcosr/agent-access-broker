@@ -425,7 +425,7 @@ async fn managed_store_overrides_take_precedence_and_apply_without_reload() {
             services: BTreeMap::from([("fake".to_string(), limit(2, "1m"))]),
             principal_overrides: vec![],
         },
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     let runtime = fixture.state.current().runtime.clone();
@@ -485,7 +485,7 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
             services: BTreeMap::from([("fake".to_string(), limit(1, "90s"))]),
             ..Default::default()
         },
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     let token = &fixture.agent_tokens[0];
@@ -532,7 +532,7 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
 
 #[tokio::test]
 async fn managed_override_lookup_failure_fails_closed_before_admission() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let token = fixture.agent_tokens[0].clone();
     assert_eq!(
         fixture

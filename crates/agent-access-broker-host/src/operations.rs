@@ -238,7 +238,8 @@ mod tests {
         }
         let mut config = agent_access_core::parse_broker_config_raw(
             "owned-test.toml",
-            r#"
+            &format!(
+                r#"
 [deployment]
 environment="development"
 enable_fake_service=true
@@ -256,15 +257,19 @@ default_decision="deny"
 [[policy.resources]]
 id="test"
 resource_type="fake_project"
-selector={kind="exact",value="TEST"}
+selector={{kind="exact",value="TEST"}}
 allowed_execution_contexts=["default"]
 [[policy.grants]]
 subjects=["group:anonymous"]
 service="fake"
 actions=["echo"]
-resources={resource_ids=["test"]}
+resources={{resource_ids=["test"]}}
 credential_mode="service"
+[limits]
+upload_spool_dir={spool:?}
 "#,
+                spool = dir.path().join("spool").display().to_string()
+            ),
             &std::sync::Arc::new(crate::backend_registry()),
         )
         .unwrap();
@@ -272,7 +277,6 @@ credential_mode="service"
             agent_access_core::AuditStoreType::Jsonl,
             dir.path().join("audit.jsonl").display().to_string(),
         ));
-        config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
         config.limits.max_concurrent_requests = 1;
         let provider = Arc::new(PausedProvider {
             invoked: tokio::sync::Semaphore::new(0),

@@ -18497,6 +18497,9 @@ content.page_formats = ["atlas_doc_format", "storage"]
 api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"
 allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
                 )
                 .unwrap()

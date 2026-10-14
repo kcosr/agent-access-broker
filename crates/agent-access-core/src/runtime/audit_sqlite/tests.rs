@@ -216,16 +216,14 @@ fn baseline_checksum_is_the_sha256_of_the_baseline_sql() {
 
 use super::super::tests::{
     CapturedEvents, EventCaptureLayer, TEST_NODE_ID, base_fake_config, install_audit_writer_hook,
-    temp_path, test_audit_record, test_audit_sink_lock,
+    temp_path, test_audit_record, test_audit_sink_lock, test_limits,
 };
 use super::super::{
     AuditRecord, AuditRuntimeRegistry, AuditSink, AuditWriterTestEventKind, BrokerRuntime,
     GovernedOperationContext, IdentityContext, InvocationControl, InvokeRequest, OperationContext,
     RuntimeError, SourceContext, StampedAuditRecord,
 };
-use crate::{
-    AuditConfig, AuditStoreType, DEFAULT_EXECUTION_CONTEXT, ExecutionContext, LimitsConfig,
-};
+use crate::{AuditConfig, AuditStoreType, DEFAULT_EXECUTION_CONTEXT, ExecutionContext};
 use agent_access_provider::ReasonCode;
 use rusqlite::OpenFlags;
 use serde_json::{Value, json};
@@ -249,7 +247,7 @@ fn sqlite_config(path: &Path) -> AuditConfig {
 fn open_sink(config: &AuditConfig, mode: AuditOpenMode) -> Result<AuditSink, RuntimeError> {
     AuditSink::new(
         Some(config),
-        &LimitsConfig::default(),
+        &test_limits(),
         Arc::new(AuditRuntimeRegistry::new()),
         TEST_NODE_ID,
         mode,

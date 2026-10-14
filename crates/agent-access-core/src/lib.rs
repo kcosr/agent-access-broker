@@ -566,7 +566,7 @@ pub struct BrokerConfig {
     pub providers: ProvidersConfig,
     #[serde(default)]
     pub gateways: BTreeMap<String, GatewayConfig>,
-    #[serde(default)]
+    /// `[limits]`, required for its `upload_spool_dir`.
     pub limits: LimitsConfig,
     /// `[audit]`; audit is disabled when the table is absent.
     #[serde(default)]
@@ -1182,8 +1182,11 @@ fn default_deny_delete_refs() -> bool {
     true
 }
 
+/// `[limits]`. The table is required: `upload_spool_dir` has no default, and
+/// every other limit has the built-in default [`LimitsConfig::new`] applies.
+/// An omitted table is reported as its missing `upload_spool_dir`.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, remote = "Self")]
 pub struct LimitsConfig {
     /// `[limits.invocations]`: per-principal, per-service invocation rate limits.
     #[serde(default)]
@@ -1209,14 +1212,17 @@ pub struct LimitsConfig {
     pub request_body_timeout_ms: u64,
     #[serde(default = "default_streaming_idle_timeout_ms")]
     pub streaming_idle_timeout_ms: u64,
-    #[serde(default = "default_upload_spool_dir")]
+    /// Directory for spooled upload bodies and the spool state lock; a
+    /// relative path resolves against the working directory.
     pub upload_spool_dir: String,
     #[serde(default = "default_upload_spool_max_bytes")]
     pub upload_spool_max_bytes: u64,
 }
 
-impl Default for LimitsConfig {
-    fn default() -> Self {
+impl LimitsConfig {
+    /// Limits that spool uploads in `upload_spool_dir`, with the built-in
+    /// default for every other limit.
+    pub fn new(upload_spool_dir: impl Into<String>) -> Self {
         Self {
             invocations: InvocationLimitsConfig::default(),
             auth_requests_per_principal_per_minute: default_auth_requests_per_principal(),
@@ -1229,9 +1235,37 @@ impl Default for LimitsConfig {
             request_timeout_ms: default_request_timeout_ms(),
             request_body_timeout_ms: default_request_body_timeout_ms(),
             streaming_idle_timeout_ms: default_streaming_idle_timeout_ms(),
-            upload_spool_dir: default_upload_spool_dir(),
+            upload_spool_dir: upload_spool_dir.into(),
             upload_spool_max_bytes: default_upload_spool_max_bytes(),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for LimitsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        /// A present `[limits]` table, read by the derived deserializer.
+        struct Table(LimitsConfig);
+
+        impl<'de> Deserialize<'de> for Table {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                // The inherent function `remote = "Self"` derives, not this trait.
+                LimitsConfig::deserialize(deserializer).map(Self)
+            }
+        }
+
+        // Serde presents an omitted field to its type as an absent option, as
+        // it does for every `Option` field, so an omitted table is `None` here.
+        Option::<Table>::deserialize(deserializer)?
+            .map(|Table(limits)| limits)
+            .ok_or_else(|| {
+                serde::de::Error::custom("missing field `upload_spool_dir` in table `[limits]`")
+            })
     }
 }
 
@@ -1272,14 +1306,6 @@ fn default_request_timeout_ms() -> u64 {
 }
 fn default_streaming_idle_timeout_ms() -> u64 {
     ProviderLimits::default().streaming_idle_timeout_ms
-}
-fn default_upload_spool_dir() -> String {
-    std::env::current_dir()
-        .unwrap_or_else(|_| Path::new(".").to_path_buf())
-        .join("target")
-        .join("agent-access-upload-spool")
-        .display()
-        .to_string()
 }
 fn default_upload_spool_max_bytes() -> u64 {
     default_max_http_body_bytes() * 4

@@ -459,6 +459,9 @@ token_refs = ["env:AGENT_ACCESS_PROVENANCE_VERIFY_TOKEN"]
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = ${JSON.stringify(join(temporary, "spool"))}
 `;
   writeFileSync(configPath, config, { mode: 0o600 });
   const child = spawn(

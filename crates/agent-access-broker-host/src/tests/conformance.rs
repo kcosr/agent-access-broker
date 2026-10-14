@@ -87,6 +87,9 @@ service = "conformance"
 actions = ["item.view", "item.download", "item.upload"]
 resources = {{ resource_ids = ["shelf-one"] }}
 credential_mode = "service"
+
+[limits]
+upload_spool_dir = "{dir}/spool"
 "#,
         dir = dir.display()
     )
@@ -112,13 +115,12 @@ async fn conformance() -> Conformance {
     std::fs::write(dir.path().join("upstream-token"), UPSTREAM_TOKEN).unwrap();
     std::fs::write(dir.path().join("identity-token"), IDENTITY_TOKEN).unwrap();
     let server = MockServer::start().await;
-    let mut config = parse_broker_config_raw(
+    let config = parse_broker_config_raw(
         "conformance.toml",
         &broker_toml(&server.uri(), dir.path()),
         &registry(),
     )
     .unwrap();
-    config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
     validate_broker_config(&config).unwrap();
     let broker = TestBroker::start_config(&config).await;
     let app = broker.app();

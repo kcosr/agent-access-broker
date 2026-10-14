@@ -14,7 +14,7 @@ fn fake_limit_of_two() -> LimitsConfig {
             services: BTreeMap::from([("fake".to_string(), limit(2, "1m"))]),
             ..Default::default()
         },
-        ..LimitsConfig::default()
+        ..test_limits()
     }
 }
 

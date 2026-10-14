@@ -444,7 +444,7 @@ async fn audit_query_routes_exist_only_with_sqlite_audit_and_management() {
 #[tokio::test]
 async fn the_browser_session_reports_whether_audit_is_queryable() {
     for (backend, expected) in [("sqlite", true), ("jsonl", false), ("disabled", false)] {
-        let fixture = browser_rate_fixture_with(LimitsConfig::default(), |config| {
+        let fixture = browser_rate_fixture_with(test_limits(), |config| {
             let path = temp_path(&format!("session-audit.audit.{backend}"));
             config.audit = match backend {
                 "sqlite" => Some(agent_access_core::AuditConfig::new(
@@ -470,7 +470,7 @@ async fn the_browser_session_reports_whether_audit_is_queryable() {
 
 #[tokio::test]
 async fn browser_sessions_read_audit_without_the_csrf_header() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     for uri in [
         SELF_OPTIONS.to_string(),
         "/v1/audit/events".to_string(),

@@ -5883,15 +5883,14 @@ mod tests {
             attribution: Default::default(),
             providers: ProvidersConfig::default(),
             gateways: BTreeMap::from([("gitlab_git".to_string(), test_gateway_config())]),
-            limits: agent_access_core::LimitsConfig {
-                upload_spool_dir: audit_path
+            limits: agent_access_core::LimitsConfig::new(
+                audit_path
                     .parent()
                     .unwrap()
                     .join("upload-spool")
                     .display()
                     .to_string(),
-                ..agent_access_core::LimitsConfig::default()
-            },
+            ),
             audit: Some(AuditConfig::new(
                 agent_access_core::AuditStoreType::Jsonl,
                 audit_path.display().to_string(),

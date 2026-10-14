@@ -1271,6 +1271,9 @@ mode = "anonymous"
 
 [policy]
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     assert!(parse_test_config(top_level).is_err());
 
@@ -1281,6 +1284,9 @@ legacy_header = "X-Old"
 
 [policy]
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     assert!(parse_test_config(nested).is_err());
 }
@@ -1832,6 +1838,9 @@ fn execution_context_config_validates_registry_and_fixed_header_contract() {
 
             [policy]
             authority = "toml"
+
+            [limits]
+            upload_spool_dir = "upload-spool"
         "#;
     let error = parse_test_config(raw).unwrap_err();
     assert!(error.to_string().contains("unknown field `header`"));
@@ -1875,6 +1884,9 @@ fn toml_grant_context_omission_is_compatibility_only() {
                 service = "fake"
                 execution_contexts = ["external"]
                 credential_mode = "service"
+
+                [limits]
+                upload_spool_dir = "upload-spool"
             "#,
     )
     .unwrap();
@@ -2001,6 +2013,9 @@ service = "jira"
 actions = ["issue.view"]
 resources = { resource_ids = [] }
 credential_mode = "service"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let error = parse_test_config(missing_subjects).unwrap_err();
     assert!(error.to_string().contains("missing field `subjects`"));
@@ -2020,6 +2035,9 @@ service = "jira"
 actions = ["issue.view"]
 resources = { resource_ids = [] }
 credential_mode = "service"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let error = parse_test_config(singular_subject).unwrap_err();
     assert!(error.to_string().contains("unknown field `subject`"));
@@ -2044,6 +2062,9 @@ subject = "alice"
 
 [policy]
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     assert!(parse_test_config(legacy).is_err());
 }
@@ -3085,6 +3106,9 @@ enabled = false
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let config = parse_test_config(raw).unwrap();
 
@@ -3213,6 +3237,9 @@ default_decision = "deny"
 [attribution.actions]
 gitlab = ["does.not.match"]
 bitbucket = ["*"]
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let config = parse_test_config(raw).unwrap();
 
@@ -3615,6 +3642,9 @@ service = "gitlab_git"
 actions = ["repo.fetch", "repo.push"]
 credential_mode = "service"
 resources = { resource_group_ids = ["repositories"] }
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let config: BrokerConfig = parse_test_config(raw).unwrap();
     validate_broker_config(&config).unwrap();
@@ -3814,8 +3844,10 @@ path = "/var/lib/agent-access-broker/managed-store.sqlite3"
 
 #[test]
 fn authentication_rate_limits_default_independently_of_invocation_limits() {
-    let limits: LimitsConfig =
-        toml::from_str("[invocations]\ndefault = { requests = 7, window = \"30s\" }\n").unwrap();
+    let limits: LimitsConfig = toml::from_str(
+        "upload_spool_dir = \"spool\"\n[invocations]\ndefault = { requests = 7, window = \"30s\" }\n",
+    )
+    .unwrap();
     assert_eq!(
         limits.invocations.default,
         Some(InvocationLimitConfig {
@@ -3826,12 +3858,103 @@ fn authentication_rate_limits_default_independently_of_invocation_limits() {
     assert_eq!(limits.auth_requests_per_principal_per_minute, 100);
     assert_eq!(limits.auth_requests_per_source_per_minute, 300);
     let configured: LimitsConfig = toml::from_str(
-        "auth_requests_per_principal_per_minute = 4\nauth_requests_per_source_per_minute = 8\n",
+        "upload_spool_dir = \"spool\"\nauth_requests_per_principal_per_minute = 4\nauth_requests_per_source_per_minute = 8\n",
     )
     .unwrap();
     assert_eq!(configured.auth_requests_per_principal_per_minute, 4);
     assert_eq!(configured.auth_requests_per_source_per_minute, 8);
     assert!(configured.invocations.default.is_none());
+}
+
+/// A minimal broker configuration without a `[limits]` table.
+const LIMITS_TEST_CONFIG_PREFIX: &str = r#"
+[identity]
+mode = "anonymous"
+authority = "toml"
+
+[policy]
+authority = "toml"
+default_decision = "deny"
+"#;
+
+#[test]
+fn upload_spool_dir_is_required_and_other_limits_keep_their_defaults() {
+    let config = parse_test_config(&format!(
+        "{LIMITS_TEST_CONFIG_PREFIX}\n[limits]\nupload_spool_dir = \"relative/spool\"\n"
+    ))
+    .unwrap();
+    validate_broker_config(&config).unwrap();
+    // A relative path is kept as written; the runtime resolves it against
+    // the working directory.
+    assert_eq!(config.limits.upload_spool_dir, "relative/spool");
+    assert_eq!(
+        format!("{:?}", config.limits),
+        format!("{:?}", LimitsConfig::new("relative/spool"))
+    );
+    let limits = LimitsConfig::new("spool");
+    assert_eq!(limits.auth_requests_per_principal_per_minute, 100);
+    assert_eq!(limits.auth_requests_per_source_per_minute, 300);
+    assert_eq!(limits.max_concurrent_requests, 100);
+    assert_eq!(limits.max_concurrent_requests_per_principal, 10);
+    assert_eq!(limits.max_http_body_bytes, 512 * 1024 * 1024);
+    assert_eq!(limits.max_download_bytes, 100 * 1024 * 1024);
+    assert_eq!(limits.max_upstream_response_bytes, 512 * 1024 * 1024);
+    assert_eq!(limits.request_timeout_ms, 30_000);
+    assert_eq!(limits.request_body_timeout_ms, 300_000);
+    assert_eq!(limits.streaming_idle_timeout_ms, 30_000);
+    assert_eq!(limits.upload_spool_max_bytes, 2 * 1024 * 1024 * 1024);
+    assert!(limits.invocations.default.is_none());
+}
+
+#[test]
+fn omitted_upload_spool_dir_fails_to_parse_naming_the_field() {
+    // The `[limits]` table without the setting.
+    let error = parse_test_config(&format!(
+        "{LIMITS_TEST_CONFIG_PREFIX}\n[limits]\nmax_concurrent_requests = 5\n"
+    ))
+    .unwrap_err();
+    assert!(matches!(error, ConfigError::Parse { .. }), "{error:?}");
+    let message = error.to_string();
+    assert!(
+        message.contains("missing field `upload_spool_dir`"),
+        "{message}"
+    );
+    assert!(message.contains("[limits]"), "{message}");
+
+    // The whole `[limits]` table, including when only nested tables are set.
+    for raw in [
+        LIMITS_TEST_CONFIG_PREFIX.to_string(),
+        format!(
+            "{LIMITS_TEST_CONFIG_PREFIX}\n[limits.invocations]\ndefault = {{ requests = 7, window = \"30s\" }}\n"
+        ),
+    ] {
+        let error = parse_test_config(&raw).unwrap_err();
+        assert!(matches!(error, ConfigError::Parse { .. }), "{error:?}");
+        let message = error.to_string();
+        assert!(
+            message.contains("missing field `upload_spool_dir`"),
+            "{raw}: {message}"
+        );
+    }
+    let error = parse_test_config(LIMITS_TEST_CONFIG_PREFIX).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("missing field `upload_spool_dir` in table `[limits]`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_upload_spool_dir_parses_but_fails_validation() {
+    for value in ["", " "] {
+        let config = parse_test_config(&format!(
+            "{LIMITS_TEST_CONFIG_PREFIX}\n[limits]\nupload_spool_dir = {value:?}\n"
+        ))
+        .unwrap();
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(&errors, "limits.upload_spool_dir must be non-empty");
+    }
 }
 
 #[test]
@@ -4146,6 +4269,9 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
 
 fn parse_audit_test_config(audit: &str) -> Result<BrokerConfig, ConfigError> {
@@ -4302,6 +4428,9 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#,
     )
     .unwrap();
@@ -4339,6 +4468,9 @@ default_decision = "deny"
 type = "jsonl"
 path = "audit.jsonl"
 durability = "flush_eventually"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
 
     let error = parse_test_config(raw).unwrap_err();
@@ -4404,6 +4536,9 @@ authority = "toml"
 [http_services.github]
 display_name = "GitHub"
 base_url = "https://api.github.com"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
     let error = parse_test_config(raw).unwrap_err();
     assert!(error.to_string().contains("http_services"));
@@ -4798,6 +4933,9 @@ authority = "toml"
 [policy]
 authority = "toml"
 default_decision = "deny"
+
+[limits]
+upload_spool_dir = "upload-spool"
 "#;
 
 #[test]

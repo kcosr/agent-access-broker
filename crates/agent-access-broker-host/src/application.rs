@@ -430,7 +430,7 @@ mod tests {
         path
     }
 
-    const MINIMAL_CONFIG: &str = r#"
+    const MINIMAL_CONFIG_WITHOUT_LIMITS: &str = r#"
 [deployment]
 environment = "development"
 
@@ -442,6 +442,14 @@ authority = "toml"
 authority = "toml"
 default_decision = "deny"
 "#;
+
+    /// A minimal configuration whose upload spool is in `directory`.
+    fn minimal_config(directory: &Path) -> String {
+        format!(
+            "{MINIMAL_CONFIG_WITHOUT_LIMITS}\n[limits]\nupload_spool_dir = {:?}\n",
+            directory.join("spool").display().to_string()
+        )
+    }
 
     #[test]
     fn serve_is_the_default_command_with_default_settings() {
@@ -484,7 +492,7 @@ default_decision = "deny"
     #[test]
     fn config_validate_exits_zero_for_valid_and_three_for_invalid_config() {
         let directory = tempfile::tempdir().unwrap();
-        let valid = write_config(directory.path(), MINIMAL_CONFIG);
+        let valid = write_config(directory.path(), &minimal_config(directory.path()));
         assert_eq!(
             run(&["--config", valid.to_str().unwrap(), "config", "validate"]),
             0
@@ -492,6 +500,16 @@ default_decision = "deny"
         let invalid = write_config(directory.path(), "[identity]\nmode = \"anonymous\"\n");
         assert_eq!(
             run(&["--config", invalid.to_str().unwrap(), "config", "validate"]),
+            3
+        );
+        let without_spool = write_config(directory.path(), MINIMAL_CONFIG_WITHOUT_LIMITS);
+        assert_eq!(
+            run(&[
+                "--config",
+                without_spool.to_str().unwrap(),
+                "config",
+                "validate"
+            ]),
             3
         );
         let missing = directory.path().join("missing.toml");
@@ -504,7 +522,7 @@ default_decision = "deny"
     #[test]
     fn audit_verify_exits_two_without_sqlite_audit_and_three_for_invalid_config() {
         let directory = tempfile::tempdir().unwrap();
-        let disabled = write_config(directory.path(), MINIMAL_CONFIG);
+        let disabled = write_config(directory.path(), &minimal_config(directory.path()));
         assert_eq!(
             run(&["--config", disabled.to_str().unwrap(), "audit", "verify"]),
             2

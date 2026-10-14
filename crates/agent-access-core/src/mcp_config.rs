@@ -170,6 +170,8 @@ authority="toml"
 [mcp]
 enabled=true
 public_url="https://broker.example.com/mcp"
+[limits]
+upload_spool_dir="upload-spool"
 "#,
         )
         .unwrap()

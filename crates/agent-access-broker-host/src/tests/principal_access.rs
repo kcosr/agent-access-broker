@@ -304,7 +304,7 @@ async fn auditor_credentials_and_catalog_keep_their_distinct_boundaries() {
 
 #[tokio::test]
 async fn browser_auditor_keeps_authentication_when_personal_access_is_disabled() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store

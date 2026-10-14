@@ -62,7 +62,7 @@ fn object_keys(value: &Value) -> Vec<String> {
 
 #[tokio::test]
 async fn another_source_cannot_lock_out_the_user_and_admin_unlock_clears_every_source() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let attacker = "198.51.100.7:5000";
     let failed = assert_login_rejected(
         local_login(&fixture, attacker, "alice", "wrong-password").await,
@@ -170,7 +170,7 @@ async fn login_principal_budget_and_concurrency_are_keyed_by_source() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_principal_per_minute: 3,
         max_concurrent_requests_per_principal: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // The fixture login spent one of 127.0.0.1's three attempts. Alice's
@@ -208,7 +208,7 @@ async fn login_principal_budget_and_concurrency_are_keyed_by_source() {
 
 #[tokio::test]
 async fn password_change_failures_count_against_the_callers_source() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     // Repeated attempts after the source locks retain the generic change error.
     for _ in 0..4 {
         let response = fixture
@@ -306,7 +306,7 @@ async fn auth_source_budget_uses_the_grouped_login_source() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_source_per_minute: 2,
         auth_requests_per_principal_per_minute: 100,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // Login from rotating addresses within one IPv6 /64 shares one budget.
@@ -368,7 +368,7 @@ fn trusted_proxy_client_address_is_the_login_source() {
 
 #[tokio::test]
 async fn failed_login_audits_only_a_valid_claimed_principal() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let invalid = "bad principal <script>";
     let too_long = "a".repeat(257);
     for principal in [invalid, too_long.as_str()] {

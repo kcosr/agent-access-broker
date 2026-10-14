@@ -651,7 +651,7 @@ async fn gateway_body_admission_preserves_git_error_headers_and_cache_policy() {
 async fn body_admission_invalid_explicit_token_cannot_use_cookie_to_bypass_source_budget() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_source_per_minute: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // Fixture login consumed this IPv4 source's one authentication attempt.
@@ -729,7 +729,7 @@ async fn body_admission_anonymous_pool_preserves_authenticated_capacity_and_same
     let fixture = browser_rate_fixture(LimitsConfig {
         max_concurrent_requests: 8,
         max_concurrent_requests_per_principal: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     let mut held = Vec::new();
@@ -856,7 +856,7 @@ async fn body_admission_verified_principals_cannot_fill_global_capacity_with_con
         LimitsConfig {
             max_concurrent_requests: 8,
             max_concurrent_requests_per_principal: 1,
-            ..LimitsConfig::default()
+            ..test_limits()
         },
         |config| config.policy.grants[0].subjects.push("user:admin".into()),
     )
@@ -959,7 +959,7 @@ async fn body_admission_owner_can_pause_and_revoke_while_compromised_token_holds
     let fixture = browser_rate_fixture(LimitsConfig {
         max_concurrent_requests: 8,
         max_concurrent_requests_per_principal: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     let snapshot = fixture.state.current();

@@ -73,7 +73,7 @@ async fn token_get(app: Router, token: &str, uri: &str) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn browser_management_reads_forbid_caching() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     fixture
         .state
         .current()
@@ -129,7 +129,7 @@ async fn browser_management_reads_forbid_caching() {
 
 #[tokio::test]
 async fn portal_load_reads_write_no_audit_records() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let before = broker_request_ids(&read_audit_records(&fixture.audit_path));
     assert!(!before.is_empty(), "the fixture login is audited");
     for uri in PORTAL_LOAD_READS {
@@ -184,7 +184,7 @@ async fn session_probe(app: Router, cookies: &[axum::http::HeaderValue]) -> (Sta
 #[tokio::test]
 async fn session_probes_distinguish_absent_invalid_and_expired_cookies() {
     use axum::http::HeaderValue;
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     let before = broker_request_ids(&read_audit_records(&fixture.audit_path));
     for cookies in [
         vec![],
@@ -275,7 +275,7 @@ async fn session_probes_distinguish_absent_invalid_and_expired_cookies() {
 async fn logged_out_session_probes_still_enforce_and_audit_admission_limits() {
     let fixture = browser_rate_fixture(LimitsConfig {
         auth_requests_per_source_per_minute: 1,
-        ..LimitsConfig::default()
+        ..test_limits()
     })
     .await;
     // The fixture's login already consumed the source's authentication budget.
@@ -295,7 +295,7 @@ async fn logged_out_session_probes_still_enforce_and_audit_admission_limits() {
 
 #[tokio::test]
 async fn successful_reads_work_while_audit_writes_fail() {
-    let fixture = browser_rate_fixture(LimitsConfig::default()).await;
+    let fixture = browser_rate_fixture(test_limits()).await;
     // Another connection holds the audit database's write lock, so every
     // audit append fails after the writer's busy timeout.
     let blocker = rusqlite::Connection::open(&fixture.audit_path).unwrap();
