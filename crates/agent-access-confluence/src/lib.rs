@@ -2530,6 +2530,7 @@ impl ConfluenceProvider {
             )
             .await?;
         ensure_authorized_comment_container(&container, request.resource_scopes()?)?;
+        let write = ConfluenceWrite::new(json!({ "containerId": container.id() }));
         let response = self
             .backend
             .add_comment(
@@ -2546,27 +2547,30 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
-        validate_created_comment(&response.value, action, &container)?;
-        let result = json!({
-            "comment": comment_result(&response.value, action, &container, Some("storage"))?,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = comment_audit(
-            &request,
-            &container,
-            action,
-            Some(&response.value.id),
-            Some("storage"),
-            None,
-            self.backend.egress_proxy_audit(credential),
-        );
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(response.status), Some(response.duration_ms))
-            .with_object_ids(comment_object_ids(&response.value, &container)))
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            validate_created_comment(&response.value, action, &container)?;
+            let result = json!({
+                "comment": comment_result(&response.value, action, &container, Some("storage"))?,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = comment_audit(
+                &request,
+                &container,
+                action,
+                Some(&response.value.id),
+                Some("storage"),
+                None,
+                self.backend.egress_proxy_audit(credential),
+            );
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(Some(response.status), Some(response.duration_ms))
+                .with_object_ids(comment_object_ids(&response.value, &container)))
+        })
+        .await
     }
 
     async fn invoke_comment_update(
@@ -2611,6 +2615,7 @@ impl ConfluenceProvider {
             inputs.base_version,
             self.backend.egress_proxy_audit(credential),
         )?;
+        let write = ConfluenceWrite::new(json!({ "commentId": inputs.comment_id }));
         let response = match self
             .backend
             .update_comment(
@@ -2634,8 +2639,9 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(write.failed(error)),
         };
+        after_accepted_write("mutation_response", write.locators(), async {
         validate_comment_identity(&response.value, &inputs.comment_id, action.kind)?;
         require_current_comment(&response.value)?;
         if response.value.version != Some(next_version) {
@@ -2649,7 +2655,7 @@ impl ConfluenceProvider {
             .await
             .map_err(|error| {
                 // The update applied: throttling must not invite a second update.
-                error.unverified_if_throttled(
+                error.unverified_after_mutation(
                     "post_update_readback",
                     json!({"commentId": inputs.comment_id, "version": next_version}),
                 )
@@ -2699,6 +2705,8 @@ impl ConfluenceProvider {
                 &updated_evidence.target,
                 &updated_evidence.container,
             )))
+        })
+        .await
     }
 
     async fn invoke_comment_delete(
@@ -2721,42 +2729,46 @@ impl ConfluenceProvider {
             &execution_evidence.container,
             request.resource_scopes()?,
         )?;
+        let write = ConfluenceWrite::new(json!({ "commentId": inputs.comment_id }));
         let response = self
             .backend
             .delete_comment(action.kind, &inputs.comment_id, credential)
             .await
-            .map_err(confluence_backend_error)?;
-        let result = json!({
-            "commentId": inputs.comment_id,
-            "status": "deleted",
-            "containerType": action.container_type.as_str(),
-            "kind": action.kind.as_str(),
-            "space": execution_evidence.container.space(),
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(comment_audit(
-                &request,
-                &execution_evidence.container,
-                action,
-                Some(&execution_evidence.target.id),
-                None,
-                None,
-                self.backend.egress_proxy_audit(credential),
-            ))
-            .with_upstream(
-                Some(response.status),
-                Some(
-                    evidence
-                        .upstream_duration_ms
-                        .saturating_add(execution_evidence.upstream_duration_ms)
-                        .saturating_add(response.duration_ms),
-                ),
-            )
-            .with_object_ids(comment_object_ids(
-                &execution_evidence.target,
-                &execution_evidence.container,
-            )))
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let result = json!({
+                "commentId": inputs.comment_id,
+                "status": "deleted",
+                "containerType": action.container_type.as_str(),
+                "kind": action.kind.as_str(),
+                "space": execution_evidence.container.space(),
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(comment_audit(
+                    &request,
+                    &execution_evidence.container,
+                    action,
+                    Some(&execution_evidence.target.id),
+                    None,
+                    None,
+                    self.backend.egress_proxy_audit(credential),
+                ))
+                .with_upstream(
+                    Some(response.status),
+                    Some(
+                        evidence
+                            .upstream_duration_ms
+                            .saturating_add(execution_evidence.upstream_duration_ms)
+                            .saturating_add(response.duration_ms),
+                    ),
+                )
+                .with_object_ids(comment_object_ids(
+                    &execution_evidence.target,
+                    &execution_evidence.container,
+                )))
+        })
+        .await
     }
 
     async fn invoke_comment_reply_list(
@@ -2898,6 +2910,7 @@ impl ConfluenceProvider {
             &execution_evidence.container,
             request.resource_scopes()?,
         )?;
+        let write = ConfluenceWrite::new(json!({ "parentCommentId": inputs.comment_id }));
         let response = self
             .backend
             .add_comment(
@@ -2912,7 +2925,8 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
         validate_created_reply(
             &response.value,
             action,
@@ -2924,7 +2938,7 @@ impl ConfluenceProvider {
             .await
             .map_err(|error| {
                 // The reply exists: throttling must not invite a second reply.
-                error.unverified_if_throttled(
+                error.unverified_after_mutation(
                     "post_create_readback",
                     json!({
                         "commentId": response.value.id,
@@ -2969,6 +2983,8 @@ impl ConfluenceProvider {
                 &created_comment,
                 &execution_evidence.container,
             )))
+        })
+        .await
     }
 
     async fn invoke_page_view(
@@ -3180,6 +3196,9 @@ impl ConfluenceProvider {
                     "Confluence space lookup omitted the homepage required for default placement",
                 )
             })?;
+        let write = ConfluenceWrite::new(
+            json!({ "space": inputs.space, "parentPageId": effective_parent_page_id }),
+        );
         let response = match self
             .backend
             .create_page(
@@ -3205,13 +3224,15 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(write
+                    .failed(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "parentPageId": effective_parent_page_id,
                     })));
             }
         };
+        after_accepted_write("mutation_response", write.locators(), async {
         let page = response.value;
         if page.space != inputs.space {
             return Err(ProviderError::deny(
@@ -3236,7 +3257,7 @@ impl ConfluenceProvider {
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                 // The page exists: throttling here must not invite a second create.
                 return Err(confluence_backend_error(error)
-                    .unverified_if_throttled(
+                    .unverified_after_mutation(
                         "post_create_readback",
                         json!({
                             "pageId": page.id,
@@ -3329,6 +3350,8 @@ impl ConfluenceProvider {
                 "pageId": page.id,
                 "parentPageId": effective_parent_page_id,
             })))
+        })
+        .await
     }
 
     async fn invoke_page_move(
@@ -3446,6 +3469,9 @@ impl ConfluenceProvider {
             ));
         }
 
+        let write = ConfluenceWrite::new(
+            json!({ "pageId": page.id, "targetPageId": target.id, "parentPageId": effective_parent_page_id }),
+        );
         let move_response = match self
             .backend
             .move_page(&page.id, inputs.position, &target.id, credential)
@@ -3467,7 +3493,8 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(write
+                    .failed(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "pageId": page.id,
@@ -3478,94 +3505,21 @@ impl ConfluenceProvider {
                     })));
             }
         };
-        let mut upstream_duration_ms = page_response.duration_ms
-            + target_response.duration_ms
-            + space_response.duration_ms
-            + page_hierarchy_response.duration_ms
-            + target_hierarchy_response.duration_ms
-            + effective_parent_response.duration_ms
-            + effective_parent_hierarchy_response.duration_ms
-            + ancestors_response.duration_ms
-            + move_response.duration_ms;
-        if move_response.value != page.id {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence page move response did not match the moved page",
-            )
-            .with_audit(page_move_failure_audit(
-                &request,
-                (
-                    &page.id,
-                    &target.id,
-                    &space.key,
-                    &space.id,
-                    &effective_parent_page_id,
-                ),
-                inputs.position,
-                "move_response",
-                self.backend.egress_proxy_audit(credential),
-            ))
-            .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
-            .with_object_ids(json!({
-                "pageId": page.id,
-                "targetPageId": target.id,
-                "parentPageId": effective_parent_page_id,
-                "previousParentId": previous_parent_id,
-                "previousParentType": previous_parent_type,
-            })));
-        }
-        let hierarchy_readback_response = match self
-            .backend
-            .page_hierarchy(&page.id, false, credential)
-            .await
-        {
-            Ok(readback) => readback,
-            Err(error) => {
-                let mut audit = page_move_failure_audit(
-                    &request,
-                    (
-                        &page.id,
-                        &target.id,
-                        &space.key,
-                        &space.id,
-                        &effective_parent_page_id,
-                    ),
-                    inputs.position,
-                    "post_move_hierarchy_readback",
-                    self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
-                    .unverified_if_throttled(
-                        "post_move_hierarchy_readback",
-                        json!({
-                            "pageId": page.id,
-                            "targetPageId": target.id,
-                            "parentPageId": effective_parent_page_id,
-                            "previousParentId": previous_parent_id,
-                            "previousParentType": previous_parent_type,
-                        }),
-                    )
-                    .with_audit(audit)
-                    .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
-                    .with_object_ids(json!({
-                        "pageId": page.id,
-                        "targetPageId": target.id,
-                        "parentPageId": effective_parent_page_id,
-                        "previousParentId": previous_parent_id,
-                        "previousParentType": previous_parent_type,
-                    })));
-            }
-        };
-        upstream_duration_ms += hierarchy_readback_response.duration_ms;
-        if let Err(error) = validate_page_hierarchy(
-            &hierarchy_readback_response.value,
-            &page.id,
-            &space.id,
-            &effective_parent_page_id,
-            "current",
-        ) {
-            return Err(error
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut upstream_duration_ms = page_response.duration_ms
+                + target_response.duration_ms
+                + space_response.duration_ms
+                + page_hierarchy_response.duration_ms
+                + target_hierarchy_response.duration_ms
+                + effective_parent_response.duration_ms
+                + effective_parent_hierarchy_response.duration_ms
+                + ancestors_response.duration_ms
+                + move_response.duration_ms;
+            if move_response.value != page.id {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence page move response did not match the moved page",
+                )
                 .with_audit(page_move_failure_audit(
                     &request,
                     (
@@ -3576,7 +3530,7 @@ impl ConfluenceProvider {
                         &effective_parent_page_id,
                     ),
                     inputs.position,
-                    "post_move_hierarchy_readback",
+                    "move_response",
                     self.backend.egress_proxy_audit(credential),
                 ))
                 .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
@@ -3587,59 +3541,58 @@ impl ConfluenceProvider {
                     "previousParentId": previous_parent_id,
                     "previousParentType": previous_parent_type,
                 })));
-        }
-        let children_readback_response = match self
-            .backend
-            .page_direct_children(&effective_parent_page_id, credential)
-            .await
-        {
-            Ok(readback) => readback,
-            Err(error) => {
-                let mut audit = page_move_failure_audit(
-                    &request,
-                    (
-                        &page.id,
-                        &target.id,
-                        &space.key,
-                        &space.id,
-                        &effective_parent_page_id,
-                    ),
-                    inputs.position,
-                    "post_move_order_readback",
-                    self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
-                    .unverified_if_throttled(
-                        "post_move_order_readback",
-                        json!({
+            }
+            let hierarchy_readback_response = match self
+                .backend
+                .page_hierarchy(&page.id, false, credential)
+                .await
+            {
+                Ok(readback) => readback,
+                Err(error) => {
+                    let mut audit = page_move_failure_audit(
+                        &request,
+                        (
+                            &page.id,
+                            &target.id,
+                            &space.key,
+                            &space.id,
+                            &effective_parent_page_id,
+                        ),
+                        inputs.position,
+                        "post_move_hierarchy_readback",
+                        self.backend.egress_proxy_audit(credential),
+                    );
+                    audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                    return Err(confluence_backend_error(error)
+                        .unverified_after_mutation(
+                            "post_move_hierarchy_readback",
+                            json!({
+                                "pageId": page.id,
+                                "targetPageId": target.id,
+                                "parentPageId": effective_parent_page_id,
+                                "previousParentId": previous_parent_id,
+                                "previousParentType": previous_parent_type,
+                            }),
+                        )
+                        .with_audit(audit)
+                        .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
+                        .with_object_ids(json!({
                             "pageId": page.id,
                             "targetPageId": target.id,
                             "parentPageId": effective_parent_page_id,
                             "previousParentId": previous_parent_id,
                             "previousParentType": previous_parent_type,
-                        }),
-                    )
-                    .with_audit(audit)
-                    .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
-                    .with_object_ids(json!({
-                        "pageId": page.id,
-                        "targetPageId": target.id,
-                        "parentPageId": effective_parent_page_id,
-                        "previousParentId": previous_parent_id,
-                        "previousParentType": previous_parent_type,
-                    })));
-            }
-        };
-        upstream_duration_ms += children_readback_response.duration_ms;
-        let (child_position, target_child_position) = match verify_page_move_order(
-            &children_readback_response.value,
-            &page.id,
-            &target.id,
-            inputs.position,
-        ) {
-            Ok(positions) => positions,
-            Err(error) => {
+                        })));
+                }
+            };
+            upstream_duration_ms += hierarchy_readback_response.duration_ms;
+            if let Err(error) = validate_page_hierarchy(
+                &hierarchy_readback_response.value,
+                &page.id,
+                &space.id,
+                &effective_parent_page_id,
+                "current",
+            ) {
                 return Err(error
                     .with_audit(page_move_failure_audit(
                         &request,
@@ -3651,7 +3604,7 @@ impl ConfluenceProvider {
                             &effective_parent_page_id,
                         ),
                         inputs.position,
-                        "post_move_order_readback",
+                        "post_move_hierarchy_readback",
                         self.backend.egress_proxy_audit(credential),
                     ))
                     .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
@@ -3663,52 +3616,129 @@ impl ConfluenceProvider {
                         "previousParentType": previous_parent_type,
                     })));
             }
-        };
-        let mut result = json!({
-            "operation": "page.move",
-            "pageId": page.id,
-            "position": inputs.position.as_str(),
-            "targetPageId": target.id,
-            "space": space.key,
-            "parentPageId": effective_parent_page_id,
-            "previousParentId": previous_parent_id,
-            "previousParentType": previous_parent_type,
-            "childPosition": child_position,
-            "verification": { "status": "matched" },
-        });
-        if let Some(target_child_position) = target_child_position {
-            result["targetChildPosition"] = json!(target_child_position);
-        }
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "confluence",
-            "operation": "page.move",
-            "pageId": page.id,
-            "position": inputs.position.as_str(),
-            "targetPageId": target.id,
-            "space": space.key,
-            "spaceId": space.id,
-            "parentPageId": effective_parent_page_id,
-            "previousParentId": previous_parent_id,
-            "previousParentType": previous_parent_type,
-            "childPosition": child_position,
-            "verificationStatus": "matched",
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        if let Some(target_child_position) = target_child_position {
-            audit["targetChildPosition"] = json!(target_child_position);
-        }
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
-            .with_object_ids(json!({
+            let children_readback_response = match self
+                .backend
+                .page_direct_children(&effective_parent_page_id, credential)
+                .await
+            {
+                Ok(readback) => readback,
+                Err(error) => {
+                    let mut audit = page_move_failure_audit(
+                        &request,
+                        (
+                            &page.id,
+                            &target.id,
+                            &space.key,
+                            &space.id,
+                            &effective_parent_page_id,
+                        ),
+                        inputs.position,
+                        "post_move_order_readback",
+                        self.backend.egress_proxy_audit(credential),
+                    );
+                    audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                    return Err(confluence_backend_error(error)
+                        .unverified_after_mutation(
+                            "post_move_order_readback",
+                            json!({
+                                "pageId": page.id,
+                                "targetPageId": target.id,
+                                "parentPageId": effective_parent_page_id,
+                                "previousParentId": previous_parent_id,
+                                "previousParentType": previous_parent_type,
+                            }),
+                        )
+                        .with_audit(audit)
+                        .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
+                        .with_object_ids(json!({
+                            "pageId": page.id,
+                            "targetPageId": target.id,
+                            "parentPageId": effective_parent_page_id,
+                            "previousParentId": previous_parent_id,
+                            "previousParentType": previous_parent_type,
+                        })));
+                }
+            };
+            upstream_duration_ms += children_readback_response.duration_ms;
+            let (child_position, target_child_position) = match verify_page_move_order(
+                &children_readback_response.value,
+                &page.id,
+                &target.id,
+                inputs.position,
+            ) {
+                Ok(positions) => positions,
+                Err(error) => {
+                    return Err(error
+                        .with_audit(page_move_failure_audit(
+                            &request,
+                            (
+                                &page.id,
+                                &target.id,
+                                &space.key,
+                                &space.id,
+                                &effective_parent_page_id,
+                            ),
+                            inputs.position,
+                            "post_move_order_readback",
+                            self.backend.egress_proxy_audit(credential),
+                        ))
+                        .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
+                        .with_object_ids(json!({
+                            "pageId": page.id,
+                            "targetPageId": target.id,
+                            "parentPageId": effective_parent_page_id,
+                            "previousParentId": previous_parent_id,
+                            "previousParentType": previous_parent_type,
+                        })));
+                }
+            };
+            let mut result = json!({
+                "operation": "page.move",
                 "pageId": page.id,
+                "position": inputs.position.as_str(),
                 "targetPageId": target.id,
+                "space": space.key,
                 "parentPageId": effective_parent_page_id,
                 "previousParentId": previous_parent_id,
                 "previousParentType": previous_parent_type,
-            })))
+                "childPosition": child_position,
+                "verification": { "status": "matched" },
+            });
+            if let Some(target_child_position) = target_child_position {
+                result["targetChildPosition"] = json!(target_child_position);
+            }
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "confluence",
+                "operation": "page.move",
+                "pageId": page.id,
+                "position": inputs.position.as_str(),
+                "targetPageId": target.id,
+                "space": space.key,
+                "spaceId": space.id,
+                "parentPageId": effective_parent_page_id,
+                "previousParentId": previous_parent_id,
+                "previousParentType": previous_parent_type,
+                "childPosition": child_position,
+                "verificationStatus": "matched",
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            if let Some(target_child_position) = target_child_position {
+                audit["targetChildPosition"] = json!(target_child_position);
+            }
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(Some(move_response.status), Some(upstream_duration_ms))
+                .with_object_ids(json!({
+                    "pageId": page.id,
+                    "targetPageId": target.id,
+                    "parentPageId": effective_parent_page_id,
+                    "previousParentId": previous_parent_id,
+                    "previousParentType": previous_parent_type,
+                })))
+        })
+        .await
     }
 
     async fn invoke_page_update(
@@ -3739,6 +3769,7 @@ impl ConfluenceProvider {
                 self.backend.egress_proxy_audit(credential),
             ));
         }
+        let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = match self
             .backend
             .update_page(
@@ -3762,58 +3793,61 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(write.failed(error)),
         };
-        let page = response.value;
-        if page.id != metadata.id || page.space != metadata.space {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence updated page did not match the authorized scope",
-            ));
-        }
-        if page.version != inputs.base_version + 1 {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence updated page version did not match the requested base version",
-            ));
-        }
-        let (web_url, space_url) = page_browser_urls(&page, &self.config)?;
-        let result = json!({
-            "pageId": page.id,
-            "space": page.space,
-            "spaceUrl": space_url,
-            "webUrl": web_url,
-            "previousVersion": inputs.base_version,
-            "version": page.version,
-            "createdAt": page.created_at,
-            "updatedAt": page.updated_at,
-            "createdBy": page.created_by,
-            "updatedBy": page.updated_by,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "confluence",
-            "operation": "page.update",
-            "pageId": page.id,
-            "space": page.space,
-            "previousVersion": inputs.base_version,
-            "version": page.version,
-            "returnedUrlFields": ["webUrl", "spaceUrl"],
-            "bodyFormat": content_audit.native_format.as_str(),
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
+        after_accepted_write("mutation_response", write.locators(), async {
+            let page = response.value;
+            if page.id != metadata.id || page.space != metadata.space {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence updated page did not match the authorized scope",
+                ));
+            }
+            if page.version != inputs.base_version + 1 {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence updated page version did not match the requested base version",
+                ));
+            }
+            let (web_url, space_url) = page_browser_urls(&page, &self.config)?;
+            let result = json!({
                 "pageId": page.id,
-            })))
+                "space": page.space,
+                "spaceUrl": space_url,
+                "webUrl": web_url,
+                "previousVersion": inputs.base_version,
+                "version": page.version,
+                "createdAt": page.created_at,
+                "updatedAt": page.updated_at,
+                "createdBy": page.created_by,
+                "updatedBy": page.updated_by,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "confluence",
+                "operation": "page.update",
+                "pageId": page.id,
+                "space": page.space,
+                "previousVersion": inputs.base_version,
+                "version": page.version,
+                "returnedUrlFields": ["webUrl", "spaceUrl"],
+                "bodyFormat": content_audit.native_format.as_str(),
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "pageId": page.id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_create(
@@ -3876,6 +3910,9 @@ impl ConfluenceProvider {
                     "Confluence space lookup omitted the homepage required for default draft placement",
                 )
             })?;
+        let write = ConfluenceWrite::new(
+            json!({ "space": inputs.space, "parentPageId": effective_parent_page_id }),
+        );
         let response = match self
             .backend
             .create_page_draft(
@@ -3906,96 +3943,30 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 );
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
+                return Err(write
+                    .failed(error)
                     .with_audit(audit)
                     .with_object_ids(json!({
                         "parentPageId": effective_parent_page_id,
                     })));
             }
         };
-        let mut draft = response.value;
-        draft.space = space_response.value.key;
-        draft.space_web_url = space_response.value.web_url;
-        require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
-        if draft.space != authorized_space || draft.space_id != space_response.value.id {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence created page draft did not match the authorized space",
-            ));
-        }
-        if draft.parent_page_id.as_deref() != Some(effective_parent_page_id.as_str()) {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence created page draft did not confirm the requested parent",
-            )
-            .with_audit(page_placement_failure_audit(
-                &request,
-                "page.draft.create",
-                (
-                    &draft.id,
-                    &draft.space,
-                    &draft.space_id,
-                    &effective_parent_page_id,
-                ),
-                "create_response",
-                self.backend.egress_proxy_audit(credential),
-            ))
-            .with_upstream(
-                Some(response.status),
-                Some(space_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "pageId": draft.id,
-                "parentPageId": effective_parent_page_id,
-            })));
-        }
-        let readback_response = match self
-            .backend
-            .page_hierarchy(&draft.id, true, credential)
-            .await
-        {
-            Ok(readback) => readback,
-            Err(error) => {
-                let mut audit = page_placement_failure_audit(
-                    &request,
-                    "page.draft.create",
-                    (
-                        &draft.id,
-                        &draft.space,
-                        &draft.space_id,
-                        &effective_parent_page_id,
-                    ),
-                    "post_create_readback",
-                    self.backend.egress_proxy_audit(credential),
-                );
-                audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
-                return Err(confluence_backend_error(error)
-                    .unverified_if_throttled(
-                        "post_create_readback",
-                        json!({
-                            "pageId": draft.id,
-                            "parentPageId": effective_parent_page_id,
-                        }),
-                    )
-                    .with_audit(audit)
-                    .with_upstream(
-                        Some(response.status),
-                        Some(space_response.duration_ms + response.duration_ms),
-                    )
-                    .with_object_ids(json!({
-                        "pageId": draft.id,
-                        "parentPageId": effective_parent_page_id,
-                    })));
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = space_response.value.key;
+            draft.space_web_url = space_response.value.web_url;
+            require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
+            if draft.space != authorized_space || draft.space_id != space_response.value.id {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence created page draft did not match the authorized space",
+                ));
             }
-        };
-        if let Err(error) = validate_page_hierarchy(
-            &readback_response.value,
-            &draft.id,
-            &draft.space_id,
-            &effective_parent_page_id,
-            "draft",
-        ) {
-            return Err(error
+            if draft.parent_page_id.as_deref() != Some(effective_parent_page_id.as_str()) {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence created page draft did not confirm the requested parent",
+                )
                 .with_audit(page_placement_failure_audit(
                     &request,
                     "page.draft.create",
@@ -4005,9 +3976,119 @@ impl ConfluenceProvider {
                         &draft.space_id,
                         &effective_parent_page_id,
                     ),
-                    "post_create_readback",
+                    "create_response",
                     self.backend.egress_proxy_audit(credential),
                 ))
+                .with_upstream(
+                    Some(response.status),
+                    Some(space_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "pageId": draft.id,
+                    "parentPageId": effective_parent_page_id,
+                })));
+            }
+            let readback_response = match self
+                .backend
+                .page_hierarchy(&draft.id, true, credential)
+                .await
+            {
+                Ok(readback) => readback,
+                Err(error) => {
+                    let mut audit = page_placement_failure_audit(
+                        &request,
+                        "page.draft.create",
+                        (
+                            &draft.id,
+                            &draft.space,
+                            &draft.space_id,
+                            &effective_parent_page_id,
+                        ),
+                        "post_create_readback",
+                        self.backend.egress_proxy_audit(credential),
+                    );
+                    audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
+                    return Err(confluence_backend_error(error)
+                        .unverified_after_mutation(
+                            "post_create_readback",
+                            json!({
+                                "pageId": draft.id,
+                                "parentPageId": effective_parent_page_id,
+                            }),
+                        )
+                        .with_audit(audit)
+                        .with_upstream(
+                            Some(response.status),
+                            Some(space_response.duration_ms + response.duration_ms),
+                        )
+                        .with_object_ids(json!({
+                            "pageId": draft.id,
+                            "parentPageId": effective_parent_page_id,
+                        })));
+                }
+            };
+            if let Err(error) = validate_page_hierarchy(
+                &readback_response.value,
+                &draft.id,
+                &draft.space_id,
+                &effective_parent_page_id,
+                "draft",
+            ) {
+                return Err(error
+                    .with_audit(page_placement_failure_audit(
+                        &request,
+                        "page.draft.create",
+                        (
+                            &draft.id,
+                            &draft.space,
+                            &draft.space_id,
+                            &effective_parent_page_id,
+                        ),
+                        "post_create_readback",
+                        self.backend.egress_proxy_audit(credential),
+                    ))
+                    .with_upstream(
+                        Some(response.status),
+                        Some(
+                            space_response.duration_ms
+                                + response.duration_ms
+                                + readback_response.duration_ms,
+                        ),
+                    )
+                    .with_object_ids(json!({
+                        "pageId": draft.id,
+                        "parentPageId": effective_parent_page_id,
+                    })));
+            }
+            let draft_handle = self.mint_draft_handle(
+                ConfluenceDraftContentType::Page,
+                &draft,
+                ConfluenceDraftOrigin::New,
+                None,
+                &request,
+            )?;
+            let result = draft_content_result(
+                "page.draft.create",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some(draft_handle),
+                None,
+                &self.config,
+            )?;
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "page.draft.create",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
                 .with_upstream(
                     Some(response.status),
                     Some(
@@ -4019,49 +4100,9 @@ impl ConfluenceProvider {
                 .with_object_ids(json!({
                     "pageId": draft.id,
                     "parentPageId": effective_parent_page_id,
-                })));
-        }
-        let draft_handle = self.mint_draft_handle(
-            ConfluenceDraftContentType::Page,
-            &draft,
-            ConfluenceDraftOrigin::New,
-            None,
-            &request,
-        )?;
-        let result = draft_content_result(
-            "page.draft.create",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some(draft_handle),
-            None,
-            &self.config,
-        )?;
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "page.draft.create",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(
-                    space_response.duration_ms
-                        + response.duration_ms
-                        + readback_response.duration_ms,
-                ),
-            )
-            .with_object_ids(json!({
-                "pageId": draft.id,
-                "parentPageId": effective_parent_page_id,
-            })))
+                })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_stage(
@@ -4115,6 +4156,7 @@ impl ConfluenceProvider {
             .space_by_key(&current.space, lookup_credential)
             .await
             .map_err(confluence_backend_error)?;
+        let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = self
             .backend
             .update_page_draft(
@@ -4130,53 +4172,56 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut draft = response.value;
-        draft.space = current.space;
-        draft.space_web_url = space_response.value.web_url;
-        require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
-        require_draft_version_one(&draft)?;
-        let draft_handle = self.mint_draft_handle(
-            ConfluenceDraftContentType::Page,
-            &draft,
-            ConfluenceDraftOrigin::Staged,
-            Some(inputs.base_version),
-            &request,
-        )?;
-        let mut result = draft_content_result(
-            "page.draft.stage",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some(draft_handle),
-            None,
-            &self.config,
-        )?;
-        result["expectedBaseVersion"] = json!(inputs.base_version);
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "page.draft.stage",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        audit["expectedBaseVersion"] = json!(inputs.base_version);
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(
-                    current_response
-                        .duration_ms
-                        .saturating_add(space_response.duration_ms)
-                        .saturating_add(response.duration_ms),
-                ),
-            )
-            .with_object_ids(json!({ "pageId": draft.id })))
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = current.space;
+            draft.space_web_url = space_response.value.web_url;
+            require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
+            require_draft_version_one(&draft)?;
+            let draft_handle = self.mint_draft_handle(
+                ConfluenceDraftContentType::Page,
+                &draft,
+                ConfluenceDraftOrigin::Staged,
+                Some(inputs.base_version),
+                &request,
+            )?;
+            let mut result = draft_content_result(
+                "page.draft.stage",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some(draft_handle),
+                None,
+                &self.config,
+            )?;
+            result["expectedBaseVersion"] = json!(inputs.base_version);
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "page.draft.stage",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            audit["expectedBaseVersion"] = json!(inputs.base_version);
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(
+                        current_response
+                            .duration_ms
+                            .saturating_add(space_response.duration_ms)
+                            .saturating_add(response.duration_ms),
+                    ),
+                )
+                .with_object_ids(json!({ "pageId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_view(
@@ -4249,6 +4294,7 @@ impl ConfluenceProvider {
             .await?;
         ensure_draft_content_matches_handle(&current.value, &handle)?;
         require_draft_version_one(&current.value)?;
+        let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = self
             .backend
             .update_page_draft(
@@ -4264,39 +4310,42 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut draft = response.value;
-        draft.space = current.value.space;
-        draft.space_web_url = current.value.space_web_url;
-        ensure_draft_content_matches_handle(&draft, &handle)?;
-        require_draft_version_one(&draft)?;
-        let result = draft_content_result(
-            "page.draft.update",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some(inputs.draft_handle),
-            None,
-            &self.config,
-        )?;
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "page.draft.update",
-            &draft,
-            ConfluenceDraftContentType::Page,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(current.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "pageId": draft.id })))
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = current.value.space;
+            draft.space_web_url = current.value.space_web_url;
+            ensure_draft_content_matches_handle(&draft, &handle)?;
+            require_draft_version_one(&draft)?;
+            let result = draft_content_result(
+                "page.draft.update",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some(inputs.draft_handle),
+                None,
+                &self.config,
+            )?;
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "page.draft.update",
+                &draft,
+                ConfluenceDraftContentType::Page,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(current.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "pageId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_publish(
@@ -4338,6 +4387,7 @@ impl ConfluenceProvider {
                 ));
             }
         }
+        let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = self
             .backend
             .update_page_draft(
@@ -4353,87 +4403,90 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut published = response.value;
-        published.space = draft.space.clone();
-        published.space_web_url = draft.space_web_url.clone();
-        require_current_draft_content(&published, ConfluenceDraftContentType::Page)?;
-        if published.id != draft.id
-            || published.space_id != draft.space_id
-            || published.parent_page_id != handle.parent_page_id
-        {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence published page did not preserve the broker-managed draft placement",
-            ));
-        }
-        let published_attachment_ids = if draft_attachments.is_empty() {
-            Vec::new()
-        } else {
-            let current_attachments = self
-                .backend
-                .page_attachments(&published.id, lookup_credential)
-                .await
-                .map_err(|error| {
-                    // The page is published: throttling must not invite a second publish.
-                    confluence_backend_error(error).unverified_if_throttled(
-                        "post_publish_attachment_readback",
-                        json!({"pageId": published.id}),
-                    )
-                })?
-                .value;
-            let current_ids = current_attachments
-                .iter()
-                .map(|attachment| attachment.id.as_str())
-                .collect::<BTreeSet<_>>();
-            let draft_ids = draft_attachments
-                .iter()
-                .map(|attachment| attachment.id.clone())
-                .collect::<Vec<_>>();
-            if draft_ids
-                .iter()
-                .any(|id| !current_ids.contains(id.as_str()))
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut published = response.value;
+            published.space = draft.space.clone();
+            published.space_web_url = draft.space_web_url.clone();
+            require_current_draft_content(&published, ConfluenceDraftContentType::Page)?;
+            if published.id != draft.id
+                || published.space_id != draft.space_id
+                || published.parent_page_id != handle.parent_page_id
             {
                 return Err(ProviderError::error(
                     ReasonCode::UpstreamProtocolFailed,
-                    "Confluence page draft attachments were not preserved through publish",
+                    "Confluence published page did not preserve the broker-managed draft placement",
                 ));
             }
-            draft_ids
-        };
-        let mut result = draft_content_result(
-            "page.draft.publish",
-            &published,
-            ConfluenceDraftContentType::Page,
-            None,
-            None,
-            &self.config,
-        )?;
-        result["draftVersion"] = json!(draft.version);
-        result["publishedAttachmentIds"] = json!(published_attachment_ids);
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "page.draft.publish",
-            &published,
-            ConfluenceDraftContentType::Page,
-            Some(inputs.body_format.as_str()),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        audit["lifecycle"] = json!("current");
-        audit["draftVersion"] = json!(draft.version);
-        audit["attachmentIds"] = json!(published_attachment_ids);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(draft_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "pageId": published.id,
-                "attachmentIds": published_attachment_ids,
-            })))
+            let published_attachment_ids = if draft_attachments.is_empty() {
+                Vec::new()
+            } else {
+                let current_attachments = self
+                    .backend
+                    .page_attachments(&published.id, lookup_credential)
+                    .await
+                    .map_err(|error| {
+                        // The page is published: throttling must not invite a second publish.
+                        confluence_backend_error(error).unverified_after_mutation(
+                            "post_publish_attachment_readback",
+                            json!({"pageId": published.id}),
+                        )
+                    })?
+                    .value;
+                let current_ids = current_attachments
+                    .iter()
+                    .map(|attachment| attachment.id.as_str())
+                    .collect::<BTreeSet<_>>();
+                let draft_ids = draft_attachments
+                    .iter()
+                    .map(|attachment| attachment.id.clone())
+                    .collect::<Vec<_>>();
+                if draft_ids
+                    .iter()
+                    .any(|id| !current_ids.contains(id.as_str()))
+                {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence page draft attachments were not preserved through publish",
+                    ));
+                }
+                draft_ids
+            };
+            let mut result = draft_content_result(
+                "page.draft.publish",
+                &published,
+                ConfluenceDraftContentType::Page,
+                None,
+                None,
+                &self.config,
+            )?;
+            result["draftVersion"] = json!(draft.version);
+            result["publishedAttachmentIds"] = json!(published_attachment_ids);
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "page.draft.publish",
+                &published,
+                ConfluenceDraftContentType::Page,
+                Some(inputs.body_format.as_str()),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            audit["lifecycle"] = json!("current");
+            audit["draftVersion"] = json!(draft.version);
+            audit["attachmentIds"] = json!(published_attachment_ids);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(draft_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "pageId": published.id,
+                    "attachmentIds": published_attachment_ids,
+                })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_discard(
@@ -4456,77 +4509,81 @@ impl ConfluenceProvider {
         let draft = draft_response.value;
         ensure_draft_content_matches_handle(&draft, &handle)?;
         require_draft_version_one(&draft)?;
+        let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = self
             .backend
             .discard_page_draft(&draft.id, credential)
             .await
-            .map_err(confluence_backend_error)?;
-        match self
-            .backend
-            .draft_page(&draft.id, Some("storage"), lookup_credential)
-            .await
-        {
-            Ok(_) => {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "Confluence page draft still exists after discard",
-                ));
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            match self
+                .backend
+                .draft_page(&draft.id, Some("storage"), lookup_credential)
+                .await
+            {
+                Ok(_) => {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence page draft still exists after discard",
+                    ));
+                }
+                Err(error)
+                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(error) => {
+                    return Err(confluence_backend_error(error).unverified_after_mutation(
+                        "post_discard_readback",
+                        json!({"pageId": draft.id}),
+                    ));
+                }
             }
-            Err(error) if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {
+            match self
+                .backend
+                .page_metadata(&draft.id, lookup_credential)
+                .await
+            {
+                Ok(_) => {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence page draft discard created current content",
+                    ));
+                }
+                Err(error)
+                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(error) => {
+                    return Err(confluence_backend_error(error).unverified_after_mutation(
+                        "post_discard_readback",
+                        json!({"pageId": draft.id}),
+                    ));
+                }
             }
-            Err(error) => {
-                return Err(confluence_backend_error(error).unverified_if_throttled(
-                    "post_discard_readback",
-                    json!({"pageId": draft.id}),
-                ));
-            }
-        }
-        match self
-            .backend
-            .page_metadata(&draft.id, lookup_credential)
-            .await
-        {
-            Ok(_) => {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "Confluence page draft discard created current content",
-                ));
-            }
-            Err(error) if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {
-            }
-            Err(error) => {
-                return Err(confluence_backend_error(error).unverified_if_throttled(
-                    "post_discard_readback",
-                    json!({"pageId": draft.id}),
-                ));
-            }
-        }
-        let result = json!({
-            "operation": "page.draft.discard",
-            "pageId": draft.id,
-            "lifecycle": "draft",
-            "status": "discarded",
-            "space": draft.space,
-            "spaceId": draft.space_id,
-            "discardedVersion": draft.version,
-            "discarded": true,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(draft_audit(
-                &request,
-                "page.draft.discard",
-                &draft,
-                ConfluenceDraftContentType::Page,
-                None,
-                true,
-                self.backend.egress_proxy_audit(credential),
-            ))
-            .with_upstream(
-                Some(response.status),
-                Some(draft_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "pageId": draft.id })))
+            let result = json!({
+                "operation": "page.draft.discard",
+                "pageId": draft.id,
+                "lifecycle": "draft",
+                "status": "discarded",
+                "space": draft.space,
+                "spaceId": draft.space_id,
+                "discardedVersion": draft.version,
+                "discarded": true,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(draft_audit(
+                    &request,
+                    "page.draft.discard",
+                    &draft,
+                    ConfluenceDraftContentType::Page,
+                    None,
+                    true,
+                    self.backend.egress_proxy_audit(credential),
+                ))
+                .with_upstream(
+                    Some(response.status),
+                    Some(draft_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "pageId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_page_draft_verify(
@@ -4678,6 +4735,10 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
+        // Set when the upload that stopped the batch may have applied.
+        let mut stopped_uncertain = false;
         // Set when Confluence throttled the verification of an applied upload.
         let mut unverified_attachment_id = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
@@ -4694,7 +4755,8 @@ impl ConfluenceProvider {
                         return Err(ProviderError::error(
                             ReasonCode::UpstreamProtocolFailed,
                             "Confluence page draft attachment upload returned mismatched parent",
-                        ));
+                        )
+                        .with_mutation_receipt(MutationReceipt::unknown()));
                     }
                     if let Err(error) = self
                         .draft_attachment_for_page(
@@ -4705,7 +4767,9 @@ impl ConfluenceProvider {
                         .await
                     {
                         if error.reason_code() != ReasonCode::UpstreamRateLimited {
-                            return Err(error);
+                            // The upload applied: repeating the batch would
+                            // upload it again.
+                            return Err(error.or_mutation_receipt(MutationReceipt::unknown()));
                         }
                         // The upload applied but its verification was
                         // throttled: keep the batch and report it unverified,
@@ -4757,6 +4821,8 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
+                    stopped_uncertain = upload_may_have_applied(&error);
                     audit_attachments.push(json!({
                         "status": "failed",
                         "size": uploads[index].size,
@@ -4826,7 +4892,14 @@ impl ConfluenceProvider {
             "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        // Uploads that applied would be uploaded again by repeating the batch.
+        enforce_result_size(&result, self.limits.max_upstream_response_bytes).map_err(|error| {
+            if attachment_ids.is_empty() && !stopped_uncertain {
+                error
+            } else {
+                error.or_mutation_receipt(MutationReceipt::unknown())
+            }
+        })?;
         let object_ids = json!({
             "pageId": metadata_response.value.id,
             "attachmentIds": attachment_ids,
@@ -4850,12 +4923,22 @@ impl ConfluenceProvider {
                     )
                 };
             }
+            if stopped_unsent && attachment_ids.is_empty() {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
+            }
             if unverified_attachment_id.is_some() {
                 error = error.unverified_after_throttling(
                     "confluence",
                     "post_upload_readback",
                     object_ids.clone(),
                 );
+            }
+            if !attachment_ids.is_empty() || stopped_uncertain {
+                // An upload may have applied: repeating the batch could
+                // upload it again.
+                error = error.or_mutation_receipt(MutationReceipt::unknown());
             }
             return Err(error
                 .with_audit(audit)
@@ -5073,6 +5156,10 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
+        // Set when the upload that stopped the batch may have applied.
+        let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -5099,6 +5186,8 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
+                    stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -5134,6 +5223,13 @@ impl ConfluenceProvider {
             if let Some(retry_after) = rate_limited {
                 error = error.interrupted_by_upstream_rate_limit("confluence", retry_after);
             }
+            if stopped_unsent {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
+            } else if stopped_uncertain {
+                error = error.with_mutation_receipt(MutationReceipt::unknown());
+            }
             return Err(error.with_audit(json!({
                 "provider": "confluence",
                 "operation": "attachment.add",
@@ -5159,7 +5255,9 @@ impl ConfluenceProvider {
             "attachments": successes,
             "failures": failures,
         });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        // Uploads were applied: repeating the batch would upload them again.
+        enforce_result_size(&result, self.limits.max_upstream_response_bytes)
+            .map_err(|error| error.or_mutation_receipt(MutationReceipt::unknown()))?;
         let audit = json!({
             "provider": "confluence",
             "operation": "attachment.add",
@@ -5193,6 +5291,9 @@ impl ConfluenceProvider {
                     object_ids.clone(),
                 );
             }
+            // Earlier uploads applied: repeating the batch would upload them
+            // again.
+            error = error.or_mutation_receipt(MutationReceipt::unknown());
             return Err(error
                 .with_audit(audit)
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
@@ -5684,6 +5785,7 @@ impl ConfluenceProvider {
                 "Confluence space lookup did not match the authorized space",
             ));
         }
+        let write = ConfluenceWrite::new(json!({ "space": inputs.space }));
         let response = self
             .backend
             .create_blog(
@@ -5696,56 +5798,59 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
-        let mut blog = response.value;
-        blog.space = space.key;
-        blog.space_web_url = space.web_url;
-        if blog.space_id != space.id || blog.status.as_deref() != Some("current") {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence created blog did not match the authorized space",
-            ));
-        }
-        let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
-        let result = json!({
-            "operation": "blog.create",
-            "blogId": blog.id,
-            "space": blog.space,
-            "spaceId": blog.space_id,
-            "spaceUrl": space_url,
-            "webUrl": web_url,
-            "title": blog.title,
-            "status": blog.status,
-            "version": blog.version,
-            "createdAt": blog.created_at,
-            "updatedAt": blog.updated_at,
-            "createdBy": blog.created_by,
-            "updatedBy": blog.updated_by,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "confluence",
-            "operation": "blog.create",
-            "blogId": blog.id,
-            "space": blog.space,
-            "spaceId": blog.space_id,
-            "version": blog.version,
-            "returnedUrlFields": ["webUrl", "spaceUrl"],
-            "bodyFormat": content_audit.native_format.as_str(),
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(space_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut blog = response.value;
+            blog.space = space.key;
+            blog.space_web_url = space.web_url;
+            if blog.space_id != space.id || blog.status.as_deref() != Some("current") {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence created blog did not match the authorized space",
+                ));
+            }
+            let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
+            let result = json!({
+                "operation": "blog.create",
                 "blogId": blog.id,
-            })))
+                "space": blog.space,
+                "spaceId": blog.space_id,
+                "spaceUrl": space_url,
+                "webUrl": web_url,
+                "title": blog.title,
+                "status": blog.status,
+                "version": blog.version,
+                "createdAt": blog.created_at,
+                "updatedAt": blog.updated_at,
+                "createdBy": blog.created_by,
+                "updatedBy": blog.updated_by,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "confluence",
+                "operation": "blog.create",
+                "blogId": blog.id,
+                "space": blog.space,
+                "spaceId": blog.space_id,
+                "version": blog.version,
+                "returnedUrlFields": ["webUrl", "spaceUrl"],
+                "bodyFormat": content_audit.native_format.as_str(),
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(space_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "blogId": blog.id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_blog_update(
@@ -5776,6 +5881,7 @@ impl ConfluenceProvider {
             ));
         }
         let title = inputs.title.unwrap_or_else(|| metadata.title.clone());
+        let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = match self
             .backend
             .update_blog(
@@ -5799,71 +5905,74 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(credential),
                 ));
             }
-            Err(error) => return Err(confluence_backend_error(error)),
+            Err(error) => return Err(write.failed(error)),
         };
-        let mut blog = response.value;
-        blog.space = metadata.space.clone();
-        blog.space_web_url = metadata.space_web_url.clone();
-        if blog.id != metadata.id || blog.space_id != metadata.space_id {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence updated blog did not match the authorized scope",
-            ));
-        }
-        if blog.status.as_deref() != Some("current") {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence updated blog status is not current",
-            ));
-        }
-        if blog.version != inputs.base_version + 1 {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence updated blog version did not match the requested base version",
-            ));
-        }
-        let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
-        let result = json!({
-            "operation": "blog.update",
-            "blogId": blog.id,
-            "space": blog.space,
-            "spaceId": blog.space_id,
-            "spaceUrl": space_url,
-            "webUrl": web_url,
-            "title": blog.title,
-            "status": blog.status,
-            "previousVersion": inputs.base_version,
-            "version": blog.version,
-            "createdAt": blog.created_at,
-            "updatedAt": blog.updated_at,
-            "createdBy": blog.created_by,
-            "updatedBy": blog.updated_by,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = json!({
-            "provider": "confluence",
-            "operation": "blog.update",
-            "blogId": blog.id,
-            "space": blog.space,
-            "spaceId": blog.space_id,
-            "previousVersion": inputs.base_version,
-            "version": blog.version,
-            "returnedUrlFields": ["webUrl", "spaceUrl"],
-            "bodyFormat": content_audit.native_format.as_str(),
-            "credentialMode": request.credential_mode(),
-            "egressProxy": self.backend.egress_proxy_audit(credential),
-        });
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(metadata_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut blog = response.value;
+            blog.space = metadata.space.clone();
+            blog.space_web_url = metadata.space_web_url.clone();
+            if blog.id != metadata.id || blog.space_id != metadata.space_id {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence updated blog did not match the authorized scope",
+                ));
+            }
+            if blog.status.as_deref() != Some("current") {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence updated blog status is not current",
+                ));
+            }
+            if blog.version != inputs.base_version + 1 {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence updated blog version did not match the requested base version",
+                ));
+            }
+            let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
+            let result = json!({
+                "operation": "blog.update",
                 "blogId": blog.id,
-            })))
+                "space": blog.space,
+                "spaceId": blog.space_id,
+                "spaceUrl": space_url,
+                "webUrl": web_url,
+                "title": blog.title,
+                "status": blog.status,
+                "previousVersion": inputs.base_version,
+                "version": blog.version,
+                "createdAt": blog.created_at,
+                "updatedAt": blog.updated_at,
+                "createdBy": blog.created_by,
+                "updatedBy": blog.updated_by,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = json!({
+                "provider": "confluence",
+                "operation": "blog.update",
+                "blogId": blog.id,
+                "space": blog.space,
+                "spaceId": blog.space_id,
+                "previousVersion": inputs.base_version,
+                "version": blog.version,
+                "returnedUrlFields": ["webUrl", "spaceUrl"],
+                "bodyFormat": content_audit.native_format.as_str(),
+                "credentialMode": request.credential_mode(),
+                "egressProxy": self.backend.egress_proxy_audit(credential),
+            });
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(metadata_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "blogId": blog.id,
+                })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_create(
@@ -5892,6 +6001,7 @@ impl ConfluenceProvider {
             .space_by_key(&inputs.space, lookup_credential)
             .await
             .map_err(confluence_backend_error)?;
+        let write = ConfluenceWrite::new(json!({ "space": inputs.space }));
         let response = self
             .backend
             .create_blog_draft(
@@ -5906,51 +6016,54 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(confluence_backend_error)?;
-        let mut draft = response.value;
-        draft.space = space_response.value.key;
-        draft.space_web_url = space_response.value.web_url;
-        require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
-        if draft.space != authorized_space || draft.space_id != space_response.value.id {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "Confluence created blog draft did not match the authorized space",
-            ));
-        }
-        let draft_handle = self.mint_draft_handle(
-            ConfluenceDraftContentType::Blog,
-            &draft,
-            ConfluenceDraftOrigin::New,
-            None,
-            &request,
-        )?;
-        let result = draft_content_result(
-            "blog.draft.create",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some(draft_handle),
-            None,
-            &self.config,
-        )?;
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "blog.draft.create",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(space_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "blogId": draft.id })))
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = space_response.value.key;
+            draft.space_web_url = space_response.value.web_url;
+            require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
+            if draft.space != authorized_space || draft.space_id != space_response.value.id {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "Confluence created blog draft did not match the authorized space",
+                ));
+            }
+            let draft_handle = self.mint_draft_handle(
+                ConfluenceDraftContentType::Blog,
+                &draft,
+                ConfluenceDraftOrigin::New,
+                None,
+                &request,
+            )?;
+            let result = draft_content_result(
+                "blog.draft.create",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some(draft_handle),
+                None,
+                &self.config,
+            )?;
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "blog.draft.create",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(space_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "blogId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_stage(
@@ -5999,6 +6112,7 @@ impl ConfluenceProvider {
             Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {}
             Err(error) => return Err(error),
         }
+        let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = self
             .backend
             .update_blog_draft(
@@ -6014,48 +6128,51 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut draft = response.value;
-        draft.space = current.space;
-        draft.space_web_url = current.space_web_url;
-        require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
-        require_draft_version_one(&draft)?;
-        let draft_handle = self.mint_draft_handle(
-            ConfluenceDraftContentType::Blog,
-            &draft,
-            ConfluenceDraftOrigin::Staged,
-            Some(inputs.base_version),
-            &request,
-        )?;
-        let mut result = draft_content_result(
-            "blog.draft.stage",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some(draft_handle),
-            None,
-            &self.config,
-        )?;
-        result["expectedBaseVersion"] = json!(inputs.base_version);
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "blog.draft.stage",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        audit["expectedBaseVersion"] = json!(inputs.base_version);
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(current_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "blogId": draft.id })))
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = current.space;
+            draft.space_web_url = current.space_web_url;
+            require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
+            require_draft_version_one(&draft)?;
+            let draft_handle = self.mint_draft_handle(
+                ConfluenceDraftContentType::Blog,
+                &draft,
+                ConfluenceDraftOrigin::Staged,
+                Some(inputs.base_version),
+                &request,
+            )?;
+            let mut result = draft_content_result(
+                "blog.draft.stage",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some(draft_handle),
+                None,
+                &self.config,
+            )?;
+            result["expectedBaseVersion"] = json!(inputs.base_version);
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "blog.draft.stage",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            audit["expectedBaseVersion"] = json!(inputs.base_version);
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(current_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "blogId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_view(
@@ -6128,6 +6245,7 @@ impl ConfluenceProvider {
             .await?;
         ensure_draft_content_matches_handle(&current.value, &handle)?;
         require_draft_version_one(&current.value)?;
+        let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = self
             .backend
             .update_blog_draft(
@@ -6143,39 +6261,42 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut draft = response.value;
-        draft.space = current.value.space;
-        draft.space_web_url = current.value.space_web_url;
-        ensure_draft_content_matches_handle(&draft, &handle)?;
-        require_draft_version_one(&draft)?;
-        let result = draft_content_result(
-            "blog.draft.update",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some(inputs.draft_handle),
-            None,
-            &self.config,
-        )?;
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "blog.draft.update",
-            &draft,
-            ConfluenceDraftContentType::Blog,
-            Some("storage"),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        merge_confluence_content_write_audit(&mut audit, &content_audit);
-        merge_attribution_audit(&mut audit, attribution);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(current.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "blogId": draft.id })))
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut draft = response.value;
+            draft.space = current.value.space;
+            draft.space_web_url = current.value.space_web_url;
+            ensure_draft_content_matches_handle(&draft, &handle)?;
+            require_draft_version_one(&draft)?;
+            let result = draft_content_result(
+                "blog.draft.update",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some(inputs.draft_handle),
+                None,
+                &self.config,
+            )?;
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "blog.draft.update",
+                &draft,
+                ConfluenceDraftContentType::Blog,
+                Some("storage"),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            merge_confluence_content_write_audit(&mut audit, &content_audit);
+            merge_attribution_audit(&mut audit, attribution);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(current.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "blogId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_publish(
@@ -6217,6 +6338,7 @@ impl ConfluenceProvider {
                 ));
             }
         }
+        let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = self
             .backend
             .update_blog_draft(
@@ -6232,84 +6354,87 @@ impl ConfluenceProvider {
                 credential,
             )
             .await
-            .map_err(map_confluence_conflict)?;
-        let mut published = response.value;
-        published.space = draft.space.clone();
-        published.space_web_url = draft.space_web_url.clone();
-        require_current_draft_content(&published, ConfluenceDraftContentType::Blog)?;
-        if published.id != draft.id || published.space_id != draft.space_id {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence published blog did not match the draft",
-            ));
-        }
-        let published_attachment_ids = if draft_attachments.is_empty() {
-            Vec::new()
-        } else {
-            let current_attachments = self
-                .backend
-                .blog_attachments(&published.id, lookup_credential)
-                .await
-                .map_err(|error| {
-                    // The blog post is published: throttling must not invite a second publish.
-                    confluence_backend_error(error).unverified_if_throttled(
-                        "post_publish_attachment_readback",
-                        json!({"blogId": published.id}),
-                    )
-                })?
-                .value;
-            let current_ids = current_attachments
-                .iter()
-                .map(|attachment| attachment.id.as_str())
-                .collect::<BTreeSet<_>>();
-            let draft_ids = draft_attachments
-                .iter()
-                .map(|attachment| attachment.id.clone())
-                .collect::<Vec<_>>();
-            if draft_ids
-                .iter()
-                .any(|id| !current_ids.contains(id.as_str()))
-            {
+            .map_err(|error| write.failed_with(error, map_confluence_conflict))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            let mut published = response.value;
+            published.space = draft.space.clone();
+            published.space_web_url = draft.space_web_url.clone();
+            require_current_draft_content(&published, ConfluenceDraftContentType::Blog)?;
+            if published.id != draft.id || published.space_id != draft.space_id {
                 return Err(ProviderError::error(
                     ReasonCode::UpstreamProtocolFailed,
-                    "Confluence blog draft attachments were not preserved through publish",
+                    "Confluence published blog did not match the draft",
                 ));
             }
-            draft_ids
-        };
-        let mut result = draft_content_result(
-            "blog.draft.publish",
-            &published,
-            ConfluenceDraftContentType::Blog,
-            None,
-            None,
-            &self.config,
-        )?;
-        result["draftVersion"] = json!(draft.version);
-        result["publishedAttachmentIds"] = json!(published_attachment_ids);
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        let mut audit = draft_audit(
-            &request,
-            "blog.draft.publish",
-            &published,
-            ConfluenceDraftContentType::Blog,
-            Some(inputs.body_format.as_str()),
-            true,
-            self.backend.egress_proxy_audit(credential),
-        );
-        audit["lifecycle"] = json!("current");
-        audit["draftVersion"] = json!(draft.version);
-        audit["attachmentIds"] = json!(published_attachment_ids);
-        Ok(ProviderResult::new(result)
-            .with_audit(audit)
-            .with_upstream(
-                Some(response.status),
-                Some(draft_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({
-                "blogId": published.id,
-                "attachmentIds": published_attachment_ids,
-            })))
+            let published_attachment_ids = if draft_attachments.is_empty() {
+                Vec::new()
+            } else {
+                let current_attachments = self
+                    .backend
+                    .blog_attachments(&published.id, lookup_credential)
+                    .await
+                    .map_err(|error| {
+                        // The blog post is published: throttling must not invite a second publish.
+                        confluence_backend_error(error).unverified_after_mutation(
+                            "post_publish_attachment_readback",
+                            json!({"blogId": published.id}),
+                        )
+                    })?
+                    .value;
+                let current_ids = current_attachments
+                    .iter()
+                    .map(|attachment| attachment.id.as_str())
+                    .collect::<BTreeSet<_>>();
+                let draft_ids = draft_attachments
+                    .iter()
+                    .map(|attachment| attachment.id.clone())
+                    .collect::<Vec<_>>();
+                if draft_ids
+                    .iter()
+                    .any(|id| !current_ids.contains(id.as_str()))
+                {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence blog draft attachments were not preserved through publish",
+                    ));
+                }
+                draft_ids
+            };
+            let mut result = draft_content_result(
+                "blog.draft.publish",
+                &published,
+                ConfluenceDraftContentType::Blog,
+                None,
+                None,
+                &self.config,
+            )?;
+            result["draftVersion"] = json!(draft.version);
+            result["publishedAttachmentIds"] = json!(published_attachment_ids);
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            let mut audit = draft_audit(
+                &request,
+                "blog.draft.publish",
+                &published,
+                ConfluenceDraftContentType::Blog,
+                Some(inputs.body_format.as_str()),
+                true,
+                self.backend.egress_proxy_audit(credential),
+            );
+            audit["lifecycle"] = json!("current");
+            audit["draftVersion"] = json!(draft.version);
+            audit["attachmentIds"] = json!(published_attachment_ids);
+            Ok(ProviderResult::new(result)
+                .with_audit(audit)
+                .with_upstream(
+                    Some(response.status),
+                    Some(draft_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({
+                    "blogId": published.id,
+                    "attachmentIds": published_attachment_ids,
+                })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_discard(
@@ -6332,77 +6457,81 @@ impl ConfluenceProvider {
         let draft = draft_response.value;
         ensure_draft_content_matches_handle(&draft, &handle)?;
         require_draft_version_one(&draft)?;
+        let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = self
             .backend
             .discard_blog_draft(&draft.id, credential)
             .await
-            .map_err(confluence_backend_error)?;
-        match self
-            .backend
-            .draft_blog(&draft.id, Some("storage"), lookup_credential)
-            .await
-        {
-            Ok(_) => {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "Confluence blog draft still exists after discard",
-                ));
+            .map_err(|error| write.failed(error))?;
+        after_accepted_write("mutation_response", write.locators(), async {
+            match self
+                .backend
+                .draft_blog(&draft.id, Some("storage"), lookup_credential)
+                .await
+            {
+                Ok(_) => {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence blog draft still exists after discard",
+                    ));
+                }
+                Err(error)
+                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(error) => {
+                    return Err(confluence_backend_error(error).unverified_after_mutation(
+                        "post_discard_readback",
+                        json!({"blogId": draft.id}),
+                    ));
+                }
             }
-            Err(error) if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {
+            match self
+                .backend
+                .blog_metadata(&draft.id, lookup_credential)
+                .await
+            {
+                Ok(_) => {
+                    return Err(ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "Confluence blog draft discard created current content",
+                    ));
+                }
+                Err(error)
+                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(error) => {
+                    return Err(confluence_backend_error(error).unverified_after_mutation(
+                        "post_discard_readback",
+                        json!({"blogId": draft.id}),
+                    ));
+                }
             }
-            Err(error) => {
-                return Err(confluence_backend_error(error).unverified_if_throttled(
-                    "post_discard_readback",
-                    json!({"blogId": draft.id}),
-                ));
-            }
-        }
-        match self
-            .backend
-            .blog_metadata(&draft.id, lookup_credential)
-            .await
-        {
-            Ok(_) => {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "Confluence blog draft discard created current content",
-                ));
-            }
-            Err(error) if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {
-            }
-            Err(error) => {
-                return Err(confluence_backend_error(error).unverified_if_throttled(
-                    "post_discard_readback",
-                    json!({"blogId": draft.id}),
-                ));
-            }
-        }
-        let result = json!({
-            "operation": "blog.draft.discard",
-            "blogId": draft.id,
-            "lifecycle": "draft",
-            "status": "discarded",
-            "space": draft.space,
-            "spaceId": draft.space_id,
-            "discardedVersion": draft.version,
-            "discarded": true,
-        });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result)
-            .with_audit(draft_audit(
-                &request,
-                "blog.draft.discard",
-                &draft,
-                ConfluenceDraftContentType::Blog,
-                None,
-                true,
-                self.backend.egress_proxy_audit(credential),
-            ))
-            .with_upstream(
-                Some(response.status),
-                Some(draft_response.duration_ms + response.duration_ms),
-            )
-            .with_object_ids(json!({ "blogId": draft.id })))
+            let result = json!({
+                "operation": "blog.draft.discard",
+                "blogId": draft.id,
+                "lifecycle": "draft",
+                "status": "discarded",
+                "space": draft.space,
+                "spaceId": draft.space_id,
+                "discardedVersion": draft.version,
+                "discarded": true,
+            });
+            enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+            Ok(ProviderResult::new(result)
+                .with_audit(draft_audit(
+                    &request,
+                    "blog.draft.discard",
+                    &draft,
+                    ConfluenceDraftContentType::Blog,
+                    None,
+                    true,
+                    self.backend.egress_proxy_audit(credential),
+                ))
+                .with_upstream(
+                    Some(response.status),
+                    Some(draft_response.duration_ms + response.duration_ms),
+                )
+                .with_object_ids(json!({ "blogId": draft.id })))
+        })
+        .await
     }
 
     async fn invoke_blog_draft_verify(
@@ -6554,6 +6683,10 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
+        // Set when the upload that stopped the batch may have applied.
+        let mut stopped_uncertain = false;
         // Set when Confluence throttled the verification of an applied upload.
         let mut unverified_attachment_id = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
@@ -6570,7 +6703,8 @@ impl ConfluenceProvider {
                         return Err(ProviderError::error(
                             ReasonCode::UpstreamProtocolFailed,
                             "Confluence blog draft attachment upload returned mismatched parent",
-                        ));
+                        )
+                        .with_mutation_receipt(MutationReceipt::unknown()));
                     }
                     if let Err(error) = self
                         .draft_attachment_for_blog(
@@ -6581,7 +6715,9 @@ impl ConfluenceProvider {
                         .await
                     {
                         if error.reason_code() != ReasonCode::UpstreamRateLimited {
-                            return Err(error);
+                            // The upload applied: repeating the batch would
+                            // upload it again.
+                            return Err(error.or_mutation_receipt(MutationReceipt::unknown()));
                         }
                         // The upload applied but its verification was
                         // throttled: keep the batch and report it unverified,
@@ -6633,6 +6769,8 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
+                    stopped_uncertain = upload_may_have_applied(&error);
                     audit_attachments.push(json!({
                         "status": "failed",
                         "size": uploads[index].size,
@@ -6702,7 +6840,14 @@ impl ConfluenceProvider {
             "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        // Uploads that applied would be uploaded again by repeating the batch.
+        enforce_result_size(&result, self.limits.max_upstream_response_bytes).map_err(|error| {
+            if attachment_ids.is_empty() && !stopped_uncertain {
+                error
+            } else {
+                error.or_mutation_receipt(MutationReceipt::unknown())
+            }
+        })?;
         let object_ids = json!({
             "blogId": metadata_response.value.id,
             "attachmentIds": attachment_ids,
@@ -6726,12 +6871,22 @@ impl ConfluenceProvider {
                     )
                 };
             }
+            if stopped_unsent && attachment_ids.is_empty() {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
+            }
             if unverified_attachment_id.is_some() {
                 error = error.unverified_after_throttling(
                     "confluence",
                     "post_upload_readback",
                     object_ids.clone(),
                 );
+            }
+            if !attachment_ids.is_empty() || stopped_uncertain {
+                // An upload may have applied: repeating the batch could
+                // upload it again.
+                error = error.or_mutation_receipt(MutationReceipt::unknown());
             }
             return Err(error
                 .with_audit(audit)
@@ -6949,6 +7104,10 @@ impl ConfluenceProvider {
         let mut upstream_status = Some(metadata_response.status);
         // Set when Confluence throttled the upload that stopped the batch.
         let mut rate_limited = None;
+        // Set when the SDK proved the upload that stopped the batch unsent.
+        let mut stopped_unsent = false;
+        // Set when the upload that stopped the batch may have applied.
+        let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             let upload_audit = attachment_upload_audit(&upload);
             match self
@@ -6963,7 +7122,8 @@ impl ConfluenceProvider {
                         return Err(ProviderError::error(
                             ReasonCode::UpstreamProtocolFailed,
                             "Confluence blog attachment upload returned mismatched parent",
-                        ));
+                        )
+                        .with_mutation_receipt(MutationReceipt::unknown()));
                     }
                     successes.push(json!({
                         "attachmentId": response.value.id,
@@ -6981,6 +7141,8 @@ impl ConfluenceProvider {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
                         rate_limited = Some(*retry_after);
                     }
+                    stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
+                    stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
                         "status": "failed",
                         "attachment": upload_audit.clone(),
@@ -7016,6 +7178,13 @@ impl ConfluenceProvider {
             if let Some(retry_after) = rate_limited {
                 error = error.interrupted_by_upstream_rate_limit("confluence", retry_after);
             }
+            if stopped_unsent {
+                // The first upload never reached Confluence and the rest
+                // were skipped, so nothing was applied.
+                error = error.with_mutation_receipt(MutationReceipt::not_applied());
+            } else if stopped_uncertain {
+                error = error.with_mutation_receipt(MutationReceipt::unknown());
+            }
             return Err(error.with_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.attachment.add",
@@ -7043,7 +7212,9 @@ impl ConfluenceProvider {
             "attachments": successes,
             "failures": failures,
         });
-        enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        // Uploads were applied: repeating the batch would upload them again.
+        enforce_result_size(&result, self.limits.max_upstream_response_bytes)
+            .map_err(|error| error.or_mutation_receipt(MutationReceipt::unknown()))?;
         let audit = json!({
             "provider": "confluence",
             "operation": "blog.attachment.add",
@@ -7078,6 +7249,9 @@ impl ConfluenceProvider {
                     object_ids.clone(),
                 );
             }
+            // Earlier uploads applied: repeating the batch would upload them
+            // again.
+            error = error.or_mutation_receipt(MutationReceipt::unknown());
             return Err(error
                 .with_audit(audit)
                 .with_upstream(upstream_status, Some(upstream_duration_ms))
@@ -7932,8 +8106,11 @@ fn comment_scope_requires_lookup(comment_id: String) -> ProviderError {
 
 fn blog_scope_lookup_error(blog_id: &str, error: ConfluenceBackendError) -> ProviderError {
     match error {
+        // A redirect, like an unusable response, leaves the blog
+        // unconfirmed rather than failing the lookup.
         ConfluenceBackendError::Forbidden
         | ConfluenceBackendError::NotFound
+        | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => blog_scope_requires_lookup(blog_id.to_string()),
         other => confluence_backend_error(other),
     }
@@ -11947,8 +12124,94 @@ fn confluence_verification_mismatch_error(
     }))
 }
 
+/// The receipts of a Confluence write action's mutation request. Its failures
+/// keep their ordinary reason and message.
+struct ConfluenceWrite {
+    /// What the write targets, from the validated request and the reads
+    /// before it; never from the write's own response.
+    locators: Value,
+}
+
+impl ConfluenceWrite {
+    fn new(locators: Value) -> Self {
+        Self { locators }
+    }
+
+    fn locators(&self) -> Value {
+        self.locators.clone()
+    }
+
+    /// [`Self::failed_with`] the ordinary mapping.
+    fn failed(&self, error: ConfluenceBackendError) -> ProviderError {
+        self.failed_with(error, confluence_backend_error)
+    }
+
+    /// The failure of the mutation request itself, mapped by `map`:
+    ///
+    /// - proven unsent: `not_applied`;
+    /// - no response, a 5xx a proxy may return after Confluence committed the
+    ///   write, or a redirect the Broker never follows: `unknown`;
+    /// - a success status whose response then failed: `applied_unverified`;
+    /// - a rejection, or a failure before anything was sent: no receipt.
+    fn failed_with(
+        &self,
+        error: ConfluenceBackendError,
+        map: impl FnOnce(ConfluenceBackendError) -> ProviderError,
+    ) -> ProviderError {
+        let receipt = match &error {
+            ConfluenceBackendError::NotSent { .. } => Some(MutationReceipt::not_applied()),
+            ConfluenceBackendError::NoResponse { .. }
+            | ConfluenceBackendError::Redirected
+            | ConfluenceBackendError::HttpStatus(500..=599) => Some(MutationReceipt::unknown()),
+            ConfluenceBackendError::AcceptedUnreadable(_) => Some(
+                MutationReceipt::applied_unverified("mutation_response", self.locators()),
+            ),
+            ConfluenceBackendError::Unauthorized
+            | ConfluenceBackendError::Forbidden
+            | ConfluenceBackendError::NotFound
+            | ConfluenceBackendError::Conflict
+            | ConfluenceBackendError::HttpStatus(_)
+            | ConfluenceBackendError::RateLimited(_)
+            | ConfluenceBackendError::Validation { .. }
+            | ConfluenceBackendError::Transport(_)
+            | ConfluenceBackendError::Timeout
+            | ConfluenceBackendError::ResponseTooLarge
+            | ConfluenceBackendError::Protocol(_) => None,
+        };
+        let failure = map(error);
+        match receipt {
+            Some(receipt) => failure.with_mutation_receipt(receipt),
+            None => failure,
+        }
+    }
+}
+
+/// Runs what follows a write Confluence accepted: a failure that reports no
+/// receipt keeps its reason and gains `applied_unverified` at `stage`.
+async fn after_accepted_write(
+    stage: &str,
+    locators: Value,
+    tail: impl Future<Output = Result<ProviderResult, ProviderError>>,
+) -> Result<ProviderResult, ProviderError> {
+    tail.await.map_err(|error| {
+        error.or_mutation_receipt(MutationReceipt::applied_unverified(stage, locators))
+    })
+}
+
+/// Whether an upload that failed may still have created its attachment.
+fn upload_may_have_applied(error: &ConfluenceBackendError) -> bool {
+    matches!(
+        error,
+        ConfluenceBackendError::NoResponse { .. }
+            | ConfluenceBackendError::Redirected
+            | ConfluenceBackendError::HttpStatus(500..=599)
+            | ConfluenceBackendError::AcceptedUnreadable(_)
+    )
+}
+
 fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
     match error {
+        ConfluenceBackendError::AcceptedUnreadable(error) => sanitized_backend_reason(error),
         ConfluenceBackendError::Unauthorized => "unauthorized",
         ConfluenceBackendError::Forbidden => "forbidden",
         ConfluenceBackendError::NotFound => "not_found",
@@ -11957,11 +12220,15 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
         }
         ConfluenceBackendError::RateLimited(_) => "upstream_rate_limited",
         ConfluenceBackendError::Validation { .. } => "input_invalid",
-        ConfluenceBackendError::Transport(_) => "upstream_connection_failed",
-        ConfluenceBackendError::Timeout => "upstream_timeout",
-        ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
-            "upstream_protocol_failed"
-        }
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::NoResponse { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => "upstream_connection_failed",
+        ConfluenceBackendError::NotSent { timed_out: true }
+        | ConfluenceBackendError::NoResponse { timed_out: true }
+        | ConfluenceBackendError::Timeout => "upstream_timeout",
+        ConfluenceBackendError::ResponseTooLarge
+        | ConfluenceBackendError::Redirected
+        | ConfluenceBackendError::Protocol(_) => "upstream_protocol_failed",
     }
 }
 

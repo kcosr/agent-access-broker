@@ -14,12 +14,14 @@
 //! retry that repeats the write. [`mutation_unverified_after_throttling`],
 //! [`ProviderError::unverified_if_throttled`], and
 //! [`ProviderError::unverified_after_throttling`] report it as
-//! `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
-//! `retrySafe: false`, and no retry wait. So does a batch whose later write
+//! `mutation_verification_failed` with an
+//! [`applied_unverified`](crate::MutationReceipt::applied_unverified) receipt
+//! (`mutationStatus: "applied_unverified"`, `retrySafe: false`) and no retry
+//! wait. So does a batch whose later write
 //! was throttled after earlier writes applied
 //! ([`ProviderError::partially_applied_before_throttling`]).
 
-use crate::{Decision, ProviderError, ReasonCode};
+use crate::{Decision, MutationReceipt, ProviderError, ReasonCode};
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, TimeDelta, Utc};
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use serde_json::{Map, Value, json};
@@ -192,12 +194,10 @@ pub fn mutation_unverified_after_throttling(
         ReasonCode::MutationVerificationFailed,
         mutation_unverified_after_throttling_message(service),
     )
-    .with_result(json!({
-        "mutationStatus": "applied_unverified",
-        "retrySafe": false,
-        "verificationStage": verification_stage,
-        "safeLocators": safe_locators,
-    }))
+    .with_mutation_receipt(MutationReceipt::applied_unverified(
+        verification_stage,
+        safe_locators,
+    ))
 }
 
 impl ProviderError {
@@ -237,18 +237,17 @@ impl ProviderError {
         for field in ["limitScope", "service", "retryAfterSeconds", "retryAt"] {
             result.remove(field);
         }
-        let unverified =
-            mutation_unverified_after_throttling(service, verification_stage, safe_locators);
-        if let Some(Value::Object(fields)) = unverified.result.map(|result| *result) {
-            result.extend(fields);
-        }
         Self {
-            decision: unverified.decision,
-            reason_code: unverified.reason_code,
-            message: unverified.message,
+            decision: Decision::Error,
+            reason_code: ReasonCode::MutationVerificationFailed.into(),
+            message: mutation_unverified_after_throttling_message(service),
             result: Some(Box::new(Value::Object(result))),
             ..self
         }
+        .with_mutation_receipt(MutationReceipt::applied_unverified(
+            verification_stage,
+            safe_locators,
+        ))
     }
 
     /// For a batch whose later write `service` throttled after earlier writes

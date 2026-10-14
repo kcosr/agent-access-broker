@@ -4,7 +4,9 @@
 //! managed credential profile, JSON, raw-download, and multipart-upload
 //! actions, a presenter with an embedded body and a whole-result Markdown
 //! renderer, and (when `endpoints` is enabled) a resource type whose entries
-//! keep a private attribute that a single-attempt action consumes. Broker acceptance tests register it beside the linked
+//! keep a private attribute that a single-attempt action consumes. Its writes
+//! report a request the SDK proved unsent with a mutation receipt. Broker
+//! acceptance tests register it beside the linked
 //! backends; that it needs nothing outside this crate and the registration
 //! list is the point.
 use agent_access_provider::presentation::{
@@ -15,14 +17,14 @@ use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
     BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
     ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration, EgressProxyConfig,
-    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
-    ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
-    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext,
-    attachment_upload_plan, complete_upstream_trace, file_upload_body, parse_backend_config,
-    read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    MutationReceipt, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
+    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, ReasonCode,
+    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
+    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, StateDisposition, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    UpstreamError, ValidationContext, attachment_upload_plan, complete_upstream_trace,
+    file_upload_body, parse_backend_config, read_bounded_body, take_upstream_trace,
+    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -442,6 +444,18 @@ fn upstream_error(error: UpstreamError) -> ProviderError {
     ProviderError::error(error.reason_code(), "conformance upstream request failed")
 }
 
+/// The failure of an action's only write: a request the SDK proved never
+/// reached the upstream also reports that nothing was applied.
+fn write_error(error: UpstreamError) -> ProviderError {
+    let unsent = matches!(error, UpstreamError::NotSent { .. });
+    let failure = upstream_error(error);
+    if unsent {
+        failure.with_mutation_receipt(MutationReceipt::not_applied())
+    } else {
+        failure
+    }
+}
+
 fn status_error(status: reqwest::StatusCode) -> ProviderError {
     match status.as_u16() {
         401 => ProviderError::deny(
@@ -598,7 +612,7 @@ impl ConformanceProvider {
                 UpstreamCall::new("endpoint.ping"),
             )
             .await
-            .map_err(upstream_error)?;
+            .map_err(write_error)?;
         let status = response.status().as_u16();
         let receipt = self
             .read_json(response, |value| {
@@ -761,7 +775,7 @@ impl ConformanceProvider {
                 UpstreamCall::new("item.upload"),
             )
             .await
-            .map_err(upstream_error)?;
+            .map_err(write_error)?;
         let status = response.status().as_u16();
         let revision = self
             .read_json(response, |value| Ok(value.get("revision").cloned()))
@@ -933,6 +947,22 @@ mod tests {
     fn provider(base_url: &str, limits: ProviderLimits) -> ConformanceProvider {
         ConformanceProvider::build(&config(base_url), &TestHost::with_limits(limits).context())
             .unwrap()
+    }
+
+    #[test]
+    fn only_unsent_writes_report_that_nothing_was_applied() {
+        let unsent = || UpstreamError::NotSent {
+            timed_out: false,
+            detail: "connection refused".into(),
+        };
+        let write = write_error(unsent());
+        assert_eq!(write.reason_code(), ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(
+            write.result.as_deref(),
+            Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+        );
+        assert!(upstream_error(unsent()).result.is_none());
+        assert!(write_error(UpstreamError::Timeout).result.is_none());
     }
 
     #[test]

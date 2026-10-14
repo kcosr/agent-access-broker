@@ -237,7 +237,9 @@ header changes, as well as review and discussion readbacks), the error is
 `mutationStatus: "applied_unverified"`, `retrySafe: false`,
 `verificationStage`, and `safeLocators`, and no retry wait: refresh by the
 returned IDs instead of repeating the mutation. A write proven never sent is
-reported as `not_applied`; see [Unsent writes](#unsent-writes).
+reported as `not_applied`, and one that may have applied without confirmation
+as `applied_unverified` or `unknown`; see
+[Unsent and unanswered writes](#unsent-and-unanswered-writes).
 
 ## Actions and lookup requirements
 
@@ -922,7 +924,8 @@ re-read the owner-draft snapshot and reviewer state; they return the 409
 contract if any effect may have applied, but may surface an ordinary sanitized
 upstream failure when readback proves the operation left both unchanged. A
 mutation request proven never sent returns `mutationStatus = "not_applied"`
-with `retrySafe = true` instead (see [Unsent writes](#unsent-writes)). The
+with `retrySafe = true` instead (see
+[Unsent and unanswered writes](#unsent-and-unanswered-writes)). The
 `review.submit` summary note follows a publication that already applied, so
 any failure to create it, sent or not, stays applied-unverified.
 
@@ -1238,7 +1241,7 @@ expected SHA, merge option flags, and upstream merge status.
 Review audit may include bounded position type and numeric-line metadata,
 expected/proven head SHA, reviewer state, resolution flag, and safe object IDs.
 
-### Unsent writes
+### Unsent and unanswered writes
 
 A GitLab write action sends its mutation request after its reads. When the
 Broker proves that request never reached GitLab, because no connection was
@@ -1254,21 +1257,46 @@ Nothing was applied, and the action can be repeated. This covers every write,
 with or without a verification contract, including provisioning and project
 uploads. A read that was never sent carries no mutation receipt.
 
-Only that proof yields `not_applied`. A timeout, connection reset or other
-transport failure after the request may have been sent keeps its existing
-outcome:
+Only that proof yields `not_applied`. Writes with a verification contract
+(inline discussions, discussion replies, draft notes, draft publication, review
+submission, approvals, suggestion application, webhook and provisioning
+mutations) treat the other failures of their mutation request by what GitLab
+may have done:
 
-- writes with a verification contract (inline discussions, discussion
-  replies, draft notes, draft publication, review submission, approvals,
-  suggestion application, webhook and provisioning mutations) return
-  `mutation_verification_failed`/409 with `mutationStatus =
-  "applied_unverified"` and `retrySafe = false`, or the ordinary error when
-  readback proves the target unchanged; and
-- other writes (issue, note, merge-request and merge, general discussion,
-  discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline
-  and job mutations, and project uploads) return their ordinary sanitized
-  upstream error without a mutation receipt. Inspect the target before
-  repeating them.
+- when the request may have been applied without confirmation, because it timed
+  out or its connection failed after sending, GitLab answered 5xx, or a success
+  response stalled, failed, exceeded the byte cap or did not have the expected
+  shape, the action returns `mutation_verification_failed`/409 with
+  `mutationStatus = "applied_unverified"` and `retrySafe = false`, or the
+  ordinary error when readback proves the target unchanged;
+- when GitLab definitively rejected the request, with a redirect, a 4xx status
+  such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
+  `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
+  its ordinary error without a receipt.
+
+A readback after the mutation that was never sent, timed out, failed, was
+throttled, answered 5xx or returned an unusable response also returns the
+`applied_unverified` contract.
+
+Other writes (issue, note, merge-request and merge, general discussion,
+discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and
+job mutations, and project uploads) keep their ordinary sanitized error and
+reason, and add a receipt for what GitLab may have done:
+
+| What happened | Receipt |
+| --- | --- |
+| The request may have been sent, but no response arrived: a timeout (including a stalled upload) or a connection failure after sending (`upstream_timeout`, HTTP 504, or `upstream_connection_failed`, HTTP 502) | `{ "mutationStatus": "unknown", "retrySafe": false }` |
+| GitLab, or a proxy in front of it, answered with a redirect, which the Broker never follows on a write, or a 5xx (`upstream_failed`); the write may have committed first | `{ "mutationStatus": "unknown", "retrySafe": false }` |
+| GitLab answered with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse, carried a body on a no-content response, or did not match the request, such as an issue in another project | `mutationStatus = "applied_unverified"`, `retrySafe = false`, `verificationStage = "mutation_response"` and `safeLocators` |
+
+The `safeLocators` name the target from the validated request, never from the
+response: always `project`, and `issueIid`, `mergeRequestIid`, `noteId`,
+`discussionId`, `branch`, `path`, `ref`, `pipelineId`, `jobId`, or
+`sourceBranch` and `targetBranch`, as the action has them. Inspect the target
+before repeating a write with either receipt. A rejection with another HTTP
+status, such as 400, 403, 404, 409, 422 or 429, and a failure before
+the request is sent, such as an upload file the Broker cannot open, carry no
+receipt.
 
 A later request that fails after a write applied, such as a readback or the
 `review.submit` summary note, never reports `not_applied`.

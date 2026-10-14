@@ -608,7 +608,8 @@ local test servers; it is not a general proxy bypass.
 - An `UpstreamError` means no usable response. `NotSent` proves the request
   never reached the upstream; `Timeout` and `Transport` may have been received
   and acted on. `reason_code()` gives the standard reason to report. Keep a
-  possibly sent mutation's uncertainty in its outcome.
+  write's proof or uncertainty in its outcome with a mutation receipt (see
+  [outcomes and receipts](#outcomes-and-receipts)).
 - Clients never follow redirects. `get_following_redirects(url, rules,
   operation)` follows a GET chain by hand under
   `RedirectRules::new(max_redirects, deadline, authorize)`. Every hop must be
@@ -1075,12 +1076,76 @@ Errors can carry a bounded `result` with `with_result`, and upstream facts with
 - **Confirmed rejection**: the upstream refused and nothing changed. Report the
   matching deny or error reason.
 - **Proven unsent**: `UpstreamError::NotSent`, so nothing reached the upstream.
+- **Unknown**: a write's request may have reached the upstream, but nothing
+  confirmed whether it applied: it timed out or its connection failed after
+  sending, its upload stalled, the upstream answered with a redirect, which a
+  write never follows, or a 5xx, or the client
+  reported a failure the provider does not recognize.
 - **Applied**: success, with safe locators of what changed.
 - **Partial**: a batch in which some writes applied. Keep the batch's `status`,
   per-item results and failures in the error result.
-- **Unverified**: the write applied but its read-back failed. Report
-  `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
-  `retrySafe: false`, the `verificationStage` and `safeLocators`.
+- **Unverified**: the upstream accepted the write with a success status, but
+  its response could not be read or validated, or its read-back failed.
+
+A failed write tells its caller whether repeating it is safe through a mutation
+receipt in its result. The receipt describes the whole operation, and never
+claims a retry is safe when anything may have applied. Build one with
+`MutationReceipt` and attach it with `ProviderError::with_mutation_receipt`,
+which keeps the result's other fields, with `or_mutation_receipt`, which keeps
+a more specific receipt the error already carries, or write it into a result
+value with `write_into`:
+
+| Constructor | `mutationStatus` | `retrySafe` | Use for |
+| --- | --- | --- | --- |
+| `MutationReceipt::not_applied()` | `not_applied` | `true` | A proven-unsent write (`UpstreamError::NotSent`), with its ordinary reason, such as `upstream_connection_failed`; or a batch whose first item was proven unsent. |
+| `MutationReceipt::unknown()` | `unknown` | `false` | A write that may have reached the upstream without a definitive answer: a timeout, transport failure, stalled upload, unrecognized `UpstreamError`, redirect (3xx) or 5xx response, with its ordinary reason. Also a batch that failed after any item may have applied, alongside its partial result. |
+| `MutationReceipt::applied_unverified(stage, safe_locators)` | `applied_unverified` | `false` | A write the upstream accepted (2xx) whose response then stalled, failed, exceeded a cap or failed validation, or whose read-back failed, with the failure's own reason; or `mutation_verification_failed` when the verification itself failed. Use a stage such as `mutation_response`, and safe locators from the validated request or an earlier verified response, never from the unreadable one. |
+
+Report a failed read-back after an applied write with
+`ProviderError::unverified_after_mutation(stage, safe_locators)`: throttling
+becomes `mutation_verification_failed`, as `unverified_if_throttled` reports
+it, and any other failure keeps its reason and gains the `applied_unverified`
+receipt. A 4xx rejection, upstream throttling of the write itself, and a local
+failure before anything was sent, such as an upload file that cannot be opened,
+carry no receipt. Attach a receipt only to the action's own write and what follows it.
+Reads never carry one, and once an earlier write in the action applied, a later
+failure is never `not_applied`. `MutationStatus` is non-exhaustive: a match on
+it ends with an arm that treats an unknown status as unsafe to retry, and a
+match on `UpstreamError` ends with an arm that reports `unknown`.
+
+```rust check
+use agent_access_provider::deps::serde_json::Map;
+use agent_access_provider::{MutationReceipt, ProviderError, UpstreamError};
+
+/// The failure of an action's only write, from the error its send returned.
+fn write_send_failure(error: UpstreamError) -> ProviderError {
+    let receipt = match &error {
+        UpstreamError::NotSent { .. } => Some(MutationReceipt::not_applied()),
+        // The SDK refused the URL before sending; only `NotSent` is the proof
+        // that makes a retry safe.
+        UpstreamError::NotAllowed => None,
+        // A timeout, a transport failure and any failure this module does not
+        // know may have reached the upstream.
+        _ => Some(MutationReceipt::unknown()),
+    };
+    let failure = ProviderError::error(error.reason_code(), "the notes request failed");
+    match receipt {
+        Some(receipt) => failure.with_mutation_receipt(receipt),
+        None => failure,
+    }
+}
+
+/// A failure after the upstream accepted the write, such as a response that
+/// fails validation. A throttled read-back's receipt is kept.
+fn after_accepted_write(error: ProviderError, note_id: &str) -> ProviderError {
+    let mut locators = Map::new();
+    locators.insert("noteId".into(), note_id.into());
+    error.or_mutation_receipt(MutationReceipt::applied_unverified(
+        "mutation_response",
+        locators.into(),
+    ))
+}
+```
 
 Neither the host nor the CLI replays an operation: not after a failed
 read-back, a timeout, cancellation, forced shutdown or a local output failure.

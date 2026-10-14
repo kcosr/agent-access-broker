@@ -249,6 +249,34 @@ verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
 IDs and keys. It carries no retry wait: inspect those issues instead of repeating
 the mutation.
 
+A Jira write action sends its mutation request after its reads. When the Broker
+proves that request never reached Jira, because no connection was established
+(including a connect timeout) or the request could not be built, the action
+keeps its ordinary failure and adds `mutationStatus: "not_applied"`,
+`retrySafe: true` to its result: nothing was applied, and the action can be
+repeated. Every write action except `attachment.add` sends a single mutation
+and fails with `upstream_connection_failed` (`Jira request failed`) or
+`upstream_timeout` (`Jira request timed out`). An `attachment.add` batch whose
+first upload was never sent keeps `upstream_failed` with `Jira attachment
+upload failed` (see [Attachments](#attachments)). A read that was never sent
+carries no receipt.
+
+Every other write failure after which Jira may have applied the write keeps its
+ordinary reason and message and reports what Jira may have done:
+
+| What happened | Receipt |
+| --- | --- |
+| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
+| Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, such as a created issue in another project | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
+| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
+
+`safeLocators` name the target from the validated request and the reads before
+the write, never from the failed response: the `project` (and parent issue) of
+a create, the created issue IDs once the create response was validated, or the
+issue and comment IDs of an update. Inspect the issue before repeating a write
+with either receipt. A 4xx rejection and throttling of the write itself carry
+no receipt.
+
 ## Read response formats
 
 Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
@@ -1026,6 +1054,15 @@ waiting and repeating the batch would upload them again, so the reason code is
 `retrySafe: false`, `verificationStage: "attachment_upload"`, and
 `safeLocators` with the issue and created attachment IDs, with no retry wait.
 Upload only the failed and skipped files, later, instead of the whole batch.
+When the first upload was proven never sent, nothing was created: the
+`upstream_failed` error carries `mutationStatus: "not_applied"` and
+`retrySafe: true`, and the whole batch can be repeated. When an upload may have
+created its attachment before the batch failed (an earlier upload succeeded, or
+the failed upload got no response, a redirect, a 5xx, or a success status with an
+unreadable response), the error keeps its result and adds
+`mutationStatus: "unknown"`, `retrySafe: false`, unless throttling already
+reported it as `applied_unverified`; repeating the whole batch could upload
+files twice.
 
 ```mermaid
 stateDiagram-v2

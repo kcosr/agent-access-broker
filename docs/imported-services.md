@@ -366,9 +366,14 @@ file-output receipts report that marker; output failures never replay the tool.
 
 A successful write-capable MCP response is `applied_unverified`: it reports upstream
 acceptance without independently proving the backend mutation. After dispatch,
-transport/protocol/tool/output errors retain an uncertain mutation outcome with
-`retrySafe: false`. Agents must inspect the backend outcome before deciding on a
-separate operation. Read-only classification is a reviewed statement about upstream
+transport/protocol/tool/output errors retain an uncertain mutation outcome:
+`mutationStatus: "unknown"`, `retrySafe: false` and `toolDispatched: true`.
+Agents must inspect the backend outcome before deciding on a separate
+operation. A failed write whose `tools/call` request was never dispatched,
+because connecting or initialization failed first or the Broker proved the
+request unsent, reports `mutationStatus: "not_applied"`, `retrySafe: true` and
+`toolDispatched: false`, with its ordinary reason: the tool never received it,
+so repeating the write is safe. Read-only classification is a reviewed statement about upstream
 effects, not a restriction on saving a local response file.
 
 In the legacy protocol, disconnecting does not prove cancellation: a timed-out

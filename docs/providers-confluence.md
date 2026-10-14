@@ -199,6 +199,47 @@ unverified upload is a `failures` entry with `status: "unverified"` and its
 lists every created attachment. Inspect those objects instead of repeating the
 mutation.
 
+A Confluence write action sends its mutation request after its reads. When the
+Broker proves that request never reached Confluence, because no connection was
+established (including a connect timeout) or the request could not be built,
+the action keeps its ordinary failure and adds `mutationStatus: "not_applied"`,
+`retrySafe: true` to its result: nothing was applied, and the action can be
+repeated.
+
+- Page, blog, draft and comment writes, which send a single mutation, fail with
+  `upstream_connection_failed` (`Confluence request failed`) or
+  `upstream_timeout` (`Confluence request timed out`).
+- A page or blog attachment batch whose first upload was never sent keeps
+  `upstream_failed` with `Confluence attachment upload failed` or
+  `Confluence blog attachment upload failed`.
+- A page or blog draft attachment batch whose first upload was never sent keeps
+  `upstream_failed` with `Confluence page draft attachment upload partially
+  failed` or `Confluence blog draft attachment upload partially failed`, and its
+  result keeps `status: "partial"`, the empty `attachments` and `failures`
+  alongside the receipt.
+
+A read that was never sent carries no receipt.
+
+Every other write failure after which Confluence may have applied the write
+keeps its ordinary reason and message and reports what Confluence may have
+done:
+
+| What happened | Receipt |
+| --- | --- |
+| The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Confluence or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
+| Confluence answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request; or anything after the accepted write failed, such as a read-back, a draft handle or the result size | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"`, or the read-back stage (such as `post_create_readback`) when a read-back request failed |
+| A page, blog or draft attachment batch failed after an upload may have created its attachment: an earlier upload succeeded, or the failing upload got no response, a redirect, a 5xx or an unreadable success response | `mutationStatus: "unknown"`, `retrySafe: false`, alongside the batch's result |
+
+`safeLocators` name the target from the validated request and the reads before
+the write, such as the `pageId`, `blogId`, `commentId`, `parentCommentId`,
+`containerId`, or the `space` and `parentPageId` of a create; a failed
+read-back keeps the locators its throttled form reports. A throttled read-back
+or batch keeps its `mutation_verification_failed`/`applied_unverified`
+outcome. A 4xx rejection, a version conflict and throttling of the write itself
+carry no receipt. Page create, page draft create and page move audit records
+keep `sideEffectPossible: true` for every mutation failure. Inspect the content
+before repeating a write with a `retrySafe: false` receipt.
+
 ## Actions and lookup requirements
 
 Thirty-seven actions:

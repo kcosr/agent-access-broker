@@ -98,6 +98,57 @@ async fn workflow_throttling_is_an_upstream_rate_limit_without_retry_claims() {
     }
 }
 
+struct StatusTransport(u16);
+#[async_trait]
+impl NotificationTransport for StatusTransport {
+    async fn send(
+        &self,
+        _endpoint: Url,
+        _body: Vec<u8>,
+    ) -> Result<TransportReceipt, ProviderError> {
+        Ok(TransportReceipt::status(self.0))
+    }
+}
+
+#[tokio::test]
+async fn redirects_and_server_errors_leave_an_unknown_notification_outcome() {
+    for (status, reason, receipt) in [
+        (
+            502,
+            ReasonCode::UpstreamFailed,
+            Some(json!({"mutationStatus": "unknown", "retrySafe": false})),
+        ),
+        (
+            500,
+            ReasonCode::UpstreamFailed,
+            Some(json!({"mutationStatus": "unknown", "retrySafe": false})),
+        ),
+        // The Broker never follows a redirect: the Workflow may have
+        // accepted the request.
+        (
+            302,
+            ReasonCode::UpstreamProtocolFailed,
+            Some(json!({"mutationStatus": "unknown", "retrySafe": false})),
+        ),
+        (400, ReasonCode::UpstreamFailed, None),
+        (403, ReasonCode::UpstreamForbidden, None),
+    ] {
+        let provider = TeamsProvider {
+            transport: Arc::new(StatusTransport(status)),
+            allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
+            max_bytes: MAX_BODY_BYTES,
+        };
+        let error = provider.invoke(admitted_invocation()).await.unwrap_err();
+        assert_eq!(error.reason_code(), reason, "{status}");
+        assert_eq!(
+            error.message,
+            "Teams Workflow rejected the notification; request was not retried"
+        );
+        assert_eq!(error.upstream_status, Some(status));
+        assert_eq!(error.result.as_deref(), receipt.as_ref(), "{status}");
+    }
+}
+
 #[tokio::test]
 async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_metadata() {
     let transport = Arc::new(AcceptTransport(std::sync::atomic::AtomicUsize::new(0)));
@@ -479,6 +530,10 @@ async fn proven_unsent_requests_are_reported_apart_from_unknown_outcomes() {
     assert_eq!(error.decision(), Decision::Error);
     assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
     assert_eq!(error.message, "Teams notification request was not sent");
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+    );
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
 }
 
@@ -630,6 +685,10 @@ async fn http_redirects_errors_and_timeouts_never_retry_or_leak_urls() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert!(error.message.contains("outcome may be unknown"));
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "unknown", "retrySafe": false}))
+    );
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

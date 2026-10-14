@@ -4,8 +4,8 @@
 use agent_access_provider::{
     ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BoundedDownload,
     BuildContext, ClientProfile, CredentialDescriptor, CredentialView, EgressDeclaration,
-    EgressProxyConfig, EgressRoute, ExecutionCredential, Provider, ProviderBuildError,
-    ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
+    EgressProxyConfig, EgressRoute, ExecutionCredential, MutationReceipt, Provider,
+    ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
     ProviderReasonDefinition, ProviderResult, ProviderResultStream, ReasonCode, RedirectRules,
     ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
     ServiceDescriptor, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
@@ -256,16 +256,7 @@ impl CloudbeesCiProvider {
             .client
             .send(request, UpstreamCall::new(&operation))
             .await
-            .map_err(|error| match (error, mutation) {
-                (UpstreamError::NotAllowed, _) => escaped_base(),
-                // Only `NotSent` proves the controller never received the request.
-                (UpstreamError::Timeout | UpstreamError::Transport(_), Some(locators)) => {
-                    trigger_unverified(locators)
-                }
-                (error, _) => {
-                    ProviderError::error(error.reason_code(), "CloudBees CI request failed")
-                }
-            })?;
+            .map_err(|error| send_failure(error, mutation))?;
         complete_upstream_trace(&mut response, None);
         let status = response.status();
         let content_type = response
@@ -297,7 +288,12 @@ impl CloudbeesCiProvider {
             ));
         }
         if status.is_redirection() {
-            return Err(protocol_error());
+            // The Broker never follows a redirect, so a trigger answered with
+            // one may already be queued.
+            return Err(match mutation {
+                Some(_) => protocol_error().with_mutation_receipt(MutationReceipt::unknown()),
+                None => protocol_error(),
+            });
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
             return Err(rate_limited(response.headers()));
@@ -1114,10 +1110,10 @@ impl CloudbeesCiProvider {
                     json!({"controller":input.controller,"job":&input.job,
                         "queueId":queue,"queueUrl":queue_url,"mutationStatus":"applied","retrySafe":false})
                 } else {
-                    json!({"controller":input.controller,"job":&input.job,
-                        "mutationStatus":"applied_unverified","retrySafe":false,
-                        "verificationStage":"mutation_response",
-                        "safeLocators":safe_locators})
+                    let mut value = json!({"controller":input.controller,"job":&input.job});
+                    MutationReceipt::applied_unverified("mutation_response", safe_locators)
+                        .write_into(&mut value);
+                    value
                 };
                 (value, reply)
             }
@@ -1192,6 +1188,28 @@ fn upstream_not_found(message: &'static str) -> ProviderError {
     ProviderError::deny(ReasonCode::ResourceNotFound, message).with_upstream(Some(404), None)
 }
 
+/// A request that produced no response. For the trigger POST (`mutation`
+/// holds its safe locators), only `NotSent` proves the controller never
+/// received it; a timeout or transport failure is the unverified trigger,
+/// and any other failure may have reached the controller.
+fn send_failure(error: UpstreamError, mutation: Option<&Value>) -> ProviderError {
+    match (error, mutation) {
+        (UpstreamError::NotAllowed, _) => escaped_base(),
+        (UpstreamError::Timeout | UpstreamError::Transport(_), Some(locators)) => {
+            trigger_unverified(locators)
+        }
+        (error @ UpstreamError::NotSent { .. }, Some(_)) => {
+            ProviderError::error(error.reason_code(), "CloudBees CI request failed")
+                .with_mutation_receipt(MutationReceipt::not_applied())
+        }
+        (error, Some(_)) => {
+            ProviderError::error(error.reason_code(), "CloudBees CI request failed")
+                .with_mutation_receipt(MutationReceipt::unknown())
+        }
+        (error, None) => ProviderError::error(error.reason_code(), "CloudBees CI request failed"),
+    }
+}
+
 /// The `mutation_verification_failed` receipt for a trigger POST that may
 /// have reached the controller without a confirming response.
 fn trigger_unverified(safe_locators: &Value) -> ProviderError {
@@ -1199,12 +1217,10 @@ fn trigger_unverified(safe_locators: &Value) -> ProviderError {
         ReasonCode::MutationVerificationFailed,
         "CloudBees CI did not confirm the build trigger; a build may already be queued. Do not retry automatically; check job.view (inQueue, lastBuild) or build.list first.",
     )
-    .with_result(json!({
-        "mutationStatus": "applied_unverified",
-        "retrySafe": false,
-        "verificationStage": "mutation_response",
-        "safeLocators": safe_locators,
-    }))
+    .with_mutation_receipt(MutationReceipt::applied_unverified(
+        "mutation_response",
+        safe_locators.clone(),
+    ))
 }
 /// CloudBees CI authenticates with a non-empty Basic username and API token.
 pub(crate) fn basic_material(
@@ -2795,6 +2811,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trigger_post_redirect_is_an_unknown_outcome() {
+        let server = MockServer::start().await;
+        mount_buildable_job(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/team-ci/job/payments/job/build-api/build"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/team-ci/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, protocol_error().message);
+        assert_eq!(
+            error.result.as_deref(),
+            Some(&json!({"mutationStatus":"unknown","retrySafe":false}))
+        );
+        // A read answered with a redirect carries no receipt.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(JOB_API))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/team-ci/"))
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert!(error.result.is_none());
+    }
+
+    #[tokio::test]
     async fn trigger_post_timeout_after_send_is_applied_unverified() {
         let server = MockServer::start().await;
         mount_buildable_job(&server).await;
@@ -2875,7 +2926,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trigger_post_proven_not_sent_stays_a_plain_connection_error() {
+    async fn trigger_post_proven_not_sent_is_not_applied_and_retry_safe() {
         let (origin, server) = raw_trigger_controller(false).await;
         let error = provider_with_limits(&origin, ProviderLimits::default())
             .invoke(invocation("build.trigger", job_inputs(json!({}))))
@@ -2883,7 +2934,35 @@ mod tests {
             .unwrap_err();
         server.await.unwrap();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
-        assert!(error.result.is_none());
+        assert_eq!(error.message, "CloudBees CI request failed");
+        assert_eq!(
+            error.result.as_deref(),
+            Some(&json!({"mutationStatus":"not_applied","retrySafe":true}))
+        );
+        // Any other failure of the trigger POST may have reached the
+        // controller; a read's never carries a receipt.
+        let locators = json!({"controller":"team-ci","job":"payments/build-api"});
+        let other = send_failure(UpstreamError::Redirect, Some(&locators));
+        assert_eq!(other.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(other.message, "CloudBees CI request failed");
+        assert_eq!(
+            other.result.as_deref(),
+            Some(&json!({"mutationStatus":"unknown","retrySafe":false}))
+        );
+        assert!(send_failure(UpstreamError::Redirect, None).result.is_none());
+        // A read that was never sent, including the trigger's own job read,
+        // carries no mutation receipt.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        for action in ["job.view", "build.trigger"] {
+            let error = provider_with_limits(&origin, ProviderLimits::default())
+                .invoke(invocation(action, job_inputs(json!({}))))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+            assert!(error.result.is_none(), "{action}");
+        }
     }
 
     #[tokio::test]

@@ -671,6 +671,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
 
     assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
+        create_error.result.as_deref(),
+        Some(&json!({"mutationStatus": "unknown", "retrySafe": false}))
+    );
+    assert_eq!(
         create_error.audit.as_ref().unwrap()["mutationPhase"],
         "create_mutation"
     );
@@ -804,6 +808,60 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
         .unwrap();
     assert_eq!(scopes["space"], vec!["ENG"]);
     assert!(!scopes.contains_key("page"));
+}
+
+#[tokio::test]
+async fn blog_scope_lookup_redirects_stay_scope_resolution_denials() {
+    for redirect_space in [false, true] {
+        let server = MockServer::start().await;
+        let redirect = || ResponseTemplate::new(302).insert_header("location", "/wiki/elsewhere");
+        if redirect_space {
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/blogposts/123456"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "123456",
+                    "type": "blogpost",
+                    "spaceId": "98765",
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/spaces/98765"))
+                .respond_with(redirect())
+                .expect(1)
+                .mount(&server)
+                .await;
+        } else {
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/blogposts/123456"))
+                .respond_with(redirect())
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let provider = ConfluenceProvider::with_backend(
+            confluence_config(),
+            ProviderLimits::default(),
+            Arc::new(http_confluence_backend_for_server(&server)),
+        );
+        // Both the blog evidence and its space lookup run in scope
+        // resolution: a redirect leaves the blog unconfirmed.
+        let error = provider
+            .lookup_scopes(
+                "blog.view",
+                &json!({ "blogId": "123456" }),
+                Some(&credential()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny, "{redirect_space}");
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(
+            error.message,
+            "Confluence blog 123456 scope requires lookup confirmation"
+        );
+        assert!(error.result.is_none());
+    }
 }
 
 #[tokio::test]
@@ -5404,8 +5462,13 @@ async fn http_backend_comment_mutations_fail_closed_on_conflict_and_delete_statu
         .delete_comment(ConfluenceCommentKind::Footer, "5002", &credential())
         .await
         .unwrap_err();
+    // Confluence answered the delete with an unexpected success status: the
+    // write was accepted, but its response is unexpected.
+    let ConfluenceBackendError::AcceptedUnreadable(delete_error) = delete_error else {
+        panic!("expected an accepted delete, got {delete_error:?}");
+    };
     assert!(
-        matches!(delete_error, ConfluenceBackendError::Protocol(message) if message.contains("unexpected success status"))
+        matches!(*delete_error, ConfluenceBackendError::Protocol(message) if message.contains("unexpected success status"))
     );
 }
 
@@ -6014,6 +6077,11 @@ struct PageMoveTestBackend {
     fail_create: bool,
     fail_draft_create: bool,
     fail_move: bool,
+    /// What a failing create, draft create or move returns.
+    mutation_failure: ConfluenceBackendError,
+    /// What a read-back after a mutation returns instead of the throttling
+    /// the `throttle_*` flags select.
+    readback_failure: Option<ConfluenceBackendError>,
     preserve_parent_on_move: bool,
     preserve_order_on_move: bool,
     /// Throttle hierarchy reads once a create or move has applied.
@@ -6026,9 +6094,9 @@ struct PageMoveTestBackend {
 impl PageMoveTestBackend {
     fn throttled_after_mutation(&self, throttle: bool) -> Result<(), ConfluenceBackendError> {
         if throttle && self.mutated.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(ConfluenceBackendError::RateLimited(Some(
-                UpstreamRetryAfter::after_seconds(30),
-            )));
+            return Err(self.readback_failure.clone().unwrap_or(
+                ConfluenceBackendError::RateLimited(Some(UpstreamRetryAfter::after_seconds(30))),
+            ));
         }
         Ok(())
     }
@@ -6067,6 +6135,8 @@ impl PageMoveTestBackend {
             fail_create: false,
             fail_draft_create: false,
             fail_move: false,
+            mutation_failure: ConfluenceBackendError::NoResponse { timed_out: true },
+            readback_failure: None,
             preserve_parent_on_move: false,
             preserve_order_on_move: false,
             throttle_hierarchy_after_mutation: false,
@@ -7485,7 +7555,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
             target_page_id.to_string(),
         ));
         if self.fail_move {
-            return Err(ConfluenceBackendError::Timeout);
+            return Err(self.mutation_failure.clone());
         }
         let parent_page_id = match position {
             ConfluencePageMovePosition::Append => target_page_id.to_string(),
@@ -7557,7 +7627,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
             .or_else(|| self.space.homepage_id.clone());
         self.create_requests.lock().unwrap().push(request.clone());
         if self.fail_create {
-            return Err(ConfluenceBackendError::Timeout);
+            return Err(self.mutation_failure.clone());
         }
         self.hierarchies.lock().unwrap().insert(
             "900001".to_string(),
@@ -7588,7 +7658,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         _credential: &ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         if self.fail_draft_create {
-            return Err(ConfluenceBackendError::Timeout);
+            return Err(self.mutation_failure.clone());
         }
         let parent_page_id = request
             .parent_page_id
@@ -8361,61 +8431,10 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         ProviderLimits::default(),
         Arc::new(http_confluence_backend_for_server(&server)),
     );
-    let names = ["first", "second", "third"];
-    let page = ConfluencePage {
-        id: "123456".to_string(),
-        title: "Runbook".to_string(),
-        space: "ENG".to_string(),
-        web_url: None,
-        space_web_url: None,
-        status: Some("current".to_string()),
-        version: 7,
-        created_at: None,
-        updated_at: None,
-        created_by: None,
-        updated_by: None,
-        bodies: BTreeMap::new(),
-    };
     let error = provider
-        .invoke(
-            InvocationBuilder::new("confluence", "attachment.add")
-                .inputs(json!({
-                    "pageId": "123456",
-                    "attachments": names.iter().enumerate().map(|(index, name)| json!({
-                        "field": format!("file{index}"),
-                        "filename": format!("{name}.txt"),
-                        "contentType": "text/plain",
-                        "size": name.len(),
-                        "sha256": sha256_hex(name.as_bytes()),
-                    })).collect::<Vec<_>>(),
-                }))
-                .resources(BTreeMap::from([(
-                    "space".to_string(),
-                    vec!["ENG".to_string()],
-                )]))
-                .credential(credential())
-                .lookup_credential(credential())
-                .body_parts(
-                    names
-                        .iter()
-                        .enumerate()
-                        .map(|(index, name)| {
-                            BrokerBodyPart::in_memory(
-                                format!("file{index}"),
-                                Some(format!("{name}.txt")),
-                                Some("text/plain".to_string()),
-                                name.as_bytes().to_vec(),
-                            )
-                        })
-                        .collect(),
-                )
-                .state(ProviderState::new(ConfluencePagePreflight {
-                    page,
-                    upstream_status: 200,
-                    upstream_duration_ms: 1,
-                }))
-                .build(),
-        )
+        .invoke(page_attachment_add_invocation(&[
+            "first", "second", "third",
+        ]))
         .await
         .unwrap_err();
     // att1 applied before the second upload was throttled: repeating the
@@ -8447,6 +8466,374 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         assert!(result.get(field).is_none(), "{field}: {result}");
     }
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn write_receipts_follow_what_confluence_may_have_applied() {
+    let not_applied = json!({"mutationStatus": "not_applied", "retrySafe": true});
+    let unknown = json!({"mutationStatus": "unknown", "retrySafe": false});
+    let write = ConfluenceWrite::new(json!({"pageId": "123456"}));
+    let unverified = json!({
+        "mutationStatus": "applied_unverified",
+        "retrySafe": false,
+        "verificationStage": "mutation_response",
+        "safeLocators": {"pageId": "123456"},
+    });
+    // Only the SDK's not-sent proof becomes `NotSent`; a send that may have
+    // reached Confluence becomes `NoResponse`. Both keep the reason and
+    // message a timeout or transport failure reports.
+    for (timed_out, reason, message) in [
+        (
+            false,
+            ReasonCode::UpstreamConnectionFailed,
+            "Confluence request failed",
+        ),
+        (
+            true,
+            ReasonCode::UpstreamTimeout,
+            "Confluence request timed out",
+        ),
+    ] {
+        let unsent = confluence_upstream_error(UpstreamError::NotSent {
+            timed_out,
+            detail: "connection refused".to_string(),
+        });
+        assert_eq!(unsent, ConfluenceBackendError::NotSent { timed_out });
+        let unanswered = confluence_upstream_error(if timed_out {
+            UpstreamError::Timeout
+        } else {
+            UpstreamError::Transport("reset".to_string())
+        });
+        assert_eq!(unanswered, ConfluenceBackendError::NoResponse { timed_out });
+        for (error, receipt) in [(unsent, &not_applied), (unanswered, &unknown)] {
+            assert_eq!(confluence_backend_reason_code(&error), reason);
+            assert_eq!(sanitized_backend_reason(&error), reason.as_str());
+            for failure in [
+                write.failed(error.clone()),
+                write.failed_with(error.clone(), map_confluence_conflict),
+            ] {
+                assert_eq!(failure.decision(), Decision::Error);
+                assert_eq!(failure.reason_code(), reason);
+                assert_eq!(failure.message, message);
+                assert_eq!(failure.result.as_deref(), Some(receipt));
+            }
+            // Reads carry no mutation receipt.
+            let read = confluence_backend_error(error);
+            assert_eq!(read.reason_code(), reason);
+            assert!(read.result.is_none());
+        }
+    }
+    // A 5xx may follow a committed write; a success status followed by an
+    // unreadable response means Confluence accepted it.
+    assert_eq!(
+        write
+            .failed(ConfluenceBackendError::HttpStatus(504))
+            .result
+            .as_deref(),
+        Some(&unknown)
+    );
+    // The Broker never follows a redirect: the write may have committed.
+    let redirected = write.failed(ConfluenceBackendError::Redirected);
+    assert_eq!(redirected.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(redirected.message, "Confluence response protocol error");
+    assert_eq!(redirected.result.as_deref(), Some(&unknown));
+    for (error, reason) in [
+        (ConfluenceBackendError::Timeout, ReasonCode::UpstreamTimeout),
+        (
+            ConfluenceBackendError::Transport("response read failed".to_string()),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (
+            ConfluenceBackendError::ResponseTooLarge,
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            ConfluenceBackendError::Protocol("shape".to_string()),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+    ] {
+        let accepted = accepted_if_success(200)(error.clone());
+        let failure = write.failed(accepted);
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(
+            failure.message,
+            confluence_backend_error(error.clone()).message
+        );
+        assert_eq!(failure.result.as_deref(), Some(&unverified));
+        // The same failure after an error status, or before sending, is not
+        // an accepted write.
+        assert_eq!(accepted_if_success(409)(error.clone()), error);
+        assert!(write.failed(error).result.is_none());
+    }
+    // Rejections, conflicts and throttling carry no receipt.
+    for error in [
+        ConfluenceBackendError::Conflict,
+        ConfluenceBackendError::HttpStatus(400),
+        ConfluenceBackendError::Forbidden,
+        ConfluenceBackendError::RateLimited(None),
+        confluence_upstream_error(UpstreamError::NotAllowed),
+    ] {
+        let failure = write.failed_with(error, map_confluence_conflict);
+        assert!(
+            failure
+                .result
+                .as_deref()
+                .is_none_or(|result| result.get("mutationStatus").is_none())
+        );
+    }
+
+    // Unsent placement writes report the receipt and keep their audit.
+    let unsent = || PageMoveTestBackend {
+        mutation_failure: ConfluenceBackendError::NotSent { timed_out: false },
+        ..PageMoveTestBackend::new()
+    };
+    let space_scope = |request: ProviderInvocation| {
+        InvocationBuilder::from(request)
+            .resources(ResourceScopes::from([(
+                "space".to_string(),
+                vec!["ENG".to_string()],
+            )]))
+            .build()
+    };
+    for (backend, request, phase) in [
+        (
+            PageMoveTestBackend {
+                fail_create: true,
+                ..unsent()
+            },
+            space_scope(invocation(
+                "page.create",
+                json!({"space": "ENG", "title": "Created", "contentFormat": "storage", "content": "<p>body</p>"}),
+            )),
+            "create_mutation",
+        ),
+        (
+            PageMoveTestBackend {
+                fail_draft_create: true,
+                ..unsent()
+            },
+            space_scope(invocation(
+                "page.draft.create",
+                json!({"space": "ENG", "title": "Draft", "contentFormat": "storage", "content": "<p>body</p>"}),
+            )),
+            "create_mutation",
+        ),
+        (
+            PageMoveTestBackend {
+                fail_move: true,
+                ..unsent()
+            },
+            page_move_invocation(),
+            "move_mutation",
+        ),
+    ] {
+        let error = ConfluenceProvider::with_backend(
+            confluence_config(),
+            ProviderLimits::default(),
+            Arc::new(backend),
+        )
+        .invoke(request)
+        .await
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(error.result.as_deref(), Some(&not_applied), "{phase}");
+        let audit = error.audit.as_deref().unwrap();
+        assert_eq!(audit["mutationPhase"], phase);
+        assert_eq!(audit["upstreamFailure"], "upstream_connection_failed");
+    }
+
+    // A read-back that fails after the page was created leaves it
+    // unverified at the read-back stage, with the read-back's reason.
+    let backend = PageMoveTestBackend {
+        throttle_hierarchy_after_mutation: true,
+        readback_failure: Some(ConfluenceBackendError::NoResponse { timed_out: true }),
+        ..PageMoveTestBackend::new()
+    };
+    let error = ConfluenceProvider::with_backend(
+        confluence_config(),
+        ProviderLimits::default(),
+        Arc::new(backend),
+    )
+    .invoke(space_scope(invocation(
+        "page.create",
+        json!({"space": "ENG", "title": "Created", "contentFormat": "storage", "content": "<p>body</p>"}),
+    )))
+    .await
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "post_create_readback",
+            "safeLocators": {"pageId": "900001", "parentPageId": "55555"},
+        }))
+    );
+
+    // An attachment batch whose first upload was never sent applied nothing.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let mut config = confluence_config();
+    config.attachments.media_types = vec!["text/plain".to_string()];
+    config.allowed_upstream_hosts = vec![format!("{origin}/wiki/rest/api/**")];
+    let backend = HttpConfluenceBackend::new_with_api_base(
+        config.clone(),
+        ProviderLimits::default(),
+        Url::parse(&format!("{origin}/wiki/rest/api/")).unwrap(),
+    );
+    let error =
+        ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend))
+            .invoke(page_attachment_add_invocation(&["first", "second"]))
+            .await
+            .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+    assert_eq!(error.message, "Confluence attachment upload failed");
+    assert_eq!(error.result.as_deref(), Some(&not_applied));
+    let audit = error.audit.as_deref().unwrap();
+    assert_eq!(
+        audit["attachments"][0]["reason"],
+        "upstream_connection_failed"
+    );
+    assert_eq!(audit["attachments"][1]["status"], "skipped");
+}
+
+#[tokio::test]
+async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
+    let attachment = json!({
+        "results": [{
+            "id": "att1",
+            "title": "first.txt",
+            "metadata": { "mediaType": "text/plain" },
+            "extensions": { "fileSize": 5 }
+        }]
+    });
+    let unknown = json!({"mutationStatus": "unknown", "retrySafe": false});
+    for (first_ok, failure_status, message, receipt) in [
+        // The first upload got a 5xx, which may follow an applied upload.
+        (
+            false,
+            500,
+            "Confluence attachment upload failed",
+            Some(&unknown),
+        ),
+        // The first upload was answered with a redirect, which the Broker
+        // never follows.
+        (
+            false,
+            302,
+            "Confluence attachment upload failed",
+            Some(&unknown),
+        ),
+        // The first upload was rejected: nothing was applied.
+        (false, 400, "Confluence attachment upload failed", None),
+        // An upload applied before the next one was rejected.
+        (
+            true,
+            400,
+            "Confluence attachment upload partially failed",
+            Some(&unknown),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        if first_ok {
+            Mock::given(method("POST"))
+                .and(path("/wiki/rest/api/content/123456/child/attachment"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(attachment.clone()))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/wiki/rest/api/content/123456/child/attachment"))
+            .respond_with(ResponseTemplate::new(failure_status))
+            .mount(&server)
+            .await;
+        let mut config = confluence_config();
+        config.attachments.media_types = vec!["text/plain".to_string()];
+        let error = ConfluenceProvider::with_backend(
+            config,
+            ProviderLimits::default(),
+            Arc::new(http_confluence_backend_for_server(&server)),
+        )
+        .invoke(page_attachment_add_invocation(&["first", "second"]))
+        .await
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(error.message, message);
+        let result = error.result.as_deref();
+        assert_eq!(
+            result.and_then(|result| result.get("mutationStatus")),
+            receipt.map(|receipt| &receipt["mutationStatus"]),
+            "{message} {failure_status}"
+        );
+        if first_ok {
+            let result = result.unwrap();
+            assert_eq!(result["status"], "partial");
+            assert_eq!(result["attachments"][0]["attachmentId"], "att1");
+            assert_eq!(result["retrySafe"], false);
+        } else {
+            assert_eq!(result, receipt);
+        }
+    }
+}
+
+/// A page `attachment.add` of one text file per name, admitted with the
+/// page's preflight state.
+fn page_attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
+    let page = ConfluencePage {
+        id: "123456".to_string(),
+        title: "Runbook".to_string(),
+        space: "ENG".to_string(),
+        web_url: None,
+        space_web_url: None,
+        status: Some("current".to_string()),
+        version: 7,
+        created_at: None,
+        updated_at: None,
+        created_by: None,
+        updated_by: None,
+        bodies: BTreeMap::new(),
+    };
+    InvocationBuilder::new("confluence", "attachment.add")
+        .inputs(json!({
+            "pageId": "123456",
+            "attachments": names.iter().enumerate().map(|(index, name)| json!({
+                "field": format!("file{index}"),
+                "filename": format!("{name}.txt"),
+                "contentType": "text/plain",
+                "size": name.len(),
+                "sha256": sha256_hex(name.as_bytes()),
+            })).collect::<Vec<_>>(),
+        }))
+        .resources(BTreeMap::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .credential(credential())
+        .lookup_credential(credential())
+        .body_parts(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    BrokerBodyPart::in_memory(
+                        format!("file{index}"),
+                        Some(format!("{name}.txt")),
+                        Some("text/plain".to_string()),
+                        name.as_bytes().to_vec(),
+                    )
+                })
+                .collect(),
+        )
+        .state(ProviderState::new(ConfluencePagePreflight {
+            page,
+            upstream_status: 200,
+            upstream_duration_ms: 1,
+        }))
+        .build()
 }
 
 fn http_confluence_backend_for_server(server: &MockServer) -> HttpConfluenceBackend {

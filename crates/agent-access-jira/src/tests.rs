@@ -6414,6 +6414,262 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     );
 }
 
+#[tokio::test]
+async fn write_receipts_follow_what_jira_may_have_applied() {
+    let not_applied = json!({"mutationStatus": "not_applied", "retrySafe": true});
+    let unknown = json!({"mutationStatus": "unknown", "retrySafe": false});
+    let write = JiraWrite::new(json!({"issueId": "10001", "issueKey": "PROJ-1"}));
+    let unverified = |stage: &str| {
+        json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": stage,
+            "safeLocators": {"issueId": "10001", "issueKey": "PROJ-1"},
+        })
+    };
+    // Only the SDK's not-sent proof becomes `NotSent`; a send that may have
+    // reached Jira becomes `NoResponse`. Both keep the reason and message a
+    // timeout or transport failure reports.
+    for (timed_out, reason, message) in [
+        (
+            false,
+            ReasonCode::UpstreamConnectionFailed,
+            "Jira request failed",
+        ),
+        (true, ReasonCode::UpstreamTimeout, "Jira request timed out"),
+    ] {
+        let unsent = jira_upstream_error(UpstreamError::NotSent {
+            timed_out,
+            detail: "connection refused".to_string(),
+        });
+        assert_eq!(unsent, JiraBackendError::NotSent { timed_out });
+        let unanswered = jira_upstream_error(if timed_out {
+            UpstreamError::Timeout
+        } else {
+            UpstreamError::Transport("reset".to_string())
+        });
+        assert_eq!(unanswered, JiraBackendError::NoResponse { timed_out });
+        for (error, receipt) in [(unsent, &not_applied), (unanswered, &unknown)] {
+            assert_eq!(jira_backend_reason_code(&error), reason);
+            assert_eq!(sanitized_backend_reason(&error), reason.as_str());
+            let failure = write.failed(error.clone());
+            assert_eq!(failure.decision(), crate::Decision::Error);
+            assert_eq!(failure.reason_code(), reason);
+            assert_eq!(failure.message, message);
+            assert_eq!(failure.result.as_deref(), Some(receipt));
+            // Reads carry no mutation receipt.
+            let read = jira_backend_error(error);
+            assert_eq!(read.reason_code(), reason);
+            assert_eq!(read.message, message);
+            assert!(read.result.is_none());
+        }
+    }
+    // A 5xx may follow a committed write; a success status followed by an
+    // unreadable response means Jira accepted it.
+    let server_error = write.failed(JiraBackendError::HttpStatus(502));
+    assert_eq!(server_error.reason_code(), ReasonCode::UpstreamFailed);
+    assert_eq!(server_error.result.as_deref(), Some(&unknown));
+    // The Broker never follows a redirect: the write may have committed.
+    let redirected = write.failed(JiraBackendError::Redirected);
+    assert_eq!(redirected.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(redirected.message, "Jira response protocol error");
+    assert_eq!(redirected.result.as_deref(), Some(&unknown));
+    assert_eq!(
+        sanitized_backend_reason(&JiraBackendError::Redirected),
+        "upstream_protocol_failed"
+    );
+    for (error, reason) in [
+        (JiraBackendError::Timeout, ReasonCode::UpstreamTimeout),
+        (
+            JiraBackendError::Transport("body".to_string()),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+        (
+            JiraBackendError::ResponseTooLarge,
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            JiraBackendError::Protocol("shape".to_string()),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+    ] {
+        let accepted = accepted_if_success(201)(error.clone());
+        assert_eq!(jira_backend_reason_code(&accepted), reason);
+        let failure = write.failed(accepted);
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(failure.message, jira_backend_error(error.clone()).message);
+        assert_eq!(
+            failure.result.as_deref(),
+            Some(&unverified("mutation_response"))
+        );
+        // The same failure after an error status, or before sending, is not
+        // an accepted write.
+        assert_eq!(accepted_if_success(400)(error.clone()), error);
+        assert!(write.failed(error).result.is_none());
+    }
+    // Rejections and throttling carry no receipt.
+    for error in [
+        JiraBackendError::HttpStatus(409),
+        JiraBackendError::Forbidden,
+        JiraBackendError::NotFound,
+        JiraBackendError::RateLimited(None),
+        jira_upstream_error(UpstreamError::NotAllowed),
+    ] {
+        assert!(
+            write
+                .failed(error)
+                .result
+                .as_deref()
+                .is_none_or(|result| result.get("mutationStatus").is_none())
+        );
+    }
+
+    let update = |error: Option<JiraBackendError>, readback: Option<JiraBackendError>| {
+        let mut backend = StubJiraBackend::default();
+        backend.issues.insert("PROJ-1".to_string(), visible_issue());
+        *backend.issue_update_error.lock().unwrap() = error;
+        if let Some(readback) = readback {
+            backend
+                .issue_errors
+                .lock()
+                .unwrap()
+                .insert("PROJ-1".to_string(), readback);
+        }
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
+    };
+    let update_invocation = || {
+        per_user_invocation(
+            "issue.update",
+            json!({"issue": "PROJ-1", "summary": "new summary"}),
+            vec![],
+        )
+    };
+    for (error, reason, receipt) in [
+        (
+            JiraBackendError::NotSent { timed_out: false },
+            ReasonCode::UpstreamConnectionFailed,
+            not_applied.clone(),
+        ),
+        (
+            JiraBackendError::NoResponse { timed_out: true },
+            ReasonCode::UpstreamTimeout,
+            unknown.clone(),
+        ),
+        (
+            JiraBackendError::HttpStatus(503),
+            ReasonCode::UpstreamFailed,
+            unknown.clone(),
+        ),
+        (
+            accepted_if_success(204)(JiraBackendError::Transport("body".to_string())),
+            ReasonCode::UpstreamConnectionFailed,
+            unverified("mutation_response"),
+        ),
+    ] {
+        let failure = update(Some(error), None)
+            .invoke(update_invocation())
+            .await
+            .unwrap_err();
+        assert_eq!(failure.reason_code(), reason);
+        assert_eq!(failure.result.as_deref(), Some(&receipt));
+    }
+    // A read-back that times out after the update applied leaves it
+    // unverified at the read-back stage, with its own reason.
+    let failure = update(None, Some(JiraBackendError::NoResponse { timed_out: true }))
+        .invoke(update_invocation())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.reason_code(), ReasonCode::UpstreamTimeout);
+    assert_eq!(
+        failure.result.as_deref(),
+        Some(&unverified("post_update_readback"))
+    );
+
+    // A created comment that does not match the request was still created.
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".to_string(), visible_issue());
+    *backend.add_comment_parent_override.lock().unwrap() = Some(Some("10040".to_string()));
+    let failure =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
+            .invoke(per_user_invocation(
+                "comment.add",
+                json!({"issue": "PROJ-1", "contentFormat": "adf", "content": adf_text("hello")}),
+                vec![],
+            ))
+            .await
+            .unwrap_err();
+    assert_eq!(failure.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(
+        failure.result.as_deref(),
+        Some(&unverified("mutation_response"))
+    );
+
+    // An attachment batch whose first upload was unsent applied nothing; one
+    // whose first upload may have applied, or that stopped after an applied
+    // upload, has an unknown outcome. A rejected first upload applied
+    // nothing either.
+    let stopped_after = |successes, error| {
+        let mut backend = StubJiraBackend::default();
+        backend.issues.insert("PROJ-1".to_string(), visible_issue());
+        *backend.fail_upload_after_successes.lock().unwrap() = Some(successes);
+        *backend.upload_error.lock().unwrap() = Some(error);
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
+    };
+    for (successes, error, receipt) in [
+        (
+            0,
+            JiraBackendError::NotSent { timed_out: true },
+            Some(&not_applied),
+        ),
+        (
+            0,
+            JiraBackendError::NoResponse { timed_out: false },
+            Some(&unknown),
+        ),
+        (0, JiraBackendError::HttpStatus(500), Some(&unknown)),
+        (0, JiraBackendError::Redirected, Some(&unknown)),
+        (
+            0,
+            accepted_if_success(200)(JiraBackendError::Timeout),
+            Some(&unknown),
+        ),
+        (0, JiraBackendError::HttpStatus(413), None),
+    ] {
+        let failure = stopped_after(successes, error.clone())
+            .invoke(attachment_add_invocation(&["first", "second"]))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(failure.message, "Jira attachment upload failed");
+        assert_eq!(failure.result.as_deref(), receipt, "{error:?}");
+    }
+    assert_eq!(
+        stopped_after(0, JiraBackendError::NotSent { timed_out: true })
+            .invoke(attachment_add_invocation(&["first", "second"]))
+            .await
+            .unwrap_err()
+            .audit
+            .unwrap()["attachments"][0]["reason"],
+        "upstream_timeout"
+    );
+    for error in [
+        JiraBackendError::NotSent { timed_out: true },
+        JiraBackendError::HttpStatus(413),
+    ] {
+        let failure = stopped_after(1, error)
+            .invoke(attachment_add_invocation(&["first", "second"]))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(failure.message, "Jira attachment upload partially failed");
+        let result = failure.result.as_deref().unwrap();
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
+        assert_eq!(result["mutationStatus"], "unknown", "{result}");
+        assert_eq!(result["retrySafe"], false);
+    }
+}
+
 /// Throttling after an applied write reports the write as applied but
 /// unverified, never as a rate limit to wait out and retry.
 fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locators: Value) {
@@ -9058,7 +9314,11 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
         ))
         .await
         .unwrap_err();
-    assert!(matches!(error, JiraBackendError::Timeout), "{error:?}");
+    // Jira accepted the upload with a 200 before its body stalled.
+    assert_eq!(
+        error,
+        JiraBackendError::AcceptedUnreadable(Box::new(JiraBackendError::Timeout))
+    );
     let events = capture.take_upstream_requests();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["upstreamOperation"], "attachment.add");

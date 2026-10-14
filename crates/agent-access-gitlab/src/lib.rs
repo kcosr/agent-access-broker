@@ -765,11 +765,12 @@ impl GitlabProvider {
             .await?;
         ensure_upload_project_scope(&project, request.resource_scopes()?)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
             .backend
             .upload_project(project.id, upload, credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         // Attachment URLs contain secret path segments. Keep all returned metadata
         // out of audit fields and object identifiers.
         Ok(gitlab_result(
@@ -949,13 +950,16 @@ impl GitlabProvider {
             )
             .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
             .backend
             .create_issue(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_issue_in_project(&project, &response.value)?;
-        ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_issue_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
+        ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)
+            .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "issue.create",
             &project,
@@ -1010,13 +1014,18 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &existing.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "issueIid": inputs.iid }),
+        );
         let response = self
             .backend
             .update_issue(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_issue_in_project(&project, &response.value)?;
-        ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_issue_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
+        ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)
+            .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "issue.update",
             &project,
@@ -1149,12 +1158,16 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "issueIid": inputs.iid }),
+        );
         let response = self
             .backend
             .create_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_note_target_issue(&response.value, inputs.iid)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_note_target_issue(&response.value, inputs.iid)
+            .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "issue.note.add",
             &project,
@@ -1245,18 +1258,22 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "issueIid": inputs.iid, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .update_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         ensure_issue_note_consistent(
             &project,
             &issue.value,
             &response.value,
             inputs.iid,
             inputs.note_id,
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "issue.note.update",
             &project,
@@ -1312,11 +1329,14 @@ impl GitlabProvider {
             inputs.iid,
             inputs.note_id,
         )?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "issueIid": inputs.iid, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .delete_issue_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         let mut result = gitlab_result(
             "issue.note.delete",
             &project,
@@ -1501,16 +1521,21 @@ impl GitlabProvider {
             .await
             .map_err(gitlab_lookup_backend_error)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "sourceBranch": inputs.source_branch, "targetBranch": inputs.target_branch }),
+        );
         let response = self
             .backend
             .create_merge_request(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_merge_request_in_project(&project, &response.value)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_merge_request_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         ensure_merge_request_description_within_cap(
             &response.value,
             self.config.content.max_body_bytes,
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.create",
             &project,
@@ -1573,16 +1598,21 @@ impl GitlabProvider {
                 .map_err(gitlab_lookup_backend_error)?;
         }
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
+        );
         let response = self
             .backend
             .update_merge_request(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_merge_request_in_project(&project, &response.value)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_merge_request_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         ensure_merge_request_description_within_cap(
             &response.value,
             self.config.content.max_body_bytes,
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.update",
             &project,
@@ -1715,12 +1745,16 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
+        );
         let response = self
             .backend
             .create_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_note_target_merge_request(&response.value, inputs.iid)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_note_target_merge_request(&response.value, inputs.iid)
+            .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.note.add",
             &project,
@@ -1811,18 +1845,22 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .update_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         ensure_merge_request_note_consistent(
             &project,
             &merge_request.value,
             &response.value,
             inputs.iid,
             inputs.note_id,
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.note.update",
             &project,
@@ -1878,11 +1916,14 @@ impl GitlabProvider {
             inputs.iid,
             inputs.note_id,
         )?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .delete_merge_request_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         let mut result = gitlab_result(
             "merge_request.note.delete",
             &project,
@@ -4439,12 +4480,16 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
+        );
         let response = self
             .backend
             .create_merge_request_discussion(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_discussion_target_merge_request(&response.value, inputs.iid)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_discussion_target_merge_request(&response.value, inputs.iid)
+            .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.discussion.add",
             &project,
@@ -4505,18 +4550,22 @@ impl GitlabProvider {
             Some(inputs.note_id),
             None,
         )?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "discussionId": inputs.discussion_id, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .update_merge_request_discussion_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         ensure_merge_request_note_consistent(
             &project,
             &merge_request.value,
             &response.value,
             inputs.iid,
             inputs.note_id,
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let mut result = gitlab_result_with_request_body_audit(
             "merge_request.discussion.note.update",
             &project,
@@ -4576,11 +4625,14 @@ impl GitlabProvider {
             Some(inputs.note_id),
             None,
         )?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "discussionId": inputs.discussion_id, "noteId": inputs.note_id }),
+        );
         let response = self
             .backend
             .delete_merge_request_discussion_note(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         let mut result = gitlab_result(
             "merge_request.discussion.note.delete",
             &project,
@@ -4632,11 +4684,14 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "discussionId": inputs.discussion_id }),
+        );
         let response = self
             .backend
             .set_merge_request_discussion_resolved(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         ensure_merge_request_discussion_consistent(
             &project,
             &merge_request.value,
@@ -4645,7 +4700,8 @@ impl GitlabProvider {
             &inputs.discussion_id,
             None,
             Some(inputs.change.resolved()),
-        )?;
+        )
+        .map_err(|error| write.unverified(error))?;
         let operation = inputs.change.operation();
         let mut result = gitlab_result(
             operation,
@@ -4693,13 +4749,17 @@ impl GitlabProvider {
         ensure_merge_request_in_project(&project, &existing)?;
         require_matching_merge_request_sha(&inputs.sha, &existing)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
+        );
         let response = self
             .backend
             .merge_merge_request(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_merge_backend_error)?;
+            .map_err(|error| gitlab_merge_backend_error(&write, error))?;
         let mut merged = response.value;
-        ensure_merge_request_in_project(&project, &merged)?;
+        ensure_merge_request_in_project(&project, &merged)
+            .map_err(|error| write.unverified(error))?;
         let request_body_audit =
             request_body_audit_for_merge_request_merge(&inputs, &existing, &merged);
         merged.description = None;
@@ -4813,11 +4873,14 @@ impl GitlabProvider {
         )
         .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "branch": inputs.branch }),
+        );
         let response = self
             .backend
             .create_branch(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "branch.create",
             &project,
@@ -5118,11 +5181,14 @@ impl GitlabProvider {
         )
         .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
+        );
         let response = self
             .backend
             .create_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "file.create",
             &project,
@@ -5181,11 +5247,14 @@ impl GitlabProvider {
         ensure_file_path_matches(&inputs.path, &existing)?;
         require_matching_last_commit_id(inputs.last_commit_id.as_deref(), &existing)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
+        );
         let response = self
             .backend
             .update_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "file.update",
             &project,
@@ -5241,11 +5310,14 @@ impl GitlabProvider {
         ensure_file_path_matches(&inputs.path, &existing)?;
         require_matching_last_commit_id(inputs.last_commit_id.as_deref(), &existing)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
+        );
         let response = self
             .backend
             .delete_file(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "file.delete",
             &project,
@@ -5378,11 +5450,14 @@ impl GitlabProvider {
         )
         .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "branch": inputs.branch }),
+        );
         let response = self
             .backend
             .create_commit(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
+            .map_err(|error| write.failed(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "commit.create",
             &project,
@@ -5488,12 +5563,16 @@ impl GitlabProvider {
             .ensure_ci_ref_execution_allowed(&project, &inputs.ref_name, lookup_credential)
             .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "ref": inputs.ref_name }),
+        );
         let response = self
             .backend
             .run_pipeline(project.id, inputs.clone(), credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_pipeline_in_project(&project, &response.value)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_pipeline_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "pipeline.run",
             &project,
@@ -5552,6 +5631,9 @@ impl GitlabProvider {
             .value;
         ensure_pipeline_in_project(&project, &existing)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "pipelineId": inputs.pipeline_id }),
+        );
         let response = match change {
             GitlabPipelineStateChange::Retry => {
                 self.backend
@@ -5564,8 +5646,9 @@ impl GitlabProvider {
                     .await
             }
         }
-        .map_err(gitlab_write_error)?;
-        ensure_pipeline_in_project(&project, &response.value)?;
+        .map_err(|error| write.failed(error))?;
+        ensure_pipeline_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         Ok(gitlab_result(
             operation,
             &project,
@@ -5809,12 +5892,16 @@ impl GitlabProvider {
             .ensure_ci_ref_execution_allowed(&project, ref_name, lookup_credential)
             .await?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "jobId": inputs.job_id }),
+        );
         let response = self
             .backend
             .play_job(project.id, inputs.job_id, credential)
             .await
-            .map_err(gitlab_write_error)?;
-        ensure_job_in_project(&project, &response.value)?;
+            .map_err(|error| write.failed(error))?;
+        ensure_job_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         Ok(gitlab_result_with_request_body_audit(
             "job.play",
             &project,
@@ -5849,6 +5936,9 @@ impl GitlabProvider {
             .value;
         ensure_job_in_project(&project, &existing)?;
         let credential = execution_credential(&request)?;
+        let write = PlainWrite::new(
+            json!({ "project": project.path_with_namespace, "jobId": inputs.job_id }),
+        );
         let response = match change {
             GitlabJobStateChange::Retry => {
                 self.backend
@@ -5861,8 +5951,9 @@ impl GitlabProvider {
                     .await
             }
         }
-        .map_err(gitlab_write_error)?;
-        ensure_job_in_project(&project, &response.value)?;
+        .map_err(|error| write.failed(error))?;
+        ensure_job_in_project(&project, &response.value)
+            .map_err(|error| write.unverified(error))?;
         Ok(gitlab_result(
             operation,
             &project,
@@ -12731,6 +12822,10 @@ fn mutation_backend_error(
     locators: MutationSafeLocators,
 ) -> ProviderError {
     match error {
+        // A request that was never prepared keeps the mapping of its cause.
+        GitlabBackendError::RequestUnbuilt(error) => {
+            mutation_backend_error(*error, stage, locators)
+        }
         // Only the write itself can be proven unsent; an unsent readback
         // leaves an applied write unverified.
         GitlabBackendError::NotSent { timed_out }
@@ -12743,6 +12838,7 @@ fn mutation_backend_error(
         )
         .with_internal_diagnostic_code(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str()),
         GitlabBackendError::NotSent { .. }
+        | GitlabBackendError::NoResponse { .. }
         | GitlabBackendError::Transport(_)
         | GitlabBackendError::Timeout
         | GitlabBackendError::Protocol(_)
@@ -14086,13 +14182,13 @@ fn gitlab_proof_backend_error(error: GitlabBackendError) -> ProviderError {
     }
 }
 
-fn gitlab_merge_backend_error(error: GitlabBackendError) -> ProviderError {
+fn gitlab_merge_backend_error(write: &PlainWrite, error: GitlabBackendError) -> ProviderError {
     match error {
         GitlabBackendError::HttpStatus(409) => ProviderError::deny(
             ReasonCode::VersionConflict,
             "GitLab merge request sha does not match current metadata",
         ),
-        other => gitlab_write_error(other),
+        other => write.failed(other),
     }
 }
 
@@ -14108,16 +14204,61 @@ pub(crate) fn mutation_not_sent(timed_out: bool) -> ProviderError {
         },
         "GitLab request was not sent; nothing was applied",
     )
-    .with_result(json!({ "mutationStatus": "not_applied", "retrySafe": true }))
+    .with_mutation_receipt(MutationReceipt::not_applied())
 }
 
-/// The error of an action's single upstream write that carries no
-/// verification receipt: a proven-unsent request reports `not_applied`, and
-/// every other failure keeps its ordinary mapping.
-fn gitlab_write_error(error: GitlabBackendError) -> ProviderError {
-    match error {
-        GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
-        other => gitlab_backend_error(other),
+/// The receipts of an action's single upstream write that has no
+/// verification contract. Its failures keep their ordinary reason and
+/// message.
+pub(crate) struct PlainWrite {
+    /// What the write targets, from the validated request and the responses
+    /// that preceded the write; never from the write's own response.
+    locators: Value,
+}
+
+impl PlainWrite {
+    pub(crate) fn new(locators: Value) -> Self {
+        Self { locators }
+    }
+
+    /// The failure of the write request itself:
+    ///
+    /// - proven unsent: `not_applied`;
+    /// - no response, a 5xx a proxy may return after GitLab committed the
+    ///   write, or a redirect the Broker never follows: `unknown`;
+    /// - a success status whose response then stalled, failed, exceeded the
+    ///   byte cap or did not parse: `applied_unverified`;
+    /// - a rejection, or a failure before anything was sent: no receipt.
+    pub(crate) fn failed(&self, error: GitlabBackendError) -> ProviderError {
+        match error {
+            GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
+            GitlabBackendError::NoResponse { .. }
+            | GitlabBackendError::HttpStatus(300..=399 | 500..=599) => {
+                gitlab_backend_error(error).with_mutation_receipt(MutationReceipt::unknown())
+            }
+            GitlabBackendError::Timeout
+            | GitlabBackendError::Transport(_)
+            | GitlabBackendError::ResponseTooLarge
+            | GitlabBackendError::DraftPositionShapeInvalid
+            | GitlabBackendError::Protocol(_) => self.unverified(gitlab_backend_error(error)),
+            GitlabBackendError::RequestUnbuilt(_)
+            | GitlabBackendError::Unauthorized
+            | GitlabBackendError::Forbidden
+            | GitlabBackendError::NotFound
+            | GitlabBackendError::HttpStatus(_)
+            | GitlabBackendError::RateLimited(_)
+            | GitlabBackendError::Validation { .. } => gitlab_backend_error(error),
+        }
+    }
+
+    /// A failure after GitLab accepted the write, such as a response that
+    /// does not match the request: `applied_unverified` at the
+    /// `mutation_response` stage.
+    pub(crate) fn unverified(&self, error: ProviderError) -> ProviderError {
+        error.or_mutation_receipt(MutationReceipt::applied_unverified(
+            "mutation_response",
+            self.locators.clone(),
+        ))
     }
 }
 
@@ -14156,13 +14297,16 @@ fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {
             format!("GitLab rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        GitlabBackendError::NotSent { timed_out: false } | GitlabBackendError::Transport(_) => {
-            ProviderError::error(
-                ReasonCode::UpstreamConnectionFailed,
-                "GitLab request failed",
-            )
-        }
-        GitlabBackendError::NotSent { timed_out: true } | GitlabBackendError::Timeout => {
+        GitlabBackendError::RequestUnbuilt(error) => gitlab_backend_error(*error),
+        GitlabBackendError::NotSent { timed_out: false }
+        | GitlabBackendError::NoResponse { timed_out: false }
+        | GitlabBackendError::Transport(_) => ProviderError::error(
+            ReasonCode::UpstreamConnectionFailed,
+            "GitLab request failed",
+        ),
+        GitlabBackendError::NotSent { timed_out: true }
+        | GitlabBackendError::NoResponse { timed_out: true }
+        | GitlabBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "GitLab request timed out")
         }
         GitlabBackendError::ResponseTooLarge => ProviderError::error(
@@ -14214,12 +14358,6 @@ pub enum PositionInputCategory {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PositionInputFailureResult {
     input_category: PositionInputCategory,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MutationVerificationStatus {
-    AppliedUnverified,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -14339,44 +14477,22 @@ where
     ))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MutationVerificationFailureResult {
-    mutation_status: MutationVerificationStatus,
-    retry_safe: bool,
-    verification_stage: MutationVerificationStage,
-    safe_locators: MutationSafeLocators,
-}
-
-impl MutationVerificationFailureResult {
-    pub(crate) fn new(
-        verification_stage: MutationVerificationStage,
-        safe_locators: MutationSafeLocators,
-    ) -> Self {
-        Self {
-            mutation_status: MutationVerificationStatus::AppliedUnverified,
-            retry_safe: false,
-            verification_stage,
-            safe_locators,
-        }
-    }
-}
-
 pub fn mutation_verification_failed(
     verification_stage: MutationVerificationStage,
     safe_locators: MutationSafeLocators,
 ) -> ProviderError {
+    let stage = serde_json::to_value(verification_stage)
+        .expect("mutation verification stage is serializable");
     ProviderError::error(
         ReasonCode::MutationVerificationFailed,
         "upstream mutation could not be fully verified",
     )
-    .with_result(
-        serde_json::to_value(MutationVerificationFailureResult::new(
-            verification_stage,
-            safe_locators,
-        ))
-        .expect("mutation verification failure result is serializable"),
-    )
+    .with_mutation_receipt(MutationReceipt::applied_unverified(
+        stage
+            .as_str()
+            .expect("mutation verification stage serializes as a string"),
+        serde_json::to_value(safe_locators).expect("mutation safe locators are serializable"),
+    ))
 }
 
 pub fn position_input_invalid(input_category: PositionInputCategory) -> ProviderError {

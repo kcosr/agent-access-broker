@@ -186,12 +186,16 @@ impl GmailProvider {
             search_pages: ContinuationSigner::new(None),
         })
     }
+    /// Sends one Gmail request. `mutation` holds a write's safe locators: its
+    /// failures carry a mutation receipt for what Gmail may have applied.
+    #[allow(clippy::too_many_arguments)]
     async fn request(
         &self,
         credential: &DelegatedCredential,
         method: Method,
         url: Url,
         body: Option<Value>,
+        mutation: Option<&Value>,
         action: &str,
         budget: &mut RequestBudget,
     ) -> Result<Value, ProviderError> {
@@ -217,10 +221,30 @@ impl GmailProvider {
                 )
                 .await
                 .map_err(|e| {
-                    ProviderError::error(
-                        e.reason_code(),
-                        if method == Method::GET { "Gmail request failed" } else { "Gmail request failed; mutation outcome may be unknown, inspect before retrying" },
-                    )
+                    if method == Method::GET {
+                        return ProviderError::error(e.reason_code(), "Gmail request failed");
+                    }
+                    match (e, mutation) {
+                        // Nothing reached Gmail: an earlier attempt could only
+                        // have been rejected with 401, so nothing was applied.
+                        (e @ UpstreamError::NotSent { .. }, Some(_)) => {
+                            ProviderError::error(e.reason_code(), "Gmail request failed")
+                                .with_mutation_receipt(MutationReceipt::not_applied())
+                        }
+                        (e, mutation) => {
+                            let failure = ProviderError::error(
+                                e.reason_code(),
+                                "Gmail request failed; mutation outcome may be unknown, inspect before retrying",
+                            );
+                            // The SDK refused the URL before sending it; any
+                            // other failure may have reached Gmail.
+                            if mutation.is_some() && !matches!(e, UpstreamError::NotAllowed) {
+                                failure.with_mutation_receipt(MutationReceipt::unknown())
+                            } else {
+                                failure
+                            }
+                        }
+                    }
                 })?;
             budget.last_status = Some(response.status().as_u16());
             // A 401 explicitly rejected authentication. Only that response may
@@ -249,6 +273,11 @@ impl GmailProvider {
                         .message
                         .push_str("; mutation outcome may be unknown, inspect before retrying");
                 }
+                // The Broker never follows a redirect, and a proxy can answer
+                // 5xx after Gmail applied the change.
+                if mutation.is_some() && ((300..400).contains(&status) || status >= 500) {
+                    error = error.with_mutation_receipt(MutationReceipt::unknown());
+                }
                 Err(error)
             } else {
                 read_response(response, &mut budget.remaining)
@@ -259,7 +288,17 @@ impl GmailProvider {
                                 "; mutation outcome may be unknown, inspect before retrying",
                             );
                         }
-                        error
+                        // Gmail accepted the change with a success status, but
+                        // its response could not be read.
+                        match mutation {
+                            Some(locators) => {
+                                error.with_mutation_receipt(MutationReceipt::applied_unverified(
+                                    "mutation_response",
+                                    locators.clone(),
+                                ))
+                            }
+                            None => error,
+                        }
                     })
             };
             if let Some(trace) = trace {
@@ -336,6 +375,7 @@ impl GmailProvider {
                         Method::GET,
                         self.url("profile"),
                         None,
+                        None,
                         action,
                         budget,
                     )
@@ -353,6 +393,7 @@ impl GmailProvider {
                         credential,
                         Method::GET,
                         self.url("labels"),
+                        None,
                         None,
                         action,
                         budget,
@@ -399,7 +440,7 @@ impl GmailProvider {
                     url.query_pairs_mut().append_pair("pageToken", token);
                 }
                 let v = self
-                    .request(credential, Method::GET, url, None, action, budget)
+                    .request(credential, Method::GET, url, None, None, action, budget)
                     .await?;
                 let entries = match v.get("messages") {
                     None => &[][..],
@@ -428,7 +469,7 @@ impl GmailProvider {
                         url.query_pairs_mut().append_pair("metadataHeaders", header);
                     }
                     let detail = self
-                        .request(credential, Method::GET, url, None, action, budget)
+                        .request(credential, Method::GET, url, None, None, action, budget)
                         .await?;
                     messages.push(mail::message(&detail, false)?);
                 }
@@ -454,8 +495,17 @@ impl GmailProvider {
                 if verb == "view" {
                     url.query_pairs_mut().append_pair("format", "full");
                 }
+                let locators = (verb != "view").then(|| json!({ entity: id }));
                 let value = self
-                    .request(credential, method, url, body, action, budget)
+                    .request(
+                        credential,
+                        method,
+                        url,
+                        body,
+                        locators.as_ref(),
+                        action,
+                        budget,
+                    )
                     .await?;
                 if verb == "view" {
                     if entity == "message" {
@@ -507,10 +557,18 @@ impl Provider for GmailProvider {
             || invocation.action().ends_with(".restore");
         let result = tokio::time::timeout(DEADLINE, self.execute(&invocation, &mut budget))
             .await
-            .unwrap_or_else(|_| Err(ProviderError::error(
-                ReasonCode::UpstreamTimeout,
-                if mutation { "Gmail operation exceeded its deadline; mutation outcome may be unknown, inspect before retrying" } else { "Gmail operation exceeded its deadline" },
-            )))
+            .unwrap_or_else(|_| {
+                let error = ProviderError::error(
+                    ReasonCode::UpstreamTimeout,
+                    if mutation { "Gmail operation exceeded its deadline; mutation outcome may be unknown, inspect before retrying" } else { "Gmail operation exceeded its deadline" },
+                );
+                // The mutation may already have been sent.
+                Err(if mutation {
+                    error.with_mutation_receipt(MutationReceipt::unknown())
+                } else {
+                    error
+                })
+            })
             .map_err(|mut error| {
                 error.audit = Some(Box::new(audit.clone()));
                 error.object_ids = object_ids.clone().map(Box::new);

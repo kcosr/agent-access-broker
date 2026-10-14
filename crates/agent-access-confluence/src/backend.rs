@@ -863,8 +863,30 @@ pub enum ConfluenceBackendError {
     RateLimited(Option<UpstreamRetryAfter>),
     #[error("upstream validation failed with status {status}")]
     Validation { status: u16, message: String },
+    /// The SDK proved the request never reached Confluence: it could not be
+    /// built, or no connection was established (`timed_out` for a connect
+    /// timeout). It reports the same reason as `Timeout` or `Transport`.
+    #[error("request was not sent")]
+    NotSent { timed_out: bool },
+    /// The request may have reached Confluence, but no response arrived: it
+    /// timed out (`timed_out`), its connection failed after it was sent, or
+    /// the SDK reported a failure Confluence does not classify. It reports the
+    /// same reason as `Timeout` or `Transport`.
+    #[error("request got no response")]
+    NoResponse { timed_out: bool },
+    /// Confluence answered a write with a success status, but its response
+    /// then failed, stalled, exceeded the byte cap or did not parse; reported
+    /// like the wrapped failure.
+    #[error("write accepted but its response failed: {0}")]
+    AcceptedUnreadable(Box<ConfluenceBackendError>),
+    /// Confluence answered with a redirect, which the Broker never follows. It
+    /// reports the same reason as `Protocol`.
+    #[error("Confluence redirect responses are rejected")]
+    Redirected,
+    /// Reading a response failed, or an upload file could not be opened.
     #[error("transport: {0}")]
     Transport(String),
+    /// Reading a response stalled.
     #[error("request timed out")]
     Timeout,
     #[error("response too large")]
@@ -873,8 +895,24 @@ pub enum ConfluenceBackendError {
     Protocol(String),
 }
 
+/// Marks a failure that followed a write's success `status` as
+/// [`ConfluenceBackendError::AcceptedUnreadable`]; one after any other status
+/// is returned unchanged.
+pub(crate) fn accepted_if_success(
+    status: u16,
+) -> impl FnOnce(ConfluenceBackendError) -> ConfluenceBackendError {
+    move |error| {
+        if (200..300).contains(&status) {
+            ConfluenceBackendError::AcceptedUnreadable(Box::new(error))
+        } else {
+            error
+        }
+    }
+}
+
 pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> ProviderError {
     match error {
+        ConfluenceBackendError::AcceptedUnreadable(error) => confluence_backend_error(*error),
         ConfluenceBackendError::Unauthorized => ProviderError::error(
             ReasonCode::UpstreamUnauthorized,
             "Confluence credential was rejected",
@@ -903,21 +941,27 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
             format!("Confluence rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        ConfluenceBackendError::Transport(_message) => ProviderError::error(
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::NoResponse { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => ProviderError::error(
             ReasonCode::UpstreamConnectionFailed,
             "Confluence request failed",
         ),
-        ConfluenceBackendError::Timeout => {
+        ConfluenceBackendError::NotSent { timed_out: true }
+        | ConfluenceBackendError::NoResponse { timed_out: true }
+        | ConfluenceBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "Confluence request timed out")
         }
         ConfluenceBackendError::ResponseTooLarge => ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Confluence response exceeded the configured byte cap",
         ),
-        ConfluenceBackendError::Protocol(_message) => ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence response protocol error",
-        ),
+        ConfluenceBackendError::Redirected | ConfluenceBackendError::Protocol(_) => {
+            ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                "Confluence response protocol error",
+            )
+        }
     }
 }
 
@@ -933,6 +977,7 @@ pub(crate) fn map_confluence_conflict(error: ConfluenceBackendError) -> Provider
 
 pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> ReasonCode {
     match error {
+        ConfluenceBackendError::AcceptedUnreadable(error) => confluence_backend_reason_code(error),
         ConfluenceBackendError::Unauthorized => ReasonCode::UpstreamUnauthorized,
         ConfluenceBackendError::Forbidden => ReasonCode::UpstreamForbidden,
         ConfluenceBackendError::NotFound => ReasonCode::ScopeUnresolved,
@@ -940,11 +985,15 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
         ConfluenceBackendError::HttpStatus(_) => ReasonCode::UpstreamFailed,
         ConfluenceBackendError::RateLimited(_) => ReasonCode::UpstreamRateLimited,
         ConfluenceBackendError::Validation { .. } => ReasonCode::InputInvalid,
-        ConfluenceBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
-        ConfluenceBackendError::Timeout => ReasonCode::UpstreamTimeout,
-        ConfluenceBackendError::ResponseTooLarge | ConfluenceBackendError::Protocol(_) => {
-            ReasonCode::UpstreamProtocolFailed
-        }
+        ConfluenceBackendError::NotSent { timed_out: false }
+        | ConfluenceBackendError::NoResponse { timed_out: false }
+        | ConfluenceBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
+        ConfluenceBackendError::NotSent { timed_out: true }
+        | ConfluenceBackendError::NoResponse { timed_out: true }
+        | ConfluenceBackendError::Timeout => ReasonCode::UpstreamTimeout,
+        ConfluenceBackendError::ResponseTooLarge
+        | ConfluenceBackendError::Redirected
+        | ConfluenceBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
     }
 }
 
@@ -1147,9 +1196,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await
         .unwrap_or(Err(ConfluenceBackendError::Timeout));
         complete_confluence_trace(trace, &value);
-        let value = value?;
+        let value = value.map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: first_attachment_from_value_with_required_parent(value, blog_id)?,
+            value: first_attachment_from_value_with_required_parent(value, blog_id)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1350,8 +1400,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         let moved_page_id = value
             .get("pageId")
             .and_then(Value::as_str)
@@ -1360,7 +1411,8 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 ConfluenceBackendError::Protocol(
                     "Confluence page move response omitted pageId".to_string(),
                 )
-            })?
+            })
+            .map_err(accepted_if_success(status))?
             .to_string();
         Ok(ConfluenceBackendResponse {
             value: moved_page_id,
@@ -1647,10 +1699,12 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: page_from_v2_value(value, &request.space, &request.space_id)?,
+            value: page_from_v2_value(value, &request.space, &request.space_id)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1682,10 +1736,11 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: page_from_value(value)?,
+            value: page_from_value(value).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1713,10 +1768,12 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: draft_content_from_value(value, ConfluenceDraftContentType::Page)?,
+            value: draft_content_from_value(value, ConfluenceDraftContentType::Page)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1782,10 +1839,12 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: draft_content_from_value(value, ConfluenceDraftContentType::Page)?,
+            value: draft_content_from_value(value, ConfluenceDraftContentType::Page)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1811,7 +1870,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        confluence_response_no_content(response, self.limits.max_upstream_response_bytes).await?;
+        confluence_response_no_content(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
             value: (),
             status,
@@ -1839,10 +1900,11 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: blog_from_value(value)?,
+            value: blog_from_value(value).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1868,10 +1930,11 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: blog_from_value(value)?,
+            value: blog_from_value(value).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1897,10 +1960,12 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: draft_content_from_value(value, ConfluenceDraftContentType::Blog)?,
+            value: draft_content_from_value(value, ConfluenceDraftContentType::Blog)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1966,10 +2031,12 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: draft_content_from_value(value, ConfluenceDraftContentType::Blog)?,
+            value: draft_content_from_value(value, ConfluenceDraftContentType::Blog)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1995,7 +2062,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        confluence_response_no_content(response, self.limits.max_upstream_response_bytes).await?;
+        confluence_response_no_content(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
             value: (),
             status,
@@ -2042,9 +2111,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await
         .unwrap_or(Err(ConfluenceBackendError::Timeout));
         complete_confluence_trace(trace, &value);
-        let value = value?;
+        let value = value.map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: first_attachment_from_value(value, page_id)?,
+            value: first_attachment_from_value(value, page_id)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2090,9 +2160,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await
         .unwrap_or(Err(ConfluenceBackendError::Timeout));
         complete_confluence_trace(trace, &value);
-        let value = value?;
+        let value = value.map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: first_attachment_from_value_with_required_parent(value, page_id)?,
+            value: first_attachment_from_value_with_required_parent(value, page_id)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2138,9 +2209,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await
         .unwrap_or(Err(ConfluenceBackendError::Timeout));
         complete_confluence_trace(trace, &value);
-        let value = value?;
+        let value = value.map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: first_attachment_from_value_with_required_parent(value, blog_id)?,
+            value: first_attachment_from_value_with_required_parent(value, blog_id)
+                .map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2676,10 +2748,11 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: comment_from_value(value, request.kind)?,
+            value: comment_from_value(value, request.kind).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2713,9 +2786,10 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             response,
             self.limits.max_upstream_response_bytes,
         )
-        .await?;
+        .await
+        .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: comment_from_value(value, request.kind)?,
+            value: comment_from_value(value, request.kind).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2741,7 +2815,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        confluence_response_no_content(response, self.limits.max_upstream_response_bytes).await?;
+        confluence_response_no_content(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
             value: (),
             status,
@@ -2947,24 +3023,20 @@ pub(crate) async fn send_confluence_request(
 
 pub(crate) fn confluence_upstream_error(error: UpstreamError) -> ConfluenceBackendError {
     match error {
-        // A request that never reached the upstream fails as it always has:
-        // connect timeouts as timeouts, everything else as transport errors.
-        UpstreamError::Timeout
-        | UpstreamError::NotSent {
-            timed_out: true, ..
-        } => ConfluenceBackendError::Timeout,
-        UpstreamError::Transport(message)
-        | UpstreamError::NotSent {
-            detail: message, ..
-        } => ConfluenceBackendError::Transport(message),
+        // Only the SDK's own not-sent classification proves Confluence never
+        // received the request; every other failure may have reached it.
+        UpstreamError::NotSent { timed_out, .. } => ConfluenceBackendError::NotSent { timed_out },
+        UpstreamError::Timeout => ConfluenceBackendError::NoResponse { timed_out: true },
+        UpstreamError::Transport(_) => ConfluenceBackendError::NoResponse { timed_out: false },
         UpstreamError::NotAllowed => ConfluenceBackendError::Protocol(
             "Confluence upstream URL is not allowlisted".to_string(),
         ),
         UpstreamError::Redirect => ConfluenceBackendError::Protocol(
             "Confluence attachment redirect is invalid".to_string(),
         ),
-        // Any other failure produced no usable response.
-        other => ConfluenceBackendError::Transport(other.to_string()),
+        // Any other failure produced no usable response and may have reached
+        // Confluence.
+        _ => ConfluenceBackendError::NoResponse { timed_out: false },
     }
 }
 
@@ -3661,9 +3733,7 @@ pub(crate) fn validate_confluence_body_response(
 ) -> Result<(), ConfluenceBackendError> {
     let status = response.status().as_u16();
     if response.status().is_redirection() {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence redirect responses are rejected".to_string(),
-        ));
+        return Err(ConfluenceBackendError::Redirected);
     }
     if status == 401 {
         return Err(ConfluenceBackendError::Unauthorized);

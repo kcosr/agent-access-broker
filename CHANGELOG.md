@@ -398,6 +398,19 @@ All notable changes to this project are documented in this file.
   and a `UrlPatternPolicy`: the allowlist grammar (a fixed host, no embedded
   credentials, literal, `*` or `**` path segments) plus the policy's schemes,
   emptiness, query and fragment, and repeat rules.
+- The provider SDK builds mutation receipts with `MutationReceipt`:
+  `not_applied()` for a proven-unsent write (`mutationStatus: "not_applied"`,
+  `retrySafe: true`), `unknown()` for a write that may have reached the
+  upstream without a response (`mutationStatus: "unknown"`,
+  `retrySafe: false`) and `applied_unverified(stage, safe_locators)`.
+  `ProviderError::with_mutation_receipt` attaches one to a failure's result,
+  keeping its other fields, `ProviderError::or_mutation_receipt` attaches one
+  unless the error already reports a `mutationStatus`,
+  `ProviderError::unverified_after_mutation` reports a failed read-back after an
+  applied write as `applied_unverified` (keeping throttling's
+  `mutation_verification_failed`), and `MutationReceipt::write_into` writes one
+  into a result value.
+  `MutationStatus` names the non-exhaustive status vocabulary.
 
 ### Changed
 
@@ -472,6 +485,102 @@ All notable changes to this project are documented in this file.
 - The GitLab webhook destination diagnostic for repeated patterns now reads
   `contains duplicate normalized entry` instead of
   `contains duplicate normalized destination`.
+- GitLab writes without a verification contract (issue, note, merge-request
+  and merge, general discussion, discussion-note edit/delete, resolve/reopen,
+  branch, file, commit, pipeline and job mutations, and project uploads) whose
+  request may have reached GitLab but got no response, because it timed out
+  (including a stalled upload) or its connection failed after sending, now add
+  `mutationStatus: "unknown"`, `retrySafe: false` to their unchanged
+  `upstream_timeout` or `upstream_connection_failed` error, which previously
+  carried no result. The same writes now also report `mutationStatus:
+  "unknown"`, `retrySafe: false` for a redirect or 5xx response
+  (`upstream_failed`), since the Broker never follows a redirect and a proxy can
+  answer 5xx after a committed write, and for an upstream failure GitLab does
+  not classify, and `mutationStatus:
+  "applied_unverified"`, `retrySafe: false`, `verificationStage:
+  "mutation_response"` with request-derived `safeLocators` when GitLab answered
+  with a success status whose response then failed, stalled, exceeded the byte
+  cap, did not parse, carried a body on a no-content response or did not match
+  the request. Reasons, statuses and messages are unchanged; 4xx rejections,
+  throttling and failures before sending keep no receipt.
+- Imported MCP and OpenAPI write failures whose request was never dispatched
+  (`toolDispatched: false` or `operationDispatched: false`: the tool call was
+  never sent, or the Broker refused its URL or proved it unsent) now report
+  `retrySafe: true` with their unchanged `mutationStatus: "not_applied"`
+  instead of `retrySafe: false`. Dispatched failures keep
+  `mutationStatus: "unknown"`, `retrySafe: false`.
+- A CloudBees CI `build.trigger` POST and a Teams `notification.send` request
+  that the Broker proves were never sent now add `mutationStatus:
+  "not_applied"`, `retrySafe: true` to their unchanged error (CloudBees CI:
+  `upstream_connection_failed` or `upstream_timeout`, `CloudBees CI request
+  failed`; Teams: `Teams notification request was not sent`, which also covers
+  a refused endpoint URL). Both previously carried no result. Reads, including
+  the trigger's job read, carry no receipt.
+- A Teams notification that may have reached the Workflow without a confirmed
+  outcome (a timeout, a transport failure or another unclassified failure
+  after sending, a redirect or a 5xx response) and a CloudBees CI trigger POST
+  answered with a redirect, or failing without a response in a way other than
+  a timeout, transport failure or proven-unsent request, now add
+  `mutationStatus: "unknown"`,
+  `retrySafe: false` to their unchanged error. CloudBees CI's existing
+  `applied_unverified` outcomes are unchanged.
+- A Gmail archive, trash or restore whose request the Broker proves was never
+  sent now reports `mutationStatus: "not_applied"`, `retrySafe: true` with its
+  unchanged `upstream_connection_failed` or `upstream_timeout`, and its message
+  drops the `mutation outcome may be unknown, inspect before retrying` suffix
+  (`Gmail request failed`). Mutations that may have reached Gmail keep the
+  suffix.
+- Gmail archive, trash and restore failures that may have applied now carry a
+  receipt with their unchanged reason and message: `mutationStatus:
+  "unknown"`, `retrySafe: false` after a timeout or transport failure once
+  sent, a redirect or 5xx response or the operation deadline, and
+  `mutationStatus:
+  "applied_unverified"`, `verificationStage: "mutation_response"` with the
+  requested `message` or `thread` ID as `safeLocators` when Gmail answered
+  with a success status whose body could not be read or parsed.
+- Jira write actions (`issue.create`, `issue.child.create`, `issue.update`,
+  `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`,
+  `comment.update`, `comment.delete`, `comment.property.set`,
+  `comment.property.delete`, and `attachment.add` when its first upload was not
+  sent) whose request the Broker proves was never sent now add
+  `mutationStatus: "not_applied"`, `retrySafe: true` to their unchanged error,
+  which previously carried no result: `upstream_connection_failed` or
+  `upstream_timeout` for single writes, and `upstream_failed` with
+  `Jira attachment upload failed` for the attachment batch.
+- Jira write failures that may have applied now carry a receipt with their
+  unchanged reason and message: `mutationStatus: "unknown"`,
+  `retrySafe: false` when the mutation request got no response (or an
+  unclassified failure), a redirect or a 5xx; `mutationStatus:
+  "applied_unverified"` at
+  `mutation_response` when Jira answered with a success status whose response
+  then failed, did not parse or did not match the request; and
+  `applied_unverified` at the read-back stage when the read-back after an
+  applied create, child create, update, parent set or dependency add failed or
+  did not match, or the result exceeded the response limit (throttled
+  read-backs keep their `mutation_verification_failed`). An `attachment.add`
+  batch in which an upload may have applied reports `unknown` alongside its
+  result, unless throttling already reported it as `applied_unverified`.
+- Confluence write actions (page create, update and move; blog create and
+  update; page and blog draft create, stage, update, publish and discard;
+  footer comment add; comment update, delete and reply; and page, blog and draft
+  attachment batches whose first upload was not sent) whose request the Broker
+  proves was never sent now add `mutationStatus: "not_applied"`,
+  `retrySafe: true` to their unchanged error: `upstream_connection_failed` or
+  `upstream_timeout` for single writes, and `upstream_failed` with the batch's
+  existing message for attachment batches. Draft attachment batches keep their
+  `status: "partial"` result alongside the receipt.
+- Confluence write failures that may have applied now carry a receipt with
+  their unchanged reason and message: `mutationStatus: "unknown"`,
+  `retrySafe: false` when the mutation request got no response (or an
+  unclassified failure), a redirect or a 5xx; `mutationStatus:
+  "applied_unverified"` at
+  `mutation_response` when Confluence answered with a success status whose
+  response then failed, did not parse or did not match the request, or when
+  anything after the accepted write failed; and `applied_unverified` at the
+  read-back stage when a read-back request failed (throttled read-backs keep
+  their `mutation_verification_failed`). Page, blog and draft attachment
+  batches in which an upload may have applied report `unknown` alongside their
+  result, unless throttling already reported `applied_unverified`.
 
 ### Fixed
 

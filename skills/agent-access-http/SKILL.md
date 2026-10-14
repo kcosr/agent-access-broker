@@ -744,6 +744,18 @@ that verifies a create) is never a rate limit: it returns
 do not wait and repeat the write. On `concurrency_limited`, wait for your
 in-flight requests to finish.
 
+A failed write can carry a mutation receipt in `result`, beside its ordinary
+reason. `mutationStatus: "not_applied"` with `retrySafe: true` means the Broker
+proved the request never reached the upstream service: nothing changed, and
+the write may be repeated. `mutationStatus: "unknown"` with `retrySafe: false`
+(a timeout, a dropped connection, a redirect, a 5xx, or a batch that failed after an item
+may have applied) means the write may have applied, and
+`mutationStatus: "applied_unverified"` means the service accepted it but the
+Broker could not read or verify the response; use its `safeLocators`. Inspect
+the target before repeating either. A 4xx rejection carries no receipt; any
+other failed write without one makes no claim either way, so inspect before
+repeating it too.
+
 Verified review-mutation success includes `mutationStatus: "applied"` and
 `retrySafe: false`. If GitLab may have accepted a write but readback cannot
 prove it, expect HTTP 409, `decision: "error"`,
@@ -758,7 +770,12 @@ sanitized upstream failure only when they prove no change.
 Any GitLab write the Broker proves was never sent (no connection was made)
 fails with `upstream_connection_failed` or `upstream_timeout` and
 `mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and the
-request may be repeated. Any other transport failure is not that proof.
+request may be repeated. Any other transport failure is not that proof. A
+GitLab write without a verification contract keeps its ordinary error and
+reports `mutationStatus: "unknown"`, `retrySafe: false` when it got no response,
+a redirect or a 5xx, and `mutationStatus: "applied_unverified"` with `safeLocators` when
+GitLab answered with a success whose response could not be read or validated.
+Either way it may have applied, so inspect the target before repeating it.
 Suggestion success is based on scoped discussion/note reread, not the possibly
 stale immediate response flag. It contains no commit ID/SHA and does not imply
 thread resolution.

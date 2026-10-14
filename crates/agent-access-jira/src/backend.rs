@@ -598,8 +598,30 @@ pub enum JiraBackendError {
         message: String,
         body_malformed: bool,
     },
+    /// The SDK proved the request never reached Jira: it could not be built,
+    /// or no connection was established (`timed_out` for a connect timeout).
+    /// It reports the same reason as `Timeout` or `Transport`.
+    #[error("Jira request was not sent")]
+    NotSent { timed_out: bool },
+    /// The request may have reached Jira, but no response arrived: it timed
+    /// out (`timed_out`), its connection failed after it was sent, or the SDK
+    /// reported a failure Jira does not classify. It reports the same reason
+    /// as `Timeout` or `Transport`.
+    #[error("Jira request got no response")]
+    NoResponse { timed_out: bool },
+    /// Jira answered a write with a success status, but its response then
+    /// failed, stalled, exceeded the byte cap or did not parse; reported like
+    /// the wrapped failure.
+    #[error("Jira accepted the write but its response failed: {0}")]
+    AcceptedUnreadable(Box<JiraBackendError>),
+    /// Jira answered with a redirect, which the Broker never follows. It
+    /// reports the same reason as `Protocol`.
+    #[error("Jira redirect responses are rejected")]
+    Redirected,
+    /// Reading a response failed, or an upload file could not be opened.
     #[error("Jira transport failed: {0}")]
     Transport(String),
+    /// Reading a response stalled.
     #[error("Jira request timed out")]
     Timeout,
     #[error("Jira response exceeded the configured byte cap")]
@@ -615,8 +637,24 @@ pub enum JiraBackendError {
     Protocol(String),
 }
 
+/// Marks a failure that followed a write's success `status` as
+/// [`JiraBackendError::AcceptedUnreadable`]; one after any other status is
+/// returned unchanged.
+pub(crate) fn accepted_if_success(
+    status: u16,
+) -> impl FnOnce(JiraBackendError) -> JiraBackendError {
+    move |error| {
+        if (200..300).contains(&status) {
+            JiraBackendError::AcceptedUnreadable(Box::new(error))
+        } else {
+            error
+        }
+    }
+}
+
 pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
     match error {
+        JiraBackendError::AcceptedUnreadable(error) => jira_backend_error(*error),
         JiraBackendError::Unauthorized => ProviderError::error(
             ReasonCode::UpstreamUnauthorized,
             "Jira rejected the selected credential",
@@ -645,27 +683,32 @@ pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
             format!("Jira rejected the request: {message}"),
         )
         .with_upstream(Some(status), None),
-        JiraBackendError::Transport(_message) => {
+        JiraBackendError::NotSent { timed_out: false }
+        | JiraBackendError::NoResponse { timed_out: false }
+        | JiraBackendError::Transport(_) => {
             ProviderError::error(ReasonCode::UpstreamConnectionFailed, "Jira request failed")
         }
-        JiraBackendError::Timeout => {
+        JiraBackendError::NotSent { timed_out: true }
+        | JiraBackendError::NoResponse { timed_out: true }
+        | JiraBackendError::Timeout => {
             ProviderError::error(ReasonCode::UpstreamTimeout, "Jira request timed out")
         }
         JiraBackendError::ResponseTooLarge => ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Jira response exceeded the configured byte cap",
         ),
-        JiraBackendError::IssueCreateResponseInvalid { .. } | JiraBackendError::Protocol(_) => {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira response protocol error",
-            )
-        }
+        JiraBackendError::IssueCreateResponseInvalid { .. }
+        | JiraBackendError::Redirected
+        | JiraBackendError::Protocol(_) => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "Jira response protocol error",
+        ),
     }
 }
 
 pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
     match error {
+        JiraBackendError::AcceptedUnreadable(error) => jira_backend_reason_code(error),
         JiraBackendError::Unauthorized => ReasonCode::UpstreamUnauthorized,
         JiraBackendError::Forbidden => ReasonCode::UpstreamForbidden,
         JiraBackendError::NotFound => ReasonCode::ScopeUnresolved,
@@ -678,10 +721,15 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
                 ReasonCode::InputInvalid
             }
         }
-        JiraBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
-        JiraBackendError::Timeout => ReasonCode::UpstreamTimeout,
+        JiraBackendError::NotSent { timed_out: false }
+        | JiraBackendError::NoResponse { timed_out: false }
+        | JiraBackendError::Transport(_) => ReasonCode::UpstreamConnectionFailed,
+        JiraBackendError::NotSent { timed_out: true }
+        | JiraBackendError::NoResponse { timed_out: true }
+        | JiraBackendError::Timeout => ReasonCode::UpstreamTimeout,
         JiraBackendError::ResponseTooLarge
         | JiraBackendError::IssueCreateResponseInvalid { .. }
+        | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
     }
 }
@@ -996,7 +1044,7 @@ impl JiraBackend for HttpJiraBackend {
                         duration_ms: elapsed_ms(started),
                     });
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(accepted_if_success(status)(error)),
             };
         let partial = partial_created_issue_from_value(&value);
         let created = created_issue_from_value(value).map_err(|_| {
@@ -1040,7 +1088,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1070,7 +1120,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1154,7 +1206,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1293,9 +1347,11 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = jira_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
-            value: comment_from_value(value)?,
+            value: comment_from_value(value).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1335,9 +1391,11 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let value = jira_response_value(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
-            value: comment_from_value(value)?,
+            value: comment_from_value(value).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1363,7 +1421,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1418,13 +1478,14 @@ impl JiraBackend for HttpJiraBackend {
                     .map(Into::into),
             );
         }
-        let value = value?;
+        let value = value.map_err(accepted_if_success(status))?;
         let attachment = value
             .as_array()
             .and_then(|items| items.first())
             .cloned()
             .ok_or_else(|| JiraBackendError::Protocol("attachment response missing".to_string()))
-            .and_then(attachment_from_value)?;
+            .and_then(attachment_from_value)
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: attachment,
             status,
@@ -1646,7 +1707,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1675,7 +1738,9 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes).await?;
+        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
             value: (),
             status,
@@ -1826,24 +1891,20 @@ pub(crate) async fn send_jira_request(
 
 pub(crate) fn jira_upstream_error(error: UpstreamError) -> JiraBackendError {
     match error {
-        // A request that never reached the upstream fails as it always has:
-        // connect timeouts as timeouts, everything else as transport errors.
-        UpstreamError::Timeout
-        | UpstreamError::NotSent {
-            timed_out: true, ..
-        } => JiraBackendError::Timeout,
-        UpstreamError::Transport(message)
-        | UpstreamError::NotSent {
-            detail: message, ..
-        } => JiraBackendError::Transport(message),
+        // Only the SDK's own not-sent classification proves Jira never
+        // received the request; every other failure may have reached it.
+        UpstreamError::NotSent { timed_out, .. } => JiraBackendError::NotSent { timed_out },
+        UpstreamError::Timeout => JiraBackendError::NoResponse { timed_out: true },
+        UpstreamError::Transport(_) => JiraBackendError::NoResponse { timed_out: false },
         UpstreamError::NotAllowed => {
             JiraBackendError::Protocol("Jira upstream URL is not allowlisted".to_string())
         }
         UpstreamError::Redirect => {
             JiraBackendError::Protocol("Jira attachment redirect is invalid".to_string())
         }
-        // Any other failure produced no usable response.
-        other => JiraBackendError::Transport(other.to_string()),
+        // Any other failure produced no usable response and may have reached
+        // Jira.
+        _ => JiraBackendError::NoResponse { timed_out: false },
     }
 }
 
@@ -2029,9 +2090,7 @@ pub(crate) fn validate_jira_body_response(
 ) -> Result<(), JiraBackendError> {
     let status = response.status().as_u16();
     if response.status().is_redirection() {
-        return Err(JiraBackendError::Protocol(
-            "Jira redirect responses are rejected".to_string(),
-        ));
+        return Err(JiraBackendError::Redirected);
     }
     if status == 401 {
         return Err(JiraBackendError::Unauthorized);

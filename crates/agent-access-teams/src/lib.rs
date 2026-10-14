@@ -245,11 +245,20 @@ impl NotificationTransport for HttpTransport {
             .body(body);
         let mut response = client.send(request, UpstreamCall::new(ACTION)).await.map_err(|error| {
             // reqwest's error string can contain the entire signed URL.
-            let message = match error {
-                UpstreamError::NotSent { .. } | UpstreamError::NotAllowed => "Teams notification request was not sent",
-                _ => "Teams notification request failed; outcome may be unknown, inspect the workflow before retrying",
-            };
-            ProviderError::error(error.reason_code(), message)
+            match error {
+                // Nothing reached the Workflow, so repeating the send is safe.
+                UpstreamError::NotSent { .. } | UpstreamError::NotAllowed => {
+                    ProviderError::error(error.reason_code(), "Teams notification request was not sent")
+                        .with_mutation_receipt(MutationReceipt::not_applied())
+                }
+                // A timeout, a transport failure and any failure the provider
+                // does not classify may have reached the Workflow.
+                _ => ProviderError::error(
+                    error.reason_code(),
+                    "Teams notification request failed; outcome may be unknown, inspect the workflow before retrying",
+                )
+                .with_mutation_receipt(MutationReceipt::unknown()),
+            }
         })?;
         let status = response.status().as_u16();
         complete_upstream_trace(&mut response, status_reason(status).map(Into::into));
@@ -355,7 +364,7 @@ impl Provider for TeamsProvider {
         let status = receipt.status;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(reason) = status_reason(status) {
-            let error = if reason == ReasonCode::UpstreamRateLimited {
+            let mut error = if reason == ReasonCode::UpstreamRateLimited {
                 upstream_rate_limited(SERVICE, receipt.retry_after)
             } else {
                 ProviderError::error(
@@ -363,6 +372,11 @@ impl Provider for TeamsProvider {
                     "Teams Workflow rejected the notification; request was not retried",
                 )
             };
+            // The Broker never follows a redirect, and a proxy can answer 5xx
+            // after the Workflow accepted the request.
+            if (300..=399).contains(&status) || (500..=599).contains(&status) {
+                error = error.with_mutation_receipt(MutationReceipt::unknown());
+            }
             return Err(error
                 .with_upstream(Some(status), Some(elapsed))
                 .with_audit(audit));

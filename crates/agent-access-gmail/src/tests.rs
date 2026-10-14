@@ -416,7 +416,13 @@ async fn rate_limits_and_ambiguous_mutations_never_replay() {
         assert!(!err.message.contains("secret"));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         if expected != ReasonCode::UpstreamRateLimited {
-            assert!(err.result.is_none());
+            // Only a 5xx leaves the mutation's outcome unknown.
+            assert_eq!(
+                err.result.as_deref(),
+                (status >= 500)
+                    .then(|| json!({"mutationStatus":"unknown","retrySafe":false}))
+                    .as_ref()
+            );
             continue;
         }
         assert_eq!(err.decision(), Decision::Error);
@@ -527,13 +533,137 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
                 .unwrap_err();
             assert_eq!(error.reason_code(), reason);
             assert_eq!(error.upstream_status, Some(status));
+            let uncertain = status >= 500 && action.ends_with("trash");
+            assert_eq!(error.message.contains("unknown"), uncertain);
+            // A proxy can answer 5xx after Gmail applied the change.
             assert_eq!(
-                error.message.contains("unknown"),
-                status >= 500 && action.ends_with("trash")
+                error
+                    .result
+                    .as_deref()
+                    .and_then(|result| result.get("mutationStatus")),
+                uncertain.then_some(&json!("unknown"))
             );
             assert!(!error.message.contains("private"));
         }
     }
+}
+
+#[tokio::test]
+async fn mutation_receipts_follow_what_gmail_may_have_applied() {
+    use tokio::io::AsyncReadExt;
+    let host = agent_access_provider::test_support::TestHost::default();
+    let gmail = |origin: &str| {
+        GmailProvider::new(
+            Url::parse(&format!("{origin}/gmail/v1/users/me/")).unwrap(),
+            &host,
+            &host.limits,
+        )
+        .unwrap()
+    };
+    // A closed port refuses the connection: nothing reached Gmail.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    for action in ["message.trash", "thread.archive", "message.view"] {
+        let error = gmail(&origin)
+            .invoke(invocation(action, json!({"id":"a123"})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+        assert_eq!(error.message, "Gmail request failed");
+        if action.ends_with(".view") {
+            // Reads carry no mutation receipt.
+            assert!(error.result.is_none());
+        } else {
+            assert_eq!(
+                error.result.as_deref(),
+                Some(&json!({"mutationStatus":"not_applied","retrySafe":true})),
+                "{action}"
+            );
+        }
+    }
+    // A mutation read in full and then dropped unanswered may have applied,
+    // and one Gmail accepted with an unreadable body applied.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(socket.read_u8().await.unwrap());
+        }
+        assert!(head.starts_with(b"POST /gmail/v1/users/me/messages/a123/trash "));
+    });
+    let error = gmail(&origin)
+        .invoke(invocation("message.trash", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
+    assert!(error.message.contains("mutation outcome may be unknown"));
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus":"unknown","retrySafe":false}))
+    );
+    let server = MockServer::start().await;
+    Mock::given(path("/gmail/v1/users/me/threads/a123/trash"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{not json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = provider(&server)
+        .invoke(invocation("thread.trash", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(
+        error.message,
+        "Gmail response is invalid or exceeds a bound; mutation outcome may be unknown, inspect before retrying"
+    );
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "mutation_response",
+            "safeLocators": {"thread": "a123"},
+        }))
+    );
+    // A mutation answered with a redirect, which the Broker never follows,
+    // may have applied; a read answered with one carries no receipt.
+    for (action, route, receipt) in [
+        (
+            "message.restore",
+            "/gmail/v1/users/me/messages/a123/untrash",
+            Some(json!({"mutationStatus":"unknown","retrySafe":false})),
+        ),
+        ("message.view", "/gmail/v1/users/me/messages/a123", None),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/elsewhere"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = provider(&server)
+            .invoke(invocation(action, json!({"id":"a123"})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
+        assert_eq!(error.message, "Gmail request failed");
+        assert_eq!(error.result.as_deref(), receipt.as_ref(), "{action}");
+    }
+    // A read with an unreadable body carries no receipt.
+    let server = MockServer::start().await;
+    Mock::given(path("/gmail/v1/users/me/threads/a123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{not json"))
+        .mount(&server)
+        .await;
+    let error = provider(&server)
+        .invoke(invocation("thread.view", json!({"id":"a123"})))
+        .await
+        .unwrap_err();
+    assert!(error.result.is_none());
 }
 
 #[test]

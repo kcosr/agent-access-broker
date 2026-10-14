@@ -267,6 +267,10 @@ fn provisioning_unverified(locators: &Value) -> ProviderError {
     )
 }
 fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> ProviderError {
+    // A request that was never prepared keeps the mapping of its cause.
+    if let GitlabBackendError::RequestUnbuilt(error) = error {
+        return provisioning_failure(*error, mutation);
+    }
     // Every provisioning action performs at most one write, after its reads.
     if let (GitlabBackendError::NotSent { timed_out }, Some(_)) = (&error, mutation) {
         return mutation_not_sent(*timed_out);
@@ -283,7 +287,8 @@ fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> 
     };
     let uncertain = matches!(
         error,
-        GitlabBackendError::Transport(_)
+        GitlabBackendError::NoResponse { .. }
+            | GitlabBackendError::Transport(_)
             | GitlabBackendError::Timeout
             | GitlabBackendError::Protocol(_)
             | GitlabBackendError::ResponseTooLarge
@@ -987,6 +992,8 @@ mod tests {
     fn provisioning_write_uncertainty_uses_canonical_contract_and_read_errors_stay_distinct() {
         let locators = json!({"userId":70,"previousTokenId":10});
         for error in [
+            GitlabBackendError::NoResponse { timed_out: true },
+            GitlabBackendError::NoResponse { timed_out: false },
             GitlabBackendError::Transport("secret".into()),
             GitlabBackendError::Timeout,
             GitlabBackendError::Protocol("secret".into()),

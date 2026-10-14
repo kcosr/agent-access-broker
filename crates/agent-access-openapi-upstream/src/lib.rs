@@ -442,12 +442,16 @@ impl Provider for OpenApiProvider {
             }
             Err(mut error) => {
                 if !action.definition.read_only {
-                    let mut result = error.result.take().map(|v| *v).unwrap_or_else(|| json!({}));
-                    result["mutationStatus"] =
-                        json!(if dispatched { "unknown" } else { "not_applied" });
-                    result["retrySafe"] = json!(false);
-                    result["operationDispatched"] = json!(dispatched);
-                    error.result = Some(Box::new(result));
+                    // Only a request the SDK refused or proved unsent was
+                    // never dispatched; anything else may have been applied.
+                    error = error.with_mutation_receipt(if dispatched {
+                        MutationReceipt::unknown()
+                    } else {
+                        MutationReceipt::not_applied()
+                    });
+                    if let Some(result) = error.result.as_deref_mut() {
+                        result["operationDispatched"] = json!(dispatched);
+                    }
                 }
                 Err(error.with_upstream(status, Some(elapsed)).with_audit(audit))
             }
