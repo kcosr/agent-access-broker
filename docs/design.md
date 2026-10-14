@@ -82,7 +82,11 @@ The execution credential exists only inside the `ProviderInvocation` handed to a
 provider for a single call. It is never placed in the response to the caller,
 never serializes, and its `Debug` representation shows only the credential kind
 (`ExecutionCredential { kind: "bearer_token", .. }`). The same redaction applies
-to proxy credentials (`EgressProxyConfig`).
+to proxy credentials (`EgressProxyConfig`). The provider cannot read the
+material either: static credentials and delegated access have no plaintext
+accessor, and the SDK attaches them to upstream requests as sensitive headers
+(`UpstreamAuthorization`, see
+[static credentials](provider-sdk.md#static-credentials)).
 
 Execution credentials are resolved only **after** identity admission, scope
 resolution, deny-by-default policy authorization, and credential-mode selection
@@ -474,7 +478,7 @@ are `const` statics, and results, descriptors and OAuth values use `new` with
 `AttachmentLimitsConfig`, are deserialized or built from `Default` with struct
 update syntax. Extendable SDK enums are non-exhaustive, so a backend's matches
 end with a fallback arm that rejects what it does not support, such as an
-unknown credential view. The policy and the intentionally exhaustive items are
+unknown credential kind. The policy and the intentionally exhaustive items are
 listed in the [inventory guide](../api/README.md#construction-and-exhaustiveness-policy).
 
 ### Provider hook contract

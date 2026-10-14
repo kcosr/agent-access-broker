@@ -572,7 +572,16 @@ read-only admitted authority, credentials lent for one invocation, upstream
 clients the host builds with allowlists and manual redirects, typed reason
 validation and bound continuation tokens. The host enforces identity, policy,
 credential selection, limits and audit around every provider call. These
-contracts keep cooperating modules within policy and catch defects. They do not
+contracts keep cooperating modules within policy and catch defects.
+
+Native providers and import adapters do not receive credential plaintext. Static
+credentials and delegated access have no plaintext accessor: a provider asks the
+SDK to present the credential, and the SDK attaches it to the upstream request
+as a sensitive header that the upstream client delivers only to the service's
+own origin. Debug output names only the kind or header. A cooperating provider
+therefore cannot log, return or forward the material by mistake. OAuth
+companions are the exception by role: they exchange and refresh tokens with
+authorization servers through the OAuth dialect contract. They do not
 sandbox linked Rust code, and they cannot stop a module from deliberately
 bypassing them, for example with its own HTTP client or by reading process
 state directly. A module could also claim a host failure that it was never

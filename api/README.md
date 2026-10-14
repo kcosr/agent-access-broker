@@ -81,9 +81,11 @@ contracts section of each inventory shows the result per type.
   fields, are non-exhaustive and are declared with `const` constructors and
   builders; their data is read through `const` accessors.
 - Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`,
-  `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`) and lent
-  credential material (`DelegatedAccess`, like `ExecutionCredential`) have
-  private fields and constructors.
+  `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`,
+  `CredentialPlacement`) and lent credential material (`DelegatedAccess`,
+  like `ExecutionCredential`) have private fields and constructors. Lent
+  material has no plaintext accessor: providers present it through the
+  privately constructed `UpstreamAuthorization`.
 - Other data types keep public fields where those fields are the data the
   other side reads (`ProviderResult`, `ProviderLimits`, `ServiceDescriptor`,
   `TokenGrant`, `ConnectedIdentity`, `OAuthTarget` and the rest). They are
@@ -92,7 +94,7 @@ contracts section of each inventory shows the result per type.
   destructuring pattern for them.
 - Extendable enums are non-exhaustive. A consumer matches them with a
   fallback arm that rejects what it does not support, failing closed: an
-  unsupported credential view, authority, egress route, I/O kind or OAuth
+  unsupported credential kind, authority, egress route, I/O kind or OAuth
   option is an error, never treated as success or as another variant.
 - Data access is through public fields or inherent methods; the SDK defines
   no public trait for data access. The implementable traits are the ones the

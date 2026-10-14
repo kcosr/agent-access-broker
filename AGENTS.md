@@ -232,10 +232,16 @@ and audit checks through the real `agent-access` binary.
   resource types, the `Provider` trait and its invocation/result/error types,
   reason codes and the hook contract the host checks provider failures, late
   streams and upstream traces against (`contract.rs`), the OAuth dialect and
-  delegated-credential contracts, and the host services backends use
-  (upstream HTTP clients built through the host's client factory, egress
-  declarations and sanitized routes, upstream allowlists, correlation,
-  upstream trace events, token signing and continuation envelopes). `lib.rs`
+  delegated-credential contracts, credential presentation
+  (`authorization.rs`: `UpstreamAuthorization` and `CredentialPlacement`) and
+  the host services backends use (upstream HTTP clients built through the
+  host's client factory, egress declarations and sanitized routes, upstream
+  allowlists, correlation, upstream trace events, token signing and
+  continuation envelopes). Static credentials and delegated access have no
+  plaintext accessor: providers, adapters and the conformance reference present
+  them through the SDK, which attaches the sensitive header itself. The host
+  keeps the plaintext it decrypts, and tests compare credentials with `==`.
+  `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through
   `presentation`. The supported `host` module holds the host cooperation ports:
