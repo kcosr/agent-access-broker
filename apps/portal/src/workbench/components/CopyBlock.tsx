@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { KeyboardEvent } from "react";
 import { cx } from "../lib/cx";
 import { isMac, matchesHotkey } from "../lib/hotkeys";
@@ -49,9 +55,15 @@ export function CopyBlock({
   const setTextRef = useCallback((el: HTMLElement | null) => {
     textRef.current = el;
   }, []);
-  // Only the latest attempt may update the block (a slow rejection must not
-  // replace a newer "Copied"). After unmount, React drops late updates.
+  // Only the latest attempt for the text on display may update the block: a
+  // slow rejection must not replace a newer "Copied", and a result for text
+  // that has since changed must not move focus or select the new text. A new
+  // click or new text (as soon as it commits) retires pending attempts.
+  // After unmount, React drops late updates.
   const attempt = useRef(0);
+  useLayoutEffect(() => {
+    attempt.current += 1;
+  }, [text]);
   const [state, setState] = useState<{ status: CopyStatus; text: string }>(
     IDLE,
   );

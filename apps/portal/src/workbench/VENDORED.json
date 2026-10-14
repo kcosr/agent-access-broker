@@ -1,5 +1,5 @@
 {
-  "commit": "8ad4cdde7e278b8fa4c100595b60368124afa63b",
+  "commit": "e52e84eccfb252aeea1d54dff7d7eba11e475c97",
   "files": {
     ".gitattributes": "b204f987d9c4231fe20681f6c0c36db0f558a3ff0b4e9a1072881864c43ade29",
     "components/AppShell.tsx": "159b387b5536761e536c785122900856820f4eab1cfad1366b3e6d9b8e3dd121",
@@ -7,7 +7,7 @@
     "components/Chips.tsx": "7818a5932d7c5708a8a97166b1cb3b0b22e9403949ca168307f990e68cafff54",
     "components/Combobox.tsx": "0aaf55fd0b13b1ec80532dfd9afdc01531f64931a1f21d21bcb88a4021b20e06",
     "components/CommandPalette.tsx": "119af3a96cbae758a9121fbef9299db3ebec0aece303f6871c477db654f8ebc2",
-    "components/CopyBlock.tsx": "c974c1684555d23016023b303d697f2956e29f635ae764278e530b8da004868a",
+    "components/CopyBlock.tsx": "2a914868f41764c1195dc911906a46bc1765542d6ac42b362be31f2a5b4295ee",
     "components/Drawer.tsx": "24f21d1dcd9841fd3c051845592398d27d0ceb5be022e4a915c9a0f23bfc72f4",
     "components/FilterInput.tsx": "601e9c43a2a7f97d20f024661fd4ba71124d66ba908a100a18a03b325090eaab",
     "components/Form.tsx": "b9b4f765b5b0141f321ed7b22af15dfdbc66fb0a4c2b014cc70da770e4913353",
