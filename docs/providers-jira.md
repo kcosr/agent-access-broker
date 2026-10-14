@@ -722,7 +722,8 @@ passthroughs; those require a separate typed policy and validation design.
 
 The `search` input takes a `query` object of `{ type: "jql" | "text", value }`,
 an optional `projects` array (min 1), an optional `maxResults`, and an optional
-`nextPageToken`. Omit `projects` to search the caller's effective broker scope,
+`nextPageToken` continuation (see [Search pagination](#search-pagination)).
+Omit `projects` to search the caller's effective broker scope,
 including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional.
 
@@ -847,6 +848,49 @@ Query grammar and cap failures return `input_invalid`, with safe token locations
 and supported alternatives where applicable. Diagnostics do not echo query
 literals. `scope_unresolved` covers returned-result identity/containment failures.
 
+### Search pagination
+
+A search result's `nextPageToken` is an opaque broker-signed continuation, not
+Jira's own token. To fetch the next page, pass it back unchanged as
+`nextPageToken` with the same search:
+
+- the same `query` type and canonical JQL (equivalent spellings, such as quoted
+  and bare values, are the same query);
+- the same `projects`, compared as a set;
+- the same effective `maxResults`; an omitted value equals the configured
+  default, and values above `providers.jira.search.max_results` equal the cap.
+
+The continuation is also bound to the execution context, the principal and
+whether it authenticated, the credential mode, the selected credential's type
+(which chooses the tenant or gateway route), and the Jira configuration Jira's
+token depends on: `tenant_host`, `cloud_id`, and whether `api.atlassian.com` is
+allowed. Any change rejects the token with `input_invalid`. Continuations
+expire 15 minutes after they are issued. They are signed with a key generated
+for each broker runtime generation, so a configuration reload or restart also
+invalidates them. Jira may also expire its own token.
+
+A continuation carries no authority and does not bind the effective project
+boundary. Every page is authorized again under current policy, its JQL is
+composed under the current boundary, and returned issues are checked against
+it, so a grant change applies from the next page. When that change alters the
+composed upstream query, for example when a grant adds or removes a project of
+an effective-access search or a new exclusion applies, the broker rejects the
+continuation with `input_invalid` before calling Jira; repeat the search
+without `nextPageToken`. Jira's token is never sent with a different query. A
+grant change that leaves the composed query unchanged, such as one outside
+explicit `projects`, keeps the continuation valid; losing a requested project
+denies the request as usual.
+
+Jira documents no maximum token size, and the broker adds no Jira-specific
+limit. `limits.max_upstream_response_bytes` bounds both the search response
+Jira's token arrives in and the result its continuation is returned in, so a
+continuation may be as long as that cap. That holds a Jira token of up to
+three quarters of the cap, less 73 bytes of envelope and query commitment. A
+longer Jira token fails the page with `upstream_protocol_failed`, as does a
+page whose whole result exceeds the cap; nothing is truncated. The
+`nextPageToken` input schema sets no maximum length; an empty token, or one
+longer than the cap, is rejected with `input_invalid` before Jira is called.
+
 ### Diagnosing rejected search results
 
 Search result validation retains the public `scope_unresolved` denial and its
@@ -890,7 +934,8 @@ pagination, or which results are returned.
 
 Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
-and an optional `nextPageToken`. Search results include the same lightweight
+and, on a continuation, Jira's `nextPageToken` recovered from the caller's
+broker continuation. Search results include the same lightweight
 issue metadata as `issue.view`, but are intentionally body-free and never
 include issue `description`; callers should use `issue.view` on a specific
 result when they need the body.

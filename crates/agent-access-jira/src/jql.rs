@@ -63,7 +63,7 @@ pub(crate) fn jql_documentation() -> Value {
             "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct."
         },
         "text": "A nonempty text query becomes key = value for a valid issue key, otherwise text ~ quoted-value; it uses the same authorization containment.",
-        "pagination": "maxResults is a positive integer capped by broker configuration. Reuse nextPageToken with the same query and projects; effective authorization is checked on every request.",
+        "pagination": "maxResults is a positive integer capped by broker configuration. nextPageToken is an opaque broker-signed continuation: pass it back unchanged with the same query, projects, and maxResults in the same execution context. It is bound to the principal, credential mode, and Jira configuration, and expires after 15 minutes or when the broker reloads. Effective authorization is checked on every request; if the effective project scope changed since the token was issued, repeat the search without nextPageToken.",
         "examples": [
             {"query": {"type": "jql", "value": "ORDER BY updated DESC"}},
             {"query": {"type": "jql", "value": ""}, "projects": ["PROJ"]},
@@ -75,9 +75,19 @@ pub(crate) fn jql_documentation() -> Value {
 }
 
 pub(crate) fn parse_search_inputs(inputs: &Value) -> Result<SearchInputs, ProviderError> {
-    serde_json::from_value(inputs.clone()).map_err(|_| {
+    let inputs: SearchInputs = serde_json::from_value(inputs.clone()).map_err(|_| {
         ProviderError::deny(ReasonCode::InputInvalid, "jira.search inputs are invalid")
-    })
+    })?;
+    // The continuation's size bound follows the configured limits and is
+    // enforced when the continuation is opened.
+    if inputs
+        .next_page_token
+        .as_ref()
+        .is_some_and(String::is_empty)
+    {
+        return Err(search_page_token_invalid());
+    }
+    Ok(inputs)
 }
 
 pub(crate) fn requested_projects(inputs: &SearchInputs) -> Result<BTreeSet<String>, ProviderError> {
@@ -139,6 +149,9 @@ pub(crate) struct BuiltJiraSearchQuery {
     pub(crate) kind: &'static str,
     pub(crate) injected_scope_predicate: &'static str,
     pub(crate) response_scope: EffectiveSearchScope,
+    /// The caller's query re-emitted canonically, before scope composition.
+    /// Continuations bind it; diagnostics carry only its hash.
+    pub(crate) canonical_caller_jql: String,
     pub(crate) canonical_caller_jql_hash: String,
     pub(crate) query_shape: Value,
     pub(crate) text_operand_hashes: Vec<String>,
@@ -272,6 +285,7 @@ pub(crate) fn build_jira_search_query(
         injected_scope_predicate,
         response_scope,
         canonical_caller_jql_hash: sha256_hex(caller_jql.as_bytes()),
+        canonical_caller_jql: caller_jql,
         query_shape,
         text_operand_hashes,
         sort_fields,

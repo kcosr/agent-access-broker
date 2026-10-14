@@ -18,6 +18,9 @@ mod issue_type_tests;
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 
+#[path = "search_continuation_tests.rs"]
+mod search_continuation_tests;
+
 #[test]
 fn parses_issue_keys_and_rejects_lowercase_or_zero_numbers() {
     assert!(is_issue_key("PROJ-1"));
@@ -1530,13 +1533,11 @@ async fn issue_create_attribution_is_applied_to_description() {
         .insert("PROJ-2".to_string(), readback);
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("issue.create")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
     let mut invocation = issue_create_invocation(json!({
         "project": "PROJ",
@@ -1585,13 +1586,11 @@ async fn issue_create_attribution_target_absent_when_description_omitted() {
         .insert("PROJ-2".to_string(), readback);
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("issue.create")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
 
     let response = provider
@@ -1623,10 +1622,8 @@ async fn issue_create_enforces_description_body_cap_after_attribution() {
         &[String::from("issue.create")],
     );
     let provider = JiraProvider {
-        config,
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution,
+        ..JiraProvider::from_backend(config, ProviderLimits::default(), backend.clone())
     };
     let mut invocation = issue_create_invocation(json!({
         "project": "PROJ",
@@ -1659,13 +1656,11 @@ async fn issue_child_create_attribution_is_applied_to_description() {
     seed_child_create_success(&mut backend, Some(expected_description.clone()));
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("issue.child.create")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
     let mut invocation = issue_child_create_invocation(json!({
         "project": "PROJ",
@@ -1704,13 +1699,11 @@ async fn issue_child_create_attribution_target_absent_when_description_omitted()
     seed_child_create_success(&mut backend, None);
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("issue.child.create")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
 
     let response = provider
@@ -1745,10 +1738,8 @@ async fn issue_child_create_enforces_description_body_cap_after_attribution() {
         &[String::from("issue.child.create")],
     );
     let provider = JiraProvider {
-        config,
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution,
+        ..JiraProvider::from_backend(config, ProviderLimits::default(), backend.clone())
     };
     let mut invocation = issue_child_create_invocation(json!({
         "project": "PROJ",
@@ -3484,10 +3475,8 @@ async fn issue_update_enforces_description_body_cap_after_attribution() {
         &[String::from("issue.update")],
     );
     let provider = JiraProvider {
-        config,
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution,
+        ..JiraProvider::from_backend(config, ProviderLimits::default(), backend.clone())
     };
     let mut invocation = per_user_invocation(
         "issue.update",
@@ -3529,13 +3518,11 @@ async fn issue_update_attribution_is_visible_in_update_readback_and_issue_view()
         .insert("PROJ-1".to_string(), readback);
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("issue.update")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
     let mut update_invocation = per_user_invocation(
         "issue.update",
@@ -4551,24 +4538,43 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
         });
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-        let mut request = per_user_invocation(
-            "search",
-            json!({
+        let request = |token: Option<&str>| {
+            let mut inputs = json!({
                 "query": {"type":"jql", "value":"created >= startOfWeek(-1w) AND created <= endOfWeek(-1w) ORDER BY created DESC"},
-                "maxResults":50,
-                "nextPageToken":"private-request-page-token"
-            }),
-            vec![],
+                "maxResults":50
+            });
+            if let Some(token) = token {
+                inputs["nextPageToken"] = json!(token);
+            }
+            InvocationBuilder::from(per_user_invocation("search", inputs, vec![]))
+                .search(SearchAuthorization::new(
+                    "project".to_string(),
+                    SearchAuthorizationScope::AllExcept {
+                        excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
+                    },
+                ))
+                .build()
+        };
+        let failing_page = backend
+            .search_page
+            .lock()
+            .unwrap()
+            .replace(page_with_upstream_token("private-request-page-token"));
+        let first = provider.invoke(request(None)).await.unwrap();
+        *backend.search_page.lock().unwrap() = failing_page;
+        let sealed = first.result["nextPageToken"].as_str().unwrap().to_string();
+        let error = provider.invoke(request(Some(&sealed))).await.unwrap_err();
+        assert_eq!(
+            backend
+                .last_search
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .next_page_token
+                .as_deref(),
+            Some("private-request-page-token")
         );
-        request = InvocationBuilder::from(request)
-            .search(SearchAuthorization::new(
-                "project".to_string(),
-                SearchAuthorizationScope::AllExcept {
-                    excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
-                },
-            ))
-            .build();
-        let error = provider.invoke(request).await.unwrap_err();
         assert_eq!(error.decision(), Decision::Deny);
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
@@ -4605,13 +4611,14 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
         );
         assert_eq!(audit["pageTokenPresent"], true);
         assert_eq!(audit["resultCount"], 2);
-        assert_eq!(backend.credential_observations.lock().unwrap().len(), 1);
-        let serialized = audit.to_string();
+        assert_eq!(backend.credential_observations.lock().unwrap().len(), 2);
+        let serialized = format!("{audit} {}", error.message);
         for private_value in [
             key,
             "private-summary-must-not-appear",
             "private-request-page-token",
             "private-response-page-token",
+            sealed.as_str(),
             "startOfWeek",
             code,
         ] {
@@ -5647,13 +5654,11 @@ async fn comment_add_applies_configured_attribution_footer() {
     backend.issues.insert("PROJ-1".to_string(), visible_issue());
     let backend = Arc::new(backend);
     let provider = JiraProvider {
-        config: jira_config(),
-        limits: ProviderLimits::default(),
-        backend: backend.clone(),
         attribution: ProviderAttributionConfig::from_patterns(
             &jira_descriptor(&jira_config()),
             &[String::from("comment.add")],
         ),
+        ..JiraProvider::from_backend(jira_config(), ProviderLimits::default(), backend.clone())
     };
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let mut invocation = per_user_invocation(
@@ -8367,6 +8372,18 @@ fn visible_issue() -> JiraIssue {
         priority: None,
         labels: None,
         description: Some(adf_text("visible description body")),
+    }
+}
+
+/// One in-scope `PROJ` issue and Jira's `upstream` token for the next page.
+fn page_with_upstream_token(upstream: &str) -> JiraSearchPage {
+    JiraSearchPage {
+        issues: vec![visible_issue()],
+        max_results: 50,
+        start_at: 0,
+        total: None,
+        next_page_token: Some(upstream.to_string()),
+        is_last: Some(false),
     }
 }
 

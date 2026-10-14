@@ -172,6 +172,16 @@ impl ContinuationFamily {
         }
     }
 
+    /// The same family with a payload cap chosen at run time, such as a
+    /// provider relaying an upstream token whose size only a configured limit
+    /// bounds. Unlike the cap given to [`Self::new`], this one is not limited
+    /// to 64 KiB; [`Self::max_token_bytes`] follows it, saturating at
+    /// `usize::MAX`.
+    pub const fn with_max_payload_bytes(mut self, max_payload_bytes: usize) -> Self {
+        self.max_payload_bytes = max_payload_bytes;
+        self
+    }
+
     /// Tokens expire `time_to_live` (whole seconds, at least one) after
     /// they are sealed.
     pub const fn expires_after(mut self, time_to_live: Duration) -> Self {
@@ -240,7 +250,9 @@ impl ContinuationFamily {
     /// base64 (unpadded) of a version byte, an 8-byte expiry when the family
     /// expires, the payload and a 32-byte MAC.
     pub const fn max_token_bytes(&self) -> usize {
-        self.token_prefix.len() + unpadded_base64_len(self.raw_overhead() + self.max_payload_bytes)
+        self.token_prefix.len().saturating_add(unpadded_base64_len(
+            self.raw_overhead().saturating_add(self.max_payload_bytes),
+        ))
     }
 
     /// Binds a token to `context`: the admitted service, the action (unless
@@ -677,7 +689,10 @@ impl ContinuationError {
 }
 
 const fn unpadded_base64_len(bytes: usize) -> usize {
-    (bytes * 4).div_ceil(3)
+    match bytes.checked_mul(4) {
+        Some(quadrupled) => quadrupled.div_ceil(3),
+        None => usize::MAX,
+    }
 }
 
 fn push_length_prefixed(out: &mut Vec<u8>, value: &[u8]) {
@@ -972,6 +987,42 @@ mod tests {
                 .expires_after(TTL)
                 .max_token_bytes(),
             2786
+        );
+    }
+
+    #[test]
+    fn runtime_payload_caps_may_exceed_the_const_ceiling() {
+        let signer = ContinuationSigner::new(None);
+        let request = invocation();
+        let relayed = PAGES.with_max_payload_bytes(MAX_PAYLOAD_CAP + 1024);
+        assert_eq!(relayed.max_payload_bytes(), MAX_PAYLOAD_CAP + 1024);
+        let largest = vec![0x5a; relayed.max_payload_bytes()];
+        let token = signer.seal(&binding(&relayed, &request), &largest).unwrap();
+        assert_eq!(token.len(), relayed.max_token_bytes());
+        assert_eq!(
+            signer.open(&binding(&relayed, &request), &token).unwrap(),
+            largest
+        );
+        assert_eq!(
+            signer.seal(
+                &binding(&relayed, &request),
+                &vec![0; relayed.max_payload_bytes() + 1]
+            ),
+            Err(ContinuationError::PayloadTooLarge {
+                limit: relayed.max_payload_bytes()
+            })
+        );
+        // The cap is part of the family, so a smaller one rejects the token.
+        assert_eq!(
+            signer.open(&binding(&PAGES, &request), &token),
+            Err(ContinuationError::TokenTooLarge {
+                limit: PAGES.max_token_bytes()
+            })
+        );
+        // Unbounded caps saturate instead of overflowing.
+        assert_eq!(
+            PAGES.with_max_payload_bytes(usize::MAX).max_token_bytes(),
+            usize::MAX
         );
     }
 
