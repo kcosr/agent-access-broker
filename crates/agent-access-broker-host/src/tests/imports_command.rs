@@ -527,3 +527,170 @@ async fn username_token_commands_store_a_username_with_the_service_slot() {
     assert!(restarted.imported_mode_available("tickets", "service"));
     assert_eq!(fixture.runs(), ["describe"]);
 }
+
+/// Creates, discovers, accepts and enables `clock`, returning the enabled
+/// result.
+async fn enabled_clock(app: &Router, token: &str) -> Value {
+    let (status, created) = request(
+        app,
+        token,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(definition("clock", "clock", &[])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let accepted = discover_and_accept(app, token, "clock", &created["result"]).await;
+    let mut enable = versions(&accepted);
+    enable["status"] = json!("enabled");
+    let (status, enabled) = request(
+        app,
+        token,
+        Method::POST,
+        "/v1/admin/imports/clock/status",
+        Some(enable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    enabled["result"].clone()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn refresh_acceptance_of_an_enabled_command_publishes_its_new_metadata() {
+    let fixture = CommandFixture::new("clock", &clock_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let enabled = enabled_clock(&app, &token).await;
+    assert_eq!(enabled["commandVersion"], "1.0.0");
+
+    // The command is upgraded in place; its actions are unchanged.
+    let mut manifest = clock_manifest();
+    manifest["version"] = json!("1.1.0");
+    fixture.write_manifest(&manifest);
+    let accepted = discover_and_accept(&app, &token, "clock", &enabled).await;
+    assert_eq!(accepted["commandVersion"], "1.1.0", "{accepted}");
+    assert_eq!(accepted["service"]["status"], "enabled", "{accepted}");
+    assert_eq!(accepted["available"], true, "{accepted}");
+    let published = broker.runtime();
+    let record = published.imported_catalog().service("clock").unwrap();
+    assert_eq!(record.accepted_metadata.as_ref().unwrap().version, "1.1.0");
+    assert_eq!(published.imported_service_unavailable_reason("clock"), None);
+    assert!(published.command_provider("clock").is_some());
+    drop((published, app));
+    broker.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn refresh_keeps_grants_and_reacceptance_requires_confirming_them() {
+    let fixture = CommandFixture::new("clock", &clock_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let enabled = enabled_clock(&app, &token).await;
+    broker
+        .runtime()
+        .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
+            grant_id: Some("clock-alice".into()),
+            subjects: vec!["user:alice".into()],
+            execution_contexts: vec!["default".into()],
+            service: "clock".into(),
+            actions: vec!["time.now".into()],
+            resources: ResourceSelection::default(),
+            credential_mode: "service".into(),
+            priority: None,
+            status: None,
+            description: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let grant_active = || {
+        fixture
+            .imports
+            .runtime
+            .managed_store()
+            .unwrap()
+            .policy_grants()
+            .unwrap()
+            .into_iter()
+            .any(|grant| grant.grant_id == "clock-alice" && grant.status == "active")
+    };
+    assert!(grant_active());
+
+    // A behavioral change quarantines the action and keeps its grant.
+    let mut manifest = clock_manifest();
+    manifest["actions"][0]["inputSchema"] =
+        json!({"type": "object", "properties": {"zone": {"type": "string"}}});
+    fixture.write_manifest(&manifest);
+    let (status, refreshed) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/clock/discover",
+        Some(versions(&enabled)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{refreshed}");
+    let refreshed = &refreshed["result"];
+    let now = refreshed["service"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["definition"]["action"] == "time.now")
+        .unwrap();
+    assert_eq!(now["status"], "quarantined");
+    assert_eq!(
+        refreshed["affectedGrantsByAction"]["time.now"],
+        json!(["clock-alice"])
+    );
+    assert!(grant_active());
+
+    // Accepting the changed action needs confirmAffectedGrants.
+    let tool = refreshed["preview"]["manifest"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["definition"]["action"] == "time.now")
+        .unwrap()
+        .clone();
+    let mut accept = versions(refreshed);
+    accept["manifestHash"] = refreshed["preview"]["manifestHash"].clone();
+    accept["selections"] = json!([{"source": tool["definition"]["source"],
+        "action": "time.now", "readOnly": true}]);
+    let (status, unconfirmed) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/clock/accept",
+        Some(accept.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unconfirmed}");
+    assert!(
+        unconfirmed.to_string().contains("confirmAffectedGrants"),
+        "{unconfirmed}"
+    );
+    accept["confirmAffectedGrants"] = json!(true);
+    let (status, confirmed) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/clock/accept",
+        Some(accept),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    let now = confirmed["result"]["service"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["definition"]["action"] == "time.now")
+        .unwrap()
+        .clone();
+    assert_eq!(now["status"], "enabled");
+    assert!(grant_active());
+    drop(app);
+    broker.stop().await;
+}

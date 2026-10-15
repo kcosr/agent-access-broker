@@ -777,6 +777,11 @@ async fn change(
                             definition_hash: String::new(),
                         })
                         .collect();
+                    // An acceptance stores the preview's metadata; build the
+                    // provider from what will be committed, never the old one.
+                    if let Some(acceptance) = &request.accepted_preview {
+                        candidate.accepted_metadata = acceptance.accepted_metadata.clone();
+                    }
                     let providers = runtime.prepare_imported_service_change(&candidate, None)?;
                     let mutation = store.update_imported_service(request, |catalog| {
                         runtime.with_imported_catalog(catalog.clone(), providers)

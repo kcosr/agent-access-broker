@@ -20,6 +20,9 @@ pub struct PreparedImportedProviders {
     definition: ImportedServiceDefinition,
     status: ImportedServiceStatus,
     enabled_actions: Vec<ImportedActionDefinition>,
+    /// The accepted metadata the provider was built with; the committed
+    /// record must carry the same.
+    accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     transport: PreparedTransport,
 }
 
@@ -65,6 +68,7 @@ impl PreparedImportedProviders {
         if record.definition != self.definition
             || record.status != self.status
             || enabled_definitions(record) != self.enabled_actions
+            || record.accepted_metadata != self.accepted_metadata
         {
             return Err(preparation_mismatch());
         }
@@ -1098,6 +1102,7 @@ impl BrokerRuntime {
             definition: definition.clone(),
             status: record.status,
             enabled_actions: enabled_definitions(record),
+            accepted_metadata: record.accepted_metadata.clone(),
             transport: transport_provenance,
         };
         if record.status != ImportedServiceStatus::Enabled
