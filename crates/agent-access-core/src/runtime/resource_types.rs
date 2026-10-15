@@ -41,6 +41,12 @@ impl std::fmt::Display for ResourceTypeOwner {
     }
 }
 
+/// Whether the broker reserves `id` without registering it: the runtime's
+/// placeholder type for a scope whose type cannot be resolved.
+fn reserved(id: &ResourceType) -> bool {
+    id == super::UNRESOLVED_RESOURCE_TYPE.id()
+}
+
 /// A generation's resource types and their owners.
 #[derive(Debug, Clone)]
 pub(crate) struct EffectiveResourceTypes {
@@ -121,6 +127,13 @@ impl EffectiveResourceTypes {
                 },
             };
             for (declared, descriptor) in types.declarations.iter().zip(&types.descriptors) {
+                if reserved(descriptor.id()) {
+                    return Err(format!(
+                        "imported service {service} resource type {} collides with a type of {}",
+                        descriptor.id(),
+                        ResourceTypeOwner::Host
+                    ));
+                }
                 if let Some(owner) = owners.get(descriptor.id()) {
                     return Err(format!(
                         "imported service {service} resource type {} collides with a type of {owner}",
@@ -187,11 +200,12 @@ impl EffectiveResourceTypes {
         }
     }
 
-    /// Whether `id` is registered by an owner other than imported service
-    /// `service`, which a new imported type may therefore not take.
+    /// Whether `id` is reserved or registered by an owner other than
+    /// imported service `service`, so a new imported type may not take it.
     pub(crate) fn registered_outside(&self, id: &str, service: &str) -> bool {
         ResourceType::new(id).is_ok_and(|id| {
-            self.owner(&id).is_some_and(|owner| {
+            reserved(&id)
+                || self.owner(&id).is_some_and(|owner| {
                 !matches!(owner, ResourceTypeOwner::Imported { service: owner, .. } if owner == service)
             })
         })
@@ -273,10 +287,11 @@ impl super::BrokerRuntime {
     /// Commits an imported-service update and builds the generation that
     /// publishes it, holding the managed policy mutation lock, which resource
     /// writes also take. An acceptance applies its resource type changes in
-    /// the same transaction; when they delete attribute values or drop a type
-    /// the generation also publishes the resulting managed policy, so its
-    /// registry, imported catalog, resource catalog and attribute bindings
-    /// change together.
+    /// the same transaction, and when it changes the types every stored
+    /// resource is checked against the new registry before commit. When the
+    /// changes delete attribute values or drop a type the generation also
+    /// publishes the resulting managed policy, so its registry, imported
+    /// catalog, resource catalog and attribute bindings change together.
     pub fn commit_imported_service_update(
         &self,
         request: crate::ImportedServiceUpdateRequest,
@@ -294,18 +309,44 @@ impl super::BrokerRuntime {
                 "imported services require managed storage".into(),
             )
         })?;
-        store.update_imported_service_with_policy(request, |catalog, policy| {
+        store.update_imported_service_with_policy(request, |catalog, transaction| {
             let next = self.with_imported_catalog(catalog.clone(), prepared)?;
-            match policy {
+            let Some(transaction) = transaction else {
+                return Ok(next);
+            };
+            next.check_stored_resources(transaction.catalog)?;
+            match transaction.policy {
                 Some(policy) => next.with_managed_policy_state(policy),
                 None => Ok(next),
             }
         })
     }
 
+    /// Checks a managed resource catalog against this generation's registry:
+    /// every resource's type and selector, and its attribute bindings.
+    fn check_stored_resources(
+        &self,
+        catalog: &crate::ManagedResourceCatalog,
+    ) -> Result<(), crate::ManagedStoreError> {
+        if self.config.policy.authority != "managed" {
+            return Ok(());
+        }
+        let errors = crate::validate_resource_definition_types(
+            self.resource_types.registry(),
+            &catalog.resources,
+        );
+        if !errors.is_empty() {
+            return Err(crate::ManagedStoreError::InputInvalid(errors.join("; ")));
+        }
+        super::resource_management::validate_attribute_bindings(
+            self.resource_types.registry(),
+            catalog,
+        )
+    }
+
     /// Publishes `state`, committed in the same transaction as the catalog
-    /// this generation carries, as its managed policy snapshot after checking
-    /// it against this generation's registry.
+    /// this generation carries and already checked against its registry, as
+    /// its managed policy snapshot.
     fn with_managed_policy_state(
         mut self,
         state: &crate::ManagedPolicyState,
@@ -313,17 +354,6 @@ impl super::BrokerRuntime {
         if self.config.policy.authority != "managed" {
             return Ok(self);
         }
-        let errors = crate::validate_resource_definition_types(
-            self.resource_types.registry(),
-            &state.catalog.resources,
-        );
-        if !errors.is_empty() {
-            return Err(crate::ManagedStoreError::InputInvalid(errors.join("; ")));
-        }
-        super::resource_management::validate_attribute_bindings(
-            self.resource_types.registry(),
-            &state.catalog,
-        )?;
         if self.policy_snapshot.load().generation() > state.revision.generation {
             return Err(crate::ManagedStoreError::VersionConflict);
         }
@@ -492,6 +522,8 @@ mod tests {
         );
         // Types an owner registers cannot be taken by another import.
         assert!(types.registered_outside("git_repository", "tickets"));
+        // The runtime's placeholder for unresolved scopes is reserved.
+        assert!(types.registered_outside("unresolved_resource_type", "tickets"));
         assert!(types.registered_outside("boards_project", "tickets"));
         assert!(!types.registered_outside("tickets_project", "tickets"));
         assert!(!types.registered_outside("unregistered_type", "tickets"));
@@ -599,6 +631,10 @@ mod tests {
 
         for (types, owner) in [
             (vec![declaration("git_repository", false)], "the broker"),
+            (
+                vec![declaration("unresolved_resource_type", false)],
+                "the broker",
+            ),
             (vec![declaration("jira_project", false)], "the jira backend"),
             (
                 vec![declaration("tickets_project", false)],

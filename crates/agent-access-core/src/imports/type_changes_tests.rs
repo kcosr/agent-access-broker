@@ -164,12 +164,12 @@ fn resource_type_comparisons_classify_every_difference() {
         Detail::AttributeMadeRequired,
         Detail::AttributePattern,
     ] {
-        assert!(detail.needs_unused_type());
+        assert!(detail.needs_value_free_type());
         assert!(!detail.checks_values());
     }
     for detail in [Detail::Pattern, Detail::MaxLength] {
         assert!(detail.checks_values());
-        assert!(!detail.needs_unused_type());
+        assert!(!detail.needs_value_free_type());
     }
 }
 
@@ -316,11 +316,7 @@ fn resource_type_acceptances_recheck_the_resources_each_change_depends_on() {
         BTreeMap::from([
             (
                 "ticketing_project".to_owned(),
-                vec![
-                    "all-projects".to_owned(),
-                    "legacy".to_owned(),
-                    "ops".to_owned()
-                ]
+                vec!["legacy".to_owned(), "ops".to_owned()]
             ),
             ("ticketing_queue".to_owned(), vec!["triage".to_owned()]),
         ])
@@ -423,4 +419,70 @@ fn command_actions_name_their_declared_resource_type() {
     assert_eq!(command_action_resource_type(&action), Some("project"));
     action.annotations = json!({"command": {}});
     assert_eq!(command_action_resource_type(&action), None);
+}
+
+fn all_selector(id: &str) -> ImportedTypeResource {
+    ImportedTypeResource {
+        id: id.into(),
+        selector: ResourceSelector::All,
+        attributes: BTreeSet::new(),
+    }
+}
+
+#[test]
+fn resource_type_attribute_rules_ignore_all_selector_resources() {
+    let accepted = metadata(vec![project(), queue()]);
+    let mut declared = project();
+    declared.attributes.push(attribute("owner", true, None));
+    declared.attributes[0].required = true;
+    declared.attributes[1].pattern = Some("[a-z]+".into());
+    let proposed = metadata(vec![declared.clone()]);
+    // `all` resources carry no attribute values, so the attribute rules apply
+    // in place; they still keep a removed type.
+    let only_all = usage(&[
+        ("ticketing_project", vec![all_selector("all-projects")]),
+        ("ticketing_queue", vec![all_selector("all-queues")]),
+    ]);
+    let preview = ImportedTypePreview::plan(Some(&accepted), &proposed, &only_all).unwrap();
+    assert_eq!(preview.changes[0].outcome, Outcome::Applied);
+    assert_eq!(preview.changes[1].outcome, Outcome::Retained);
+    assert_eq!(preview.target.resource_types[0], declared);
+    let plan = ImportedTypeAcceptance::plan(Some(&accepted), &preview.target).unwrap();
+    assert!(plan.violations(&only_all).is_empty());
+    // An exact resource still needs a new type id, and a dropped type still
+    // counts every resource.
+    let with_exact = usage(&[(
+        "ticketing_project",
+        vec![all_selector("all-projects"), exact("ops", "OPS", &[])],
+    )]);
+    let preview = ImportedTypePreview::plan(Some(&accepted), &proposed, &with_exact).unwrap();
+    assert_eq!(preview.changes[0].outcome, Outcome::NeedsNewId);
+    let plan = ImportedTypeAcceptance::plan(Some(&accepted), &proposed).unwrap();
+    assert_eq!(
+        plan.violations(&with_exact),
+        BTreeMap::from([("ticketing_project".to_owned(), vec!["ops".to_owned()])])
+    );
+    assert_eq!(
+        plan.violations(&only_all),
+        BTreeMap::from([("ticketing_queue".to_owned(), vec!["all-queues".to_owned()])])
+    );
+}
+
+#[test]
+fn resource_type_previews_of_full_commands_keep_retained_types_within_bounds() {
+    let declared = |id: String| ImportedResourceTypeDeclaration {
+        broker_type: format!("ticketing_{id}"),
+        id,
+        ..queue()
+    };
+    let ids = (1..=16).map(|n| format!("t{n:02}")).collect::<Vec<_>>();
+    let accepted = metadata(ids.iter().cloned().map(declared).collect());
+    accepted.validate().unwrap();
+    let mut renamed = ids.clone();
+    renamed[0] = "t17".into();
+    let proposed = metadata(renamed.into_iter().map(declared).collect());
+    let stored = usage(&[("ticketing_t01", vec![exact("kept", "kept", &[])])]);
+    let preview = ImportedTypePreview::plan(Some(&accepted), &proposed, &stored).unwrap();
+    assert_eq!(preview.target.resource_types.len(), 17);
+    preview.target.validate().unwrap();
 }

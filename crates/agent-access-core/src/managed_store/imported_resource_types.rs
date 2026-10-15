@@ -27,6 +27,24 @@ pub struct ImportedTypeEffects {
     pub deleted_attribute_values: Vec<DeletedResourceAttributes>,
     /// Removed types without resources that the acceptance dropped.
     pub dropped_types: Vec<String>,
+    /// The managed policy revision before and after the acceptance, which
+    /// advances when values were deleted or types dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_revision: Option<ManagedPolicyRevision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<ManagedPolicyRevision>,
+}
+
+/// What an acceptance that changes an import's resource types leaves in its
+/// transaction, for the publishing generation to check against its new
+/// registry and publish.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportedTypeTransaction<'a> {
+    /// The resource catalog after the acceptance's effects.
+    pub catalog: &'a ManagedResourceCatalog,
+    /// The advanced policy state, when the acceptance deleted attribute values
+    /// or dropped types.
+    pub policy: Option<&'a ManagedPolicyState>,
 }
 
 impl ImportedTypeEffects {
@@ -168,8 +186,11 @@ pub(super) fn apply_type_acceptance(
     if effects.is_empty() {
         return Ok((effects, None));
     }
-    let revision = next_policy_revision(&policy_revision(conn)?, &now, actor)?;
+    let previous_revision = policy_revision(conn)?;
+    let revision = next_policy_revision(&previous_revision, &now, actor)?;
     update_policy_revision(conn, &revision)?;
+    effects.previous_revision = Some(previous_revision);
+    effects.revision = Some(revision.clone());
     let catalog = resources::resource_catalog(conn)?;
     let active_grants = policy_grants(conn, Some("active"))?;
     resources::validate_grant_resource_references(&active_grants, &catalog)?;

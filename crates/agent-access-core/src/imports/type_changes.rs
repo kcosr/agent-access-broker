@@ -89,9 +89,9 @@ pub enum ImportedResourceTypeChangeKind {
 pub enum ImportedResourceTypeOutcome {
     /// The declaration is stored.
     Applied,
-    /// The change needs a new type id because resources of the type exist:
-    /// the accepted declaration stays and the actions using the type are
-    /// unsupported.
+    /// The change needs a new type id because stored resources of the type
+    /// can hold attribute values: the accepted declaration stays and the
+    /// actions using the type are unsupported.
     NeedsNewId,
     /// The removed type keeps its accepted declaration, accepting no new
     /// resources, until its resources are deleted.
@@ -130,9 +130,10 @@ pub enum ImportedResourceTypeChangeDetail {
 }
 
 impl ImportedResourceTypeChangeDetail {
-    /// Whether the change applies only to a type without stored resources:
-    /// checking stored attribute values would mean decrypting them.
-    pub fn needs_unused_type(self) -> bool {
+    /// Whether the change applies only while no stored resource of the type
+    /// can hold attribute values: checking stored values would mean
+    /// decrypting them. Only exact resources hold attribute values.
+    pub fn needs_value_free_type(self) -> bool {
         matches!(
             self,
             Self::AttributeAddedRequired | Self::AttributeMadeRequired | Self::AttributePattern
@@ -167,6 +168,16 @@ pub struct ImportedTypeResource {
     pub attributes: BTreeSet<String>,
 }
 
+impl ImportedTypeResource {
+    /// Whether the resource can hold private attribute values. The store and
+    /// the SDK accept attribute values only on exact resources, and a
+    /// resource with values cannot change its selector kind, so `all`
+    /// resources never hold any.
+    pub fn holds_attribute_values(&self) -> bool {
+        matches!(self.selector, ResourceSelector::Exact { .. })
+    }
+}
+
 /// Stored resources by Broker type ID.
 pub type ImportedTypeUsage = BTreeMap<String, Vec<ImportedTypeResource>>;
 
@@ -176,8 +187,10 @@ struct Comparison {
 }
 
 impl Comparison {
-    fn needs_unused_type(&self) -> bool {
-        self.details.iter().any(|detail| detail.needs_unused_type())
+    fn needs_value_free_type(&self) -> bool {
+        self.details
+            .iter()
+            .any(|detail| detail.needs_value_free_type())
     }
 
     fn checks_values(&self) -> bool {
@@ -280,6 +293,18 @@ fn has_resources(usage: &ImportedTypeUsage, broker_type: &str) -> bool {
         .is_some_and(|resources| !resources.is_empty())
 }
 
+/// The stored resources of `broker_type` that can hold attribute values.
+fn value_resources<'a>(
+    usage: &'a ImportedTypeUsage,
+    broker_type: &str,
+) -> impl Iterator<Item = &'a ImportedTypeResource> {
+    usage
+        .get(broker_type)
+        .into_iter()
+        .flatten()
+        .filter(|resource| resource.holds_attribute_values())
+}
+
 /// What a preview proposes for the import's resource types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedTypePreview {
@@ -345,14 +370,17 @@ impl ImportedTypePreview {
                 target.push(declared.clone());
                 continue;
             }
-            let outcome =
-                if comparison.needs_unused_type() && has_resources(usage, &previous.broker_type) {
-                    target.push(previous.clone());
-                    Outcome::NeedsNewId
-                } else {
-                    target.push(declared.clone());
-                    Outcome::Applied
-                };
+            let outcome = if comparison.needs_value_free_type()
+                && value_resources(usage, &previous.broker_type)
+                    .next()
+                    .is_some()
+            {
+                target.push(previous.clone());
+                Outcome::NeedsNewId
+            } else {
+                target.push(declared.clone());
+                Outcome::Applied
+            };
             changes.push(ImportedResourceTypeChange {
                 id: declared.id.clone(),
                 broker_type: declared.broker_type.clone(),
@@ -405,8 +433,9 @@ impl ImportedTypePreview {
 /// rechecks exactly what its preview decided.
 #[derive(Debug, Clone, Default)]
 pub struct ImportedTypeAcceptance {
-    /// Types whose change applies only while they have no resources.
-    unused: Vec<String>,
+    /// Types whose change applies only while none of their resources can
+    /// hold attribute values.
+    value_free: Vec<String>,
     /// Types whose stored exact values must match their new grammar.
     matching: Vec<(String, ResourcePattern)>,
     /// Removed attributes whose stored values are deleted, by type.
@@ -454,8 +483,8 @@ impl ImportedTypeAcceptance {
                 ));
             }
             let comparison = compare(accepted, declared);
-            if comparison.needs_unused_type() {
-                plan.unused.push(declared.broker_type.clone());
+            if comparison.needs_value_free_type() {
+                plan.value_free.push(declared.broker_type.clone());
             }
             if comparison.checks_values() {
                 plan.matching.push((
@@ -482,7 +511,7 @@ impl ImportedTypeAcceptance {
 
     /// Every Broker type ID whose stored resources the acceptance reads.
     pub fn resource_types(&self) -> BTreeSet<&str> {
-        self.unused
+        self.value_free
             .iter()
             .chain(self.matching.iter().map(|(broker_type, _)| broker_type))
             .chain(self.deletions.iter().map(|(broker_type, _)| broker_type))
@@ -491,12 +520,21 @@ impl ImportedTypeAcceptance {
             .collect()
     }
 
-    /// The stored resources that prevent the acceptance, by type: any
-    /// resource of a type that must be unused or is dropped, and exact
-    /// resources whose values no longer match a changed grammar.
+    /// The stored resources that prevent the acceptance, by type: resources
+    /// that can hold attribute values of a type whose change needs none, any
+    /// resource of a dropped type, and exact resources whose values no longer
+    /// match a changed grammar.
     pub fn violations(&self, usage: &ImportedTypeUsage) -> BTreeMap<String, Vec<String>> {
         let mut violations = BTreeMap::<String, BTreeSet<String>>::new();
-        for broker_type in self.unused.iter().chain(&self.dropped) {
+        for broker_type in &self.value_free {
+            for resource in value_resources(usage, broker_type) {
+                violations
+                    .entry(broker_type.clone())
+                    .or_default()
+                    .insert(resource.id.clone());
+            }
+        }
+        for broker_type in &self.dropped {
             for resource in usage.get(broker_type).into_iter().flatten() {
                 violations
                     .entry(broker_type.clone())
