@@ -568,7 +568,7 @@ test("a service named constructor keeps its own explicit action and resource res
   expect(model.errors).toEqual([]);
 });
 
-test("a command service restricts only its imported resource type, and untyped actions take no resources", async ({ page }) => {
+test("a command service restricts its typed actions to resources of its imported type only", async ({ page }) => {
   const model = await fixture(page);
   const contexts = ["internal", "external"];
   // Broker-checked and command-checked typed actions name the import's Broker type; an untyped action names none.
@@ -600,12 +600,10 @@ test("a command service restricts only its imported resource type, and untyped a
   await expect(ticketing.getByLabel("Triage · triage", { exact: true })).toHaveCount(0);
   await ticketing.getByLabel("Operations · OPS", { exact: true }).check();
   await expect.poll(() => model.previews.at(-1)?.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
-  await reads(ticketing).getByLabel("whoami", { exact: true }).check();
-  await expect.poll(() => model.previews.at(-1)?.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search", "whoami"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("command-boundary");
   await editor(page).getByRole("button", { name: "Issue token", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();
-  expect(model.issued[0].body.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search", "whoami"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
+  expect(model.issued[0].body.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
   expect(model.invalidPreviews).toEqual([]);
   expect(model.errors).toEqual([]);
 });

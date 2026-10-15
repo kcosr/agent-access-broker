@@ -372,7 +372,8 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   // The accepted types of a command import and those this preview declares, for action type labels.
   const types = [...(metadata?.resourceTypes ?? []), ...(data.service.acceptedMetadata?.resourceTypes ?? [])];
   const changes = data.resourceTypeChanges ?? [];
-  const typeIssues = resourceTypeIdIssues(changes, metadata, typeIds);
+  const registeredTypes = useResourceTypes();
+  const typeIssues = resourceTypeIdIssues(changes, metadata, typeIds, registeredTypes, data.service.definition.service);
   const blockedTypes = blockedTypeChanges(changes);
   const invalid = importSelectionError(data, rows);
   const typeProblem = Object.keys(typeIssues).length

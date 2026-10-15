@@ -4,7 +4,7 @@
 // acceptance moves the import to the next queued state; requests are recorded.
 import type { Page } from "@playwright/test";
 import type { ImportChangeBlocked, ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
-import type { ResourceRecord, Session } from "../../src/types";
+import type { ResourceRecord, ResourceTypeMetadata, Session } from "../../src/types";
 import { RESOURCE_TYPES } from "../../unit/resource-types.fixture";
 import { COMMAND_RESOURCE_TYPES, commandDraft, commandImportList, commandPolicyService } from "../../unit/command-import.fixture";
 
@@ -18,6 +18,8 @@ export type CommandImportApi = {
   /** A refusal the next acceptance answers with instead, as `target` lists. */
   acceptBlocked: Partial<ImportChangeBlocked> | null;
   commandImports: string[];
+  /** The command import's entries of `GET /v1/resource-types`. */
+  resourceTypes: ResourceTypeMetadata[];
   resources: ResourceRecord[];
   created: ImportDefinition[];
   accepted: Array<Record<string, unknown>>;
@@ -47,7 +49,7 @@ function recordResult(data: ImportPreviewResult) {
 }
 
 export async function mockCommandImportApi(page: Page, current: ImportPreviewResult | null = null): Promise<CommandImportApi> {
-  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resources: [], created: [], accepted: [], credentials: [], errors: [] };
+  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], created: [], accepted: [], credentials: [], errors: [] };
   page.on("pageerror", (error) => api.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
@@ -60,7 +62,7 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
     if (pathname === "/v1/auth/session") result = ADMIN_SESSION;
     else if (pathname === "/v1/resource-types" || pathname === "/v1/me") {
       // Discovery routes: their body is the result itself, without an envelope.
-      await route.fulfill({ json: pathname === "/v1/me" ? { principal: "admin", serviceLimits: [] } : { resourceTypes: [...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES] } });
+      await route.fulfill({ json: pathname === "/v1/me" ? { principal: "admin", serviceLimits: [] } : { resourceTypes: [...RESOURCE_TYPES, ...api.resourceTypes] } });
       return;
     } else if (pathname === "/v1/admin/imports" && method === "POST") {
       const definition = request.postDataJSON() as ImportDefinition;

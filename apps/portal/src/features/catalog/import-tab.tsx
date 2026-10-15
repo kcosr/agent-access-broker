@@ -486,6 +486,7 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
       purpose={purpose}
       rotate={dialog.rotate}
       withUsername={withUsername}
+      noun={purpose === "execution" && data.service.definition.adapterKind === COMMAND_KIND ? "credential" : "token"}
       onClose={close}
       onSave={(token, username) => (purpose === "personal" ? actions.writePersonalToken(data, token) : actions.writeToken(data, purpose, token, username))}
     />

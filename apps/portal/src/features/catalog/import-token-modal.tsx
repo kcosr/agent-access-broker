@@ -16,6 +16,7 @@ export function ImportTokenModal({
   purpose,
   rotate,
   withUsername = false,
+  noun,
   onClose,
   onSave,
   frame = modalFrame
@@ -25,6 +26,8 @@ export function ImportTokenModal({
   rotate: boolean;
   /** The credential is a username and token; the username is sent with the token. */
   withUsername?: boolean;
+  /** What the slot holds: a command import's execution slot is a credential of its declared kind. */
+  noun: "token" | "credential";
   onClose: () => void;
   onSave: (token: string, username?: string) => Promise<unknown>;
   frame?: EditorFrame;
@@ -54,7 +57,7 @@ export function ImportTokenModal({
   }
 
   return frame({
-    title: `${rotate ? "Rotate" : "Set"} ${purpose} ${withUsername ? "credential" : "token"}`,
+    title: `${rotate ? "Rotate" : "Set"} ${purpose} ${noun}`,
     size: "sm",
     body: (
       <div className="wb-form-stack pt-catalog-form">
@@ -79,7 +82,7 @@ export function ImportTokenModal({
           Cancel
         </Button>
         <AdminButton type="submit" variant="primary" pending={pending} disabled={(missing || missingUsername) && !pending}>
-          {withUsername ? "Save credential" : "Save token"}
+          {noun === "credential" ? "Save credential" : "Save token"}
         </AdminButton>
       </>
     ),

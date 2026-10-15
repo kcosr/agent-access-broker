@@ -7,6 +7,7 @@ import {
   buildPolicySubject,
   canManagePolicies,
   compactListPreview,
+  credentialVerifiedMessage,
   identityDisplayName,
   isActionOnlyGrant,
   isPolicyGrantIdAllowed,
@@ -234,6 +235,11 @@ describe("portal helper status and shell logic", () => {
     expect(microsoftLoginControl("disabled", false)).toBe("disabled");
     expect(microsoftLoginControl(undefined, true)).toBe("link");
     expect(microsoftLoginControl("active", false)).toBe("unlink");
+  });
+
+  test("says when a verification only checked the credential locally", () => {
+    expect(credentialVerifiedMessage("upstream_verified")).toBe("Credential verified");
+    expect(credentialVerifiedMessage("local_verified")).toBe("Credential checked locally; the service does not verify it upstream");
   });
 
   test("reports token status in precedence order", () => {

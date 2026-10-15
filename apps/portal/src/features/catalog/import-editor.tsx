@@ -8,7 +8,7 @@ import type { ImportAuthentication, ImportDefinition, ImportPreviewResult } from
 import { importSourceKey } from "../../lib/imports";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
 import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
-import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName } from "../../lib/import-command";
+import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName, credentialModesText } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
 import { Banner, Button, Checkbox, Field, Input, Select } from "../../workbench";
 import { FormError } from "../../components/form";
@@ -659,6 +659,10 @@ function CommandImportForm({
   const shown = save.attempted ? issues : {};
   const blocked = (!old && (!operatorEnabled || !commandImports.length)) || (affected.length > 0 && !confirmed);
   const modes = accepted ? accepted.credential : undefined;
+  // The credential the manifest declares, once a discovery has read it: the
+  // accepted one, else the pending preview's; null declares none.
+  const declared = accepted ? accepted.credential : data?.preview?.manifest.serviceMetadata?.credential;
+  const undeclared = declared === undefined ? [] : bindings.map((binding) => binding.ownerMode).filter((mode) => !declared?.modes.includes(mode));
 
   function definition(): ImportDefinition {
     return {
@@ -739,12 +743,22 @@ function CommandImportForm({
             <Checkbox label="Shared service credential" checked={shared} disabled={busy || !offered("service")} onChange={(event) => setShared(event.target.checked)} />
             <Checkbox label="Personal credentials for each user" checked={personal} disabled={busy || !offered("per_user")} onChange={(event) => setPersonal(event.target.checked)} />
             <p className="pt-prose wb-small">
-              {modes
-                ? `The command takes a ${CREDENTIAL_KIND_LABEL[modes.kind].toLowerCase()} credential. Existing credential modes are retained; only modes its manifest declares can be added.`
-                : shared || personal
-                  ? "Choose the modes the command's manifest declares; discovery fails otherwise. Personal credentials never fall back to a shared credential."
-                  : "No credential: for a command that needs none. Grants then use service mode and calls carry no credential."}
+              {declared === null
+                ? "The command's manifest declares no credential: clear both modes."
+                : declared
+                  ? `The command's manifest declares a ${CREDENTIAL_KIND_LABEL[declared.kind].toLowerCase()} credential in ${credentialModesText(declared.modes)} mode.${
+                      modes ? " Existing credential modes are retained; only declared modes can be added." : ""
+                    }`
+                  : shared || personal
+                    ? "Choose the modes the command's manifest declares; discovery fails otherwise. Personal credentials never fall back to a shared credential."
+                    : "No credential: for a command that needs none. Grants then use service mode and calls carry no credential."}
             </p>
+            {undeclared.length ? (
+              <Banner tone="warning" slim>
+                The manifest does not declare {credentialModesText(undeclared)} mode
+                {declared ? `; it declares ${credentialModesText(declared.modes)} only` : ""}. Discovery and acceptance fail until the modes match.
+              </Banner>
+            ) : null}
           </>
         )}
         <p className="pt-prose wb-small">Credentials reach the command only in the request on its stdin, never in arguments or its environment.</p>

@@ -16,6 +16,7 @@ import type {
   ImportServiceMetadata
 } from "../import-types";
 import { plural } from "../workbench";
+import type { ResourceTypes } from "./resource-types";
 
 export const COMMAND_KIND = "command";
 const COMMAND_PREFIX = "command:";
@@ -47,6 +48,11 @@ export function commandBindings(existing: ImportBinding[], shared: boolean, pers
 
 export const CREDENTIAL_KIND_LABEL: Record<ImportCredentialKind, string> = { token: "Token", username_token: "Username and token" };
 const MODE_LABEL: Record<ImportOwnerMode, string> = { service: "shared", per_user: "personal" };
+
+/** "shared and personal", "shared" or "personal". */
+export function credentialModesText(modes: readonly ImportOwnerMode[]): string {
+  return modes.map((mode) => MODE_LABEL[mode]).join(" and ");
+}
 
 /** "Username and token · shared or personal", or that the command needs none. */
 export function commandCredentialText(credential: ImportServiceMetadata["credential"]): string {
@@ -137,10 +143,18 @@ const TYPE_ID = /^[a-z][a-z0-9_]{0,63}$/;
 
 /**
  * Problems with the Broker type IDs of added types, by source type id: the ID
- * grammar, IDs repeated within the import, and a proposal another owner has
- * registered. Accepted types keep their IDs.
+ * grammar, IDs repeated within the import, and an ID another owner has
+ * registered: the Broker's own proposal when the preview says so, or any ID
+ * among the `registered` resource types not declared by `service`. Accepted
+ * types keep their IDs.
  */
-export function resourceTypeIdIssues(changes: readonly ImportResourceTypeChange[], metadata: ImportServiceMetadata | undefined, ids: ImportResourceTypeIds): Record<string, string> {
+export function resourceTypeIdIssues(
+  changes: readonly ImportResourceTypeChange[],
+  metadata: ImportServiceMetadata | undefined,
+  ids: ImportResourceTypeIds,
+  registered: ResourceTypes,
+  service: string
+): Record<string, string> {
   const issues: Record<string, string> = {};
   const chosen = (id: string, brokerType: string) => ids[id]?.trim() ?? brokerType;
   const editable = new Set(changes.filter((change) => change.editable).map((change) => change.id));
@@ -153,7 +167,7 @@ export function resourceTypeIdIssues(changes: readonly ImportResourceTypeChange[
     const value = chosen(change.id, change.brokerType);
     if (!TYPE_ID.test(value)) issues[change.id] = "Use up to 64 lowercase letters, digits or underscores, starting with a letter.";
     else if ((counts.get(value) ?? 0) > 1) issues[change.id] = "Another type of this import uses this ID.";
-    else if (change.blocked && value === change.brokerType) issues[change.id] = "This ID is already registered. Choose another.";
+    else if ((change.blocked && value === change.brokerType) || (registered.has(value) && registered.get(value)!.importedService !== service)) issues[change.id] = "This ID is already registered. Choose another.";
   }
   return issues;
 }

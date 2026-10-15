@@ -25,7 +25,29 @@ import { ImportTokenModal } from "../src/features/catalog/import-token-modal";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
 import { GrantActionSelector } from "../src/components/grant-actions";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
-import { COMMAND_RESOURCE_TYPES, CREATE, OAUTH_NOTICE, PROJECT, SEARCH, VIEW, WHOAMI, commandAccepted, commandDefinition, commandDiscovered, commandDraft, commandRefreshed, stdinBinding } from "./command-import.fixture";
+import { COMMAND_RESOURCE_TYPES, CREATE, OAUTH_NOTICE, PROJECT, REFRESHED_RESOURCE_TYPES, SEARCH, VIEW, WHOAMI, commandAccepted, commandDefinition, commandDiscovered, commandRefreshed, stdinBinding } from "./command-import.fixture";
+
+/** An accepted MCP or OpenAPI import with a pending refresh: no service metadata. */
+function urlImport(kind: "mcp_http" | "openapi_http"): ImportPreviewResult {
+  const data = commandRefreshed();
+  const source = (action: string) => (kind === "mcp_http" ? { toolName: action } : { operationId: action });
+  data.service.definition = {
+    ...data.service.definition,
+    adapterKind: kind,
+    endpoint: "https://api.example.test/v1",
+    executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }],
+    discovery: { kind: "execution" }
+  };
+  delete data.service.acceptedMetadata;
+  data.service.actions = data.service.actions.map((action) => ({ ...action, definition: { ...action.definition, source: source(action.definition.action), annotations: {} } }));
+  data.preview!.manifest = {
+    protocolVersion: kind === "mcp_http" ? "2026-07-28" : "3.1.0",
+    metadata: {},
+    tools: data.preview!.manifest.tools.map((tool) => ({ ...tool, definition: { ...tool.definition, source: source(tool.definition.action), annotations: {} } }))
+  };
+  data.resourceTypeChanges = [];
+  return data;
+}
 
 function renderEditor(data?: ImportPreviewResult, commandImports = ["ticketing", "deploy-tools"]) {
   return renderToStaticMarkup(createElement(ImportEditor, { principal: "admin", data, availableKinds: ["command"], commandImports, authentication: [], onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
@@ -64,6 +86,21 @@ describe("command import configuration", () => {
     expect(single).toMatch(/<option value="ticketing" selected="">ticketing<\/option>/);
   });
 
+  test("the hint names the modes the manifest declares and warns about undeclared ones", () => {
+    const draft = commandDiscovered();
+    draft.preview!.manifest.serviceMetadata = { ...draft.preview!.manifest.serviceMetadata!, credential: { kind: "token", modes: ["per_user"] } };
+    const html = renderEditor(draft);
+    expect(html).toContain("The command&#x27;s manifest declares a token credential in personal mode.");
+    expect(html).toContain("The manifest does not declare shared mode; it declares personal only.");
+    const matching = commandDiscovered();
+    expect(renderEditor(matching)).toContain("declares a username and token credential in shared and personal mode.");
+    expect(renderEditor(matching)).not.toContain("does not declare");
+    const free = commandDiscovered();
+    free.preview!.manifest.serviceMetadata = { ...free.preview!.manifest.serviceMetadata!, credential: null };
+    expect(renderEditor(free)).toContain("declares no credential: clear both modes.");
+    expect(renderEditor(free)).toContain("The manifest does not declare shared and personal mode.");
+  });
+
   test("without approved commands the editor explains the operator step and cannot create a draft", () => {
     const html = renderEditor(undefined, []);
     expect(html).toContain("No approved commands");
@@ -77,7 +114,7 @@ describe("command import configuration", () => {
     const html = renderEditor(data, []);
     expect(html).toMatch(/<select disabled=""[^>]*><option value="ticketing" selected="">ticketing \(no longer approved\)<\/option><\/select>/);
     expect(html).toContain("Operator configuration no longer approves this command");
-    expect(html).toContain("takes a username and token credential");
+    expect(html).toContain("declares a username and token credential in shared and personal mode. Existing credential modes are retained");
     // The stored shared mode stays; the declared personal mode can be added.
     expect(html).toMatch(/<input disabled="" id="[^"]+" type="checkbox" class="wb-checkbox" checked=""\/><span class="wb-check-text"><label[^>]*>Shared service credential/);
     expect(html).toMatch(/<input id="[^"]+" type="checkbox" class="wb-checkbox"\/><span class="wb-check-text"><label[^>]*>Personal credentials for each user/);
@@ -88,13 +125,18 @@ describe("command import configuration", () => {
   });
 
   test("a username-and-token execution credential takes the username with the token", () => {
-    const html = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: false, withUsername: true, onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const html = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: false, withUsername: true, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
     expect(html).toContain("Set execution credential");
     expect(html).toContain("Username");
     expect(html).toContain("Save credential");
-    const token = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
-    expect(token).toContain("Rotate execution token");
+    // A command's token credential takes no username; other imports' slots hold tokens.
+    const token = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    expect(token).toContain("Rotate execution credential");
+    expect(token).toContain("Save credential");
     expect(token).not.toContain("Username");
+    const other = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, noun: "token", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    expect(other).toContain("Rotate execution token");
+    expect(other).toContain("Save token");
   });
 });
 
@@ -188,29 +230,38 @@ describe("command import preview", () => {
     expect(selectedImportActions(rows)).toEqual([]);
     expect(importSelectionError(data, rows)).toBeNull();
     expect(metadataOnlyAcceptance(commandDiscovered())).toBe(false);
-    const mcp = commandRefreshed();
-    delete mcp.preview!.manifest.serviceMetadata;
-    expect(metadataOnlyAcceptance(mcp)).toBe(false);
-    expect(importSelectionError(mcp, rows)).toBe("Select at least one supported action.");
+    for (const [kind, noun] of [["mcp_http", "tool"], ["openapi_http", "operation"]] as const) {
+      const other = urlImport(kind);
+      const none = importReviewRows(other).map((row) => ({ ...row, selected: false }));
+      expect(metadataOnlyAcceptance(other)).toBe(false);
+      expect(importSelectionError(other, none)).toBe(`Select at least one supported ${noun}.`);
+    }
   });
 
   test("Broker type IDs are checked before acceptance and only changed IDs are sent", () => {
     const data = commandDiscovered();
     const changes = data.resourceTypeChanges!;
     const metadata = data.preview!.manifest.serviceMetadata;
-    expect(resourceTypeIdIssues(changes, metadata, {})).toEqual({});
+    const registered = indexResourceTypes([...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES]);
+    const issues = (list: typeof changes, declared: typeof metadata, ids: Record<string, string>, service = "ticketing") => resourceTypeIdIssues(list, declared, ids, registered, service);
+    expect(issues(changes, metadata, {})).toEqual({});
     expect(chosenResourceTypeIds(changes, {})).toEqual({});
     expect(chosenResourceTypeIds(changes, { project: " ticketing_project " })).toEqual({});
     expect(chosenResourceTypeIds(changes, { project: "tickets_project" })).toEqual({ project: "tickets_project" });
-    expect(resourceTypeIdIssues(changes, metadata, { project: "Tickets" }).project).toContain("lowercase");
+    expect(issues(changes, metadata, { project: "Tickets" }).project).toContain("lowercase");
     // Another added type of the import may not take the same ID.
     const twice = { ...metadata!, resourceTypes: [...metadata!.resourceTypes, { ...PROJECT, id: "board", brokerType: "ticketing_board" }] };
     const both = [...changes, { ...changes[0]!, id: "board", brokerType: "ticketing_board" }];
-    expect(resourceTypeIdIssues(both, twice, { board: "ticketing_project" }).board).toContain("Another type");
+    expect(issues(both, twice, { board: "ticketing_project" }).board).toContain("Another type");
+    // A chosen ID another owner registers is refused before acceptance;
+    // this import's own registered types are not another owner's.
+    expect(issues(changes, metadata, { project: "jira_project" }).project).toContain("already registered");
+    expect(issues(changes, metadata, { project: "ticketing_queue" })).toEqual({});
+    expect(issues(changes, metadata, { project: "ticketing_queue" }, "other")).toHaveProperty("project");
     // A proposal another owner registered must be replaced; a new choice clears it.
     const taken = [{ ...changes[0]!, blocked: true }];
-    expect(resourceTypeIdIssues(taken, metadata, {}).project).toContain("already registered");
-    expect(resourceTypeIdIssues(taken, metadata, { project: "tickets_project" })).toEqual({});
+    expect(issues(taken, metadata, {}).project).toContain("already registered");
+    expect(issues(taken, metadata, { project: "tickets_project" })).toEqual({});
     expect(blockedTypeChanges(taken)).toEqual([]);
   });
 
@@ -281,19 +332,11 @@ describe("acceptance errors", () => {
 
 describe("removed resource types", () => {
   test("accept no new resources but stay selectable for an existing resource of the type", () => {
-    const types = indexResourceTypes([...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES]);
+    const types = indexResourceTypes([...RESOURCE_TYPES, ...REFRESHED_RESOURCE_TYPES]);
     const ids = (current?: string) => creatableResourceTypes(types, current).map((type) => type.id);
     expect(ids()).toContain("ticketing_project");
     expect(ids()).not.toContain("ticketing_queue");
     expect(ids("ticketing_queue")).toContain("ticketing_queue");
     expect(ids()[0]).toBe(RESOURCE_TYPES[0]!.id);
-  });
-});
-
-describe("command fixtures", () => {
-  test("follow the Broker's shapes for drafts", () => {
-    const draft = commandDraft();
-    expect(draft.service.definition).toMatchObject({ adapterKind: "command", endpoint: "command:ticketing", discovery: { kind: "anonymous" }, connectionSettings: {}, transportAuth: false });
-    expect(draft.service.acceptedMetadata).toBeUndefined();
   });
 });

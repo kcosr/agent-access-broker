@@ -186,7 +186,7 @@ describe("catalog service index", () => {
   });
   test("token dialogs name the slot and never render a stored value", () => {
     const render = (purpose: "execution" | "personal", rotate: boolean) =>
-      renderToStaticMarkup(createElement(ImportTokenModal, { purpose, rotate, onClose: () => {}, onSave: async () => undefined, frame: inlineFrame }));
+      renderToStaticMarkup(createElement(ImportTokenModal, { purpose, rotate, noun: "token", onClose: () => {}, onSave: async () => undefined, frame: inlineFrame }));
     const set = render("execution", false);
     expect(set).toContain("Set execution token");
     expect(set).toContain("without a Bearer prefix");

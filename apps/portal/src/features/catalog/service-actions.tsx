@@ -70,6 +70,16 @@ export function serviceActionRows(service: CatalogService): ActionRow[] {
   }));
 }
 
+/**
+ * Who checks an imported action's resources: the policy catalog's
+ * `resourcesCheckedBy` when the Broker reports it, with the type and inputs
+ * from the action's declaration.
+ */
+function actionResourceCheck(row: ActionRow) {
+  const check = commandResourceCheck(row.record!.definition);
+  return row.catalog?.resourcesCheckedBy ? { ...check, by: row.catalog.resourcesCheckedBy } : check;
+}
+
 /** The resource types a command import has accepted, for its actions' "Resources checked by". */
 function commandTypes(service: CatalogService | null): readonly ImportResourceTypeDeclaration[] | null {
   return service?.imported?.definition.adapterKind === COMMAND_KIND ? service.imported.acceptedMetadata?.resourceTypes ?? [] : null;
@@ -82,7 +92,7 @@ function filterRows(rows: ActionRow[], state: { effect: string; q: string }, typ
     if (state.effect === "write" && row.readOnly) return false;
     if (!query) return true;
     const operation = row.record ? openApiOperation(row.record.definition) : null;
-    const checked = row.record && types ? resourceCheckText(commandResourceCheck(row.record.definition), types) : null;
+    const checked = row.record && types ? resourceCheckText(actionResourceCheck(row), types) : null;
     return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, ...(row.catalog?.requiredScopeTypes ?? [])]
       .filter(Boolean)
       .join(" ")
@@ -231,7 +241,7 @@ function describe(row: ActionRow) {
 /** "Broker" or "Command", with the type the action's resources are checked against. */
 function checkedByCell(row: ActionRow, types: readonly ImportResourceTypeDeclaration[]) {
   if (!row.record) return <span className="wb-muted">—</span>;
-  const check = commandResourceCheck(row.record.definition);
+  const check = actionResourceCheck(row);
   const parts = resourceCheckParts(check, types);
   return (
     <span title={check.by === "command" ? COMMAND_CHECK_CAVEAT : undefined}>
@@ -446,7 +456,7 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
   if (!open || !service) return null;
   const operation = open.record ? openApiOperation(open.record.definition) : null;
   const types = commandTypes(service);
-  const check = open.record && types ? commandResourceCheck(open.record.definition) : null;
+  const check = open.record && types ? actionResourceCheck(open) : null;
   const checkParts = check && types ? resourceCheckParts(check, types) : null;
   const checkType = check?.type ? types?.find((type) => type.id === check.type) : undefined;
   const transitions = open.record && data ? actionTransitions(open, data) : [];

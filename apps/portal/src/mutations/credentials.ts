@@ -7,6 +7,7 @@ import { useToast } from "../workbench";
 import { useSession } from "../app/session";
 import type { AccountSubject } from "../app/active-route";
 import { usePortalInvalidation } from "../data/invalidation";
+import { credentialVerifiedMessage } from "../lib/helpers";
 
 /** Whether verifying this target needs a repository to check access against. */
 export function credentialVerificationNeedsRepository(target: CredentialTarget) {
@@ -38,12 +39,12 @@ export function useCredentialActions(subject: AccountSubject) {
 
     async function verify(target: CredentialTarget, input: CredentialVerificationInput = {}) {
       try {
-        await attempt((current) =>
+        const verified = await attempt((current) =>
           administered
             ? brokerApi.adminPrincipalVerifyCredential(current, principalId, target.service, target.credentialName, input)
             : brokerApi.verifyCredential(current, target.service, target.credentialName, input)
         );
-        toast("Credential verified", { tone: "success" });
+        toast(credentialVerifiedMessage(verified.verificationStatus), { tone: "success" });
       } finally {
         // A failed verification is recorded on the credential too.
         refresh();

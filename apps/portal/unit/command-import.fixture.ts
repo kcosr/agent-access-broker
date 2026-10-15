@@ -144,9 +144,16 @@ export function commandAccepted(): ImportPreviewResult {
   return data;
 }
 
-/** A refresh to the `v2` manifest: `project` gains an optional attribute and `queue`, no longer declared, is kept for one resource. */
+/**
+ * A refresh to the `v2` manifest: `project` gains an optional attribute and
+ * `queue`, no longer declared, is kept for one resource. The complete
+ * discovery quarantined the changed `issue.search` and the missing `whoami`.
+ */
 export function commandRefreshed(): ImportPreviewResult {
   const data = commandAccepted();
+  data.service.actions = data.service.actions.map((action) =>
+    ["issue.search", "whoami"].includes(action.definition.action) ? { ...action, status: "quarantined" as const } : action
+  );
   data.affectedGrants = ["grant-search"];
   data.affectedGrantsByAction = { "issue.search": ["grant-search"], whoami: [] };
   data.preview = preview(
@@ -173,11 +180,14 @@ export function commandImportList(services: ImportPreviewResult[], names = ["tic
   };
 }
 
-/** `GET /v1/resource-types` entries of the accepted types; the removed one accepts no new resources. */
+/** `GET /v1/resource-types` entries of the types `commandAccepted` registers. */
 export const COMMAND_RESOURCE_TYPES: ResourceTypeMetadata[] = [
   { id: "ticketing_project", label: "Project", pluralLabel: "Projects", example: "OPS", selectors: ["exact", "all"], attributes: PROJECT.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })), importedService: "ticketing" },
-  { id: "ticketing_queue", label: "Queue", pluralLabel: "Queues", example: "triage", selectors: ["exact", "all"], importedService: "ticketing", removed: true }
+  { id: "ticketing_queue", label: "Queue", pluralLabel: "Queues", example: "triage", selectors: ["exact", "all"], importedService: "ticketing" }
 ];
+
+/** The same listing once the refresh is accepted: `queue` is kept for its resource and accepts no new ones. */
+export const REFRESHED_RESOURCE_TYPES: ResourceTypeMetadata[] = COMMAND_RESOURCE_TYPES.map((type) => (type.id === "ticketing_queue" ? { ...type, removed: true } : type));
 
 /** The accepted actions as the policy catalog lists them. */
 export function commandPolicyService(data: ImportPreviewResult): PolicyServiceCatalog {

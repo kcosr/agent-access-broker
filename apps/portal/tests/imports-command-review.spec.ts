@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { commandAccepted, commandDiscovered, commandRefreshed } from "../unit/command-import.fixture";
+import { REFRESHED_RESOURCE_TYPES, commandAccepted, commandDiscovered, commandPolicyService, commandRefreshed } from "../unit/command-import.fixture";
 import { mockCommandImportApi } from "./support/command-import-api";
 import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
 
@@ -166,21 +166,31 @@ test("a refresh lists type changes and may accept only the metadata and type cha
   expect(api.errors).toEqual([]);
 });
 
-test("a refused acceptance lists the retained grants and stored resources to fix", async ({ page }) => {
+test("a refused acceptance lists the retained grants or the stored resources to fix", async ({ page }) => {
   const api = await mockCommandImportApi(page, commandRefreshed());
-  api.acceptBlocked = {
-    affectedGrants: [{ id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "issue.search no longer supports per_user" }],
-    resources: [{ type: "ticketing_project", id: "legacy" }, { type: "ticketing_project", id: "web" }]
-  };
   await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
   await page.getByRole("button", { name: "Review preview", exact: true }).click();
   const dialog = review(page);
-  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
   const alert = dialog.getByRole("alert");
+  // Retained grants the change would leave invalid, each once by reference.
+  api.acceptBlocked = {
+    affectedGrants: [
+      { id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "issue.search no longer supports per_user" },
+      { id: "toml:0", reasonCode: "credential_mode_invalid", reason: "policy.grants[0] subjects[0] ...; policy.grants[0] subjects[1] ..." }
+    ]
+  };
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
   await expect(alert).toContainText("This change would leave retained grants invalid. Update or remove them first:");
-  await expect(alert).toContainText("Stored resources no longer fit these resource type changes.");
-  await expect(alert.getByRole("listitem")).toHaveText(["grant-search: issue.search no longer supports per_user", "Projects ticketing_project: legacy, web"]);
+  await expect(alert).not.toContainText("Stored resources");
+  await expect(alert.getByRole("listitem")).toHaveText(["grant-search: issue.search no longer supports per_user", "toml:0: policy.grants[0] subjects[0] ...; policy.grants[0] subjects[1] ..."]);
   await expect(alert.getByRole("link", { name: "grant-search", exact: true })).toHaveAttribute("href", "/ui/admin/policies?grant=grant-search");
+  await expect(alert.getByRole("link", { name: "toml:0", exact: true })).toHaveAttribute("href", "/ui/admin/policies?grant=toml%3A0");
+  // Stored resources the type changes no longer fit, in a separate refusal.
+  api.acceptBlocked = { resources: [{ type: "ticketing_project", id: "legacy" }, { type: "ticketing_project", id: "web" }] };
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(alert).toContainText("Stored resources no longer fit these resource type changes.");
+  await expect(alert).not.toContainText("retained grants");
+  await expect(alert.getByRole("listitem")).toHaveText(["Projects ticketing_project: legacy, web"]);
   await expect(alert.getByRole("link", { name: "legacy", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resources?item=legacy");
   expect(api.errors).toEqual([]);
 });
@@ -202,6 +212,21 @@ test("the Actions tab shows who checks each action's resources", async ({ page }
   expect(api.errors).toEqual([]);
 });
 
+test("the Actions tab takes who checks resources from the Broker's policy catalog", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandAccepted());
+  // The Broker's answer wins over the portal's reading of the stored declaration.
+  const catalog = commandPolicyService(commandAccepted());
+  catalog.actions = catalog.actions.map((action) => (action.action === "issue.view" ? { ...action, resourcesCheckedBy: "command" as const } : action));
+  await page.route("**/v1/admin/policy/catalog", (route) =>
+    route.fulfill({ json: { ok: true, result: { services: [catalog], resources: [], resourceGroups: [], executionContexts: { allowedValues: ["internal", "external"], defaultContext: "internal", contextRequired: false }, subjects: { users: [], groups: [], anonymous: false } } } })
+  );
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing`);
+  const table = page.getByRole("table", { name: "Ticketing actions", exact: true });
+  await expect(table.getByRole("row", { name: /issue\.view/ })).toContainText("Command · Projects");
+  await expect(table.getByRole("row", { name: /issue\.create/ })).toContainText("Broker · Project");
+  expect(api.errors).toEqual([]);
+});
+
 test("a username-and-token execution credential is saved with its username", async ({ page }) => {
   const api = await mockCommandImportApi(page, commandAccepted());
   await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
@@ -217,8 +242,24 @@ test("a username-and-token execution credential is saved with its username", asy
   expect(api.errors).toEqual([]);
 });
 
+test("a token execution credential is saved without a username", async ({ page }) => {
+  const accepted = commandAccepted();
+  accepted.service.acceptedMetadata = { ...accepted.service.acceptedMetadata!, credential: { kind: "token", modes: ["service", "per_user"] } };
+  const api = await mockCommandImportApi(page, accepted);
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Rotate execution credential", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Rotate execution credential", exact: true });
+  await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await dialog.getByLabel("Token", { exact: true }).fill("svc-token-only");
+  await dialog.getByRole("button", { name: "Save credential", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(api.credentials).toEqual([{ purpose: "execution", body: { expectedVersion: 5, expectedCatalogRevision: 6, token: "svc-token-only" } }]);
+  expect(api.errors).toEqual([]);
+});
+
 test("a removed imported type accepts no new resources", async ({ page }) => {
   const api = await mockCommandImportApi(page, commandAccepted());
+  api.resourceTypes = REFRESHED_RESOURCE_TYPES;
   await page.goto(`${baseUrl}/ui/admin/catalog/resources?item=new`);
   const type = page.getByRole("complementary", { name: "Add resource", exact: true }).getByLabel("Resource type", { exact: true });
   await expect(type.locator('option[value="ticketing_project"]')).toHaveText("Project");
