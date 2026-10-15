@@ -19,6 +19,7 @@ mod local_password_failures;
 pub(crate) mod oauth;
 mod principal_service_limits;
 mod resource_attributes;
+pub(crate) use resource_attributes::AdmittedResourceEntry;
 mod resources;
 use crate::fs_permissions;
 use crate::load_secret_ref_value;
@@ -4138,6 +4139,31 @@ impl ManagedStore {
         execution_credential_from_encrypted_row(key_ring, &row, expected_profile).map(drop)
     }
 
+    /// The caller's personal credential as a command import receives it,
+    /// read and checked as [`Self::resolve_user_credential`] reads it for
+    /// execution, which it records as a use.
+    pub(crate) fn resolve_user_command_credential(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        expected_profile: &str,
+    ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
+        validate_principal_id(owner_principal_id)?;
+        validate_service_and_name(service, name)?;
+        validate_profile(expected_profile)?;
+        let conn = self.connection.lock().unwrap();
+        let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
+        let credential = command_credential_from_encrypted_row(key_ring, &row, expected_profile)?;
+        conn.execute(
+            "UPDATE credentials SET last_used_at = ?2 WHERE credential_id = ?1",
+            params![row.credential_id, now_string()],
+        )
+        .map_err(sql_unavailable)?;
+        Ok(credential)
+    }
+
     pub fn resolve_user_credential_for_verification(
         &self,
         key_ring: &CredentialKeyRing,
@@ -6809,6 +6835,41 @@ fn execution_credential_from_secret(
     }
 }
 
+/// A stored secret as the command credential a command import receives: the
+/// `token` or `username_token` of its stored kind, validated as execution
+/// validates it. The strings move out of `secret` into zeroizing storage.
+fn command_credential_from_secret(
+    kind: &str,
+    mut secret: Value,
+) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
+    validate_credential_secret(kind, &secret).map_err(|error| match error {
+        ManagedStoreError::InputInvalid(message) => ManagedStoreError::CredentialInvalid(message),
+        other => other,
+    })?;
+    let mut take = |name: &str| match secret
+        .as_object_mut()
+        .and_then(|object| object.remove(name))
+    {
+        Some(Value::String(value)) => Ok(value),
+        _ => Err(ManagedStoreError::CredentialInvalid(format!(
+            "secret.{name} is required"
+        ))),
+    };
+    match kind {
+        "basic_api_token" => {
+            let username = take("username")?;
+            Ok(crate::imports::CommandCredential::username_token(
+                username,
+                take("token")?,
+            ))
+        }
+        "bearer_token" => Ok(crate::imports::CommandCredential::token(take("token")?)),
+        _ => Err(ManagedStoreError::CredentialInvalid(
+            "unsupported credential kind".to_string(),
+        )),
+    }
+}
+
 /// One query for list summaries, or a bounded query for a single principal.
 /// Only enrollment state is projected; no credential material is selected.
 fn sign_in_methods_by_principal(
@@ -8714,6 +8775,29 @@ fn execution_credential_from_encrypted_row(
     row: &EncryptedCredentialRow,
     expected_profile: &str,
 ) -> Result<ExecutionCredential, ManagedStoreError> {
+    check_usable_encrypted_row(row, expected_profile)?;
+    decrypt_execution_credential(key_ring, row)
+}
+
+/// The command credential of a usable stored row, as
+/// [`execution_credential_from_encrypted_row`] checks usability.
+fn command_credential_from_encrypted_row(
+    key_ring: &CredentialKeyRing,
+    row: &EncryptedCredentialRow,
+    expected_profile: &str,
+) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
+    check_usable_encrypted_row(row, expected_profile)?;
+    let aad = credential_aad(row);
+    let secret = key_ring.decrypt(&row.key_id, &row.secret_nonce, &row.secret_ciphertext, &aad)?;
+    command_credential_from_secret(&row.credential_kind, secret)
+}
+
+/// A stored row execution may use: enabled, of the configured profile and
+/// backend, with a valid secret reference and version, and not expired.
+fn check_usable_encrypted_row(
+    row: &EncryptedCredentialRow,
+    expected_profile: &str,
+) -> Result<(), ManagedStoreError> {
     if row.status == "disabled" {
         return Err(ManagedStoreError::CredentialNotFound);
     }
@@ -8734,7 +8818,7 @@ fn execution_credential_from_encrypted_row(
     {
         return Err(ManagedStoreError::CredentialExpired);
     }
-    decrypt_execution_credential(key_ring, row)
+    Ok(())
 }
 
 fn credential_aad(row: &EncryptedCredentialRow) -> CredentialAad {

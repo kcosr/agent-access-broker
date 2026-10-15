@@ -29,7 +29,7 @@
 //!
 //! The SDK's no-plaintext rule is unchanged for every other provider; the hook
 //! is part of the internal import contract and changes no supported API.
-use super::{CommandPermit, CommandProcessFacts};
+use super::{CommandPermit, CommandProcessFacts, CommandSecrets};
 use agent_access_provider::{
     Provider, ProviderCredentialVerification, ProviderError, ProviderResult, ReasonCode,
 };
@@ -166,6 +166,13 @@ impl CommandInvocation {
         self
     }
 
+    /// The secrets the request supplies, which the response must not echo
+    /// outside the sensitive result.
+    pub fn with_secrets(mut self, secrets: CommandSecrets) -> Self {
+        self.run.secrets = secrets;
+        self
+    }
+
     /// The Broker action ID of the accepted action.
     pub fn action(&self) -> &str {
         &self.action
@@ -241,13 +248,15 @@ impl CommandVerification {
 /// What one `invoke` or `verify` process takes over from core: its stdin
 /// request, its deadline, the budget permit its supervisor holds until the
 /// process group is reaped, the network variables set beside the configured
-/// `env`, and the facts cell the supervisor records into.
+/// `env`, the facts cell the supervisor records into, and the secrets the
+/// request supplies, which the response mapping checks the output against.
 pub struct CommandRun {
     pub request: CommandRequest,
     pub deadline: Instant,
     pub permit: CommandPermit,
     pub environment: Vec<(&'static str, OsString)>,
     pub facts: CommandProcessFacts,
+    pub secrets: CommandSecrets,
 }
 
 impl CommandRun {
@@ -258,6 +267,7 @@ impl CommandRun {
             permit,
             environment: Vec::new(),
             facts: CommandProcessFacts::new(),
+            secrets: CommandSecrets::new(),
         }
     }
 }

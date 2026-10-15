@@ -13,7 +13,9 @@ mod outbound_tls;
 
 pub use egress_proxy::EgressProxyEnvironment;
 pub(crate) use egress_proxy::preflight_egress_proxy;
-pub(crate) use inherited_network::{InheritedNetwork, is_inherited_network_variable};
+pub(crate) use inherited_network::{
+    InheritedNetwork, InheritedNetworkWire, is_inherited_network_variable,
+};
 pub use outbound_tls::{
     OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls,
     parse_strict_certificate_pem_bundle,

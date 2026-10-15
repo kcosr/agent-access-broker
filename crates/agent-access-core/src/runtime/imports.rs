@@ -171,7 +171,7 @@ fn preparation_mismatch() -> ManagedStoreError {
 
 /// The stored kind of an import's execution credential: its accepted
 /// declaration, or a bearer token for imports that record none.
-fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredentialKind {
+pub(super) fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredentialKind {
     record
         .accepted_metadata
         .as_ref()

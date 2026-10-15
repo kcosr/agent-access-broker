@@ -12,13 +12,6 @@
 //! field; the command's environment adds [`InheritedNetwork::environment`] as a
 //! convenience. The value has no `Serialize`, and its `Debug` redacts the
 //! proxy credentials.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the command request builder and the process supervisor consume these settings"
-    )
-)]
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -507,7 +500,10 @@ mod tests {
         );
         let set = network.environment();
         assert_eq!(set.len(), 9);
-        assert!(set.iter().all(|(name, _)| is_inherited_network_variable(name)));
+        assert!(
+            set.iter()
+                .all(|(name, _)| is_inherited_network_variable(name))
+        );
     }
 
     #[test]

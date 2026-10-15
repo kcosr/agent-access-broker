@@ -8,6 +8,7 @@ mod authority;
 mod command;
 mod command_facts;
 mod command_registry;
+mod command_request;
 mod definition;
 mod metadata;
 mod registration;
@@ -21,6 +22,12 @@ pub use command_facts::{CommandProcessFacts, CommandProcessFactsSnapshot};
 pub use command_registry::{
     CommandAcquireError, CommandPermit, CommandProcessControl, CommandRegistry,
     CommandRegistryClosed, LiveCommandProcess,
+};
+pub use command_request::CommandSecrets;
+pub(crate) use command_request::{
+    CommandCaller, CommandCallerToken, CommandCallerUsername, CommandCredential, InvokeRequest,
+    RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant, RequestResource,
+    wire_deadline, wire_mode,
 };
 pub use definition::*;
 pub use metadata::*;
