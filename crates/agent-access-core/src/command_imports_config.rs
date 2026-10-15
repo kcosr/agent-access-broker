@@ -26,8 +26,9 @@ pub const COMMAND_DEFAULT_WORKING_DIR: &str = "/";
 pub const COMMAND_MAX_ENV_VALUE_BYTES: usize = 4 * 1024;
 /// Most `env` entries one command may set.
 pub const COMMAND_MAX_ENV_ENTRIES: usize = 64;
-/// Variables the Broker sets from its egress settings when `network =
-/// "inherit"`; `env` may set them only with `network = "none"`.
+/// Variables the Broker may set from its egress settings when `network =
+/// "inherit"` (the trust variables only for the trust modes that use them);
+/// `env` may set them only with `network = "none"`.
 pub const COMMAND_NETWORK_VARIABLES: [&str; 9] = [
     "HTTPS_PROXY",
     "HTTP_PROXY",
@@ -48,7 +49,10 @@ pub type CommandImportsConfig = BTreeMap<String, CommandImportConfig>;
 #[serde(rename_all = "snake_case")]
 pub enum CommandNetwork {
     /// The request's `network` object and the convenience variables carry
-    /// the Broker's proxy route, `NO_PROXY` entries and loaded CA roots.
+    /// the Broker's proxy route, its `NO_PROXY` entries, and the
+    /// `[network.outbound_tls]` trust mode with the configured
+    /// `ca_certificate` path. The Broker never reads, copies or passes
+    /// certificates; the command loads the configured file itself.
     #[default]
     Inherit,
     /// Nothing is passed; `env` may supply the command's own settings.

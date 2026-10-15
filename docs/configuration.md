@@ -2149,15 +2149,16 @@ LANG = "C.UTF-8"
 | `max_output_bytes` | 1 to `limits.max_upstream_response_bytes` |
 | `max_concurrent` | 1 to `limits.max_concurrent_requests`; shared by every import of this command |
 | `working_dir` | Absolute path |
-| `network` | `inherit` passes the Broker's egress proxy, `NO_PROXY` entries and loaded CA roots; `none` passes nothing. Neither restricts what the command can reach |
+| `network` | `inherit` passes the Broker's egress proxy route, its `NO_PROXY` entries, and the `[network.outbound_tls]` trust mode with the configured `ca_certificate` path, never certificates; `none` passes nothing. Neither restricts what the command can reach |
 | `log_stderr` | Opt-in for including up to 4 KiB of escaped stderr in failure logs. The Broker cannot redact secrets a command prints, so validation warns while it is on |
 | `env` | The process environment besides the network variables, at most 64 entries; keys match `^[A-Za-z_][A-Za-z0-9_]*$`, values have no NUL and at most 4 KiB. Not for secrets |
 
 Every process starts with an empty environment plus `env`. With `network =
 "inherit"`, `env` must not set `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`,
 `http_proxy`, `NO_PROXY`, `no_proxy`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or
-`NODE_EXTRA_CA_CERTS`, which the Broker sets; use `network = "none"` to supply
-your own. `config validate`, startup and reload stay offline and never run a
+`NODE_EXTRA_CA_CERTS`, which the Broker sets from its egress settings (the
+trust variables to the configured `ca_certificate` path, for the trust modes
+that use it); use `network = "none"` to supply your own. `config validate`, startup and reload stay offline and never run a
 command; they report warnings for missing executables, enabled `log_stderr`, and
 entries no allowed `command` kind can use. Removing an entry makes its imports
 unavailable but keeps their records, grants and credentials.
