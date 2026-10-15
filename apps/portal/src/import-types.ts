@@ -5,7 +5,8 @@ export type ImportOwnerMode = "service" | "per_user";
 export type ImportPurpose = "execution" | "discovery" | "transport";
 export type ImportServiceStatus = "draft" | "disabled" | "enabled" | "retired";
 export type ImportActionStatus = "enabled" | "disabled" | "quarantined" | "retired";
-export type ImportDelivery = { kind: "bearer" } | { kind: "raw_header"; name: string };
+/** `stdin` is the delivery of command imports, whose request on stdin carries the credential. */
+export type ImportDelivery = { kind: "bearer" } | { kind: "raw_header"; name: string } | { kind: "stdin" };
 export type ImportBinding = {
   ownerMode: ImportOwnerMode;
   mechanism: "static_token" | "oauth";
@@ -42,12 +43,41 @@ export type ImportActionRecord = {
   version: number;
   definitionHash: string;
 };
+/** A command's credential kind: `token` is stored as `bearer_token`, `username_token` as `basic_api_token`. */
+export type ImportCredentialKind = "token" | "username_token";
+export type ImportResourceAttributeDeclaration = { name: string; label: string; description: string; required: boolean; pattern: string | null };
+/** A declared resource type and the Broker type ID it is registered under. */
+export type ImportResourceTypeDeclaration = {
+  /** The source's type id, which requests' `resourceType` names. */
+  id: string;
+  brokerType: string;
+  /** No longer declared, but kept registered for its remaining resources; it accepts no new ones. */
+  removed: boolean;
+  label: string;
+  pluralLabel: string;
+  pattern: string;
+  maxLength: number;
+  example: string;
+  attributes: ImportResourceAttributeDeclaration[];
+};
+/** Service-level metadata of a command import: proposed by discovery, stored on acceptance. */
+export type ImportServiceMetadata = {
+  format: string;
+  /** Display only ("Imported at version X"); never compared or pinned. */
+  version: string;
+  /** Absent (null) for a command that needs no credential. */
+  credential: { kind: ImportCredentialKind; modes: ImportOwnerMode[] } | null;
+  verify: boolean;
+  resourceTypes: ImportResourceTypeDeclaration[];
+};
 export type ImportedServiceRecord = {
   definition: ImportDefinition;
   status: ImportServiceStatus;
   version: number;
   actions: ImportActionRecord[];
   slotVersions: Partial<Record<ImportPurpose, string>>;
+  /** Command imports after their first acceptance. */
+  acceptedMetadata?: ImportServiceMetadata;
   createdAt: string;
   createdBy: string;
   updatedAt: string;
@@ -58,7 +88,51 @@ export type ImportedTool = {
   unsupportedReason: string | null;
   readOnlyHint: boolean | null;
 };
-export type ImportDiscovery = { protocolVersion: string; metadata: unknown; tools: ImportedTool[] };
+export type ImportDiscovery = {
+  protocolVersion: string;
+  metadata: unknown;
+  tools: ImportedTool[];
+  /** Command imports: the metadata acceptance would store. */
+  serviceMetadata?: ImportServiceMetadata;
+};
+export type ImportResourceTypeChangeKind = "added" | "changed" | "restored" | "removed";
+export type ImportResourceTypeOutcome = "applied" | "needs_new_id" | "retained" | "dropped";
+export type ImportResourceTypeChangeDetail =
+  | "label"
+  | "plural_label"
+  | "example"
+  | "attribute_added"
+  | "attribute_made_optional"
+  | "attribute_text"
+  | "attribute_order"
+  | "attribute_removed"
+  | "pattern"
+  | "max_length"
+  | "attribute_added_required"
+  | "attribute_made_required"
+  | "attribute_pattern";
+/** The preview's decision for one changed resource type, with the stored resources it depends on. */
+export type ImportResourceTypeChange = {
+  id: string;
+  brokerType: string;
+  change: ImportResourceTypeChangeKind;
+  outcome: ImportResourceTypeOutcome;
+  details: ImportResourceTypeChangeDetail[];
+  resourceCount: number;
+  /** Resources that keep the type in its accepted form, or that prevent the change or drop (at most 100). */
+  blockingResources: string[];
+  /** Resources whose removed attributes' values acceptance deletes (at most 100). */
+  affectedResources: string[];
+  /** An added type's Broker type ID can still be chosen. */
+  editable: boolean;
+  /** Accepting now would be rejected because of this type. */
+  blocked: boolean;
+};
+/** What an acceptance did to stored resources and types. */
+export type ImportResourceTypeEffects = {
+  deletedAttributeValues: Array<{ resourceId: string; attributes: string[] }>;
+  droppedTypes: string[];
+};
 export type ImportPreview = {
   service: string;
   serviceVersion: number;
@@ -81,11 +155,40 @@ export type ImportOAuthRegistration = {
 /** The OAuth companion that authenticates one selected import kind, with the registrations it approves (possibly none). */
 export type ImportAuthentication = { importKind: string; dialectId: string; registrations: ImportOAuthRegistration[] };
 export type ImportSecurityScheme = { name: string; kind: "bearer" | "raw_header"; header?: string };
-export type ImportListResult = { catalogRevision: number; operatorEnabled: boolean; availableKinds: string[]; importAuthentication: ImportAuthentication[]; services: ImportedServiceRecord[] };
+export type ImportListResult = {
+  catalogRevision: number;
+  operatorEnabled: boolean;
+  availableKinds: string[];
+  /** Commands the operator approved under `[command_imports.<name>]`, by name only. */
+  commandImports: Array<{ name: string }>;
+  importAuthentication: ImportAuthentication[];
+  services: ImportedServiceRecord[];
+};
 export type ImportScopedMcpIssueCode = "service_unavailable" | "missing_name" | "invalid_name" | "reserved_name" | "duplicate_name" | "projection_budget";
 export type ImportScopedMcp = { ready: boolean; issues: Array<{ code: ImportScopedMcpIssueCode; actions: string[] }>; truncated: boolean };
 export type ImportScopedMcpWarning = { toolIndex: number; proposedAction: string; codes: ImportScopedMcpIssueCode[] };
-export type ImportRecordResult = { catalogRevision: number; operatorAllowed: boolean; importAuthentication: ImportAuthentication[]; available?: boolean; unavailableReason?: string | null; scopedMcp: ImportScopedMcp; service: ImportedServiceRecord };
-export type ImportPreviewResult = ImportRecordResult & { scopedMcpWarnings: ImportScopedMcpWarning[]; preview: ImportPreview | null; affectedGrants: string[]; affectedGrantsByAction: Record<string, string[]> };
+export type ImportRecordResult = {
+  catalogRevision: number;
+  operatorAllowed: boolean;
+  importAuthentication: ImportAuthentication[];
+  available?: boolean;
+  unavailableReason?: string | null;
+  scopedMcp: ImportScopedMcp;
+  service: ImportedServiceRecord;
+  /** The accepted command manifest's version. */
+  commandVersion?: string;
+  /** Acceptances that deleted attribute values or dropped resource types. */
+  resourceTypeEffects?: ImportResourceTypeEffects;
+};
+export type ImportPreviewResult = ImportRecordResult & {
+  scopedMcpWarnings: ImportScopedMcpWarning[];
+  preview: ImportPreview | null;
+  /** Command imports: the preview's resource type decisions; empty otherwise. */
+  resourceTypeChanges?: ImportResourceTypeChange[];
+  affectedGrants: string[];
+  affectedGrantsByAction: Record<string, string[]>;
+};
 export type ImportVersions = { expectedVersion: number; expectedCatalogRevision: number };
 export type ImportSelection = { source: Record<string, unknown>; action: string; label?: string; readOnly: boolean };
+/** Broker type IDs chosen for added resource types, by the source's type id. */
+export type ImportResourceTypeIds = Record<string, string>;

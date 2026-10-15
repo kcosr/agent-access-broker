@@ -1,0 +1,221 @@
+import { expect, test, type Page } from "@playwright/test";
+import { commandAccepted, commandDiscovered, commandRefreshed } from "../unit/command-import.fixture";
+import { mockCommandImportApi } from "./support/command-import-api";
+import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
+
+// These exercise the command import editor, preview, Import tab and Actions
+// tab against explicit management API fixtures shaped like a command import of
+// the reference command. No Broker starts and no command runs.
+let assets: PortalAssets;
+let baseUrl: string;
+
+test.beforeAll(async () => {
+  assets = await servePortalAssets();
+  baseUrl = assets.baseUrl;
+});
+test.afterAll(async () => {
+  await assets.close();
+});
+
+const review = (page: Page) => page.getByRole("dialog", { name: "Review discovered actions", exact: true });
+const actionRow = (page: Page, action: string) => review(page).locator(".pt-catalog-review-item").filter({ has: page.getByRole("checkbox", { name: `Accept ${action}`, exact: true }) });
+
+test("new imports pick an approved command by name, with credential modes or none", async ({ page }) => {
+  const api = await mockCommandImportApi(page);
+  await page.goto(`${baseUrl}/ui/admin/catalog?import=1`);
+  const dialog = page.getByRole("dialog", { name: "Import service", exact: true });
+  await dialog.getByLabel("Import type", { exact: true }).selectOption("command");
+  const command = dialog.getByLabel("Command", { exact: true });
+  await expect(command.locator("option")).toHaveText(["Select an approved command", "ticketing", "deploy-tools"]);
+  await expect(dialog).not.toContainText("/opt/");
+  await command.selectOption("ticketing");
+  // The service ID follows the command name until edited.
+  await expect(dialog.getByLabel("Service ID", { exact: true })).toHaveValue("ticketing");
+  await dialog.getByLabel("Display name", { exact: true }).fill("Ticketing");
+  await expect(dialog).toContainText("No credential: for a command that needs none.");
+  await dialog.getByLabel("Shared service credential", { exact: true }).check();
+  await dialog.getByLabel("Personal credentials for each user", { exact: true }).check();
+  await dialog.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/admin\/catalog\/services\/ticketing\/import$/);
+  expect(api.created).toEqual([
+    {
+      service: "ticketing",
+      displayName: "Ticketing",
+      adapterKind: "command",
+      endpoint: "command:ticketing",
+      connectionSettings: {},
+      executionBindings: [
+        { ownerMode: "service", mechanism: "static_token", delivery: { kind: "stdin" }, status: "configured" },
+        { ownerMode: "per_user", mechanism: "static_token", delivery: { kind: "stdin" }, status: "configured" }
+      ],
+      discovery: { kind: "anonymous" },
+      transportAuth: false
+    }
+  ]);
+  const main = page.getByRole("main", { name: "Ticketing", exact: true });
+  await expect(main).toContainText("Each agent call runs the approved command once, with the request on its stdin.");
+  await expect(main).toContainText("Accept a discovery preview first");
+  await expect(main.getByRole("button", { name: "Set execution credential", exact: true })).toBeDisabled();
+  await expect(main).toContainText("Accept the command's manifest first; it declares the credential kind.");
+  expect(api.errors).toEqual([]);
+});
+
+test("a credential-free draft binds no credential", async ({ page }) => {
+  const api = await mockCommandImportApi(page);
+  api.commandImports = ["ticketing"];
+  await page.goto(`${baseUrl}/ui/admin/catalog?import=1`);
+  const dialog = page.getByRole("dialog", { name: "Import service", exact: true });
+  await dialog.getByLabel("Import type", { exact: true }).selectOption("command");
+  // A single approved command is preselected.
+  await expect(dialog.getByLabel("Command", { exact: true })).toHaveValue("ticketing");
+  await dialog.getByLabel("Service ID", { exact: true }).fill("ticketing-notes");
+  await dialog.getByLabel("Display name", { exact: true }).fill("Ticketing notes");
+  await dialog.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect.poll(() => api.created.length).toBe(1);
+  expect(api.created[0]).toMatchObject({ service: "ticketing-notes", endpoint: "command:ticketing", executionBindings: [], discovery: { kind: "anonymous" } });
+  expect(api.errors).toEqual([]);
+});
+
+test("without approved commands the editor explains the operator step", async ({ page }) => {
+  const api = await mockCommandImportApi(page);
+  api.commandImports = [];
+  await page.goto(`${baseUrl}/ui/admin/catalog?import=1`);
+  const dialog = page.getByRole("dialog", { name: "Import service", exact: true });
+  await dialog.getByLabel("Import type", { exact: true }).selectOption("command");
+  await expect(dialog).toContainText("No approved commands");
+  await expect(dialog).toContainText("[command_imports.<name>]");
+  await expect(dialog.getByRole("button", { name: "Create draft", exact: true })).toBeDisabled();
+  expect(api.errors).toEqual([]);
+});
+
+test("discovery previews the manifest, editable type IDs and who checks each action's resources", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandDiscovered());
+  api.current!.preview = null;
+  api.discoveries.push(commandDiscovered());
+  api.acceptances.push({ result: commandAccepted() });
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Discover actions", exact: true }).click();
+  const dialog = review(page);
+  await expect(dialog).toBeVisible();
+  const manifest = dialog.getByRole("region", { name: "Command manifest", exact: true });
+  await expect(manifest).toContainText("1.4.0");
+  await expect(manifest).toContainText("Username and token · shared or personal");
+  await expect(manifest).toContainText("Supported");
+  await expect(actionRow(page, "issue.view")).toContainText("Resources checked by: Broker · Project, from project");
+  await expect(actionRow(page, "issue.search")).toContainText("Resources checked by: Command · Projects");
+  await expect(actionRow(page, "whoami")).toContainText("Resources checked by: Command · no resource type");
+  await expect(actionRow(page, "issue.search").getByText("Resources checked by:")).toHaveAccessibleDescription(/the Broker cannot check that/);
+  // A draft needs a selection; invalid Broker type IDs block acceptance.
+  await expect(dialog.getByRole("button", { name: "Accept selected actions", exact: true })).toBeDisabled();
+  const typeId = dialog.getByLabel("Broker type ID for project", { exact: true });
+  await expect(typeId).toHaveValue("ticketing_project");
+  await typeId.fill("Tickets");
+  await dialog.getByRole("checkbox", { name: "Accept issue.view", exact: true }).check();
+  await expect(dialog.getByRole("button", { name: "Accept selected actions", exact: true })).toBeDisabled();
+  await expect(manifest).toContainText("Use up to 64 lowercase letters");
+  await typeId.fill("tickets_project");
+  await dialog.getByLabel("Effects for issue.view", { exact: true }).selectOption("read");
+  await dialog.getByRole("checkbox", { name: "Accept issue.search", exact: true }).check();
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(api.accepted).toEqual([
+    {
+      expectedVersion: 2,
+      expectedCatalogRevision: 4,
+      manifestHash: "manifest-1.4.0",
+      selections: [
+        { source: { name: "issue.view" }, action: "issue.view", readOnly: true },
+        { source: { name: "issue.search" }, action: "issue.search", readOnly: false }
+      ],
+      confirmAffectedGrants: false,
+      resourceTypeIds: { project: "tickets_project" }
+    }
+  ]);
+  expect(api.errors).toEqual([]);
+});
+
+test("a refresh lists type changes and may accept only the metadata and type changes", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandAccepted());
+  api.discoveries.push(commandRefreshed());
+  api.acceptances.push({ result: commandAccepted(), effects: { deletedAttributeValues: [], droppedTypes: ["ticketing_queue"] } });
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  const main = page.getByRole("main", { name: "Ticketing", exact: true });
+  await expect(main).toContainText("Imported at version");
+  await expect(main).toContainText("Queue ticketing_queue");
+  await page.getByRole("button", { name: "Refresh discovery", exact: true }).click();
+  const dialog = review(page);
+  const manifest = dialog.getByRole("region", { name: "Command manifest", exact: true });
+  await expect(manifest).toContainText("This command declares OAuth, which this Broker does not support yet; static credentials still work.");
+  await expect(manifest).toContainText("1.5.0 · imported at version 1.4.0");
+  const project = manifest.getByRole("group", { name: "Resource type project", exact: true });
+  await expect(project).toContainText("Changed: new optional attribute.");
+  await expect(project).toContainText("Applied on acceptance.");
+  await expect(project).toContainText("Broker type ID ticketing_project");
+  const queue = manifest.getByRole("group", { name: "Resource type queue", exact: true });
+  await expect(queue).toContainText("Removed");
+  await expect(queue).toContainText("Kept for its 1 resource; it accepts no new resources.");
+  await expect(queue).toContainText("Resources: triage-queue.");
+  await expect(actionRow(page, "issue.search")).toContainText("Changed");
+  await expect(dialog.getByRole("region", { name: "Unavailable actions and retained identities", exact: true })).toContainText("whoami · Removed");
+  // Deselecting every action leaves a metadata-only acceptance.
+  for (const action of ["issue.view", "issue.create"]) await dialog.getByRole("checkbox", { name: `Accept ${action}`, exact: true }).uncheck();
+  await expect(dialog).toContainText("No actions selected: accepting applies only the command's metadata and resource type changes.");
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(page.getByText("Command metadata and type changes accepted; dropped ticketing_queue", { exact: true })).toBeVisible();
+  expect(api.accepted).toEqual([{ expectedVersion: 5, expectedCatalogRevision: 6, manifestHash: "manifest-1.5.0", selections: [], confirmAffectedGrants: false }]);
+  expect(api.errors).toEqual([]);
+});
+
+test("a rejected acceptance lists the resources to fix", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandRefreshed());
+  api.acceptError = "resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (ticketing_project: legacy, web; ticketing_queue: triage-queue)";
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const dialog = review(page);
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  const alert = dialog.getByRole("alert");
+  await expect(alert).toContainText("resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (input_invalid)");
+  await expect(alert.getByRole("listitem")).toHaveText(["ticketing_project: legacy, web", "ticketing_queue: triage-queue"]);
+  expect(api.errors).toEqual([]);
+});
+
+test("the Actions tab shows who checks each action's resources", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandAccepted());
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing`);
+  const table = page.getByRole("table", { name: "Ticketing actions", exact: true });
+  await expect(table.getByRole("columnheader", { name: "Resources checked by", exact: true })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Scope", exact: true })).toHaveCount(0);
+  await expect(table.getByRole("row", { name: /issue\.view/ })).toContainText("Broker · Project");
+  await expect(table.getByRole("row", { name: /issue\.search/ })).toContainText("Command · Projects");
+  await expect(table.getByRole("row", { name: /whoami/ })).toContainText("Command · no resource type");
+  await table.getByRole("link", { name: "issue.search", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Action issue.search", exact: true });
+  await expect(drawer).toContainText("Checked by");
+  await expect(drawer).toContainText("Projects ticketing_project");
+  await expect(drawer).toContainText("the Broker cannot check that");
+  expect(api.errors).toEqual([]);
+});
+
+test("a username-and-token execution credential is saved with its username", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandAccepted());
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Rotate execution credential", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Rotate execution credential", exact: true });
+  await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Token", { exact: true }).fill("svc-example");
+  await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Username", { exact: true }).fill("svc-tickets");
+  await dialog.getByRole("button", { name: "Save credential", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(api.credentials).toEqual([{ purpose: "execution", body: { expectedVersion: 5, expectedCatalogRevision: 6, token: "svc-example", username: "svc-tickets" } }]);
+  expect(api.errors).toEqual([]);
+});
+
+test("a removed imported type accepts no new resources", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandAccepted());
+  await page.goto(`${baseUrl}/ui/admin/catalog/resources?item=new`);
+  const type = page.getByRole("complementary", { name: "Add resource", exact: true }).getByLabel("Resource type", { exact: true });
+  await expect(type.locator('option[value="ticketing_project"]')).toHaveText("Project");
+  await expect(type.locator('option[value="ticketing_queue"]')).toHaveCount(0);
+  expect(api.errors).toEqual([]);
+});

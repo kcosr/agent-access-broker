@@ -1,7 +1,8 @@
 import { AdminButton } from "../../components/admin-access";
 // Sets or rotates an imported service's token slot, or the administrator's own
-// personal discovery token. The value lives only in this mounted field and is
-// cleared as soon as it is submitted; saved tokens are never shown again.
+// personal discovery token. A command import whose credential is a username and
+// token also takes the username. The token lives only in this mounted field and
+// is cleared as soon as it is submitted; saved tokens are never shown again.
 import { useState } from "react";
 import type { ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
@@ -14,6 +15,7 @@ export type TokenPurpose = ImportPurpose | "personal";
 export function ImportTokenModal({
   purpose,
   rotate,
+  withUsername = false,
   onClose,
   onSave,
   frame = modalFrame
@@ -21,25 +23,29 @@ export function ImportTokenModal({
   purpose: TokenPurpose;
   /** A token is already stored (the title says Rotate). */
   rotate: boolean;
+  /** The credential is a username and token; the username is sent with the token. */
+  withUsername?: boolean;
   onClose: () => void;
-  onSave: (token: string) => Promise<unknown>;
+  onSave: (token: string, username?: string) => Promise<unknown>;
   frame?: EditorFrame;
 }) {
   const [value, setValue] = useState("");
+  const [username, setUsername] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const missing = !value.trim();
+  const missingUsername = withUsername && !username.trim();
 
   async function save() {
     setAttempted(true);
-    if (missing) return;
+    if (missing || missingUsername) return;
     const token = value;
     setValue("");
     setPending(true);
     setError(null);
     try {
-      await onSave(token);
+      await (withUsername ? onSave(token, username.trim()) : onSave(token));
       onClose();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -48,10 +54,15 @@ export function ImportTokenModal({
   }
 
   return frame({
-    title: `${rotate ? "Rotate" : "Set"} ${purpose} token`,
+    title: `${rotate ? "Rotate" : "Set"} ${purpose} ${withUsername ? "credential" : "token"}`,
     size: "sm",
     body: (
       <div className="wb-form-stack pt-catalog-form">
+        {withUsername ? (
+          <Field label="Username" hint="The upstream account the token belongs to." error={attempted && missingUsername && !pending ? "Enter the username." : undefined}>
+            <Input autoComplete="off" spellCheck={false} maxLength={256} value={username} disabled={pending} onChange={(event) => setUsername(event.target.value)} />
+          </Field>
+        ) : null}
         <Field
           label="Token"
           hint="Paste the token value without a Bearer prefix. Existing values cannot be revealed."
@@ -67,8 +78,8 @@ export function ImportTokenModal({
         <Button onClick={onClose} disabled={pending}>
           Cancel
         </Button>
-        <AdminButton type="submit" variant="primary" pending={pending} disabled={missing && !pending}>
-          Save token
+        <AdminButton type="submit" variant="primary" pending={pending} disabled={(missing || missingUsername) && !pending}>
+          {withUsername ? "Save credential" : "Save token"}
         </AdminButton>
       </>
     ),

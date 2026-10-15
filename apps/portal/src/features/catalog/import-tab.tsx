@@ -1,12 +1,15 @@
 import { canWriteAdmin, canUseSelfService } from "../../lib/capabilities";
 import { AdminButton } from "../../components/admin-access";
-// An imported service's Import tab: its definition, status, discovery and
-// review, credential slots, and the administrator's OAuth discovery
-// connection. The dialogs it opens (editor, review, token) live here too.
+// An imported service's Import tab: its definition (for a command import, the
+// approved command and its accepted manifest), status, discovery and review,
+// credential slots, and the administrator's OAuth discovery connection. The
+// dialogs it opens (editor, review, token) live here too.
 import { useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
+import { importItemNoun } from "../../lib/imports";
+import { COMMAND_KIND, commandCredentialText, commandName } from "../../lib/import-command";
 import { formatServiceLimit } from "../../lib/service-limits";
 import {
   AppLink,
@@ -44,17 +47,19 @@ export type ImportDialog =
 const PURPOSES: ImportPurpose[] = ["execution", "discovery", "transport"];
 
 export function bindingLabel(binding: ImportBinding) {
-  const mode = binding.ownerMode === "service" ? "Shared service token" : binding.mechanism === "oauth" ? "Personal OAuth connection" : "Personal token";
+  const secret = binding.delivery.kind === "stdin" ? "credential" : "token";
+  const mode = binding.ownerMode === "service" ? `Shared service ${secret}` : binding.mechanism === "oauth" ? "Personal OAuth connection" : `Personal ${secret}`;
   return `${mode}${binding.status === "unsupported" ? " (unsupported authentication)" : ""}`;
 }
 
 function deliveryLabel(binding: ImportBinding | undefined) {
   if (!binding) return null;
-  return binding.delivery.kind === "bearer" ? "Authorization: Bearer" : binding.delivery.name;
+  return binding.delivery.kind === "bearer" ? "Authorization: Bearer" : binding.delivery.kind === "stdin" ? "Request on stdin" : binding.delivery.name;
 }
 
 function discoveryText(data: ImportPreviewResult) {
   const discovery = data.service.definition.discovery;
+  if (data.service.definition.adapterKind === COMMAND_KIND) return "Discovery runs the command's describe without credentials.";
   if (discovery.kind === "anonymous") return "The public definition document is loaded without credentials.";
   if (discovery.kind === "execution") return "Discovery uses the shared execution token.";
   if (discovery.kind === "slot") return "Discovery uses a separate discovery token.";
@@ -108,12 +113,15 @@ export function ImportTab({
   const record = data.service;
   const definition = record.definition;
   const openapi = definition.adapterKind === "openapi_http";
+  const command = definition.adapterKind === COMMAND_KIND;
+  const accepted = record.acceptedMetadata;
+  const noun = importItemNoun(definition.adapterKind);
   const allowed = data.operatorAllowed === true && record.status !== "retired";
   const status = { ...ACTION_STATUS, draft: { label: "Draft", tone: "warning" as const, icon: "pencil" as const } }[record.status];
   const actionCounts = (["enabled", "quarantined", "disabled", "retired"] as const)
     .map((key) => ({ key, count: record.actions.filter((action) => action.status === key).length }))
     .filter((entry) => entry.count > 0);
-  const discoverLabel = openapi ? (data.preview || record.actions.length ? "Refresh definition" : "Load definition") : record.actions.length ? "Refresh discovery" : "Discover tools";
+  const discoverLabel = openapi ? (data.preview || record.actions.length ? "Refresh definition" : "Load definition") : record.actions.length ? "Refresh discovery" : `Discover ${noun}s`;
 
   async function discover() {
     if (!data) return;
@@ -144,26 +152,30 @@ export function ImportTab({
           ? definition.discovery.kind === "slot"
           : definition.transportAuth;
     if (!used && !configured) return [];
+    // A command's execution credential takes the kind its accepted manifest declares.
+    const pendingManifest = command && purpose === "execution" && !accepted?.credential;
+    const secret = command && purpose === "execution" ? "credential" : "token";
     return [
       <SettingsRow
         key={purpose}
-        label={`${purpose[0]!.toUpperCase()}${purpose.slice(1)} token`}
+        label={`${purpose[0]!.toUpperCase()}${purpose.slice(1)} ${secret}`}
         help={
           <>
             <Badge tone={configured ? "success" : "warning"} variant="dot">
               {configured ? "Configured" : "Missing"}
             </Badge>
             {!used ? " Retained, not selected by the configuration." : null}
+            {pendingManifest && used ? " Accept the command's manifest first; it declares the credential kind." : null}
           </>
         }
         group
       >
         <span className="wb-btn-group">
-          <AdminButton size="sm" icon="key" disabled={!allowed || !used} onClick={() => onDialog({ kind: "token", purpose, rotate: configured, data })}>
-            {configured ? "Rotate" : "Set"} {purpose} token
+          <AdminButton size="sm" icon="key" disabled={!allowed || !used || pendingManifest} onClick={() => onDialog({ kind: "token", purpose, rotate: configured, data })}>
+            {configured ? "Rotate" : "Set"} {purpose} {secret}
           </AdminButton>
           <AdminButton size="sm" variant="danger-ghost" icon="trash" disabled={!configured} onClick={() => actions.confirmDeleteToken(data, purpose)}>
-            Delete {purpose} token
+            Delete {purpose} {secret}
           </AdminButton>
         </span>
       </SettingsRow>
@@ -243,7 +255,9 @@ export function ImportTab({
         description={
           openapi
             ? "The OpenAPI document describes operations; agent calls go to the API base URL."
-            : "Agent calls go to this HTTP MCP endpoint. Service ID and endpoint are fixed after creation."
+            : command
+              ? "Each agent call runs the approved command once, with the request on its stdin. Service ID and command are fixed after creation."
+              : "Agent calls go to this HTTP MCP endpoint. Service ID and endpoint are fixed after creation."
         }
         actions={
           <AdminButton icon="pencil" disabled={!allowed} onClick={() => onDialog({ kind: "edit", data })}>
@@ -255,7 +269,30 @@ export function ImportTab({
           labelWidth={160}
           items={[
             { label: "Import type", value: <>{adapterLabel(definition.adapterKind)} <span className="wb-num wb-muted">{definition.adapterKind}</span></> },
-            { label: openapi ? "API base URL" : "Endpoint", value: <span className="wb-mono pt-catalog-break">{definition.endpoint}</span> },
+            command
+              ? { label: "Command", value: <span className="wb-mono pt-catalog-break">{commandName(definition.endpoint)}</span> }
+              : { label: openapi ? "API base URL" : "Endpoint", value: <span className="wb-mono pt-catalog-break">{definition.endpoint}</span> },
+            command ? { label: "Imported at version", value: data.commandVersion ?? <span className="wb-muted">Accept a discovery preview first</span> } : null,
+            command && accepted ? { label: "Command credential", value: commandCredentialText(accepted.credential) } : null,
+            command && accepted ? { label: "Verification", value: accepted.verify ? "Supported" : "Not supported by the command" } : null,
+            command && accepted
+              ? {
+                  label: "Resource types",
+                  value: accepted.resourceTypes.length ? (
+                    <span className="pt-catalog-break">
+                      {accepted.resourceTypes.map((type, index) => (
+                        <span key={type.id}>
+                          {index ? ", " : null}
+                          {type.label} <span className="wb-mono wb-muted">{type.brokerType}</span>
+                          {type.removed ? <span className="wb-muted"> (removed; kept for its resources)</span> : null}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="wb-muted">None</span>
+                  )
+                }
+              : null,
             openapi ? { label: "Definition URL", value: <span className="wb-mono pt-catalog-break">{definition.connectionSettings.definitionUrl}</span> } : null,
             openapi
               ? {
@@ -282,7 +319,11 @@ export function ImportTab({
               label: "Execution credentials",
               value: definition.executionBindings.length ? definition.executionBindings.map(bindingLabel).join(", ") : <span className="wb-muted">None</span>
             },
-            { label: "Token delivery", value: <span className="wb-mono">{deliveryLabel(definition.executionBindings[0]) ?? "—"}</span> },
+            command
+              ? definition.executionBindings.length
+                ? { label: "Credential delivery", value: "Request on stdin" }
+                : null
+              : { label: "Token delivery", value: <span className="wb-mono">{deliveryLabel(definition.executionBindings[0]) ?? "—"}</span> },
             !openapi && definition.transportAuth ? { label: "Transport", value: "Separate transport bearer token" } : null,
             { label: "Discovery", value: discoveryText(data) },
             {
@@ -326,7 +367,7 @@ export function ImportTab({
               label: "Pending preview",
               value: data.preview ? (
                 <>
-                  {data.preview.manifest.tools.length} {plural(data.preview.manifest.tools.length, openapi ? "operation" : "tool")} · discovered <Time value={data.preview.createdAt} /> by{" "}
+                  {data.preview.manifest.tools.length} {plural(data.preview.manifest.tools.length, noun)} · discovered <Time value={data.preview.createdAt} /> by{" "}
                   {data.preview.createdBy} · expires <Time value={data.preview.expiresAt} />
                 </>
               ) : (
@@ -354,7 +395,9 @@ export function ImportTab({
             </AdminButton>
           </SettingsRow>
         ) : null}
-        {!credentialRows.length && !personalToken ? <p className="pt-prose">This configuration uses no service-owned tokens.</p> : null}
+        {!credentialRows.length && !personalToken ? (
+          <p className="pt-prose">{command && !definition.executionBindings.length ? "This command takes no credential." : "This configuration uses no service-owned tokens."}</p>
+        ) : null}
       </SettingsSection>
 
       {canWriteAdmin(session) && canUseSelfService(session) && ownDiscovery(data, session.principal, "oauth") ? <DiscoveryConnection service={service.service} /> : null}
@@ -415,6 +458,7 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
         data={dialog.data}
         authentication={dialog.data.importAuthentication ?? imports?.importAuthentication ?? []}
         availableKinds={imports?.availableKinds ?? []}
+        commandImports={imports?.commandImports.map((entry) => entry.name) ?? []}
         onClose={close}
         onSave={(definition, confirmed) => actions.update(dialog.data, definition, confirmed)}
       />
@@ -429,18 +473,21 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
         data={review}
         onClose={close}
         onConfigure={configurable ? () => onDialog({ kind: "edit", data: review }) : undefined}
-        onAccept={(rows, confirmed) => actions.accept(review, rows, confirmed)}
+        onAccept={(rows, confirmed, typeIds) => actions.accept(review, rows, confirmed, typeIds)}
       />
     );
   }
   const { purpose, data } = dialog;
+  // A command's execution slot holds the kind its accepted manifest declares.
+  const withUsername = purpose === "execution" && data.service.acceptedMetadata?.credential?.kind === "username_token";
   return (
     <ImportTokenModal
       key={`token-${purpose}`}
       purpose={purpose}
       rotate={dialog.rotate}
+      withUsername={withUsername}
       onClose={close}
-      onSave={(token) => (purpose === "personal" ? actions.writePersonalToken(data, token) : actions.writeToken(data, purpose, token))}
+      onSave={(token, username) => (purpose === "personal" ? actions.writePersonalToken(data, token) : actions.writeToken(data, purpose, token, username))}
     />
   );
 }

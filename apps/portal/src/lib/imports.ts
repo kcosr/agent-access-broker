@@ -57,9 +57,22 @@ export function importReviewRows(data: ImportPreviewResult): ImportReviewRow[] {
 export function selectedImportActions(rows: ImportReviewRow[]): ImportSelection[] {
   return rows.filter((row) => row.selected && row.selectable).map((row) => ({ source: row.tool.definition.source, action: row.action.trim(), ...(row.label.trim() ? { label: row.label.trim() } : {}), readOnly: row.readOnly }));
 }
-export function importSelectionError(service: ImportedServiceRecord, rows: ImportReviewRow[]): string | null {
+/** What an adapter's discovered items are called: OpenAPI operations, command actions, MCP tools. */
+export function importItemNoun(adapterKind: string): "operation" | "action" | "tool" {
+  return adapterKind === "openapi_http" ? "operation" : adapterKind === "command" ? "action" : "tool";
+}
+/**
+ * Whether the preview may be accepted with no selections: a command preview
+ * for an import that already has accepted actions, which then applies only
+ * its service metadata and resource type changes. A draft needs a selection.
+ */
+export function metadataOnlyAcceptance(data: ImportPreviewResult): boolean {
+  return data.service.actions.length > 0 && Boolean(data.preview?.manifest.serviceMetadata);
+}
+export function importSelectionError(data: ImportPreviewResult, rows: ImportReviewRow[]): string | null {
+  const service = data.service;
   const selected = rows.filter((row) => row.selected && row.selectable);
-  if (!selected.length) return `Select at least one supported ${service.definition.adapterKind === "openapi_http" ? "operation" : "tool"}.`;
+  if (!selected.length) return metadataOnlyAcceptance(data) ? null : `Select at least one supported ${importItemNoun(service.definition.adapterKind)}.`;
   const names = new Set<string>();
   for (const row of selected) {
     const name = row.action.trim();
@@ -77,4 +90,15 @@ export function affectedImportGrants(data: ImportPreviewResult, rows: ImportRevi
 }
 export function importVersions(data: { catalogRevision: number; service: ImportedServiceRecord }) {
   return { expectedVersion: data.service.version, expectedCatalogRevision: data.catalogRevision };
+}
+/**
+ * A rejection that names what to fix, as `message (a; b)` or `message: a; b`,
+ * split into the message and its items, such as the resources that block a
+ * resource type change or the retained grants a change would invalidate. Any
+ * other message stays whole.
+ */
+export function importErrorList(text: string): { message: string; items: string[] } {
+  const listed = /^(.*\S) \(([^()]*[;:][^()]*)\)$/s.exec(text) ?? /^([^:]*?): (.*;.*)$/s.exec(text);
+  if (!listed) return { message: text, items: [] };
+  return { message: listed[1]!, items: listed[2]!.split("; ").map((item) => item.trim()).filter(Boolean) };
 }

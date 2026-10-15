@@ -18,6 +18,15 @@ export function useResourceTypes(): ResourceTypes {
   return useContext(ResourceTypesContext);
 }
 
+/**
+ * Types that accept new resources, in server order: a removed imported type
+ * stays listed for its existing resources but accepts no new ones. `current`
+ * keeps an existing resource's own type selectable.
+ */
+export function creatableResourceTypes(types: ResourceTypes, current?: ResourceType): ResourceTypeMetadata[] {
+  return [...types.values()].filter((type) => !type.removed || type.id === current);
+}
+
 // A type the broker does not describe is shown by its raw id.
 export function resourceTypeLabel(types: ResourceTypes, type: ResourceType): string {
   return types.get(type)?.label ?? type;

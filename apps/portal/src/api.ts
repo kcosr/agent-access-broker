@@ -1,4 +1,4 @@
-import type { ImportActionStatus, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
+import type { ImportActionStatus, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
   IdentityTokenMetadata,
@@ -226,10 +226,10 @@ export const brokerApi = {
   updateImport: (session: Session, service: string, body: ImportVersions & { definition: ImportDefinition; confirmAffectedGrants: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
   importPreview: (session: Session, service: string) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/preview`, {}, session),
   discoverImport: (session: Session, service: string, versions: ImportVersions) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/discover`, { method: "POST", body: JSON.stringify(versions) }, session),
-  acceptImport: (session: Session, service: string, body: ImportVersions & { manifestHash: string; selections: ImportSelection[]; confirmAffectedGrants: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/accept`, { method: "POST", body: JSON.stringify(body) }, session),
+  acceptImport: (session: Session, service: string, body: ImportVersions & { manifestHash: string; selections: ImportSelection[]; confirmAffectedGrants: boolean; resourceTypeIds?: ImportResourceTypeIds }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/accept`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportStatus: (session: Session, service: string, body: ImportVersions & { status: Exclude<ImportServiceStatus, "draft">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportActionStatus: (session: Session, service: string, action: string, body: ImportVersions & { status: Exclude<ImportActionStatus, "quarantined">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/actions/${enc(action)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
-  writeImportToken: (session: Session, service: string, purpose: ImportPurpose, body: ImportVersions & { token: string }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/credentials/${purpose}`, { method: "PUT", body: JSON.stringify(body) }, session),
+  writeImportToken: (session: Session, service: string, purpose: ImportPurpose, body: ImportVersions & { token: string; username?: string }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/credentials/${purpose}`, { method: "PUT", body: JSON.stringify(body) }, session),
   deleteImportToken: (session: Session, service: string, purpose: ImportPurpose, versions: ImportVersions) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/credentials/${purpose}`, { method: "DELETE", body: JSON.stringify(versions) }, session),
   oauthConnections(session: Session) {
     return managementRequest<import("./types").OAuthConnectionTarget[]>("/v1/oauth/connections", {}, session);

@@ -10,9 +10,11 @@ import type {
   ImportPreviewResult,
   ImportPurpose,
   ImportRecordResult,
+  ImportResourceTypeIds,
   ImportServiceStatus
 } from "../../import-types";
 import { importVersions, selectedImportActions, type ImportReviewRow } from "../../lib/imports";
+import { chosenResourceTypeIds, resourceTypeEffectsText } from "../../lib/import-command";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { Session } from "../../types";
 import { useToast } from "../../workbench";
@@ -55,10 +57,10 @@ export function useImportActions() {
       ]);
     }
 
-    async function run<T>(operation: (current: Session) => Promise<T>, message: string) {
+    async function run<T>(operation: (current: Session) => Promise<T>, message: string | ((result: T) => string)) {
       const result = await attempt(operation);
       await refresh();
-      toast(message, { tone: "success" });
+      toast(typeof message === "string" ? message : message(result), { tone: "success" });
       return result;
     }
 
@@ -80,19 +82,26 @@ export function useImportActions() {
       return result;
     }
 
-    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean): Promise<ImportRecordResult> {
+    /** Accepts the selected actions; a command preview also takes the chosen Broker type IDs of its new resource types. */
+    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ImportResourceTypeIds = {}): Promise<ImportRecordResult> {
       const preview = data.preview;
       if (!preview) return Promise.reject(new Error("This preview has expired. Run discovery again."));
       const selections = selectedImportActions(rows);
+      const resourceTypeIds = chosenResourceTypeIds(data.resourceTypeChanges ?? [], typeIds);
       return run(
         (current) =>
           brokerApi.acceptImport(current, data.service.definition.service, {
             ...importVersions(data),
             manifestHash: preview.manifestHash,
             selections,
-            confirmAffectedGrants
+            confirmAffectedGrants,
+            ...(Object.keys(resourceTypeIds).length ? { resourceTypeIds } : {})
           }),
-        `${selections.length} ${selections.length === 1 ? "action" : "actions"} accepted`
+        (result) => {
+          const accepted = selections.length ? `${selections.length} ${selections.length === 1 ? "action" : "actions"} accepted` : "Command metadata and type changes accepted";
+          const effects = resourceTypeEffectsText(result.resourceTypeEffects);
+          return effects ? `${accepted}; ${effects}` : accepted;
+        }
       );
     }
 
@@ -126,10 +135,11 @@ export function useImportActions() {
       });
     }
 
-    function writeToken(data: Versioned, purpose: ImportPurpose, token: string) {
+    /** `username` accompanies the token of a command import whose credential is a username and token. */
+    function writeToken(data: Versioned, purpose: ImportPurpose, token: string, username?: string) {
       return run(
-        (current) => brokerApi.writeImportToken(current, data.service.definition.service, purpose, { ...importVersions(data), token }),
-        `${purpose[0]!.toUpperCase()}${purpose.slice(1)} token saved`
+        (current) => brokerApi.writeImportToken(current, data.service.definition.service, purpose, { ...importVersions(data), token, ...(username !== undefined ? { username } : {}) }),
+        `${purpose[0]!.toUpperCase()}${purpose.slice(1)} ${username !== undefined ? "credential" : "token"} saved`
       );
     }
 

@@ -1914,6 +1914,18 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 
 Run it whenever the reference command or the contract it documents changes.
 
+The portal's command import coverage uses explicit API fixtures shaped like an
+import of the reference command (`apps/portal/unit/command-import.fixture.ts`)
+and starts no Broker and no command. `unit/import-command.test.ts` covers the
+approved-name picker and credential modes, stdin bindings, "Resources checked
+by", the preview's command metadata and resource type decisions, Broker type ID
+choices, metadata-only acceptance, acceptance error lists and removed types.
+`tests/imports-command-review.spec.ts` drives the same flows in the browser:
+draft creation with and without credentials, discovery and refresh review,
+acceptance bodies, the Actions tab, the username-and-token execution credential
+and resource creation without removed types. `tests/token-page.spec.ts` covers a
+command service's resource restrictions on the token page.
+
 ### Local password method transitions
 
 Password reset must reject absent or disabled local methods; explicit enable

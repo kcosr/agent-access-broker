@@ -28,6 +28,10 @@ export type ResourceTypeMetadata = {
   attributes?: ResourceAttributeMetadata[];
   /** Present only when the type accepts namespace selectors. */
   namespace?: { label: string; membersLabel: string; example: string };
+  /** The imported service that declares the type. */
+  importedService?: string;
+  /** Present when the declaring import no longer does: the type accepts no new resources. */
+  removed?: true;
 };
 
 export type OAuthScopeMode = "explicit" | "server_default";

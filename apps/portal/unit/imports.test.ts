@@ -47,12 +47,12 @@ describe("import review", () => {
     const rows = importReviewRows(data);
     rows[1].selected = true;
     rows[1].action = "removed";
-    expect(importSelectionError(data.service, rows)).toContain("already used");
+    expect(importSelectionError(data, rows)).toContain("already used");
     rows[1].action = "metrics.query";
-    expect(importSelectionError(data.service, rows)).toContain("service prefix");
+    expect(importSelectionError(data, rows)).toContain("service prefix");
     rows[1].action = "valid.name";
     rows[0].action = "renamed";
-    expect(importSelectionError(data.service, rows)).toContain("cannot be changed");
+    expect(importSelectionError(data, rows)).toContain("cannot be changed");
     expect(importSourceKey({ b: [1, { c: 2 }], a: "x" })).toBe(importSourceKey({ a: "x", b: [1, { c: 2 }] }));
   });
   test("only annotation titles are presentation metadata, not hints or execution behavior", () => {
@@ -76,10 +76,10 @@ describe("import review", () => {
     expect(rows[0]).toMatchObject({ change: "Retired – new identity required", selectable: true, selected: false, readOnly: false, action: "read.new" });
     expect(rows.find((row) => row.change === "Retired")).toMatchObject({ action: "read", selectable: false });
     rows[0].selected = true;
-    expect(importSelectionError(data.service, rows)).toBeNull();
+    expect(importSelectionError(data, rows)).toBeNull();
     expect(affectedImportGrants(data, rows)).toEqual([]);
     rows[0].action = "read";
-    expect(importSelectionError(data.service, rows)).toContain("already used");
+    expect(importSelectionError(data, rows)).toContain("already used");
     const active = { ...data.service.actions[0], definition: { ...data.service.actions[0].definition, action: "read.new" }, status: "enabled" as const };
     // A live mapping wins over its source's tombstone, regardless of record order.
     data.service.actions.unshift(active);
@@ -108,7 +108,7 @@ describe("import review", () => {
     const rows = importReviewRows(data);
     expect(rows[1]).toMatchObject({ selectable: true, selected: false, scopedMcpWarning: data.scopedMcpWarnings[0] });
     rows[1].selected = true;
-    expect(importSelectionError(data.service, rows)).toBeNull();
+    expect(importSelectionError(data, rows)).toBeNull();
     expect(selectedImportActions(rows).map((selection) => selection.action)).toEqual(["read", "new"]);
     rows[1].action = "edited.proposal";
     expect(rows[1].scopedMcpWarning?.proposedAction).toBe("new");
@@ -134,7 +134,7 @@ test("retained unavailable selections can be maintained, but not added or duplic
 describe("catalog service index", () => {
   const imports = () => {
     const data = fixture();
-    return { catalogRevision: 4, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [data.service] };
+    return { catalogRevision: 4, operatorEnabled: true, availableKinds: ["mcp_http"], commandImports: [], importAuthentication: [], services: [data.service] };
   };
   test("merges built-in and imported services with status, action and manager counts", () => {
     const list = imports();

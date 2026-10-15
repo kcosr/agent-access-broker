@@ -8,7 +8,7 @@ import { useId, useMemo, useState } from "react";
 import { brokerApi } from "../../api";
 import type { ResourceGroupRecord, ResourceRecord, ResourceSelector, ResourceType, ResourceWriteBody } from "../../types";
 import { resourceLabel, selectorLabel } from "../../lib/resource-labels";
-import { namespaceCoverage, resourceTypeLabel, resourceTypePluralLabel, selectorPlaceholder, useResourceTypes, type ResourceTypes } from "../../lib/resource-types";
+import { creatableResourceTypes, namespaceCoverage, resourceTypeLabel, resourceTypePluralLabel, selectorPlaceholder, useResourceTypes, type ResourceTypes } from "../../lib/resource-types";
 import { groupRows, sortRows } from "../../lib/table-sort";
 import { urlParam } from "../../lib/url-state";
 import { AppLink, Banner, Button, Checkbox, type DataColumn, DataTable, Drawer, DrawerSection, EmptyState, ErrorState, Field, FilterInput, Icon, Input, KeyValue, List, ListFooter, Main, plural, Seg, Select, type SortState, StateCell, StatePill, Switch, TableGroupHeader, Time, Toolbar, ToolbarRow, ToolbarSummary } from "../../workbench";
@@ -498,8 +498,10 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   const actions = useResourceActions();
   const formId = useId();
   const [chosenType, setType] = useState<ResourceType | null>(record?.resourceType ?? null);
+  // Removed imported types accept no new resources; an existing resource keeps its own.
+  const offered = creatableResourceTypes(types, record?.resourceType);
   // New resources start with the first type the broker lists.
-  const type = chosenType ?? [...types.keys()][0] ?? "";
+  const type = chosenType ?? offered[0]?.id ?? "";
   const namespace = namespaceCoverage(types, type);
   const [kind, setKind] = useState<ResourceSelector["kind"]>(record?.selector.kind ?? "exact");
   const [value, setValue] = useState(record && record.selector.kind !== "all" ? record.selector.value : "");
@@ -591,9 +593,10 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
               }}
             >
               {type && !types.has(type) ? <option value={type}>{type}</option> : null}
-              {[...types.values()].map((option) => (
+              {offered.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
+                  {option.removed ? " (removed)" : ""}
                 </option>
               ))}
             </Select>

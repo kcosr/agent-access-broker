@@ -32,7 +32,7 @@ export type CatalogService = {
   state: ServiceState;
 };
 
-export const ADAPTER_LABELS: Record<string, string> = { mcp_http: "HTTP MCP", openapi_http: "OpenAPI HTTP" };
+export const ADAPTER_LABELS: Record<string, string> = { mcp_http: "HTTP MCP", openapi_http: "OpenAPI HTTP", command: "Local command" };
 
 export function adapterLabel(kind: string) {
   return ADAPTER_LABELS[kind] ?? kind;

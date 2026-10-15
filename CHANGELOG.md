@@ -566,6 +566,21 @@ All notable changes to this project are documented in this file.
   the command's `verify` when its manifest declares it, fenced like a call,
   and stays local otherwise; its audit, failed or not, keeps the process facts
   with no upstream status.
+- The portal imports local commands. **Import service** offers the **Local
+  command** type, which picks an operator-approved command by name, never a
+  path, and chooses shared and personal credential modes, or none. The
+  discovery preview shows the command version, credential kind and
+  verification support, any OAuth notice, each resource type's decision with
+  the stored resources it depends on and an editable Broker type ID for new
+  types (sent as `resourceTypeIds`), and for each action **Resources checked
+  by: Broker** or **Command**, with what the command must enforce. A command
+  import with accepted actions may accept a preview with no selections. The
+  Import tab shows the accepted version, credential, verification and resource
+  types and takes the username of a `username_token` execution credential; the
+  Actions tab and action drawer show who checks each action's resources.
+  Acceptance messages report deleted attribute values and dropped types, and
+  rejections that name resources or grants list them. Resource creation no
+  longer offers removed imported types.
 
 ### Changed
 
