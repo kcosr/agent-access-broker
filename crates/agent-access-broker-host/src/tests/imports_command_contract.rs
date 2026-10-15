@@ -6,9 +6,9 @@
 //!
 //! The fixture command records each run, keeps the request, arguments and
 //! environment of each `invoke` and `verify` in a private directory for the
-//! test to inspect, waits while a hold file exists, and answers with a
-//! response file the test writes, or by default with a checksum of the
-//! request it read, never the request itself.
+//! test to inspect, waits while a hold file exists, and exits with a status
+//! or answers with a response file the test writes, or by default with a
+//! checksum of the request it read, never the request itself.
 #![cfg(unix)]
 use super::imports_command::{CommandFixture, request, versions};
 use super::imports_foundation::import_broker;
@@ -28,6 +28,7 @@ cat > "$run.request"
 printf '%s\n' "$@" > "$run.args"
 env > "$run.env"
 while [ -e "$HOLD" ]; do sleep 0.05; done
+if [ -e "$RESPONSES/$1.exit" ]; then exit "$(cat "$RESPONSES/$1.exit")"; fi
 if [ -e "$RESPONSES/$1.json" ]; then cat "$RESPONSES/$1.json"; exit 0; fi
 sum=$(cksum < "$run.request" | cut -d ' ' -f 1)
 printf '{"ok":true,"result":{"cksum":"%s"}}\n' "$sum"
@@ -1063,6 +1064,39 @@ async fn responses_map_errors_receipts_and_contract_violations() {
         assert_eq!(body["result"]["mutationStatus"], "unknown", "{case}");
         assert!(!body.to_string().contains("no_key") && !body.to_string().contains("teapot"));
     }
+    // An error message echoing the personal token, and a locator holding
+    // the Basic credential built from the username and token.
+    let basic = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("avery:{PERSONAL_TOKEN}"))
+    };
+    for (response, id) in [
+        (
+            format!(
+                r#"{{"ok": false, "error": {{"code": "upstream_unauthorized", "message": "Rejected {PERSONAL_TOKEN}."}}}}"#
+            ),
+            "echo-message",
+        ),
+        (
+            format!(
+                r#"{{"ok": true, "result": {{"key": "K"}}, "receipt": {{"safeLocators": {{"auth": "Basic {basic}"}}}}}}"#
+            ),
+            "echo-basic",
+        ),
+    ] {
+        contract.respond("invoke", Some(&response));
+        let (status, body) = create(id).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{id}: {body}");
+        assert_eq!(body["reasonCode"], "operation_failed", "{id}");
+        assert_eq!(body["result"]["mutationStatus"], "unknown", "{id}");
+        assert!(!body.to_string().contains(&basic), "{id}");
+        no_secret_in(&body.to_string(), id);
+        assert_eq!(
+            contract.audited(id)[0]["providerAudit"]["command"]["contractViolation"],
+            true,
+            "{id}"
+        );
+    }
     // A locator echoing the personal token the request supplied.
     contract.respond(
         "invoke",
@@ -1549,6 +1583,29 @@ async fn inherited_network_settings_follow_the_trust_mode() {
         }
     }
 
+    // A locator copied from HTTPS_PROXY, whose password is percent-encoded,
+    // is a contract violation.
+    contract.respond(
+        "invoke",
+        Some(&format!(
+            r#"{{"ok": true, "result": {{"key": "K"}}, "receipt": {{"safeLocators": {{"proxy": "{credentialed}"}}}}}}"#
+        )),
+    );
+    let (status, body) = invoke_as(
+        &app,
+        &agent,
+        "echo-proxy-url",
+        "tickets",
+        "issue.create",
+        json!({"project": "OPS", "summary": "x"}),
+    )
+    .await;
+    if proxied {
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(body["reasonCode"], "operation_failed");
+        assert!(!body.to_string().contains("proxy-pass"), "{body}");
+    }
+
     // A locator echoing the proxy password is a contract violation.
     contract.respond(
         "invoke",
@@ -1736,6 +1793,10 @@ async fn an_http_disconnect_leaves_the_command_running_to_its_result() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["decision"], "allow");
     assert_eq!(records[0]["providerAudit"]["command"]["exitCode"], 0);
+    assert_eq!(
+        records[0]["providerAudit"]["command"]["contractViolation"],
+        false
+    );
     wait_until("the permit returns", || registry.in_use("tickets") == 0).await;
     drop(app);
     let report = broker.stop().await;
@@ -1777,6 +1838,8 @@ async fn mcp_cancellation_leaves_the_command_running_to_its_result() {
         .await
         .unwrap()
         .unwrap();
+    // Every MCP response body holds the broker state it was admitted under,
+    // so only the cancellation's status is kept.
     let cancelled = tower::ServiceExt::oneshot(
         app.clone(),
         super::mcp::request(
@@ -1790,8 +1853,9 @@ async fn mcp_cancellation_leaves_the_command_running_to_its_result() {
         ),
     )
     .await
-    .unwrap();
-    assert_eq!(cancelled.status(), StatusCode::ACCEPTED);
+    .unwrap()
+    .status();
+    assert_eq!(cancelled, StatusCode::ACCEPTED);
     drop(response);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!reaped(pid));
@@ -1808,21 +1872,9 @@ async fn mcp_cancellation_leaves_the_command_running_to_its_result() {
     assert_eq!(record["providerAudit"]["command"]["exitCode"], 0);
     assert_eq!(contract.started("invoke").len(), before + 1);
     wait_until("the permit returns", || registry.in_use("tickets") == 0).await;
-    // Every owned operation has finished and the process left no capacity.
-    // The broker's shutdown is not asserted here: the host's MCP session
-    // keeps a runtime snapshot after a cancelled request, which is outside
-    // the command contract.
-    assert_eq!(
-        broker
-            .state()
-            .operations
-            .shutdown(Duration::from_secs(5))
-            .await,
-        0
-    );
-    assert_eq!(registry.live_processes(), 0);
     drop(app);
-    drop(broker);
+    let report = broker.stop().await;
+    assert!(report.is_clean(), "{report:?}");
 }
 
 /// Criteria 15 and 20: the command timeout, the HTTP MCP deadline and a
@@ -1888,7 +1940,8 @@ async fn deadlines_and_shutdown_kill_commands_and_audit_their_authority_once() {
     assert_eq!(command["spawned"], true);
     assert_eq!(command["exitCode"], Value::Null);
     assert_eq!(command["signal"], libc::SIGKILL);
-    assert_eq!(command["contractViolation"], false);
+    // The Broker stopped it before reading a response: no verdict.
+    assert_eq!(command["contractViolation"], Value::Null);
     wait_until("the permit returns", || registry.in_use("tickets") == 0).await;
 
     // The HTTP MCP deadline drops the call, which kills its process; audit
@@ -1938,6 +1991,11 @@ async fn deadlines_and_shutdown_kill_commands_and_audit_their_authority_once() {
         assert_eq!(audit["command"]["spawned"], true, "{audit}");
         assert_eq!(audit["command"]["exitCode"], Value::Null, "{audit}");
         assert_eq!(audit["command"]["operationDispatched"], true, "{audit}");
+        assert_eq!(
+            audit["command"]["contractViolation"],
+            Value::Null,
+            "{audit}"
+        );
         let authorization = &audit["commandAuthorization"];
         assert_eq!(authorization["mode"], "command", "{audit}");
         let grants = authorization["grants"].as_array().unwrap();
@@ -1987,6 +2045,11 @@ async fn deadlines_and_shutdown_kill_commands_and_audit_their_authority_once() {
     let audit = &records[0]["providerAudit"];
     assert_eq!(audit["executionState"], "unknown", "{audit}");
     assert_eq!(audit["command"]["spawned"], true, "{audit}");
+    assert_eq!(
+        audit["command"]["contractViolation"],
+        Value::Null,
+        "{audit}"
+    );
     assert_eq!(audit["commandAuthorization"]["mode"], "broker", "{audit}");
     contract.hold(false);
 }
@@ -2089,5 +2152,382 @@ async fn username_token_credentials_execute_in_both_modes_across_rewrap() {
     let broker = import_broker(&rotated).await;
     calls(broker.app()).await;
     assert_eq!(sent(&contract), expected);
+    broker.stop().await;
+}
+
+/// Item: a call whose import changed after its request was built, while it
+/// resolved resources, credentials and its caller, is fenced immediately
+/// before the command starts: `service_action_denied` with `not_applied`,
+/// and no process receives its credentials.
+#[tokio::test]
+async fn calls_are_fenced_again_immediately_before_the_command_starts() {
+    let contract = Contract::new(&tickets_manifest(false));
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    // A service name no other test pauses.
+    import(&app, &token, "fenced", "tickets", &["service", "per_user"]).await;
+    admin(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        json!({"id": "fenced-all", "resourceType": "fenced_project",
+            "selector": {"kind": "all"}, "allowedExecutionContexts": ["default"]}),
+    )
+    .await;
+    broker
+        .runtime()
+        .create_managed_policy_grant(grant(
+            "fenced",
+            "user:bob",
+            "fenced",
+            "issue.create",
+            "service",
+            0,
+            select(&["fenced-all"], &[]),
+        ))
+        .unwrap();
+    let bob = contract.fixture.issue(
+        "bob",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedServices": ["fenced"], "allowedExecutionContexts": ["default"]}),
+    );
+    contract.respond("invoke", Some(CREATED));
+
+    let pause = agent_access_core::test_support::CommandDispatchPause::new("fenced");
+    let call = {
+        let (app, bob) = (app.clone(), bob.clone());
+        tokio::spawn(async move {
+            invoke_as(
+                &app,
+                &bob,
+                "fenced-call",
+                "fenced",
+                "issue.create",
+                json!({"project": "OPS", "summary": "Fenced"}),
+            )
+            .await
+        })
+    };
+    pause.reached().await;
+    // The request is built; rotating the slot retires the admitted import.
+    let record = current(&app, &token, "fenced").await;
+    rotate_service_slot(&app, &token, "fenced", &record, "svc-rotated-5c1e").await;
+    pause.release();
+    let (status, body) = call.await.unwrap();
+    assert_not_applied(status, &body, "service_action_denied");
+    assert!(contract.started("invoke").is_empty());
+    let records = contract.audited("fenced-call");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["providerAudit"]["command"]["spawned"], false);
+    drop(pause);
+
+    // The next call runs with the rotated secret.
+    let (status, body) = invoke_as(
+        &app,
+        &bob,
+        "fenced-next",
+        "fenced",
+        "issue.create",
+        json!({"project": "OPS", "summary": "Next"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        contract.last("invoke").document["credentials"]["service"]["token"],
+        "svc-rotated-5c1e"
+    );
+    drop(app);
+    broker.stop().await;
+}
+
+/// Item: a personal verification queued for the command's only slot is
+/// fenced after it: a reload that changed the command entry rejects it
+/// without starting `verify` or supplying the credential.
+#[tokio::test]
+async fn queued_verifications_are_fenced_after_their_slot() {
+    let mut contract = Contract::new(&tickets_manifest(true));
+    contract.entry("tickets").max_concurrent = 1;
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
+    let runtime = broker.runtime();
+    avery(&runtime, &config, &["tickets"]);
+    let registry = runtime.command_registry().clone();
+
+    let held = registry.acquire("tickets", 1, far()).await.unwrap();
+    let verify = {
+        let (app, token) = (app.clone(), token.clone());
+        tokio::spawn(async move {
+            request(
+                &app,
+                &token,
+                Method::POST,
+                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                None,
+            )
+            .await
+        })
+    };
+    wait_until("the verification queues", || {
+        registry.waiting("tickets") == 1
+    })
+    .await;
+    let mut moved = config.clone();
+    let entry = moved.command_imports.get_mut("tickets").unwrap();
+    let script = std::path::Path::new(&entry.path).to_path_buf();
+    entry.path = script
+        .parent()
+        .unwrap()
+        .join(".")
+        .join(script.file_name().unwrap())
+        .display()
+        .to_string();
+    broker.reload_config(&moved).await;
+    drop(held);
+    let (status, body) = verify.await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["reasonCode"], "service_action_denied", "{body}");
+    assert!(contract.started("verify").is_empty());
+    assert_eq!(registry.in_use("tickets"), 0);
+
+    // The current generation verifies with the new entry.
+    let (status, verified) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{verified}");
+    assert_eq!(contract.started("verify").len(), 1);
+    drop((runtime, app));
+    broker.stop().await;
+}
+
+/// Item: an exact resource without attributes deleted and recreated while a
+/// call waits is a different entry: `scope_unresolved` with `not_applied`.
+#[tokio::test]
+async fn a_recreated_resource_without_attributes_fails_the_queued_call() {
+    let mut contract = Contract::new(&tickets_manifest(false));
+    contract.entry("tickets").max_concurrent = 1;
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
+    projects(&app, &token).await;
+    let lab = json!({"id": "lab", "resourceType": "tickets_project",
+        "selector": {"kind": "exact", "value": "LAB"}, "allowedExecutionContexts": ["default"]});
+    admin(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        lab.clone(),
+    )
+    .await;
+    let runtime = broker.runtime();
+    avery(&runtime, &config, &["tickets"]);
+    grants(&runtime);
+    let bob = contract.fixture.issue(
+        "bob",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+    );
+    contract.respond("invoke", Some(CREATED));
+    let registry = runtime.command_registry().clone();
+    let create = |id: &'static str| {
+        let (app, bob) = (app.clone(), bob.clone());
+        tokio::spawn(async move {
+            invoke_as(
+                &app,
+                &bob,
+                id,
+                "tickets",
+                "issue.create",
+                json!({"project": "LAB", "summary": "Queued"}),
+            )
+            .await
+        })
+    };
+    // Admitted with the entry, the value passes its ID.
+    let (status, body) = create("lab-before").await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        contract.last("invoke").document["authorization"]["resources"],
+        json!([{"value": "LAB", "id": "lab", "attributes": {}}])
+    );
+    let started = contract.started("invoke").len();
+
+    let version = || {
+        runtime
+            .managed_store()
+            .unwrap()
+            .resource("lab")
+            .unwrap()
+            .version
+    };
+    // Deleted and recreated identically in a later second.
+    let held = registry.acquire("tickets", 1, far()).await.unwrap();
+    let queued = create("lab-recreated");
+    wait_until("the call queues", || registry.waiting("tickets") == 1).await;
+    runtime
+        .delete_managed_resource(agent_access_core::DeleteResourceRequest {
+            id: "lab".into(),
+            expected_version: version(),
+            updated_by: "admin".into(),
+        })
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    admin(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        lab,
+    )
+    .await;
+    assert_eq!(version(), 1);
+    drop(held);
+    let (status, body) = queued.await.unwrap();
+    assert_not_applied(status, &body, "scope_unresolved");
+    // Changed: renamed, which advances its version.
+    let held = registry.acquire("tickets", 1, far()).await.unwrap();
+    let queued = create("lab-renamed");
+    wait_until("the call queues", || registry.waiting("tickets") == 1).await;
+    admin(
+        &app,
+        &token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/lab",
+        json!({"expectedVersion": version(), "displayName": "Laboratory"}),
+    )
+    .await;
+    drop(held);
+    let (status, body) = queued.await.unwrap();
+    assert_not_applied(status, &body, "scope_unresolved");
+    assert_eq!(contract.started("invoke").len(), started);
+    drop((runtime, app));
+    broker.stop().await;
+}
+
+/// Items: a failed command verification keeps its process facts in its
+/// audit record, for a valid error code, a non-zero exit, a contract
+/// violation and a timeout; command verification records no upstream
+/// status.
+#[tokio::test]
+async fn failed_verifications_keep_their_process_facts() {
+    let mut contract = Contract::new(&tickets_manifest(true));
+    contract.entry("tickets").timeout = "1s".into();
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
+    let runtime = broker.runtime();
+    avery(&runtime, &config, &["tickets"]);
+    let verify = || {
+        let (app, token) = (app.clone(), token.clone());
+        async move {
+            request(
+                &app,
+                &token,
+                Method::POST,
+                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                None,
+            )
+            .await
+        }
+    };
+    let audited = |contract: &Contract, body: &Value| {
+        contract
+            .audit()
+            .into_iter()
+            .find(|record| {
+                record["brokerRequestId"] == body["brokerRequestId"]
+                    && record["providerAudit"].get("verification").is_some()
+            })
+            .unwrap_or_else(|| panic!("no verification audit: {body}"))
+    };
+
+    let (status, verified) = verify().await;
+    assert_eq!(status, StatusCode::OK, "{verified}");
+    let record = audited(&contract, &verified);
+    assert!(record["upstreamStatus"].is_null(), "{record}");
+    assert!(record["upstreamDurationMs"].is_u64(), "{record}");
+    let facts = &record["providerAudit"]["verification"]["command"];
+    assert_eq!(facts["exitCode"], 0, "{record}");
+    assert_eq!(facts["contractViolation"], false, "{record}");
+
+    for (case, setup, reason, exit_code, signal, violation) in [
+        (
+            "error code",
+            Some((
+                "verify.json",
+                r#"{"ok": false, "error": {"code": "upstream_unauthorized", "message": "Rejected."}}"#,
+            )),
+            "upstream_unauthorized",
+            json!(0),
+            Value::Null,
+            json!(false),
+        ),
+        (
+            "non-zero exit",
+            Some(("verify.exit", "3")),
+            "operation_failed",
+            json!(3),
+            Value::Null,
+            json!(false),
+        ),
+        (
+            "contract violation",
+            Some(("verify.json", "not json")),
+            "operation_failed",
+            json!(0),
+            Value::Null,
+            json!(true),
+        ),
+        (
+            "timeout",
+            None,
+            "upstream_timeout",
+            Value::Null,
+            json!(libc::SIGKILL),
+            Value::Null,
+        ),
+    ] {
+        match setup {
+            Some((file, content)) => {
+                std::fs::write(contract.fixture.path(&format!("responses/{file}")), content)
+                    .unwrap()
+            }
+            None => contract.hold(true),
+        }
+        let (status, failed) = verify().await;
+        assert_ne!(status, StatusCode::OK, "{case}: {failed}");
+        assert_eq!(failed["reasonCode"], reason, "{case}: {failed}");
+        let record = audited(&contract, &failed);
+        assert!(record["upstreamStatus"].is_null(), "{case}: {record}");
+        let facts = &record["providerAudit"]["verification"]["command"];
+        assert_eq!(facts["name"], "tickets", "{case}: {record}");
+        assert_eq!(facts["spawned"], true, "{case}: {record}");
+        assert_eq!(facts["exitCode"], exit_code, "{case}: {record}");
+        assert_eq!(facts["signal"], signal, "{case}: {record}");
+        assert_eq!(facts["contractViolation"], violation, "{case}: {record}");
+        no_secret_in(&record.to_string(), case);
+        match setup {
+            Some((file, _)) => {
+                std::fs::remove_file(contract.fixture.path(&format!("responses/{file}"))).unwrap()
+            }
+            None => contract.hold(false),
+        }
+    }
+    drop((runtime, app));
     broker.stop().await;
 }
