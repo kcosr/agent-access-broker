@@ -799,18 +799,22 @@ sequenceDiagram
     P->>C: send(builder, UpstreamCall with the authorization)
     C->>C: Add the credential as a sensitive header
     alt URL outside allowed_upstream_hosts
-        C-->>P: UpstreamError::NotAllowed
+        C-->>P: UpstreamError::NotAllowed, with no trace
     else Credentials bound for another origin
         C-->>P: UpstreamError::NotSent, traced as upstream_connection_failed
     else Allowed
         C->>U: Send within the client profile, never following redirects
-        U-->>C: Response or failure
-        C-->>P: Response with a pending trace, or an UpstreamError
+        alt Response received
+            U-->>C: Response
+            C-->>P: Response with a pending trace
+            P->>P: take_upstream_trace(response)
+            P->>P: read_bounded_body(response, byte_cap, idle_timeout)
+            P->>P: Complete the trace with the outcome's reason
+        else Transport failure or timeout
+            C-->>P: UpstreamError, its trace already recorded
+        end
     end
-    P->>P: take_upstream_trace(response)
-    P->>P: read_bounded_body(response, byte_cap, idle_timeout)
-    P->>P: Complete the trace with the outcome's reason
-    Note over P,C: One upstream_request_completed trace per request
+    Note over P,C: One upstream_request_completed trace per request, except an allowlist rejection
 ```
 
 Task-local invocation context does not follow `tokio::spawn`. Run work you move

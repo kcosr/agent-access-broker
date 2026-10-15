@@ -86,8 +86,9 @@ flowchart TD
     Run --> Verify["audit verify"]
     Run --> Serve["serve: validate the configuration, acquire state locks"]
     Serve --> Generation["Build a runtime generation: BackendConfig::build for each configured provider"]
-    Generation --> Listen["Bind the listeners and serve"]
-    Listen -->|SIGUSR2 or administrative reload| Reload["Validate the candidate, build a new generation"]
+    Generation --> Bind["Bind the listeners once"]
+    Bind --> Listen["Serve on the bound listeners"]
+    Listen -->|SIGUSR2 or administrative reload| Reload["Validate the candidate, build and publish a new generation"]
     Reload --> Listen
     Listen -->|SIGTERM or SIGINT| Shutdown["Bounded shutdown"]
     Validate --> Exit["BrokerExit, returned from main"]
