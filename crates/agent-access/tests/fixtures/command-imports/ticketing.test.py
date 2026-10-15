@@ -499,6 +499,16 @@ class TriggerTests(unittest.TestCase):
         leaked = one_document(self, self.create("locator_secret"))
         self.assertEqual(leaked["receipt"]["safeLocators"]["copy"], USER_TOKEN)
 
+    def test_locator_secret_without_credentials_echoes_the_proxy_password(self):
+        # Private attribute values are not supplied secrets, so a command
+        # without credentials leaks the proxy password, or has nothing to leak.
+        create = broker("issue.create", {"project": "OPS", "summary": "trigger:locator_secret"}, credential=None)
+        create["network"]["proxy"] = {"url": "https://proxy.example:8443", "username": "proxy-user", "password": "proxy-pass"}
+        leaked = one_document(self, run("invoke", create, "no_credential"))
+        self.assertEqual(leaked["receipt"]["safeLocators"], {"issue": "OPS-43", "copy": "proxy-pass"})
+        create["network"]["proxy"] = None
+        self.assertEqual(one_document(self, run("invoke", create, "no_credential"))["error"]["code"], "input_invalid")
+
     def test_response_shape_violations(self):
         self.assertEqual(one_document(self, self.search("unknown_code"))["error"]["code"], "teapot")
         self.assertIn("\u0007", one_document(self, self.search("bad_message"))["error"]["message"])

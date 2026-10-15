@@ -105,8 +105,9 @@ Deterministic triggers.
                                 (violation)
     locator_nested              success with an object locator (violation)
     locator_secret              success whose locator holds the supplied
-                                credential token, or without credentials a
-                                private attribute value (violation)
+                                credential token, or without credentials the
+                                proxy password (violation); input_invalid
+                                when the request supplied neither
     unknown_code                error code outside the contract (violation)
     bad_message                 error message with a control character
                                 (violation)
@@ -543,7 +544,7 @@ class Ticketing:
         inputs = request["inputs"]
         query = inputs["query"]
         if query.startswith("trigger:"):
-            response = self.trigger(query[len("trigger:"):], request, False, "OPS-42", None)
+            response = self.trigger(query[len("trigger:"):], request, False, "OPS-42")
             if response is not None:
                 return response
             query = ""
@@ -586,7 +587,7 @@ class Ticketing:
         key = "%s-%d" % (project, self.highest.get(project, 0) + 1)
         summary = inputs["summary"]
         if summary.startswith("trigger:"):
-            response = self.trigger(summary[len("trigger:"):], request, True, key, resource)
+            response = self.trigger(summary[len("trigger:"):], request, True, key)
             if response is not None:
                 return response
         attributes = resource.get("attributes") or {}
@@ -656,7 +657,7 @@ class Ticketing:
 
     # Triggers ---------------------------------------------------------------
 
-    def trigger(self, name, request, write, locator, resource):
+    def trigger(self, name, request, write, locator):
         """Returns a response, or None to continue normally; may not return."""
         if name in ERROR_CODES:
             extra = {"retryAfterSeconds": 30} if name == "upstream_rate_limited" else {}
@@ -685,7 +686,7 @@ class Ticketing:
                 receipt({"safeLocators": {"issue": {"key": locator}}})),
             "locator_secret": lambda: success(
                 {"key": locator, "status": "open"},
-                receipt({"safeLocators": {"issue": locator, "copy": supplied_secret(request, resource)}})),
+                receipt({"safeLocators": {"issue": locator, "copy": supplied_secret(request)}})),
             "unknown_code": lambda: failure("teapot", "Not a contract error code."),
             "bad_message": lambda: {"ok": False, "error": {
                 "code": "upstream_failed", "message": "Bell\u0007 in the message."}},
@@ -747,12 +748,15 @@ def received_network(network):
             "caCertificate": network.get("caCertificate")}
 
 
-def supplied_secret(request, resource):
+def supplied_secret(request):
+    """A credential token or the proxy password the request supplied, which
+    the Broker checks replies for; private attribute values are not checked."""
     for credential in (request.get("credentials") or {}).values():
         if credential.get("token"):
             return credential["token"]
-    for value in ((resource or {}).get("attributes") or {}).values():
-        return value
+    proxy = (request.get("network") or {}).get("proxy") or {}
+    if proxy.get("password"):
+        return proxy["password"]
     raise invalid("No supplied secret is available for locator_secret.")
 
 
