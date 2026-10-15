@@ -633,6 +633,14 @@ All notable changes to this project are documented in this file.
   batches in which an upload may have applied report `unknown` alongside their
   result, unless throttling already reported `applied_unverified`.
 
+- Agent token issuance uses a dedicated page for personal and administered
+  accounts, with the grant builder's shared read-only/write-capable action
+  selector, live access preview, boundary summary, and persistent Issue/Cancel
+  actions. Service-specific filters and column All/None preserve selections
+  outside the matching actions. Unsaved navigation requires confirmation, and
+  successful issuance selects the new token while displaying its one-time secret
+  and MCP setup.
+
 ### Fixed
 
 - Management credential verification and imported-service discovery report a
@@ -651,6 +659,10 @@ All notable changes to this project are documented in this file.
 - The `broker_listening` event reports the address each listener bound rather
   than the requested one, so `serve --listen 127.0.0.1:0` names the port the
   system assigned instead of port 0. Other addresses are reported as before.
+- Restricted token drafts wait for complete context, service, and action
+  selections before requesting an effective-access preview, avoiding spurious
+  `allowedServices must not be empty` errors. Incomplete restrictions cannot
+  silently become a token that follows all current grants.
 
 ### Removed
 

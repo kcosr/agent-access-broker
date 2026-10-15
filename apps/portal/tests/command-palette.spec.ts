@@ -66,7 +66,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
     else if (pathname === "/v1/admin/policy/resources") result = [resource, excludedResource];
     else if (pathname === "/v1/admin/policy/resource-groups") result = resourceGroups;
-    else if (pathname === "/v1/admin/policy/effective-access") result = { policyGeneration: 1, access: [] };
+    else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
     else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
     else if (pathname === "/v1/credentials") result = [credential];
@@ -312,5 +312,16 @@ test("empty search announces no results through the persistent live region", asy
   await expect(palette.getByRole("listbox").getByRole("status")).toHaveCount(0);
   await expect(palette.getByRole("listbox")).toContainText("No results");
   expect(await liveStatus.evaluate((node, original) => node === original, statusNode)).toBe(true);
+  expect(model.errors).toEqual([]);
+});
+
+test("the issue-token command opens the dedicated self-service page", async ({ page }) => {
+  const model = await fixture(page, "user", true);
+  const palette = await search(page, "Issue agent token");
+  await palette.getByRole("option", { name: "Issue agent token", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/tokens\/new/);
+  await expect(page.getByRole("main", { name: "Issue agent token", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Issue agent token", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Issue agent token", exact: true })).toHaveCount(0);
   expect(model.errors).toEqual([]);
 });

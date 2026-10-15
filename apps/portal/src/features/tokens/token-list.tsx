@@ -126,7 +126,7 @@ export function TokenToolbar({ model }: { model: TokenListModel }) {
     <Toolbar>
       <ToolbarRow
         primary={actions.writable ?
-          <Button variant="primary" icon="plus" onClick={() => actions.openIssueDialog()} disabled={blocker !== null} title={blocker ?? undefined}>
+          <Button variant="primary" icon="plus" onClick={() => actions.openIssuePage()} disabled={blocker !== null} title={blocker ?? undefined}>
             Issue token
           </Button> : null
         }
@@ -276,7 +276,7 @@ export function TokenTable({ model, label = "Tokens" }: { model: TokenListModel;
         title={model.subject.administered ? "No agent tokens" : "No agent tokens yet"}
         actions={
           actions.issueBlocker() === null ? (
-            <Button variant="primary" icon="plus" onClick={() => actions.openIssueDialog()}>
+            <Button variant="primary" icon="plus" onClick={() => actions.openIssuePage()}>
               Issue token
             </Button>
           ) : null

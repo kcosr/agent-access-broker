@@ -33,7 +33,7 @@ describe("spaces and tabs", () => {
 
 describe("portal paths", () => {
   test("recognizes portal pages, including entity pages and their tabs", () => {
-    for (const path of ["/ui", "/ui/access", "/ui/admin/principals/alice%40example.test", "/ui/admin/principals/alice/tokens", "/ui/admin/groups/ops/members", "/ui/admin/catalog/services/jira/import", "/ui/admin/policies/new", "/ui/admin/policies/jira-read/edit"]) {
+    for (const path of ["/ui", "/ui/access", "/ui/tokens/new", "/ui/admin/principals/alice%40example.test", "/ui/admin/principals/alice/tokens", "/ui/admin/principals/alice%40example.test/tokens/new", "/ui/admin/groups/ops/members", "/ui/admin/catalog/services/jira/import", "/ui/admin/policies/new", "/ui/admin/policies/jira-read/edit"]) {
       expect(isPortalPath(path), path).toBe(true);
     }
     for (const path of ["/ui/admin/imports", "/ui/admin/users", "/ui/dashboard", "/ui/admin/audit/requests/x", "/unknown"]) {
@@ -44,6 +44,7 @@ describe("portal paths", () => {
   test("keeps recognized return paths and rejects external or unknown ones", () => {
     expect(sanitizedUiReturnTo("/ui/admin/groups/operators")).toBe("/ui/admin/groups/operators");
     expect(sanitizedUiReturnTo("/ui/tokens")).toBe("/ui/tokens");
+    expect(sanitizedUiReturnTo("/ui/tokens/new")).toBe("/ui/tokens/new");
     expect(sanitizedUiReturnTo("/ui/login")).toBe("/ui");
     expect(sanitizedUiReturnTo("//example.com/ui")).toBe("/ui");
     expect(sanitizedUiReturnTo("/ui\\example.com")).toBe("/ui");
@@ -58,6 +59,15 @@ describe("portal paths", () => {
     expect(paths.catalogService("jira", "import")).toBe("/ui/admin/catalog/services/jira/import");
     expect(paths.principals("groups", "ops")).toBe("/ui/admin/principals?kind=groups&item=ops");
     expect(paths.grantNew({ subject: "user:alice" })).toBe("/ui/admin/policies/new?subject=user%3Aalice");
+  });
+
+  test("creation links keep owner and service identifiers separate from their return destination", () => {
+    const created = new URL(paths.principalTokenNew("alice@example.test", { services: ["jira", "imported/service"], returnTo: "/ui/admin/principals/alice%40example.test/access?service=jira" }), "https://broker.example.test");
+    expect(created.pathname).toBe("/ui/admin/principals/alice%40example.test/tokens/new");
+    expect(created.searchParams.getAll("service")).toEqual(["jira", "imported/service"]);
+    expect(created.searchParams.get("returnTo")).toBe("/ui/admin/principals/alice%40example.test/access?service=jira");
+    expect(paths.tokenNew()).toBe("/ui/tokens/new");
+    expect(paths.principalTokens("alice@example.test", "token?with&delimiters")).toBe("/ui/admin/principals/alice%40example.test/tokens?token=token%3Fwith%26delimiters");
   });
 });
 

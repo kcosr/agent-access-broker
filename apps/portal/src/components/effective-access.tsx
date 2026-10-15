@@ -215,6 +215,6 @@ export function EffectiveAccessDisclosure({
 }
 
 /** Always-on preview (drawers, the grant editor). */
-export function EffectiveAccessPanel(input: PreviewInput) {
-  return <PreviewBody input={input} enabled />;
+export function EffectiveAccessPanel({ serviceNames, grantedActions, ...input }: PreviewInput & PreviewNames) {
+  return <PreviewBody input={input} enabled serviceNames={serviceNames} grantedActions={grantedActions} />;
 }

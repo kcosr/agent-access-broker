@@ -7,6 +7,7 @@ import { ModalHost } from "./modal-host";
 import { ModalProvider } from "./modal";
 import { PaletteProvider } from "./palette";
 import { SessionProvider } from "./session";
+import { TokenIssuanceProvider } from "./token-issuance";
 
 function RouterLink({ href, ...rest }: LinkProps) {
   return <Link to={href} {...rest} />;
@@ -22,12 +23,14 @@ export function RootLayout() {
       <ToastProvider>
         <ModalProvider>
           <SessionProvider>
-            <ResourceTypes>
-              <PaletteProvider>
-                <Outlet />
-                <ModalHost />
-              </PaletteProvider>
-            </ResourceTypes>
+            <TokenIssuanceProvider>
+              <ResourceTypes>
+                <PaletteProvider>
+                  <Outlet />
+                  <ModalHost />
+                </PaletteProvider>
+              </ResourceTypes>
+            </TokenIssuanceProvider>
           </SessionProvider>
         </ModalProvider>
       </ToastProvider>

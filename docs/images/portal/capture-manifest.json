@@ -235,29 +235,29 @@
       "file": "guide/user-token-details-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft invocation token with explicit lifetime, contexts, and restricted access",
-      "sha256": "3a1d89bd0b44e4ad6d9dfd73b9195d15e556681b7bec4d9c0a5d6eee92a9dd06"
+      "description": "Synthetic unsubmitted token creation page with explicit lifetime, contexts, and restricted access",
+      "sha256": "bedfd1027ea21b4c19226688d07153872305c2ce072664b34177fe56ecae6053"
     },
     {
       "file": "guide/user-token-access-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft token restricted to the Jira issue.view action",
-      "sha256": "54ed6e2ed7d6849e3bf5613b5cb11054eb35d98ab18f2123c2f78cd94b8a3002"
+      "description": "Synthetic unsubmitted token restricted to Jira issue.view using the shared read-only and write-capable action columns",
+      "sha256": "7262e286ef487fc4a38540beee06f2004738a5060a150bc9d9f4f229aab4a5ff"
     },
     {
       "file": "guide/user-token-resources-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft Jira token selecting only the exact DEMO Jira project resource",
-      "sha256": "d45a7cd1bf155f3231b7b1d7cd4af1f4f87e8cfb6b71e045a2879c8e08c04e99"
+      "description": "Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource",
+      "sha256": "86adf1de44003660f3557eda62a0bee67ff861785730d7e0f138a4b68cdfe882"
     },
     {
-      "file": "guide/user-token-review-light.png",
+      "file": "guide/user-token-boundary-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Final token review showing restrictions before issuance; no token is issued",
-      "sha256": "46cfce8ca412d506b6cf69e452bd5a2aad86b721ee9c7e6db2abefd39b6fb3ae"
+      "description": "Synthetic unsubmitted token page with the live Boundary and Effective access summaries; no token is issued",
+      "sha256": "68bb871bbd0b2377adc40aa0ec4e7f84e66e8eedeff86fdc2366f8f5315b467a"
     },
     {
       "file": "guide/user-token-revoke-light.png",

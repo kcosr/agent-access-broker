@@ -4,9 +4,10 @@ import { canWriteSubject } from "../lib/capabilities";
 // failure; callers show the error.
 import { useMemo } from "react";
 import { brokerApi } from "../api";
-import type { AgentTokenModal } from "../app-types";
-import type { AgentTokenIssueBody, AgentTokenOptions, BrokerTokenRecord } from "../types";
-import { buildAgentTokenServiceRestrictions } from "../lib/helpers";
+import type { AgentTokenOptions, BrokerTokenRecord } from "../types";
+import { useLocation, useNavigate } from "react-router";
+import { paths, portalReturnTo } from "../app/paths";
+import { useAdminPrincipal } from "../data/queries";
 import { useToast } from "../workbench";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
@@ -16,9 +17,12 @@ import { usePortalInvalidation } from "../data/invalidation";
 export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions: AgentTokenOptions | null) {
   const { session, attempt } = useSession();
   const toast = useToast();
-  const { setModal, confirm } = useModal();
+  const { confirm } = useModal();
   const invalidate = usePortalInvalidation();
   const { administered, principalId } = subject;
+  const owner = useAdminPrincipal(principalId, administered);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   return useMemo(() => {
     function refresh() {
@@ -29,6 +33,8 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
     /** Why a token cannot be issued right now, or null. */
     function issueBlocker() {
       if (!canWriteSubject(session, subject)) return "You do not have permission to issue tokens here.";
+      if (administered && !owner.data) return "The token owner is unavailable. Refresh the portal and try again.";
+      if (administered && owner.data?.status !== "active") return "Tokens cannot be issued for a disabled principal.";
       const ttlPolicy = administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
       if (!ttlPolicy) return "Token issuance policy is unavailable. Refresh the portal and try again.";
       if (!agentTokenOptions) return "Token options are unavailable. Refresh the portal and try again.";
@@ -37,65 +43,21 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
       return null;
     }
 
-    /** Opens the issue dialog; `services` starts it restricted to those services. */
-    function openIssueDialog(services: string[] = []) {
-      const ttlPolicy = administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
+    /** Opens the creation page; selected services prefill all currently granted actions. */
+    function openIssuePage(services: string[] = []) {
       const blocker = issueBlocker();
-      if (blocker || !ttlPolicy || !agentTokenOptions) {
-        toast(blocker ?? "Token options are unavailable.", { tone: "error" });
+      if (blocker) {
+        toast(blocker, { tone: "error" });
         return;
       }
-      const available = services.filter((service) => agentTokenOptions.services.some((option) => option.service === service));
-      setModal({
-        type: "token",
-        administrative: administered,
-        targetPrincipalId: principalId,
-        options: agentTokenOptions,
-        accessMode: available.length ? "restricted" : "policy",
-        screen: "edit",
-        selectedExecutionContexts: [...agentTokenOptions.executionContexts],
-        selectedServices: available,
-        selectedActions: Object.fromEntries(
-          available.map((service) => [service, agentTokenOptions.services.find((option) => option.service === service)?.actions.map((action) => action.action) ?? []])
-        ),
-        resourceSelections: {},
-        name: "",
-        lifetime: ttlPolicy.defaultTtl ?? ttlPolicy.options[0] ?? "",
-        ttlPolicy
-      });
-    }
-
-    async function issue(modal: AgentTokenModal) {
-      const never = modal.lifetime === "never";
-      const restricted = modal.accessMode === "restricted" && modal.selectedServices.length > 0;
-      const body: AgentTokenIssueBody = {
-        name: modal.name,
-        ttl: never ? undefined : modal.lifetime || undefined,
-        never: never || undefined,
-        allowedServices: restricted ? modal.selectedServices : undefined,
-        allowedExecutionContexts: modal.selectedExecutionContexts,
-        serviceRestrictions: restricted
-          ? buildAgentTokenServiceRestrictions(modal.selectedServices, modal.selectedActions, modal.resourceSelections, modal.options)
-          : undefined
-      };
-      try {
-        const issued = await attempt((current) =>
-          modal.administrative ? brokerApi.adminPrincipalIssueAgentToken(current, modal.targetPrincipalId, body) : brokerApi.issueToken(current, body)
-        );
-        setModal({
-          type: "reveal",
-          token: issued.token,
-          record: issued.record,
-          principalId: modal.targetPrincipalId,
-          options: modal.options
-        });
-        invalidate.console();
-        if (modal.administrative) invalidate.admin();
-      } catch (error) {
-        // Options may have changed underneath the dialog.
-        invalidate.agentTokenOptions();
-        throw error;
-      }
+      const creationPath = administered ? paths.principalTokenNew(principalId) : paths.tokenNew();
+      // The palette's global action on an existing draft is already fulfilled.
+      if (location.pathname === creationPath && services.length === 0) return;
+      const returnTo = location.pathname === creationPath
+        ? portalReturnTo(new URLSearchParams(location.search).get("returnTo")) ?? (administered ? paths.principalTokens(principalId) : paths.tokens())
+        : `${location.pathname}${location.search}${location.hash}`;
+      const params = { services, returnTo };
+      navigate(administered ? paths.principalTokenNew(principalId, params) : paths.tokenNew(params));
     }
 
     async function setPaused(record: BrokerTokenRecord, paused: boolean) {
@@ -128,8 +90,8 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
       });
     }
 
-    return { writable: canWriteSubject(session, subject), issueBlocker, openIssueDialog, issue, setPaused, revoke, confirmRevoke };
-  }, [administered, principalId, agentTokenOptions, session, attempt, toast, setModal, confirm, invalidate]);
+    return { writable: canWriteSubject(session, subject), issueBlocker, openIssuePage, setPaused, revoke, confirmRevoke };
+  }, [administered, principalId, agentTokenOptions, session, attempt, toast, confirm, invalidate, owner.data, navigate, location.pathname, location.search, location.hash]);
 }
 
 export function useManagementTokenActions() {

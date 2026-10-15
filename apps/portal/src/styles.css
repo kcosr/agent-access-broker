@@ -237,6 +237,15 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
+.pt-action-columns .wb-check-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .pt-action-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .pt-secret {
   -webkit-text-security: disc;
 }

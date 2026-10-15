@@ -84,12 +84,18 @@ Review the breadth of the delegation before saving it. Use the
 
 1. Open **Admin > Principals > the account > Tokens** to inspect its
    **Agent tokens** and, for eligible human accounts, **Management tokens**.
-2. Select an agent token to inspect its ceiling. Use **Pause token** for a
+2. To create an agent token, choose **Issue token**. The creation page shows
+   the account as the fixed owner and uses the same action columns, boundary
+   summary, and access preview as [personal token creation](user.md#5-issue-a-token-with-the-smallest-useful-boundary).
+   Only administrators can issue for another account; disabled accounts cannot
+   receive new tokens. After issuance, save the one-time secret before closing
+   **Token created**.
+3. Select an agent token to inspect its ceiling. Use **Pause token** for a
    temporary suspension, **Resume token** to restore a paused token, or **Revoke**
    to retire it. Changing its restrictions requires a replacement token.
-3. Open **Credentials** to inspect the account's configured stored API-token
+4. Open **Credentials** to inspect the account's configured stored API-token
    targets. Replace or delete the stored credential when its purpose changes.
-4. Return to **Access** and confirm that current grants still match the intended
+5. Return to **Access** and confirm that current grants still match the intended
    service/action/resource boundary.
 
 Expected result: administrative changes apply to the selected account. Your own

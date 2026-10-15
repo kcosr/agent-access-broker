@@ -55,6 +55,7 @@ describe("grant action classification and selection", () => {
     const readonly = renderToStaticMarkup(createElement(GrantActionSelector, { available: actions, selected: ["issue.view"], disabled: true, onChange: () => undefined }));
     expect(readonly).not.toContain("<button");
     const badge = (selected: string[]) => renderToStaticMarkup(createElement(WriteCapability, { available: actions, selected }));
+    expect(badge([])).toBe("");
     expect(badge(["issue.view"])).toContain(">Read-only<");
     expect(badge(["issue.view"])).not.toContain("Writes");
     expect(badge(["issue.view", "issue.update"])).toContain("Writes");
@@ -62,6 +63,12 @@ describe("grant action classification and selection", () => {
     expect(badge(["unreviewed.read"])).toContain("Writes");
     expect(badge(["unreviewed.read"])).not.toContain('type="checkbox"');
   });
+});
+
+test("action filters can be identified independently for each service", () => {
+  const html = renderToStaticMarkup(createElement(GrantActionSelector, { available: actions, selected: [], disabled: false, filterLabel: "Filter jira actions", onChange: () => undefined }));
+  expect(html).toContain('aria-label="Filter jira actions"');
+  expect(html).toContain('class="pt-columns pt-action-columns"');
 });
 
 test("unavailable actions remain removable but cannot be newly selected", () => {

@@ -164,12 +164,29 @@ verification, and failure. Check the sanitized error code after a failed attempt
 
 ## Issue a token for the agent
 
-In **My access > Tokens**, choose **Issue token** and set a purpose, finite
-lifetime, and one or more effective execution contexts. **Follow current grants**
-follows your grants within those contexts. **Restrict to selected** adds service,
-action, and resource/group restrictions as a ceiling. Choose the smallest useful
-boundary for dedicated automation. The raw token is shown once; save it to the
-agent's protected secret location before closing the dialog.
+In **My access > Tokens**, choose **Issue token** to open the token creation
+page. Set a descriptive name, finite lifetime, and one or more effective execution
+contexts. **Follow current grants** follows your grants within those contexts.
+**Restrict to selected** adds service, action, and resource/group restrictions as
+a ceiling. Choose the smallest useful boundary for dedicated automation.
+
+Each service uses the same **Read-only** and **Write-capable** action columns as
+the grant builder. Filter actions, then use **All** or **None** within a column
+to change only matching actions; other selections remain. Actions without
+reviewed read-only metadata are write-capable. A selected action that is no
+longer available stays visible so you can remove it.
+
+Check **Boundary** and **Effective access** on the page before choosing
+**Issue token** in the persistent action bar. An incomplete service, action, or
+context selection shows guidance until it can be previewed. An explicit empty
+resource selection is valid but allows no resources. **Cancel** returns to the
+token list or the page that opened the form, after confirming discard of any
+changes. Drafts are not saved across a refresh.
+
+Successful issuance opens **Token created** over the owner's token list with
+the new token selected. The raw token is shown once; save it to the agent's
+protected secret location before closing the dialog. Keep the page open while
+issuance is pending: closing or refreshing it can lose the one-time response.
 
 When the deployment offers [remote HTTP MCP](mcp.md#http-endpoint) with Bearer
 tokens, the **Token created** dialog also shows **Connect an MCP client**: the

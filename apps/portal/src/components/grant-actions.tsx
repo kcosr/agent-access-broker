@@ -8,20 +8,22 @@ export function GrantActionSelector({
   available,
   selected,
   disabled,
+  filterLabel = "Filter actions",
   onChange
 }: {
   available: readonly ClassifiedAction[];
   selected: string[];
   disabled: boolean;
+  filterLabel?: string;
   onChange: (selected: string[]) => void;
 }) {
   const [search, setSearch] = useState("");
   const groups = grantActionGroups(available, selected, search);
   return (
     <div className="flex flex-col gap-3">
-      <FilterInput value={search} onChange={setSearch} placeholder="Filter actions…" label="Filter actions" hotkey={null} />
+      <FilterInput value={search} onChange={setSearch} placeholder="Filter actions…" label={filterLabel} hotkey={null} />
       <p className="pt-prose">All / None apply to the matching actions in that column. Actions without reviewed read-only metadata are write-capable.</p>
-      <div className="pt-columns">
+      <div className="pt-columns pt-action-columns">
         {groups.map((group) => {
           const matching = group.matching.map((action) => action.action);
           const selectable = group.matching.filter((action) => action.available !== false).map((action) => action.action);
@@ -78,6 +80,7 @@ export function GrantActionSelector({
 
 /** "Writes" badge when any selected action is write-capable; missing metadata never claims read-only. */
 export function WriteCapability({ available, selected }: { available: readonly ClassifiedAction[]; selected: readonly string[] }) {
+  if (!selected.length) return null;
   const counts = actionSelectionCounts(available, selected);
   const label = `${counts.readOnly} read-only ${counts.readOnly === 1 ? "action" : "actions"}, ${counts.writeCapable} write-capable ${counts.writeCapable === 1 ? "action" : "actions"}`;
   if (!counts.writeCapable) {

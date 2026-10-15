@@ -503,22 +503,16 @@ test("token boundaries use live resource references and allow empty effective ac
   await expect(page.getByText("All Confluence spaces", { exact: true })).toHaveCount(0);
   await expect(row.getByText("ENG", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Issue agent token" });
+  const dialog = page.getByRole("main", { name: "Issue agent token", exact: true });
   await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("limited-docs");
   await dialog.getByRole("group", { name: "Access", exact: true }).getByRole("button", { name: "Restrict to selected", exact: true }).click();
-  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(dialog).toContainText("Step 2 of 3 · Token access");
   await dialog.getByRole("checkbox", { name: "confluence", exact: true }).check();
   await dialog.getByRole("checkbox", { name: "page.view", exact: true }).check();
   await dialog.getByRole("group", { name: "confluence resources", exact: true }).getByRole("button", { name: "Selected resources and groups", exact: true }).click();
   await dialog.getByRole("checkbox", { name: "Documentation", exact: true }).check();
-  await dialog.getByRole("button", { name: "Back", exact: true }).click();
   await dialog.getByRole("group", { name: "Execution contexts" }).getByLabel("internal", { exact: true }).uncheck();
-  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(dialog.getByRole("checkbox", { name: "Documentation", exact: true })).toBeChecked();
-  await dialog.getByText("Effective access", { exact: true }).click();
   await expect(dialog.getByText("No access currently", { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "Review", exact: true }).click();
   await expect(dialog).toContainText("Restrictions cannot be edited after issuance.");
   const issued = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/tokens");
   await dialog.getByRole("button", { name: "Issue token", exact: true }).click();
@@ -1530,7 +1524,7 @@ test("local browser login supports administration, self-service credentials, tok
     const tabs = page.getByRole("navigation", { name: "User sections", exact: true });
     await tabs.getByRole("link", { name: "Tokens", exact: true }).click();
     await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
-    const dialog = page.getByRole("dialog", { name: "Issue agent token", exact: true });
+    const dialog = page.getByRole("main", { name: "Issue agent token", exact: true });
     await expect(dialog).toContainText(`Owner ${principalId}`);
     const lifetime = dialog.getByLabel("Lifetime");
     await expect(lifetime).toHaveValue("37m");
@@ -1545,25 +1539,21 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(dialog.getByLabel("jira")).toHaveCount(0);
     await contexts.getByLabel("external", { exact: true }).uncheck();
     await dialog.getByRole("group", { name: "Access", exact: true }).getByRole("button", { name: "Restrict to selected", exact: true }).click();
-    await expect(dialog).toContainText("Step 1 of 3 · Details");
-    await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-    const review = dialog.getByRole("button", { name: "Review", exact: true });
-    await expect(review).toBeDisabled();
+    const issue = dialog.getByRole("button", { name: "Issue token", exact: true });
+    await expect(issue).toBeDisabled();
     await dialog.getByRole("checkbox", { name: "jira", exact: true }).check();
-    await expect(review).toBeDisabled();
+    await expect(issue).toBeDisabled();
     await dialog.getByRole("searchbox", { name: "Filter jira actions", exact: true }).fill("issue");
     await dialog.getByRole("checkbox", { name: "issue.view", exact: true }).check();
-    await expect(review).toBeEnabled();
-    await review.click();
+    await expect(issue).toBeEnabled();
     await expect(dialog).toContainText("Restrictions cannot be edited after issuance.");
-    // The dialog is app-wide: moving to another page keeps the owner and draft.
-    await page.evaluate(() => {
-      history.pushState({}, "", "/ui/tokens");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    });
-    await expect(page).toHaveURL(/\/ui\/tokens$/);
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText(`Owner ${principalId}`);
+    // Leaving an owner-scoped draft requires an explicit discard.
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    const discard = page.getByRole("alertdialog", { name: "Discard changes?", exact: true });
+    await expect(discard).toBeVisible();
+    await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/ui/admin/principals/${principalId}/tokens/new`));
+    await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(`managed-token-${testInfo.project.name}`);
     const issueRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === `/v1/admin/principals/${principalId}/agent-tokens`);
     await dialog.getByRole("button", { name: "Issue token", exact: true }).click();
     expect((await issueRequest).postDataJSON()).toEqual({
@@ -1582,10 +1572,7 @@ test("local browser login supports administration, self-service credentials, tok
     const managedMcp = reveal.getByRole("region", { name: "Connect an MCP client", exact: true });
     await expect(managedMcp.getByText(`export AGENT_ACCESS_TOKEN=${managedRawToken}`, { exact: true })).toBeVisible();
     await reveal.getByRole("button", { name: "Done", exact: true }).click();
-    await page.evaluate((path) => {
-      history.pushState({}, "", path);
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    }, `/ui/admin/principals/${principalId}/tokens`);
+    await expect(page).toHaveURL(new RegExp(`/ui/admin/principals/${principalId}/tokens\\?token=`));
     const row = tableRow(page, `managed-token-${testInfo.project.name}`);
     await expect(await columnCell(row, "Expires")).toHaveText("Never");
     await page.screenshot({ path: testInfo.outputPath("token-actions.png"), fullPage: true });
@@ -1738,7 +1725,7 @@ test("local browser login supports administration, self-service credentials, tok
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
-    const dialog = page.getByRole("dialog", { name: "Issue agent token", exact: true });
+    const dialog = page.getByRole("main", { name: "Issue agent token", exact: true });
     const lifetime = dialog.getByLabel("Lifetime");
     await expect(lifetime).toHaveValue("37m");
     await expect.poll(() => lifetime.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["37m", "5h", "never"]);
@@ -1855,14 +1842,12 @@ test("local browser login supports administration, self-service credentials, tok
     await contexts.getByLabel("internal", { exact: true }).uncheck();
     await contexts.getByLabel("external", { exact: true }).uncheck();
     await dialog.getByRole("group", { name: "Access", exact: true }).getByRole("button", { name: "Restrict to selected", exact: true }).click();
-    await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-    const review = dialog.getByRole("button", { name: "Review", exact: true });
-    await expect(review).toBeDisabled();
+    const issue = dialog.getByRole("button", { name: "Issue token", exact: true });
+    await expect(issue).toBeDisabled();
     await dialog.getByRole("checkbox", { name: "jira", exact: true }).check();
-    await expect(review).toBeDisabled();
+    await expect(issue).toBeDisabled();
     await dialog.getByRole("checkbox", { name: "issue.view", exact: true }).check();
-    await expect(review).toBeEnabled();
-    await review.click();
+    await expect(issue).toBeEnabled();
     await dialog.getByRole("button", { name: "Issue token", exact: true }).click();
     await expect(reveal.getByText("Never", { exact: true })).toBeVisible();
     await reveal.getByRole("button", { name: "Done", exact: true }).click();

@@ -13,11 +13,12 @@ import { GroupPage } from "../features/principals/group-page";
 import { PrincipalPage } from "../features/principals/principal-page";
 import { PrincipalsPage } from "../features/principals/principals-page";
 import { SystemPage } from "../features/system/system-page";
+import { TokenEditorPage } from "../features/tokens/token-editor-page";
 import { TokensPage } from "../features/tokens/tokens-page";
 import { LandingRedirect, LoginRoute, NotFoundPage, PortalGate } from "./gate";
 import { ROUTE } from "./paths";
 import { RootLayout } from "./root";
-import { canViewAdmin, canUseSelfService, canWritePolicies, hasPolicyScope } from "../lib/capabilities";
+import { canViewAdmin, canWriteAdmin, canUseSelfService, canWritePolicies, hasPolicyScope } from "../lib/capabilities";
 import { type PortalRouteHandle } from "./spaces";
 
 function page(path: string, handle: PortalRouteHandle, element: RouteObject["element"]): RouteObject {
@@ -37,6 +38,8 @@ export const portalRoutes: RouteObject[] = [
         children: [
           { path: ROUTE.root, element: <LandingRedirect /> },
           page(ROUTE.access, self("access", canUseSelfService), <AccessPage />),
+          page(ROUTE.tokenNew, self("tokens", canUseSelfService), <TokenEditorPage />),
+          page(ROUTE.principalTokenNew, admin("principals", canWriteAdmin), <TokenEditorPage />),
           page(ROUTE.tokens, self("tokens", canUseSelfService), <TokensPage />),
           page(ROUTE.credentials, self("credentials", canUseSelfService), <CredentialsPage />),
           page(ROUTE.activity, self("activity", canViewActivity), <ActivityPage />),

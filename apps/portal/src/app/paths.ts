@@ -7,6 +7,8 @@ export const ROUTE = {
   login: "/ui/login",
   access: "/ui/access",
   tokens: "/ui/tokens",
+  tokenNew: "/ui/tokens/new",
+  principalTokenNew: "/ui/admin/principals/:principalId/tokens/new",
   credentials: "/ui/credentials",
   activity: "/ui/activity",
   account: "/ui/account",
@@ -50,6 +52,14 @@ function query(params: Record<string, string | undefined | null>) {
 
 const seg = encodeURIComponent;
 
+type TokenCreationParams = { services?: string[]; returnTo?: string };
+function tokenCreationQuery({ services = [], returnTo }: TokenCreationParams) {
+  const params = new URLSearchParams();
+  services.forEach((service) => params.append("service", service));
+  if (returnTo) params.set("returnTo", returnTo);
+  return params.size ? `?${params.toString()}` : "";
+}
+
 export type PrincipalTab = "overview" | "access" | "grants" | "groups" | "tokens" | "credentials" | "limits" | "activity";
 export type GroupTab = "overview" | "members" | "grants" | "microsoft";
 export type ServiceTab = "actions" | "managers" | "limits" | "import";
@@ -59,6 +69,9 @@ export const paths = {
   access: (service?: string) => `${ROUTE.access}${query({ service })}`,
   accessAction: (service: string, action: string) => `${ROUTE.access}${query({ service, q: action })}`,
   tokens: (token?: string) => `${ROUTE.tokens}${query({ token })}`,
+  tokenNew: (params: TokenCreationParams = {}) => `${ROUTE.tokenNew}${tokenCreationQuery(params)}`,
+  principalTokenNew: (principalId: string, params: TokenCreationParams = {}) => `${ROUTE.principals}/${seg(principalId)}/tokens/new${tokenCreationQuery(params)}`,
+  principalTokens: (principalId: string, token?: string) => `${ROUTE.principals}/${seg(principalId)}/tokens${query({ token })}`,
   credentials: (credential?: string) => `${ROUTE.credentials}${query({ credential })}`,
   account: () => ROUTE.account,
   policies: (params: Record<string, string | undefined> = {}) => `${ROUTE.policies}${query(params)}`,
