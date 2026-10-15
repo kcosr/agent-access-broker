@@ -54,36 +54,62 @@ fn type_id_with(service: &str, tail: &str) -> String {
     format!("{}_{tail}", &service[..keep])
 }
 
-/// The stable suffix that separates a colliding proposal: the first eight
-/// hex digits of the SHA-256 of the manifest type id.
-fn type_id_suffix(id: &str) -> String {
+/// The stable suffixes that separate a colliding proposal, in the order they
+/// are tried: the first eight hex digits of the SHA-256 of the manifest type
+/// id, then of `<id>#1`, `<id>#2` and so on.
+fn type_id_suffixes(id: &str) -> impl Iterator<Item = String> + '_ {
     use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(id.as_bytes());
-    digest[..4]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    (0u32..).map(move |attempt| {
+        let input = match attempt {
+            0 => id.to_owned(),
+            n => format!("{id}#{n}"),
+        };
+        sha2::Sha256::digest(input.as_bytes())[..4]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    })
 }
 
 /// Broker type IDs for manifest type ids that have none yet: `<service>_<id>`
-/// with only the service part shortened. A proposal equal to another
-/// proposal, or to an ID the import already holds, becomes
-/// `<service>_<id>_<suffix>` instead. Proposals are deterministic.
+/// with only the service part shortened. Every ID the import holds and every
+/// proposal that collides with nothing are reserved first; then, in manifest
+/// order, each colliding type takes the first `<service>_<id>_<suffix>` from
+/// [`type_id_suffixes`] that is still free. All IDs fit 64 bytes and the
+/// result is deterministic.
 pub(crate) fn proposed_type_ids(service: &str, ids: &[&str], held: &[&str]) -> Vec<String> {
     let base = ids
         .iter()
         .map(|id| type_id_with(service, id))
         .collect::<Vec<_>>();
+    let unique = base
+        .iter()
+        .map(|proposal| {
+            !held.contains(&proposal.as_str())
+                && base.iter().filter(|other| *other == proposal).count() == 1
+        })
+        .collect::<Vec<_>>();
+    let mut reserved = held
+        .iter()
+        .map(|id| (*id).to_owned())
+        .chain(
+            base.iter()
+                .zip(&unique)
+                .filter(|(_, unique)| **unique)
+                .map(|(proposal, _)| proposal.clone()),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
     ids.iter()
-        .zip(&base)
-        .map(|(id, proposal)| {
-            let collides = held.contains(&proposal.as_str())
-                || base.iter().filter(|other| *other == proposal).count() > 1;
-            if collides {
-                type_id_with(service, &format!("{id}_{}", type_id_suffix(id)))
-            } else {
-                proposal.clone()
+        .zip(base)
+        .zip(unique)
+        .map(|((id, proposal), unique)| {
+            if unique {
+                return proposal;
             }
+            type_id_suffixes(id)
+                .map(|suffix| type_id_with(service, &format!("{id}_{suffix}")))
+                .find(|candidate| reserved.insert(candidate.clone()))
+                .expect("an unbounded suffix sequence yields a free ID")
         })
         .collect()
 }
@@ -505,6 +531,70 @@ mod tests {
                 .broker_type
                 .ends_with(&type_id_suffix("project_alpha_component_two"))
         );
+    }
+
+    /// The first suffix tried for `id`.
+    fn type_id_suffix(id: &str) -> String {
+        type_id_suffixes(id).next().unwrap()
+    }
+
+    fn manifest_with_types(ids: &[&str]) -> Manifest {
+        let mut value = crate::manifest::tests::sample();
+        let template = value["resourceTypes"][0].clone();
+        value["resourceTypes"] = json!(
+            ids.iter()
+                .map(|id| {
+                    let mut declared = template.clone();
+                    declared["id"] = json!(id);
+                    declared
+                })
+                .collect::<Vec<_>>()
+        );
+        value["actions"] = json!([]);
+        parse(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    fn assert_distinct_type_ids(ids: &[String]) {
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            ids.len(),
+            "{ids:?}"
+        );
+        for id in ids {
+            assert!(
+                id.len() <= 64 && id.as_bytes()[0].is_ascii_lowercase(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn suffixed_type_ids_avoid_other_proposals_and_held_ids() {
+        let service = format!("{}-qx", "a".repeat(60));
+        assert_eq!(type_id_suffix("q_r"), "9666ac00");
+        // `q_r` and `r` collide, and `q_r`'s first suffixed candidate is the
+        // third type's own proposal, which it keeps.
+        let types = ["q_r", "r", "q_r_9666ac00"];
+        let ids = proposed_type_ids(&service, &types, &[]);
+        assert_distinct_type_ids(&ids);
+        assert_eq!(ids[2], type_id_with(&service, "q_r_9666ac00"));
+        assert_eq!(proposed_type_ids(&service, &types, &[]), ids);
+        let proposed = proposed_metadata(&service, &manifest_with_types(&types), None);
+        proposed.validate().unwrap();
+        assert_eq!(
+            proposed
+                .resource_types
+                .iter()
+                .map(|declared| declared.broker_type.clone())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        // A suffixed candidate the import already holds is skipped too.
+        let held = type_id_with(&service, &format!("q_r_{}", type_id_suffix("q_r")));
+        let ids = proposed_type_ids(&service, &["q_r", "r"], &[&held]);
+        assert_distinct_type_ids(&ids);
+        assert!(!ids.contains(&held), "{ids:?}");
+        assert_eq!(proposed_type_ids(&service, &["q_r", "r"], &[&held]), ids);
     }
 
     #[test]
