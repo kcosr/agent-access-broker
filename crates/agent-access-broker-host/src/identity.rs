@@ -380,6 +380,7 @@ mod tests {
             names,
             [
                 "agent-access-cloudbees-ci",
+                "agent-access-command-import",
                 "agent-access-confluence",
                 "agent-access-fake",
                 "agent-access-gitlab",

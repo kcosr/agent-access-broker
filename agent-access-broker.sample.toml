@@ -55,7 +55,7 @@ environment = "development"
 # management.enabled, and credential encryption). Disabled by default.
 [imports]
 enabled = false
-allowed_kinds = ["mcp_http", "openapi_http"]
+allowed_kinds = ["mcp_http", "openapi_http", "command"]
 # OpenAPI requires both its API base URL and document URL to be allowed.
 # See docs/imported-openapi.md for an example.
 allowed_endpoints = [] # For example ["https://tools.internal.example/mcp"].

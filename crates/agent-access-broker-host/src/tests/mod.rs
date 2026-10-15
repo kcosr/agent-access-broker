@@ -19325,6 +19325,7 @@ async fn token_issuance_waits_for_policy_coordinator_and_all_concurrent_requests
 
 mod managed_identity;
 
+mod imports_command;
 mod imports_management;
 
 // Real descriptors in discovery fixtures need locally usable credential material.

@@ -473,6 +473,14 @@ All notable changes to this project are documented in this file.
   slots hold `basic_api_token` material, copying every existing slot row
   unchanged. Import credential writes accept `username` (CLI `--username`) for a
   command import's `username_token` credential.
+- The `command` import kind (`agent-access-command-import`) imports an approved
+  command by running `<path> describe` and mapping its `agent-access-command/1`
+  manifest; invalid actions stay listed as unsupported. Acceptance stores the
+  manifest's service metadata, and a command without a credential enables with
+  service-mode grants and no credential. Import list responses include
+  `commandImports` (approved names only) and command import results
+  `commandVersion`. Command invocations fail closed before any process starts
+  in this build.
 
 ### Changed
 

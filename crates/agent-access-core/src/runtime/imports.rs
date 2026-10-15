@@ -508,6 +508,12 @@ impl BrokerRuntime {
             .collect()
     }
 
+    /// The approved command names, `[command_imports]` keys, that command
+    /// imports may name as `command:<name>`. Paths are never exposed.
+    pub fn approved_command_imports(&self) -> Vec<String> {
+        self.config.command_imports.keys().cloned().collect()
+    }
+
     pub fn import_catalog_revision(&self) -> u64 {
         self.imported_catalog.revision
     }

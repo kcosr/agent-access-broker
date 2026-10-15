@@ -36,8 +36,9 @@ receives is described in its [trust model](provider-sdk.md#trust-model).
   `agent_access_gmail::GOOGLE_OAUTH_DIALECT`. Several providers can share one
   dialect.
 - `.import_adapter(registration())` selects a shipped import adapter through
-  the opaque handle its crate returns: `agent_access_mcp_upstream::registration()`
-  or `agent_access_openapi_upstream::registration()`. The MCP registration also
+  the opaque handle its crate returns: `agent_access_mcp_upstream::registration()`,
+  `agent_access_openapi_upstream::registration()` or
+  `agent_access_command_import::registration()`. The MCP registration also
   contributes its `mcp_oauth` companion dialect; selecting that dialect again is a
   duplicate. Custom import adapters are not supported.
 - `.build()` validates the selections together and returns the immutable
