@@ -6280,7 +6280,7 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let FinalizeContext {
             search_authorization,
-            command: _,
+            command,
             agent_request_id,
             broker_request_id,
             policy_generation,
@@ -6377,7 +6377,9 @@ impl BrokerRuntime {
         };
 
         // Revisions belong to the admitted host snapshot, not upstream tool metadata
-        // or a later store read. Apply them after either provider outcome.
+        // or a later store read. Apply them after either provider outcome, with
+        // a command import's process facts and admitted authority, which a host
+        // interruption must not discard either.
         let provider_audit = if let Some(imported) = self.imported_catalog.service(&service) {
             let revisions = json!({
                 "catalogRevision": self.imported_catalog.revision,
@@ -6387,10 +6389,15 @@ impl BrokerRuntime {
                     .map(|record| record.version),
             });
             let mut audit = provider_audit.unwrap_or_else(|| json!({}));
+            if !audit.is_object() {
+                audit = json!({"providerAudit": audit});
+            }
             if let Some(fields) = audit.as_object_mut() {
                 fields.insert("importedService".into(), revisions);
-            } else {
-                audit = json!({"providerAudit": audit, "importedService": revisions});
+                if let Some(command) = &command {
+                    fields.insert("command".into(), command.audit());
+                    fields.insert("commandAuthorization".into(), command.authorization_audit());
+                }
             }
             Some(audit)
         } else {

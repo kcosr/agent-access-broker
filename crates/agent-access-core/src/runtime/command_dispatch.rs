@@ -36,11 +36,13 @@ pub(super) struct CommandDispatch {
 
 /// What admission records for a command-import call, held in its
 /// finalization context so that every outcome from admission on, including
-/// a host interruption, keeps it: the authority admitted for the call, the
-/// resource entries its request names, and the process facts its supervisor
-/// records.
+/// a host interruption, audits it: the approved command, the authority
+/// admitted for the call, the resource entries its request names, and the
+/// process facts its supervisor records.
 #[derive(Clone)]
 pub(super) struct AdmittedCommand {
+    /// The approved command name the import's endpoint names.
+    name: String,
     authorization: CommandAuthorization,
     /// The enabled exact entries, by value, of the resources the request
     /// names, as the admission snapshot published them. A value without one
@@ -52,6 +54,29 @@ pub(super) struct AdmittedCommand {
 impl AdmittedCommand {
     pub(super) fn authorization(&self) -> &CommandAuthorization {
         &self.authorization
+    }
+
+    /// The audit's `command` facts: the command name, whether its process
+    /// was spawned, how the leader ended, how long it ran, whether it broke
+    /// the contract, and whether the operation was dispatched. Facts not yet
+    /// known are `null`.
+    pub(super) fn audit(&self) -> Value {
+        let facts = self.facts.snapshot();
+        json!({
+            "name": self.name,
+            "spawned": facts.spawned,
+            "exitCode": facts.exit_code,
+            "signal": facts.signal,
+            "durationMs": facts.duration_ms,
+            "contractViolation": facts.contract_violation,
+            "operationDispatched": facts.spawned,
+        })
+    }
+
+    /// The audit's `commandAuthorization`: the admitted grant IDs, versions,
+    /// subjects, credential modes and boundaries, never attributes.
+    pub(super) fn authorization_audit(&self) -> Value {
+        serde_json::to_value(&self.authorization).unwrap_or(Value::Null)
     }
 }
 
@@ -185,8 +210,13 @@ impl BrokerRuntime {
         snapshot: &PolicySnapshot,
         context: &ExecutionContext,
     ) -> Option<AdmittedCommand> {
-        // Only an imported service records a command admission.
-        self.imported_catalog.service(service)?;
+        let record = self.imported_catalog.service(service)?;
+        let name = record
+            .definition
+            .endpoint()
+            .ok()?
+            .command_name()?
+            .to_owned();
         let (resource_type, values) = match &authorization {
             CommandAuthorization::Broker {
                 resource_type,
@@ -245,6 +275,7 @@ impl BrokerRuntime {
             })
             .unwrap_or_default();
         Some(AdmittedCommand {
+            name,
             authorization,
             resources,
             facts: CommandProcessFacts::new(),
