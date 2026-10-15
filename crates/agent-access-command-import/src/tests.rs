@@ -545,10 +545,11 @@ async fn the_hook_runs_invoke_and_verify_under_the_permit_it_is_handed() {
     assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
     assert!(error.result.is_none());
 
-    // A command that answers is still not interpreted by this Broker.
+    // A command that answers has its document read: a write it confirms is
+    // applied but unverified.
     let (answering, _, _, _) = command_hook(&command("process/echo.sh")).await;
     let facts = CommandProcessFacts::new();
-    let error = answering
+    let result = answering
         .invoke_command(
             CommandInvocation::new(
                 "issue.search".into(),
@@ -560,13 +561,23 @@ async fn the_hook_runs_invoke_and_verify_under_the_permit_it_is_handed() {
             .with_facts(facts.clone()),
         )
         .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+        .unwrap();
     assert_eq!(
-        error.result.as_deref(),
-        Some(&json!({"mutationStatus": "unknown", "retrySafe": false}))
+        result.result,
+        json!({"upstreamCommand": {"bytes": request().stdin().len()},
+            "mutationStatus": "applied_unverified", "retrySafe": false})
     );
     assert_eq!(facts.snapshot().exit_code, Some(0));
+    assert!(!facts.snapshot().contract_violation);
+    let verified = answering
+        .verify_command(CommandVerification::new(
+            request(),
+            deadline(),
+            permit(&registry).await,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(verified.upstream_status, 0);
     assert_eq!(registry.in_use("ticketing"), 0);
 }
 

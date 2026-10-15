@@ -63,13 +63,6 @@ pub(crate) fn output_limit(command: &CommandImportConfig) -> usize {
 pub(crate) struct Completed {
     /// The document to read.
     pub(crate) stdout: Vec<u8>,
-    #[cfg_attr(
-        unix,
-        expect(
-            dead_code,
-            reason = "the response contract logs the violations it finds"
-        )
-    )]
     stderr: Vec<u8>,
 }
 
@@ -77,13 +70,6 @@ pub(crate) struct Completed {
 impl Completed {
     /// Logs a contract violation found in the document, as a run failure
     /// is logged.
-    #[cfg_attr(
-        unix,
-        expect(
-            dead_code,
-            reason = "the response contract logs the violations it finds"
-        )
-    )]
     pub(crate) fn log_violation(
         &self,
         service: &str,

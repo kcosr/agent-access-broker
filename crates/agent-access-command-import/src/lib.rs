@@ -21,14 +21,15 @@
 //! `supervisor.rs`, `run.rs`). Commands run on Unix only.
 mod manifest;
 mod mapping;
+mod response;
 mod scopes;
 
 use agent_access_core::CommandImportConfig;
 use agent_access_core::imports::{
     AdapterDiscoveryError, CommandAcquireError, CommandInvocation, CommandProcessFacts,
-    CommandProvider, CommandVerification, ImportEndpointForm, ImportedActionAuthority,
-    ImportedActionDefinition, ImportedAdapter, ImportedAdapterContext, ImportedAdapterRegistration,
-    ImportedAuthMechanism, ImportedBindingStatus, ImportedDiscovery,
+    CommandProvider, CommandSecrets, CommandVerification, ImportEndpointForm,
+    ImportedActionAuthority, ImportedActionDefinition, ImportedAdapter, ImportedAdapterContext,
+    ImportedAdapterRegistration, ImportedAuthMechanism, ImportedBindingStatus, ImportedDiscovery,
     ImportedDiscoveryAuthentication, ImportedDiscoveryCredential, ImportedProvider,
     ImportedServiceDefinition, ImportedServiceMetadata, imported_adapter_registration,
 };
@@ -274,7 +275,6 @@ struct CommandImportProvider {
     service: String,
     actions: BTreeMap<String, CompiledAction>,
     command: CommandImportConfig,
-    #[expect(dead_code, reason = "the request contract reads its declarations")]
     metadata: ImportedServiceMetadata,
 }
 
@@ -286,38 +286,74 @@ impl CommandImportProvider {
     }
 
     /// The result of the document an `invoke` process printed before
-    /// exiting 0. This Broker does not interpret command responses, so the
-    /// call fails closed: the process ran, so a write's outcome is unknown.
+    /// exiting 0 (see [`response`]). A document that breaks the command
+    /// contract is recorded and logged as a violation and fails
+    /// `operation_failed`: the process ran, so a write's outcome is unknown.
     fn invoke_response(
         &self,
-        _action: &CompiledAction,
+        action: &CompiledAction,
         read_only: bool,
-        _completed: run::Completed,
-        _facts: &CommandProcessFacts,
+        completed: run::Completed,
+        facts: &CommandProcessFacts,
+        secrets: &CommandSecrets,
     ) -> Result<ProviderResult, ProviderError> {
-        let error = ProviderError::error(
-            ReasonCode::OperationFailed,
-            "command responses are not supported by this broker",
-        );
-        Err(if read_only {
-            error
-        } else {
-            error.with_mutation_receipt(MutationReceipt::unknown())
-        })
+        match response::invoke(&self.service, action, read_only, &completed.stdout, secrets) {
+            Ok(outcome) => outcome,
+            Err(violation) => Err(self.violation(
+                &completed,
+                facts,
+                CommandOperation::Invoke,
+                violation,
+                read_only,
+            )),
+        }
     }
 
     /// The verification result of the document a `verify` process printed
-    /// before exiting 0. This Broker does not interpret command responses,
-    /// so verification fails closed.
+    /// before exiting 0: verified for `{"ok": true}`, the command's mapped
+    /// error otherwise. Commands have no upstream status; core records the
+    /// process facts in the verification audit.
     fn verify_response(
         &self,
-        _completed: run::Completed,
-        _facts: &CommandProcessFacts,
+        completed: run::Completed,
+        facts: &CommandProcessFacts,
     ) -> Result<ProviderCredentialVerification, ProviderError> {
-        Err(ProviderError::error(
-            ReasonCode::OperationFailed,
-            "command responses are not supported by this broker",
-        ))
+        match response::verify(&self.service, &completed.stdout) {
+            Ok(Ok(())) => Ok(ProviderCredentialVerification::new(
+                0,
+                facts.snapshot().duration_ms.unwrap_or(0),
+                serde_json::json!({}),
+            )),
+            Ok(Err(error)) => Err(error),
+            Err(violation) => {
+                Err(self.violation(&completed, facts, CommandOperation::Verify, violation, true))
+            }
+        }
+    }
+
+    /// Records and logs a response that broke the command contract; callers
+    /// see only `operation_failed`, with an `unknown` write receipt.
+    fn violation(
+        &self,
+        completed: &run::Completed,
+        facts: &CommandProcessFacts,
+        operation: CommandOperation,
+        violation: response::Violation,
+        read_only: bool,
+    ) -> ProviderError {
+        facts.record_contract_violation();
+        completed.log_violation(
+            &self.service,
+            &self.command,
+            operation,
+            violation.category(),
+        );
+        let error = ProviderError::error(ReasonCode::OperationFailed, "The tool failed.");
+        if read_only {
+            error
+        } else {
+            error.with_mutation_receipt(MutationReceipt::unknown())
+        }
     }
 }
 
@@ -364,28 +400,42 @@ impl CommandProvider for CommandImportProvider {
             .action(invocation.action())
             .map_err(|error| not_started(error, read_only))?;
         let read_only = read_only && action.read_only;
-        let run = invocation.into_run();
-        let facts = run.facts.clone();
+        let agent_access_core::imports::CommandRun {
+            request,
+            deadline,
+            permit,
+            environment,
+            facts,
+            secrets,
+        } = invocation.into_run();
         let completed = run::execute(run::Run {
             service: &self.service,
             command: &self.command,
             operation: CommandOperation::Invoke,
-            permit: run.permit,
-            request: Some(run.request),
-            deadline: run.deadline,
+            permit,
+            request: Some(request),
+            deadline,
             max_output_bytes: run::output_limit(&self.command),
-            environment: run.environment,
-            facts: run.facts,
+            environment,
+            facts: facts.clone(),
         })
         .await
         .map_err(|failure| failure.invocation_error(read_only))?;
-        self.invoke_response(action, read_only, completed, &facts)
+        self.invoke_response(action, read_only, completed, &facts, &secrets)
     }
 
     async fn verify_command(
         &self,
         verification: CommandVerification,
     ) -> Result<ProviderCredentialVerification, ProviderError> {
+        // Core verifies only through commands whose accepted manifest
+        // declares `verify`; anything else fails before a process starts.
+        if !self.metadata.verify {
+            return Err(ProviderError::error(
+                ReasonCode::OperationFailed,
+                "this command does not verify credentials",
+            ));
+        }
         let run = verification.into_run();
         let facts = run.facts.clone();
         let completed = run::execute(run::Run {
