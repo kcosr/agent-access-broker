@@ -14,10 +14,10 @@
 //! trailing document, an unknown field or code, a message over 1,024 bytes or
 //! with control characters other than tab, a receipt on a read or of the
 //! wrong shape, an invalid locator, a message, verification stage or locator
-//! echoing a secret the request supplied (see
-//! [`CommandSecrets`] for how short private attribute values match), and a
-//! result the action's output schema rejects. Violations never expose the
-//! document.
+//! containing a credential or proxy secret the request supplied (see
+//! [`CommandSecrets`]), and a result the action's output schema rejects.
+//! Private resource attribute values are not checked. Violations never
+//! expose the document.
 use crate::mapping::CompiledAction;
 use agent_access_core::imports::CommandSecrets;
 use agent_access_provider::{
@@ -347,13 +347,13 @@ mod tests {
         }
     }
 
+    /// A request's credential and proxy secrets: a token, a token shaped
+    /// like a verification stage and a proxy password.
     fn secrets() -> CommandSecrets {
         let mut secrets = CommandSecrets::new();
         secrets.insert("pat-example");
-        secrets.insert("eu-1");
         secrets.insert("stage_token_value");
-        secrets.insert_attribute("eu");
-        secrets.insert_attribute("s3cr3t-long-value");
+        secrets.insert("proxy-pass/5e");
         secrets
     }
 
@@ -738,7 +738,7 @@ mod tests {
                 "secret_in_locator",
             ),
             (
-                json!({"safeLocators": {"region": "eu-1"}}),
+                json!({"safeLocators": {"proxy": "https://svc:proxy-pass/5e@proxy.example"}}),
                 "secret_in_locator",
             ),
             (
@@ -809,12 +809,12 @@ mod tests {
             json!({"ok": false, "error": {"code": "upstream_failed", "message": message}})
                 .to_string()
         };
-        // A credential, a long attribute value or a whole short one in a
-        // message is a violation, for invocation and verification alike.
+        // A credential or proxy secret anywhere in a message is a violation,
+        // for invocation and verification alike.
         for echoed in [
             "Token pat-example was rejected.",
-            "Signing with s3cr3t-long-value failed.",
-            "eu",
+            "pat-example",
+            "Proxy proxy-pass/5e refused.",
         ] {
             assert_eq!(
                 read(&message(echoed)).unwrap_err(),
@@ -827,43 +827,67 @@ mod tests {
                 "{echoed}"
             );
         }
-        // A short attribute value inside a longer text is not.
-        let error = failure(read(&message("Region eu is busy.")));
-        assert_eq!(error.message, "Region eu is busy.");
-        assert!(
-            verify(
-                "tickets",
-                message("Region eu is busy.").as_bytes(),
-                &secrets()
+        // So is a verification stage naming one.
+        assert_eq!(
+            write(
+                json!({"ok": false, "error": {"code": "upstream_failed", "message": "x"},
+                "receipt": {"mutationStatus": "applied_unverified",
+                    "verificationStage": "stage_token_value"}})
             )
-            .unwrap()
-            .is_err()
+            .unwrap_err(),
+            Violation("secret_in_receipt")
         );
-
-        // A verification stage naming a secret is a violation.
-        for stage in ["stage_token_value", "eu"] {
+        // And a locator key or value containing one.
+        for locators in [
+            json!({"note": "x-pat-example-y"}),
+            json!({"pat-example": 1}),
+            json!({"proxy": "proxy-pass/5e"}),
+        ] {
             assert_eq!(
-                write(json!({"ok": false, "error": {"code": "upstream_failed", "message": "x"},
-                    "receipt": {"mutationStatus": "applied_unverified", "verificationStage": stage}}))
+                write(json!({"ok": true, "result": {"key": "K"},
+                    "receipt": {"safeLocators": locators}}))
                 .unwrap_err(),
-                Violation("secret_in_receipt"),
-                "{stage}"
+                Violation("secret_in_locator"),
+                "{locators}"
             );
         }
+    }
 
-        // Locators: whole short values and long values anywhere.
-        let locator = |value: Value| {
-            write(json!({"ok": true, "result": {"key": "K"},
-                "receipt": {"safeLocators": {"note": value}}}))
-        };
+    #[test]
+    fn messages_stages_and_locators_may_name_attribute_values() {
+        // Private resource attribute values, long such as an issue key or
+        // short such as a region, are not supplied secrets: a reply may name
+        // them anywhere, for invocation and verification alike.
+        for text in ["HELPDESK-1849 in eu is read-only.", "HELPDESK-1849", "eu"] {
+            let document =
+                json!({"ok": false, "error": {"code": "upstream_failed", "message": text}})
+                    .to_string();
+            assert_eq!(failure(read(&document)).message, text);
+            assert_eq!(
+                verify("tickets", document.as_bytes(), &secrets())
+                    .unwrap()
+                    .unwrap_err()
+                    .message,
+                text
+            );
+        }
+        let failed = failure(write(json!({"ok": false,
+            "error": {"code": "upstream_failed", "message": "HELPDESK-1849 in eu"},
+            "receipt": {"mutationStatus": "applied_unverified", "verificationStage": "eu",
+                "safeLocators": {"issue": "HELPDESK-1849", "eu": "eu"}}})));
         assert_eq!(
-            locator(json!("eu")).unwrap_err(),
-            Violation("secret_in_locator")
+            failed.result.as_deref().unwrap(),
+            &json!({"mutationStatus": "applied_unverified", "retrySafe": false,
+                "verificationStage": "eu",
+                "safeLocators": {"issue": "HELPDESK-1849", "eu": "eu"}})
         );
+        let written = write(json!({"ok": true, "result": {"key": "HELPDESK-1849"},
+            "receipt": {"safeLocators": {"issue": "HELPDESK-1849", "region": "eu"}}}))
+        .unwrap()
+        .unwrap();
         assert_eq!(
-            locator(json!("x-s3cr3t-long-value")).unwrap_err(),
-            Violation("secret_in_locator")
+            written.result["safeLocators"],
+            json!({"issue": "HELPDESK-1849", "region": "eu"})
         );
-        assert!(locator(json!("eu-west")).unwrap().is_ok());
     }
 }

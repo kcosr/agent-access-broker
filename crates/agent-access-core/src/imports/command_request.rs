@@ -40,30 +40,21 @@ pub(crate) fn wire_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
-/// The shortest private attribute value a text must not contain anywhere.
-/// Shorter values, such as `"eu"` or `"1"`, are common words in identifiers
-/// and messages, so they match only a whole text.
-pub const ATTRIBUTE_SUBSTRING_MIN_BYTES: usize = 8;
-
-/// The secrets core supplied to one command run, in every form the command
-/// receives them: credential tokens and the Basic form of a
-/// `username_token` credential, decrypted private attribute values, and the
-/// inherited proxy password, percent-encoded password and credentialed URL.
-/// Command output must not echo them where the Broker copies it outside the
+/// The credential and proxy secrets core supplied to one command run, in
+/// every form the command receives them: credential tokens and the Basic form
+/// of a `username_token` credential, and the inherited proxy password,
+/// percent-encoded password and credentialed URL. Command output must not
+/// echo any of them anywhere in a text the Broker copies outside the
 /// sensitive result: an error `message`, a receipt's `verificationStage` or
 /// its `safeLocators`.
 ///
-/// Credentials and proxy secrets match anywhere in a text. A private
-/// attribute value matches anywhere from [`ATTRIBUTE_SUBSTRING_MIN_BYTES`];
-/// a shorter one matches only a text equal to it. Values are zeroized on
-/// drop; `Debug` shows only their count. Empty values are not kept, since
-/// every text contains them.
+/// Private resource attribute values are not held: many are ordinary
+/// identifiers, such as an issue key or a region, that legitimately appear in
+/// replies. Values are zeroized on drop; `Debug` shows only their count.
+/// Empty values are not kept, since every text contains them.
 #[derive(Default)]
 pub struct CommandSecrets {
-    /// Secrets no text may contain.
-    anywhere: Vec<Zeroizing<String>>,
-    /// Short attribute values no text may equal.
-    whole: Vec<Zeroizing<String>>,
+    secrets: Vec<Zeroizing<String>>,
 }
 
 impl CommandSecrets {
@@ -71,41 +62,28 @@ impl CommandSecrets {
         Self::default()
     }
 
-    /// Adds a credential or proxy secret, unless it is empty.
+    /// Adds a credential or proxy secret, unless it is empty or already
+    /// held.
     pub fn insert(&mut self, secret: &str) {
-        Self::push(&mut self.anywhere, secret);
-    }
-
-    /// Adds the decrypted value of a private resource attribute.
-    pub fn insert_attribute(&mut self, value: &str) {
-        if value.len() >= ATTRIBUTE_SUBSTRING_MIN_BYTES {
-            Self::push(&mut self.anywhere, value);
-        } else {
-            Self::push(&mut self.whole, value);
-        }
-    }
-
-    fn push(secrets: &mut Vec<Zeroizing<String>>, secret: &str) {
-        if !secret.is_empty() && !secrets.iter().any(|known| known.as_str() == secret) {
-            secrets.push(Zeroizing::new(secret.to_owned()));
+        if !secret.is_empty() && !self.secrets.iter().any(|known| known.as_str() == secret) {
+            self.secrets.push(Zeroizing::new(secret.to_owned()));
         }
     }
 
     /// Whether `text`, a whole message, stage, locator key or locator value,
-    /// echoes a supplied secret.
+    /// contains a supplied secret anywhere.
     pub fn found_in(&self, text: &str) -> bool {
-        self.anywhere
+        self.secrets
             .iter()
             .any(|secret| text.contains(secret.as_str()))
-            || self.whole.iter().any(|secret| text == secret.as_str())
     }
 
     pub fn len(&self) -> usize {
-        self.anywhere.len() + self.whole.len()
+        self.secrets.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.secrets.is_empty()
     }
 }
 
@@ -249,16 +227,6 @@ impl RequestResource {
             }),
         }
     }
-
-    fn supply(&self, secrets: &mut CommandSecrets) {
-        for value in self
-            .entry
-            .iter()
-            .flat_map(|entry| entry.attributes.values())
-        {
-            secrets.insert_attribute(value);
-        }
-    }
 }
 
 impl Serialize for RequestResource {
@@ -312,23 +280,6 @@ pub(crate) enum RequestBoundary {
     Any { except: Vec<String> },
     /// Exactly these resources.
     Resources(Vec<RequestResource>),
-}
-
-impl RequestAuthorization {
-    fn supply(&self, secrets: &mut CommandSecrets) {
-        let resources: Box<dyn Iterator<Item = &RequestResource>> = match self {
-            Self::Broker { resources, .. } => Box::new(resources.iter()),
-            Self::Command { grants, .. } => {
-                Box::new(grants.iter().flat_map(|grant| match &grant.boundary {
-                    RequestBoundary::Resources(resources) => resources.as_slice(),
-                    RequestBoundary::Any { .. } => &[],
-                }))
-            }
-        };
-        for resource in resources {
-            resource.supply(secrets);
-        }
-    }
 }
 
 impl Serialize for RequestAuthorization {
@@ -446,7 +397,6 @@ impl InvokeRequest<'_> {
     /// [`CommandRequest::MAX_BYTES`] fails `operation_failed`.
     pub(crate) fn encode(&self) -> Result<(CommandRequest, CommandSecrets), ProviderError> {
         let mut secrets = CommandSecrets::new();
-        self.authorization.supply(&mut secrets);
         for credential in self.credentials.iter().flat_map(|all| all.0.values()) {
             credential.supply(&mut secrets);
         }
@@ -605,17 +555,15 @@ mod tests {
                 "credentials": { "user": { "kind": "username_token", "username": "avery", "token": "pat-example" } }
             })
         );
-        // Tokens, their Basic form and attribute values are supplied secrets;
-        // usernames are not. An attribute value under 8 bytes matches only a
-        // whole text.
+        // Tokens and their Basic form are supplied secrets; usernames and
+        // private attribute values are not.
         let basic = base64::engine::general_purpose::STANDARD.encode("avery:pat-example");
         assert!(secrets.found_in("pat-example"));
         assert!(secrets.found_in(&format!("Basic {basic}")));
-        assert!(secrets.found_in("eu-1"));
-        assert!(!secrets.found_in("x-eu-1-y"));
-        assert!(secrets.found_in("x-s3cr3t-example-y"));
         assert!(!secrets.found_in("avery"));
-        assert_eq!(format!("{secrets:?}"), "CommandSecrets { count: 4 }");
+        assert!(!secrets.found_in("eu-1"));
+        assert!(!secrets.found_in("s3cr3t-example"));
+        assert_eq!(format!("{secrets:?}"), "CommandSecrets { count: 2 }");
     }
 
     #[test]
@@ -755,26 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn short_attribute_values_match_only_whole_texts() {
-        let mut secrets = CommandSecrets::new();
-        secrets.insert("ab");
-        secrets.insert_attribute("eu");
-        secrets.insert_attribute("1234567");
-        secrets.insert_attribute("12345678");
-        // Credentials and proxy secrets match anywhere, however short.
-        assert!(secrets.found_in("xaby"));
-        // Attribute values under 8 bytes match only an entire text.
-        assert!(secrets.found_in("eu"));
-        assert!(!secrets.found_in("eu-west"));
-        assert!(secrets.found_in("1234567"));
-        assert!(!secrets.found_in("ticket 1234567x"));
-        // From 8 bytes, anywhere.
-        assert!(secrets.found_in("ticket 12345678x"));
-        assert!(!secrets.found_in("ticket 1234"));
-    }
-
-    #[test]
-    fn empty_secrets_are_never_found() {
+    fn secrets_match_anywhere_however_short_and_empty_ones_never() {
         let mut secrets = CommandSecrets::new();
         secrets.insert("");
         secrets.insert("abc");
@@ -782,5 +711,8 @@ mod tests {
         assert_eq!(secrets.len(), 1);
         assert!(!secrets.found_in("ab"));
         assert!(secrets.found_in("xabcx"));
+        secrets.insert("k9");
+        assert!(secrets.found_in("token k9z"));
+        assert!(!secrets.found_in(""));
     }
 }

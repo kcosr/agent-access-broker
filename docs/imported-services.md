@@ -466,9 +466,12 @@ A command import's call takes a slot from its command's concurrency budget,
 then runs its final checks: the import's dispatch fence, the resource entries
 the request names, and the credentials. A resource entry changed (any change
 advances its version), deleted and recreated, or disabled while the call
-waited fails `scope_unresolved`, with or without private attributes; a rotated
-service slot, a disabled or quarantined action, or a changed or removed command
-entry fails `service_action_denied`; a removed personal credential fails
+waited fails `scope_unresolved`, with or without private attributes. Each
+entry is compared on its version, creation time (to the second), display
+name, type and selector, so an entry deleted and recreated within the same
+second with identical fields counts as the same entry. A rotated service
+slot, a disabled or quarantined action, or a changed or removed command entry
+fails `service_action_denied`; a removed personal credential fails
 `credential_not_provisioned`. The dispatch fence is checked again once the
 request is built, immediately before the process starts, so a change made
 while the call resolved its resources, credentials and caller also fails
@@ -516,16 +519,14 @@ rejects, fails `operation_failed` with an `unknown` write receipt and never
 exposes the output. The command timeout fails `upstream_timeout`.
 
 Error messages, verification stages and `safeLocators` keys and values leave
-the sensitive result, so none may echo a secret the request supplied: a
-credential token or the Basic `username:token` form of a `username_token`
-credential, the proxy password, its percent-encoded form or the credentialed
-proxy URL, or a private resource attribute value. Credentials and proxy
-secrets must not appear anywhere in such a text. A private attribute value of
-8 bytes or more must not appear anywhere either; a shorter one, such as `eu`
-or `1`, is rejected only when it is the entire message, stage, key or
-locator value, so short values do not reject legitimate identifiers. A
-verification response is checked against the credential it verified and the
-proxy secrets.
+the sensitive result, so none may contain, anywhere, a credential or proxy
+secret the request supplied: a credential token or the Basic `username:token`
+form of a `username_token` credential, the proxy password, its
+percent-encoded form or the credentialed proxy URL. Private resource attribute
+values are not checked: they are stored privately, but many, such as an issue
+key or a region, legitimately appear in replies, so a command must not repeat
+an attribute value it treats as a secret in these fields. A verification
+response is checked against the credential it verified and the proxy secrets.
 
 Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
 `exitCode`, `signal`, `durationMs`, `contractViolation` and

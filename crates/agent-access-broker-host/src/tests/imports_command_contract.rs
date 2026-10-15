@@ -2531,3 +2531,141 @@ async fn failed_verifications_keep_their_process_facts() {
     drop((runtime, app));
     broker.stop().await;
 }
+
+/// The reply check covers credentials and proxy secrets only: a message,
+/// verification stage or locator naming a private attribute value the
+/// request supplied, long such as an issue key or short such as a region,
+/// keeps the contract, for invocation and verification alike.
+#[tokio::test]
+async fn replies_may_name_private_attribute_values() {
+    let contract = Contract::new(&tickets_manifest(true));
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
+    projects(&app, &token).await;
+    let runtime = broker.runtime();
+    let (agent, _) = avery(&runtime, &config, &["tickets"]);
+    grants(&runtime);
+    let version = runtime
+        .managed_store()
+        .unwrap()
+        .resource("ops")
+        .unwrap()
+        .version;
+    admin(
+        &app,
+        &token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/ops",
+        json!({"expectedVersion": version,
+            "attributes": {"region": "eu", "webhookSecret": "HELPDESK-1849"}}),
+    )
+    .await;
+    let create = |id: &'static str| {
+        let (app, agent) = (app.clone(), agent.clone());
+        async move {
+            invoke_as(
+                &app,
+                &agent,
+                id,
+                "tickets",
+                "issue.create",
+                json!({"project": "OPS", "summary": "Hello"}),
+            )
+            .await
+        }
+    };
+    let kept_the_contract = |id: &str| {
+        let records = contract.audited(id);
+        assert_eq!(records.len(), 1, "{id}");
+        assert_eq!(
+            records[0]["providerAudit"]["command"]["contractViolation"], false,
+            "{id}"
+        );
+    };
+
+    // A success whose locators name both values.
+    contract.respond(
+        "invoke",
+        Some(
+            r#"{"ok": true, "result": {"key": "HELPDESK-1849"}, "receipt": {"safeLocators": {"issue": "HELPDESK-1849", "eu": "eu"}}}"#,
+        ),
+    );
+    let (status, body) = create("named-success").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        contract.last("invoke").document["authorization"]["resources"][0]["attributes"],
+        json!({"region": "eu", "webhookSecret": "HELPDESK-1849"})
+    );
+    assert_eq!(
+        body["result"]["safeLocators"],
+        json!({"issue": "HELPDESK-1849", "eu": "eu"})
+    );
+    kept_the_contract("named-success");
+
+    // A failure whose message, stage and locators name them.
+    contract.respond(
+        "invoke",
+        Some(
+            r#"{"ok": false, "error": {"code": "upstream_failed", "message": "HELPDESK-1849 in eu is read-only."}, "receipt": {"mutationStatus": "applied_unverified", "verificationStage": "eu", "safeLocators": {"issue": "HELPDESK-1849", "region": "eu"}}}"#,
+        ),
+    );
+    let (status, body) = create("named-failure").await;
+    assert_eq!(status.as_u16(), 424, "{body}");
+    assert_eq!(body["reasonCode"], "upstream_failed", "{body}");
+    assert_eq!(body["reason"], "HELPDESK-1849 in eu is read-only.");
+    assert_eq!(
+        body["result"],
+        json!({"mutationStatus": "applied_unverified", "retrySafe": false,
+            "verificationStage": "eu",
+            "safeLocators": {"issue": "HELPDESK-1849", "region": "eu"},
+            "operationDispatched": true})
+    );
+    kept_the_contract("named-failure");
+
+    // A whole message equal to the short value.
+    contract.respond(
+        "invoke",
+        Some(r#"{"ok": false, "error": {"code": "conflict", "message": "eu"}}"#),
+    );
+    let (status, body) = create("named-short").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["reason"], "eu");
+    kept_the_contract("named-short");
+    contract.respond("invoke", None);
+
+    // Verification reads its reply the same way.
+    contract.respond(
+        "verify",
+        Some(
+            r#"{"ok": false, "error": {"code": "upstream_unauthorized", "message": "HELPDESK-1849 in eu rejected the token."}}"#,
+        ),
+    );
+    let (status, failed) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        None,
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{failed}");
+    assert_eq!(failed["reasonCode"], "upstream_unauthorized", "{failed}");
+    let record = contract
+        .audit()
+        .into_iter()
+        .find(|record| {
+            record["brokerRequestId"] == failed["brokerRequestId"]
+                && record["providerAudit"].get("verification").is_some()
+        })
+        .unwrap_or_else(|| panic!("no verification audit: {failed}"));
+    assert_eq!(
+        record["providerAudit"]["verification"]["command"]["contractViolation"], false,
+        "{record}"
+    );
+    contract.respond("verify", None);
+    drop((runtime, app));
+    broker.stop().await;
+}
