@@ -203,6 +203,7 @@ dependencies = [
  "agent-access-core",
  "agent-access-provider",
  "async-trait",
+ "futures-util",
  "libc",
  "serde_json",
  "sha2",

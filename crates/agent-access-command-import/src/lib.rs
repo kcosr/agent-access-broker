@@ -42,6 +42,25 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the command hook starts processes after the foundation lands"
+    )
+)]
+mod process;
+#[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the command hook starts processes after the foundation lands"
+    )
+)]
+mod supervisor;
+
 /// The import kind this adapter serves, `adapterKind` in imported definitions.
 const KIND: &str = "command";
 /// The shared administrative discovery deadline.
