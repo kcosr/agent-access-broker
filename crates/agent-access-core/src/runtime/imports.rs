@@ -7,6 +7,8 @@ use crate::imports::{
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
+#[cfg(test)]
+mod command_tests;
 mod mcp_names;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
@@ -171,16 +173,34 @@ fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredenti
         .map_or(ImportedCredentialKind::Token, |credential| credential.kind)
 }
 
+/// Whether an import declares no execution credential: a command import
+/// without execution bindings. Its actions use service mode without a slot,
+/// as backends without an execution credential do.
+pub(crate) fn credential_free(definition: &ImportedServiceDefinition) -> bool {
+    definition.execution_bindings.is_empty()
+        && definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
+}
+
+/// The credential modes an import's grants may name: its bindings' modes,
+/// or service mode alone for a credential-free import.
+fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
+    if credential_free(definition) {
+        return vec![ImportedCredentialMode::Service.as_str()];
+    }
+    definition
+        .execution_bindings
+        .iter()
+        .map(|binding| binding.owner_mode.as_str())
+        .collect()
+}
+
 pub(super) fn descriptor(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
 ) -> ServiceDescriptor {
-    let modes = record
-        .definition
-        .execution_bindings
-        .iter()
-        .map(|binding| binding.owner_mode.as_str())
-        .collect::<Vec<_>>();
+    let modes = declared_modes(&record.definition);
     // Arbitrary upstream content may contain private data or credentials.
     let sensitive_output_pointers: Vec<String> = config
         .providers
@@ -220,23 +240,23 @@ pub(super) fn descriptor(
         record.definition.display_name.clone(),
     )
     .with_actions(actions)
-    .with_credentials(
-        if record
-            .definition
-            .execution_bindings
-            .iter()
-            .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
-        {
-            CredentialDescriptor::default()
-                .profile("token", "bearer_token")
-                .delegated(
-                    "Connect your account to authorize this imported service's reviewed actions.",
-                )
-        } else {
-            let kind = execution_credential_kind(record);
-            CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
-        },
-    )
+    .with_credentials(if credential_free(&record.definition) {
+        CredentialDescriptor::without_execution_credential()
+    } else if record
+        .definition
+        .execution_bindings
+        .iter()
+        .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
+    {
+        CredentialDescriptor::default()
+            .profile("token", "bearer_token")
+            .delegated(
+                "Connect your account to authorize this imported service's reviewed actions.",
+            )
+    } else {
+        let kind = execution_credential_kind(record);
+        CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
+    })
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {
@@ -371,20 +391,26 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
     config.credentials.imported_modes.clear();
     for record in &catalog.services {
         let service = &record.definition.service;
-        let modes = record
-            .definition
-            .execution_bindings
-            .iter()
-            .filter(|binding| {
-                binding.is_supported()
-                    && oauth_binding_allowed(config, &record.definition, binding)
-                    && (binding.owner_mode != ImportedCredentialMode::Service
-                        || record
-                            .slot_versions
-                            .contains_key(&ImportedCredentialPurpose::Execution))
-            })
-            .map(|binding| binding.owner_mode.as_str().to_string())
-            .collect::<Vec<_>>();
+        // A credential-free import is available in service mode without a
+        // slot; it has no bindings to select from.
+        let modes = if credential_free(&record.definition) {
+            vec![ImportedCredentialMode::Service.as_str().to_string()]
+        } else {
+            record
+                .definition
+                .execution_bindings
+                .iter()
+                .filter(|binding| {
+                    binding.is_supported()
+                        && oauth_binding_allowed(config, &record.definition, binding)
+                        && (binding.owner_mode != ImportedCredentialMode::Service
+                            || record
+                                .slot_versions
+                                .contains_key(&ImportedCredentialPurpose::Execution))
+                })
+                .map(|binding| binding.owner_mode.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
         config.credentials.per_user.remove(service);
         if modes.iter().any(|mode| mode == "per_user") {
             let binding = record
@@ -435,11 +461,9 @@ pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog)
     for record in &catalog.services {
         retained.credentials.imported_modes.insert(
             record.definition.service.clone(),
-            record
-                .definition
-                .execution_bindings
-                .iter()
-                .map(|binding| binding.owner_mode.as_str().to_string())
+            declared_modes(&record.definition)
+                .into_iter()
+                .map(str::to_owned)
                 .collect(),
         );
     }
@@ -953,6 +977,12 @@ impl BrokerRuntime {
             return Err(ManagedStoreError::InputInvalid("import OAuth binding requires an approved adapter, registration, permission profile, and matching resource".into()));
         }
         Ok(())
+    }
+
+    /// Whether `definition` declares no execution credential, so enabling
+    /// it needs no provisioned credential.
+    pub fn import_credential_free(&self, definition: &ImportedServiceDefinition) -> bool {
+        credential_free(definition)
     }
 
     pub fn import_binding_available(

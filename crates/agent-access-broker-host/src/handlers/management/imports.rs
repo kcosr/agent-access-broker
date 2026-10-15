@@ -806,13 +806,17 @@ fn require_enabled_credentials(
             "accept at least one action before enabling the import",
         ));
     }
-    if !record.definition.execution_bindings.iter().any(|binding| {
-        runtime.import_binding_available(&record.definition, binding)
-            && (binding.owner_mode == ImportedCredentialMode::PerUser
-                || record
-                    .slot_versions
-                    .contains_key(&ImportedCredentialPurpose::Execution))
-    }) {
+    // A credential-free command import (no execution bindings) enables
+    // without a credential; its grants use service mode without a slot.
+    if !runtime.import_credential_free(&record.definition)
+        && !record.definition.execution_bindings.iter().any(|binding| {
+            runtime.import_binding_available(&record.definition, binding)
+                && (binding.owner_mode == ImportedCredentialMode::PerUser
+                    || record
+                        .slot_versions
+                        .contains_key(&ImportedCredentialPurpose::Execution))
+        })
+    {
         return Err(invalid(
             "import has no supported provisioned execution credential mode",
         ));
