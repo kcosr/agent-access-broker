@@ -186,8 +186,15 @@ export const COMMAND_RESOURCE_TYPES: ResourceTypeMetadata[] = [
   { id: "ticketing_queue", label: "Queue", pluralLabel: "Queues", example: "triage", selectors: ["exact", "all"], importedService: "ticketing" }
 ];
 
-/** The same listing once the refresh is accepted: `queue` is kept for its resource and accepts no new ones. */
-export const REFRESHED_RESOURCE_TYPES: ResourceTypeMetadata[] = COMMAND_RESOURCE_TYPES.map((type) => (type.id === "ticketing_queue" ? { ...type, removed: true } : type));
+/**
+ * The same listing once the refresh is accepted: `project` has the `v2`
+ * attributes, and `queue` is kept for its resource and accepts no new ones.
+ */
+export const REFRESHED_RESOURCE_TYPES: ResourceTypeMetadata[] = COMMAND_RESOURCE_TYPES.map((type) =>
+  type.id === "ticketing_queue"
+    ? { ...type, removed: true }
+    : { ...type, attributes: PROJECT_V2.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })) }
+);
 
 /** The accepted actions as the policy catalog lists them. */
 export function commandPolicyService(data: ImportPreviewResult): PolicyServiceCatalog {

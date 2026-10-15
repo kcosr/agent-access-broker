@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { REFRESHED_RESOURCE_TYPES, commandAccepted, commandDiscovered, commandPolicyService, commandRefreshed } from "../unit/command-import.fixture";
+import { COMMAND_RESOURCE_TYPES, REFRESHED_RESOURCE_TYPES, commandAccepted, commandDiscovered, commandPolicyService, commandRefreshed } from "../unit/command-import.fixture";
 import { mockCommandImportApi } from "./support/command-import-api";
 import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
 
@@ -254,6 +254,58 @@ test("a token execution credential is saved without a username", async ({ page }
   await dialog.getByRole("button", { name: "Save credential", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(api.credentials).toEqual([{ purpose: "execution", body: { expectedVersion: 5, expectedCatalogRevision: 6, token: "svc-token-only" } }]);
+  expect(api.errors).toEqual([]);
+});
+
+test("accepted resource types reach the resource editor without a reload", async ({ page }) => {
+  // Before the first acceptance the Broker registers none of the command's types.
+  const api = await mockCommandImportApi(page, commandDiscovered());
+  api.resourceTypes = [];
+  api.acceptances.push({ result: commandAccepted(), resourceTypes: COMMAND_RESOURCE_TYPES });
+  api.discoveries.push(commandRefreshed());
+  api.acceptances.push({ result: commandAccepted(), resourceTypes: REFRESHED_RESOURCE_TYPES });
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.evaluate(() => Object.assign(window, { loadedOnce: true }));
+  const sidebar = page.getByRole("complementary", { name: "Catalog", exact: true });
+  const addResource = async () => {
+    await sidebar.getByRole("link", { name: /^Resources/ }).click();
+    await page.getByRole("main", { name: "Resources", exact: true }).getByRole("button", { name: "Add resource", exact: true }).first().click();
+    return page.getByRole("complementary", { name: "Add resource", exact: true });
+  };
+
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  await review(page).getByRole("checkbox", { name: "Accept issue.view", exact: true }).check();
+  await review(page).getByLabel("Effects for issue.view", { exact: true }).selectOption("read");
+  await review(page).getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(page.getByText("1 action accepted", { exact: true })).toBeVisible();
+  // Client-side navigation: the new type and its attributes are offered.
+  let drawer = await addResource();
+  const type = drawer.getByLabel("Resource type", { exact: true });
+  await type.selectOption("ticketing_project");
+  await expect(drawer.getByLabel("Region", { exact: true })).toBeVisible();
+  await expect(drawer.getByLabel("Webhook secret", { exact: true })).toBeVisible();
+  await drawer.getByLabel("Canonical identifier", { exact: true }).fill("OPS");
+  await drawer.getByLabel("Region", { exact: true }).fill("eu-1");
+  await drawer.getByRole("checkbox", { name: "internal", exact: true }).check();
+  await drawer.getByRole("button", { name: "Save resource", exact: true }).click();
+  await expect(page.getByText("Resource added", { exact: true })).toBeVisible();
+  expect(api.createdResources).toEqual([
+    { resourceType: "ticketing_project", selector: { kind: "exact", value: "OPS" }, displayName: null, allowedExecutionContexts: ["internal"], enabled: true, attributes: { region: "eu-1" } }
+  ]);
+
+  // A metadata-only acceptance of the `v2` refresh adds an attribute and
+  // retires `queue`; the editor follows without a reload as well.
+  await sidebar.getByRole("link", { name: /^Ticketing/ }).click();
+  await page.getByRole("navigation", { name: "Ticketing sections", exact: true }).getByRole("link", { name: "Import", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh discovery", exact: true }).click();
+  for (const action of ["issue.view", "issue.create"]) await review(page).getByRole("checkbox", { name: `Accept ${action}`, exact: true }).uncheck();
+  await review(page).getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(page.getByText("Command metadata and type changes accepted", { exact: true })).toBeVisible();
+  drawer = await addResource();
+  await expect(drawer.getByLabel("Resource type", { exact: true }).locator('option[value="ticketing_queue"]')).toHaveCount(0);
+  await drawer.getByLabel("Resource type", { exact: true }).selectOption("ticketing_project");
+  await expect(drawer.getByLabel("Owner", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { loadedOnce?: boolean }).loadedOnce)).toBe(true);
   expect(api.errors).toEqual([]);
 });
 

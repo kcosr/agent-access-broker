@@ -13,14 +13,19 @@ export type CommandImportApi = {
   current: ImportPreviewResult | null;
   /** States the next discoveries publish, in order. */
   discoveries: ImportPreviewResult[];
-  /** States the next acceptances publish, in order, with the effects they report. */
-  acceptances: Array<{ result: ImportPreviewResult; effects?: ImportResourceTypeEffects }>;
+  /**
+   * States the next acceptances publish, in order, with the effects they
+   * report and the command import's `GET /v1/resource-types` entries after them.
+   */
+  acceptances: Array<{ result: ImportPreviewResult; effects?: ImportResourceTypeEffects; resourceTypes?: ResourceTypeMetadata[] }>;
   /** A refusal the next acceptance answers with instead, as `target` lists. */
   acceptBlocked: Partial<ImportChangeBlocked> | null;
   commandImports: string[];
   /** The command import's entries of `GET /v1/resource-types`. */
   resourceTypes: ResourceTypeMetadata[];
   resources: ResourceRecord[];
+  /** Bodies of resource creations, which add to `resources`. */
+  createdResources: Array<Record<string, unknown>>;
   created: ImportDefinition[];
   accepted: Array<Record<string, unknown>>;
   credentials: Array<{ purpose: string; body: Record<string, unknown> }>;
@@ -49,7 +54,7 @@ function recordResult(data: ImportPreviewResult) {
 }
 
 export async function mockCommandImportApi(page: Page, current: ImportPreviewResult | null = null): Promise<CommandImportApi> {
-  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], created: [], accepted: [], credentials: [], errors: [] };
+  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], createdResources: [], created: [], accepted: [], credentials: [], errors: [] };
   page.on("pageerror", (error) => api.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
@@ -84,6 +89,7 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
         }
         const next = api.acceptances.shift();
         if (next) api.current = next.result;
+        if (next?.resourceTypes) api.resourceTypes = next.resourceTypes;
         result = { ...recordResult(api.current), ...(next?.effects ? { resourceTypeEffects: next.effects } : {}) };
       } else if (tail.startsWith("credentials/")) {
         api.credentials.push({ purpose: tail.slice("credentials/".length), body: request.postDataJSON() as Record<string, unknown> });
@@ -97,6 +103,19 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
         executionContexts: { allowedValues: ["internal", "external"], defaultContext: "internal", contextRequired: false },
         subjects: { users: [], groups: [], anonymous: false }
       };
+    } else if (pathname === "/v1/admin/policy/resources" && method === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown> & Pick<ResourceRecord, "resourceType" | "selector" | "displayName" | "allowedExecutionContexts" | "enabled">;
+      api.createdResources.push(body);
+      const { attributes, ...definition } = body;
+      const record: ResourceRecord = {
+        ...definition,
+        id: definition.selector.kind === "all" ? `all-${definition.resourceType}` : definition.selector.value.toLowerCase(),
+        version: 1,
+        configuredAttributes: Object.keys((attributes as Record<string, string> | undefined) ?? {}),
+        ...stamp
+      };
+      api.resources = [...api.resources, record];
+      result = { record, previousRevision: { generation: 1 }, revision: { generation: 2 } };
     } else if (pathname === "/v1/admin/policy/resources") result = api.resources;
     else if (pathname === "/v1/admin/policy/status") result = { policyGeneration: 1, writable: true, authority: "managed", counts: { active: 0, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/admin/config/status") result = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };

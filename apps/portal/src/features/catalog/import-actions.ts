@@ -1,6 +1,7 @@
 // Imported service mutations. Each call resolves after the admin caches have
-// refetched, so the next action uses the new service and catalog versions.
-// Failures reject; callers show them where they happened.
+// refetched, so the next action uses the new service and catalog versions;
+// an acceptance also refetches the registered resource types. Failures
+// reject; callers show them where they happened.
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { brokerApi } from "../../api";
@@ -57,9 +58,17 @@ export function useImportActions() {
       ]);
     }
 
-    async function run<T>(operation: (current: Session) => Promise<T>, message: string | ((result: T) => string)) {
+    /**
+     * The registered resource types, which the portal keeps for the session:
+     * accepting a command import adds, changes or drops its types.
+     */
+    async function refreshResourceTypes() {
+      await queryClient.invalidateQueries({ queryKey: portalQueryKeys.resourceTypes(viewer) });
+    }
+
+    async function run<T>(operation: (current: Session) => Promise<T>, message: string | ((result: T) => string), changesResourceTypes = false) {
       const result = await attempt(operation);
-      await refresh();
+      await Promise.all([refresh(), changesResourceTypes ? refreshResourceTypes() : null]);
       toast(typeof message === "string" ? message : message(result), { tone: "success" });
       return result;
     }
@@ -101,7 +110,8 @@ export function useImportActions() {
           const accepted = selections.length ? `${selections.length} ${selections.length === 1 ? "action" : "actions"} accepted` : "Command metadata and type changes accepted";
           const effects = resourceTypeEffectsText(result.resourceTypeEffects);
           return effects ? `${accepted}; ${effects}` : accepted;
-        }
+        },
+        true
       );
     }
 
