@@ -1075,11 +1075,14 @@ one process per call. They are the deliberate exception to the rule that import
 adapters never receive credential plaintext. The command makes its own
 upstream calls, so the Broker writes to its stdin the credentials the call
 uses, the decrypted private attributes of the resources it passes, any egress
-proxy credentials, and the caller's identity. Credentials and private
-attributes cross to the trusted command only on stdin: never in arguments,
-the environment, responses, receipts, audit or logs. With
-`network = "inherit"`, the proxy credentials also appear in the convenience
-proxy variables, where other processes of the same user can read them.
+proxy credentials, and the caller's identity. The Broker passes credentials and
+private attributes to the trusted command only on stdin, never in arguments or
+the environment, and never adds them to responses, receipts, audit or logs
+itself. The command's own messages, verification stages and locators are
+checked for credentials and proxy secrets only, so a command must keep any
+attribute it treats as secret out of them. With `network = "inherit"`, the
+proxy credentials also appear in the convenience proxy variables, where other
+processes of the same user can read them.
 
 The exception rests on the operator's approval: the command's path is named in
 Broker TOML, and the Broker spawns it as its own user. A command is therefore
@@ -1096,16 +1099,16 @@ commands in separate deployments.
 The Broker still authenticates every call and applies context, token
 restrictions, grants, rate limits and audit; validates inputs against the
 accepted schema; after the call's concurrency permit, rechecks the import,
-every admitted resource's version, creation time, display name, type and
-selector, and the credentials, and checks the import and the action's
-availability again immediately before starting the process; and never falls
-back from a personal to a service credential. An action that names its
-resources in its inputs is denied before any process starts unless grants
-cover every resource, and receives only the selected credential. For any other action, the Broker passes the caller's
-top-precedence grants, each with its own credential, and the command must
-filter by them: an unfiltered command reaches whatever its credentials can, as
-other imports do. Command results are marked sensitive, and failures never
-return command output.
+every admitted resource's version, creation time, display name, type, selector
+and attribute versions, and the credentials, and checks the import and the
+action's availability again immediately before starting the process; and never
+falls back from a personal to a service credential. An action that names its
+resources in its inputs is denied before any process starts unless grants cover
+every resource, and receives only the selected credential. For any other
+action, the Broker passes the caller's top-precedence grants, each with its own
+credential, and the command must filter by them: an unfiltered command reaches
+whatever its credentials can, as other imports do. Command results are marked
+sensitive, and failures never return command output.
 
 Error messages, verification stages and write-receipt locators leave the
 sensitive result and can reach callers, compact CLI receipts and audit, so the

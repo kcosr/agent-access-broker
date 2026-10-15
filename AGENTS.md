@@ -714,7 +714,11 @@ must be gated by catalog read capability. Never infer service visibility from a
 global resource/group change.
 
 Keep private resource attributes out of `ResourceDefinition`, catalog/export
-serialization, agent tool inputs/results, Debug output, and audit. Only explicit
+serialization, agent tool inputs/results, Debug output, and audit. Command
+imports are the exception: the Broker passes them to the approved command on
+stdin only and never adds them to results or audit itself, but it checks the
+command's messages, stages and locators for credentials and proxy secrets
+only, so a command's own reply may carry an attribute value. Only explicit
 admin reveal returns plaintext, after authorization/CSRF and audit preflight, with
 `Cache-Control: no-store`. Store changes are atomic with resource versions and
 policy publication. At dispatch, revalidate the admitted resource identity, alias,

@@ -479,9 +479,13 @@ then runs its final checks: the import's dispatch fence, the resource entries
 the request names, and the credentials. A resource entry changed (any change
 advances its version), deleted and recreated, or disabled while the call
 waited fails `scope_unresolved`, with or without private attributes. Each
-entry is compared on its version, creation time (to the second), display
-name, type and selector, so an entry deleted and recreated within the same
-second with identical fields counts as the same entry. A rotated service
+entry is compared on its version (which every change advances), its creation
+time (to the second), and its display name, type and selector. An entry with
+private attributes is also compared on the versions of its attribute
+material, which are fresh for every stored value, so a recreated entry that
+holds attributes always counts as replaced. An entry without attributes
+deleted and recreated within the same second with the same version, display
+name, type and selector counts as the same entry. A rotated service
 slot, a disabled or quarantined action, or a changed or removed command entry
 fails `service_action_denied`; a removed personal credential fails
 `credential_not_provisioned`. The dispatch fence is checked again once the
@@ -498,9 +502,12 @@ request ID and the deadline; the `caller` (principal, kind, display name and
 email, the asserted username, the agent token's ID and label, and the policy
 groups); the validated `inputs`; the admitted `authorization`; the
 `credentials` it uses, keyed by wire mode `service` or `user`; and, with
-`network = "inherit"`, the egress `network` settings. Credentials and
-decrypted private attributes travel only on stdin, never in arguments, the
-environment, responses, logs or audit.
+`network = "inherit"`, the egress `network` settings. The Broker passes
+credentials and decrypted private attributes only on stdin, never in
+arguments or the environment, and never adds them to responses, logs or audit
+itself. The command's messages, verification stages and locators are checked
+for credentials and proxy secrets only, so a command must keep any attribute
+it treats as secret out of them.
 
 - **Broker-enforced** actions get `{"mode": "broker", "credential",
   "resourceType", "resources"}`: each value the inputs name, with the ID,
@@ -526,9 +533,10 @@ receipts follow [mutation receipts](http-api.md#mutation-receipts); a failed
 write's result adds `operationDispatched`, saying whether the process started.
 A response that breaks the command contract, such as invalid JSON, an unknown
 field or code, a message over 1,024 bytes or with control characters, a
-receipt on a read, an invalid locator, a supplied secret (below), or a result
-its output schema rejects, fails `operation_failed` with an `unknown` write
-receipt and never exposes the output. The command timeout fails `upstream_timeout`.
+receipt on a read, an invalid locator, a supplied credential or proxy secret
+(below), or a result its output schema rejects, fails `operation_failed` with
+an `unknown` write receipt and never exposes the output. The command timeout
+fails `upstream_timeout`.
 
 Error messages, verification stages and `safeLocators` keys and values leave
 the sensitive result, so none may contain, anywhere, a credential or proxy

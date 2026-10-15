@@ -306,14 +306,17 @@ including one that selects all resources of the type. Only a value that no
 such entry holds carries just its `value`. `resourceType` is the manifest's
 type ID, not the Broker type ID.
 
-Every admitted exact entry is fenced, with or without attributes, on its
-version, creation time (to the second), display name, type and selector.
-After the call's permit the Broker rechecks each entry and decrypts its
-attributes; an entry that changed (any change advances its version), was
-deleted and recreated, or was disabled while the call waited fails
-`scope_unresolved` without starting the process. An entry deleted and
-recreated within the same second with identical fields counts as the same
-entry.
+Every admitted exact entry is fenced, with or without attributes. After the
+call's permit the Broker rechecks each entry and decrypts its attributes; an
+entry that changed, was deleted and recreated, or was disabled while the call
+waited fails `scope_unresolved` without starting the process. Each entry is
+compared on its version (which every change advances), its creation time
+(to the second), and its display name, type and selector. An entry with
+private attributes is also compared on the versions of its attribute
+material, which are fresh for every stored value, so a recreated entry that
+holds attributes always counts as replaced. An entry without attributes
+deleted and recreated within the same second with the same version, display
+name, type and selector counts as the same entry.
 
 ### Command-enforced actions
 
@@ -417,8 +420,10 @@ must:
 - Print exactly one JSON document on stdout (trailing whitespace is allowed)
   and exit with status 0, for errors too.
 - Keep any child processes in its process group.
-- Never log, persist or forward credentials or private attributes. Stderr is
-  for diagnostics; it never reaches callers or audit.
+- Never log, persist or forward credentials, and keep any private attribute
+  it treats as secret out of logs, its error messages, verification stages
+  and locators: the Broker checks those fields for credentials and proxy
+  secrets only. Stderr is for diagnostics; it never reaches callers or audit.
 
 ### describe: the manifest
 
@@ -703,7 +708,7 @@ verification stage, or `secret_in_locator`) when the text contains, anywhere:
 
 - Every supplied credential's token, or the Basic `username:token` form of a
   `username_token` credential.
-- The proxy password in every form the command receives it: raw,
+- The proxy password in every form the command receives or derives: raw,
   percent-encoded, inside the credentialed proxy URL and in the Basic
   `username:password` form.
 
@@ -849,7 +854,8 @@ live, so a reused process ID is never signaled.*
    is unchanged and available (quarantine, disable, operator removal or a
    changed command entry fail with `service_action_denied`), revalidates
    every admitted exact resource against its fence (version, creation time,
-   display name, type and selector) and decrypts its attributes (a changed, replaced or disabled entry fails with
+   display name, type, selector and attribute versions) and decrypts its
+   attributes (a changed, replaced or disabled entry fails with
    `scope_unresolved`), and reads the credentials. Once the request is
    built, it checks the import fence and the action's availability again
    immediately before starting the process, so a change made in the meantime

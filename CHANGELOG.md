@@ -555,14 +555,14 @@ All notable changes to this project are documented in this file.
   command's write receipt with `operationDispatched`; a response that breaks
   the contract, including a message, verification stage or locator
   containing a supplied credential or proxy secret in any form the command
-  receives it (each token, the Basic `username:token` form, and the proxy
-  password raw, percent-encoded, in the proxy URL and in its Basic
+  receives or derives (each token, the Basic `username:token` form, and the
+  proxy password raw, percent-encoded, in the proxy URL and in its Basic
   `username:password` form), fails `operation_failed`; private attribute
   values are not checked, and command messages may hold no control
   character other than tab. Every admitted exact resource is fenced by its
-  row version, creation time (to the second), display name, type and
-  selector, and the import's dispatch fence is checked again immediately
-  before the process starts. Invocation audit adds
+  row version, creation time (to the second), display name, type, selector
+  and private attribute versions, and the import's dispatch fence is checked
+  again immediately before the process starts. Invocation audit adds
   `providerAudit.command` (process facts, with `contractViolation` `null`
   until a verdict) and `providerAudit.commandAuthorization` (the admitted
   authorization in either mode), kept for interrupted calls. Shutdown fails a

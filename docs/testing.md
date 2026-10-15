@@ -1912,13 +1912,13 @@ field, a nested locator, a locator holding a supplied credential or proxy
 password, an unknown code, a control character in a message, a wrong shape,
 an output schema mismatch, invalid, trailing or empty JSON and oversized
 output) and process failures (a non-zero exit, a signal, a process that never
-answers, a delay and a stderr flood). It has no trigger for pipes held open by a descendant,
-credentials or proxy secrets in a message or verification stage, an invalid
-`retryAfterSeconds` or a receipt on a read; the adapter's own tests in
-`crates/agent-access-command-import` cover those, with shell fixtures for the
-process cases. Its own check runs it as the Broker would, as separate
-processes with a cleared environment, and checks the manifest rules and the
-request shapes it accepts:
+answers, a delay and a stderr flood). It has no trigger for pipes held open by
+a descendant, credentials or proxy secrets in a message or verification
+stage, an invalid `retryAfterSeconds` or a receipt on a read; the adapter's
+own tests in `crates/agent-access-command-import` cover those, with shell
+fixtures for the process cases. Its own check runs it as the Broker would, as
+separate processes with a cleared environment, and checks the manifest rules
+and the request shapes it accepts:
 
 ```bash
 python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
