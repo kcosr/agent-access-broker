@@ -19,7 +19,9 @@ PATH in [command_imports.<name>.env] for the `env` in the first line to find
 python3, or run the script through an absolute interpreter path.
 
 Profiles. TICKETING_PROFILE, set in [command_imports.<name>.env], selects
-the manifest:
+the manifest. TICKETING_PROFILE_FILE, when set, names a file holding the
+profile instead, read on every run, so a test can switch manifests without
+changing the Broker's configuration:
 
   default        username_token credential, service and per_user modes, verify
   no_credential  no credential: service-mode grants; requests carry no
@@ -29,6 +31,10 @@ the manifest:
                  an optional `owner` attribute; `issue.search` gains `limit`
                  (a behavioral change); `whoami` is removed; a per_user-only
                  write, `issue.comment`, is added
+  trimmed        the default manifest at version 1.4.1 with `webhookSecret`
+                 removed from `project`, leaving `region`
+  bare           the default manifest at version 1.4.2 with no attributes on
+                 `project`
 
 Actions:
 
@@ -53,16 +59,23 @@ Data: projects OPS (Operations), SEC (Security) and WEB (Web); issues OPS-41
 `access` object so tests can see what the Broker passed: the credential mode
 used, the upstream account (for searches, the account per mode used;
 `anonymous` without a credential) and the names, never the values, of the
-resource attributes received.
+resource attributes received. Searches also echo the grants they received,
+as `{credential?, resources: "any" | [values], except?}`, and whoami the
+request's `network` block without proxy credentials.
 
-Requests are checked as docs/command-imports.md describes them: a credential
-mode in `authorization` (Broker-checked) or in every grant (command-checked)
-exactly when the command declares a credential; `resourceType` exactly for
-typed actions, with only `"resources": "any"` grants for untyped ones;
-resource entries with `id` and `attributes` (possibly empty) and `name` only
-when they have a display name; and verify requests for a personal
-credential (wire mode `user`) with no context, caller, inputs or
-authorization.
+The command checks, and answers input_invalid otherwise: the request format,
+`requestId` and an RFC 3339 UTC `deadline`; for invoke, `action`, `context`,
+`caller`, `inputs` and `authorization`, the authorization mode each action
+expects, `resourceType` exactly for typed actions, only `"resources": "any"`
+grants for untyped ones, and a credential mode in `authorization` or in every
+grant exactly when the profile declares a credential, with no `credentials`
+otherwise; for verify, a personal credential (wire mode `user`) and no
+context, caller, inputs or authorization. It reads resource entries by
+`value` and accepts any other members.
+
+A write answers every failure found before writing (input_invalid,
+resource_forbidden, upstream_unauthorized, upstream_forbidden,
+resource_not_found) with receipt `not_applied`.
 
 Search query grammar: clauses `project = KEY`, `status = open|closed` and
 `text ~ word` (or `text ~ "some words"`), joined by AND, optionally followed
@@ -118,12 +131,14 @@ import re
 import signal
 import sys
 import time
+import unicodedata
 
 FORMAT = "agent-access-command/1"
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_MESSAGE_BYTES = 1024
 SUBCOMMANDS = ("describe", "invoke", "verify")
-PROFILES = ("default", "no_credential", "v2")
+PROFILES = ("default", "no_credential", "v2", "trimmed", "bare")
+WRITES = ("issue.create", "issue.close", "issue.comment")
 ERROR_CODES = (
     "input_invalid",
     "resource_not_found",
@@ -180,8 +195,9 @@ class CommandError(Exception):
 
 
 def safe_message(text):
-    """Messages reach callers: no control characters but tab, at most 1 KiB."""
-    text = "".join(c if c == "\t" or (ord(c) >= 0x20 and ord(c) != 0x7F) else " " for c in text)
+    """Messages reach callers: no control characters (C0, DEL or C1) but tab,
+    at most 1 KiB."""
+    text = "".join(" " if c != "\t" and unicodedata.category(c) == "Cc" else c for c in text)
     while len(text.encode("utf-8")) > MAX_MESSAGE_BYTES:
         text = text[:-1]
     return text
@@ -230,6 +246,10 @@ def project_type(profile):
     if profile == "v2":
         attributes.append({"name": "owner", "label": "Owner",
                            "description": "Owning team.", "required": False})
+    elif profile == "trimmed":
+        attributes = attributes[:1]
+    elif profile == "bare":
+        attributes = []
     return {
         "id": "project", "label": "Project", "pluralLabel": "Projects",
         "example": "OPS", "pattern": "[A-Z][A-Z0-9]{1,9}", "maxLength": 10,
@@ -341,7 +361,8 @@ def actions(profile):
 
 
 def manifest(profile):
-    document = {"format": FORMAT, "version": "1.5.0" if profile == "v2" else "1.4.0"}
+    versions = {"v2": "1.5.0", "trimmed": "1.4.1", "bare": "1.4.2"}
+    document = {"format": FORMAT, "version": versions.get(profile, "1.4.0")}
     if profile != "no_credential":
         document["credential"] = {"kind": "username_token", "modes": ["service", "per_user"]}
     document["verify"] = profile != "no_credential"
@@ -499,7 +520,13 @@ class Ticketing:
         try:
             return handler(request)
         except (KeyError, TypeError, AttributeError):
-            raise invalid("The request does not match the accepted definition.")
+            error = invalid("The request does not match the accepted definition.")
+        except CommandError as raised:
+            error = raised
+        # Every raised failure happens before a write, so nothing was applied.
+        if request["action"] in WRITES and error.receipt is None:
+            error.receipt = {"mutationStatus": "not_applied"}
+        raise error
 
     def issue_view(self, request):
         inputs = request["inputs"]
@@ -548,7 +575,8 @@ class Ticketing:
             access = {"account": self.account(request, None, write=False)}
         else:
             access = {"accounts": accounts}
-        return success({"issues": found, "total": total, "access": access})
+        return success({"issues": found, "total": total, "access": access,
+                        "grants": [received_grant(grant) for grant in grants]})
 
     def issue_create(self, request):
         inputs = request["inputs"]
@@ -601,8 +629,11 @@ class Ticketing:
         grants = self.command_grants(request, typed=False)
         mode = grants[0].get("credential")
         account = self.account(request, mode, write=False)
-        return success({"caller": request["caller"], "context": request["context"],
-                        "access": self.access(mode, account)})
+        result = {"caller": request["caller"], "context": request["context"],
+                  "access": self.access(mode, account)}
+        if "network" in request:
+            result["network"] = received_network(request["network"])
+        return success(result)
 
     # Verify -----------------------------------------------------------------
 
@@ -695,6 +726,27 @@ class Ticketing:
         raise invalid("Unknown trigger.")
 
 
+def received_grant(grant):
+    """A passed grant as searches echo it: its mode and boundary values,
+    never attributes."""
+    echoed = {}
+    if "credential" in grant:
+        echoed["credential"] = grant["credential"]
+    resources = grant["resources"]
+    echoed["resources"] = resources if resources == "any" else [entry["value"] for entry in resources]
+    if "except" in grant:
+        echoed["except"] = grant["except"]
+    return echoed
+
+
+def received_network(network):
+    """The request's network block without the proxy's credentials."""
+    proxy = network.get("proxy")
+    return {"proxy": None if proxy is None else {"url": proxy.get("url")},
+            "noProxy": network.get("noProxy"), "trust": network.get("trust"),
+            "caCertificate": network.get("caCertificate")}
+
+
 def supplied_secret(request, resource):
     for credential in (request.get("credentials") or {}).values():
         if credential.get("token"):
@@ -756,7 +808,16 @@ def main(argv):
     if len(argv) != 2 or argv[1] not in SUBCOMMANDS:
         sys.stderr.write(USAGE)
         return 2
-    profile = os.environ.get("TICKETING_PROFILE", "default")
+    profile_file = os.environ.get("TICKETING_PROFILE_FILE")
+    if profile_file:
+        try:
+            with open(profile_file, encoding="utf-8") as handle:
+                profile = handle.read().strip()
+        except OSError:
+            sys.stderr.write("unreadable TICKETING_PROFILE_FILE\n")
+            return 2
+    else:
+        profile = os.environ.get("TICKETING_PROFILE", "default")
     if profile not in PROFILES:
         sys.stderr.write("unknown TICKETING_PROFILE\n")
         return 2

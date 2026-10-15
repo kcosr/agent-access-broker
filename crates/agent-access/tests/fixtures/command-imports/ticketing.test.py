@@ -79,8 +79,8 @@ def command(action, inputs, grants=SEARCH_GRANTS, credentials=CREDENTIALS, typed
     return request(action, inputs, authorization, credentials)
 
 
-def run(subcommand, stdin=None, profile=None, timeout=10, argv=None):
-    env = {"TICKETING_PROFILE": profile} if profile else {}
+def run(subcommand, stdin=None, profile=None, timeout=10, argv=None, env=None):
+    env = dict(env or {}, **({"TICKETING_PROFILE": profile} if profile else {}))
     data = None if stdin is None else (stdin if isinstance(stdin, bytes) else json.dumps(stdin).encode())
     return subprocess.run(
         argv or [sys.executable, "-I", str(COMMAND), subcommand],
@@ -214,6 +214,32 @@ class ManifestTests(unittest.TestCase):
         added = after_types["project"]["attributes"][len(before_types["project"]["attributes"]):]
         self.assertEqual([(a["name"], a["required"]) for a in added], [("owner", False)])
 
+    def test_attribute_profiles_remove_attributes_without_other_changes(self):
+        before, before_types = check_manifest(self, one_document(self, run("describe")))
+        for profile, version, names in (("trimmed", "1.4.1", ["region"]), ("bare", "1.4.2", [])):
+            manifest = one_document(self, run("describe", profile=profile))
+            after, after_types = check_manifest(self, manifest)
+            self.assertEqual(manifest["version"], version)
+            self.assertEqual(after, before)
+            self.assertEqual([a["name"] for a in after_types["project"]["attributes"]], names)
+            self.assertEqual({k: v for k, v in after_types["project"].items() if k != "attributes"},
+                             {k: v for k, v in before_types["project"].items() if k != "attributes"})
+
+    def test_a_profile_file_switches_the_manifest_on_every_run(self):
+        directory = Path(os.environ.get("TMPDIR", "/tmp"))
+        profile_file = directory / ("ticketing-profile-%d" % os.getpid())
+        try:
+            profile_file.write_text("trimmed\n")
+            env = {"TICKETING_PROFILE_FILE": str(profile_file), "TICKETING_PROFILE": "v2"}
+            self.assertEqual(one_document(self, run("describe", env=env))["version"], "1.4.1")
+            profile_file.write_text("bare")
+            self.assertEqual(one_document(self, run("describe", env=env))["version"], "1.4.2")
+            profile_file.write_text("nope")
+            self.assertEqual(run("describe", env=env).returncode, 2)
+        finally:
+            profile_file.unlink(missing_ok=True)
+        self.assertEqual(run("describe", env={"TICKETING_PROFILE_FILE": str(profile_file)}).returncode, 2)
+
     def test_describe_does_not_read_stdin_and_runs_through_its_shebang(self):
         self.assertTrue(os.access(COMMAND, os.X_OK), "the Broker runs the file directly")
         completed = subprocess.run([str(COMMAND), "describe"], stdin=subprocess.DEVNULL,
@@ -259,6 +285,9 @@ class InvokeTests(unittest.TestCase):
         self.assertTrue(self.invoke(broker("issue.view", {"project": "OPS", "issue": 42}, credentials=readonly))["ok"])
         self.assertError(self.invoke(broker("issue.create", {"project": "OPS", "summary": "x"}, credentials=readonly)),
                          "upstream_forbidden")
+        expired_write = self.invoke(broker("issue.create", {"project": "OPS", "summary": "x"}, credentials=expired))
+        self.assertError(expired_write, "upstream_unauthorized")
+        self.assertEqual(expired_write["receipt"], {"mutationStatus": "not_applied"})
         self.assertError(self.invoke(broker("issue.view", {"project": "OPS", "issue": 42}, credentials={})),
                          "upstream_unauthorized")
 
@@ -268,6 +297,10 @@ class InvokeTests(unittest.TestCase):
         self.assertEqual([(i["key"], i["via"]) for i in result["issues"]],
                          [("OPS-42", "user"), ("WEB-12", "user")])
         self.assertEqual(result["access"], {"accounts": {"user": "avery"}})
+        # Searches echo the grants they received, values only.
+        self.assertEqual(result["grants"], [{"credential": "user", "resources": "any", "except": ["SEC"]},
+                                            {"credential": "service", "resources": ["OPS"]}])
+        self.assertNotIn("eu-1", json.dumps(result))
 
         service_only = [SEARCH_GRANTS[1]]
         result = self.invoke(command("issue.search", {"query": ""}, service_only,
@@ -298,6 +331,29 @@ class InvokeTests(unittest.TestCase):
         response = self.invoke(broker("issue.view", {"project": "WEB", "issue": 12}, resources=[{"value": "WEB"}]))
         self.assertEqual(response["result"]["issue"]["key"], "WEB-12")
 
+    def test_writes_answer_failures_before_writing_with_not_applied(self):
+        forbidden = self.invoke(broker("issue.create", {"project": "SEC", "summary": "x"}))
+        self.assertError(forbidden, "resource_forbidden")
+        readonly = {"user": dict(CREDENTIALS["user"], token="readonly-1")}
+        upstream = self.invoke(broker("issue.create", {"project": "OPS", "summary": "x"}, credentials=readonly))
+        self.assertError(upstream, "upstream_forbidden")
+        malformed = self.invoke(broker("issue.create", {"summary": "x"}))
+        self.assertError(malformed, "input_invalid")
+        wrong_mode = self.invoke(command("issue.create", {"project": "OPS", "summary": "x"}))
+        self.assertError(wrong_mode, "input_invalid")
+        for response in (forbidden, upstream, malformed, wrong_mode):
+            self.assertEqual(response["receipt"], {"mutationStatus": "not_applied"}, response)
+        # Reads never carry a receipt.
+        self.assertNotIn("receipt", self.invoke(broker("issue.view", {"project": "SEC", "issue": 7})))
+
+    def test_messages_replace_c0_c1_and_del_control_characters_but_tab(self):
+        response = self.invoke(broker("issue.view", {"project": "O\u0085P\u009fS\u0007\u007f\tX", "issue": 1}))
+        self.assertError(response, "resource_forbidden")
+        message = response["error"]["message"]
+        self.assertIn("O P S  \tX", message)
+        self.assertFalse(any(0x80 <= ord(c) <= 0x9F or ord(c) < 0x20 and c != "\t" or ord(c) == 0x7F
+                             for c in message), repr(message))
+
     def test_close_is_a_write_checked_by_the_command(self):
         response = self.invoke(command("issue.close", {"key": "OPS-42"}))
         self.assertTrue(response["ok"])
@@ -320,6 +376,15 @@ class InvokeTests(unittest.TestCase):
         self.assertEqual(result["caller"], CALLER)
         self.assertEqual(result["context"], "internal")
         self.assertEqual(result["access"], {"credential": "user", "account": "avery"})
+        # The network block comes back without the proxy's credentials.
+        self.assertEqual(result["network"], {"proxy": None, "noProxy": [], "trust": "system", "caCertificate": None})
+        proxied = command("whoami", {}, [{"credential": "user", "resources": "any"}],
+                          {"user": CREDENTIALS["user"]}, typed=False)
+        proxied["network"] = {"proxy": {"url": "https://proxy.example:8443", "username": "p", "password": "proxy-secret"},
+                              "noProxy": [".internal.example"], "trust": "custom", "caCertificate": "/etc/ca.pem"}
+        echoed = self.invoke(proxied)["result"]["network"]
+        self.assertEqual(echoed, {"proxy": {"url": "https://proxy.example:8443"}, "noProxy": [".internal.example"],
+                                  "trust": "custom", "caCertificate": "/etc/ca.pem"})
         self.assertError(self.invoke(command("whoami", {}, SEARCH_GRANTS, typed=False)), "input_invalid")
 
     def test_malformed_requests(self):
