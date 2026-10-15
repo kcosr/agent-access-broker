@@ -306,11 +306,14 @@ including one that selects all resources of the type. Only a value that no
 such entry holds carries just its `value`. `resourceType` is the manifest's
 type ID, not the Broker type ID.
 
-Every admitted exact entry carries an identity and version fence, with or
-without attributes. After the call's permit the Broker rechecks each entry and
-decrypts its attributes; an entry that changed (any change advances its
-version), was deleted and recreated, or was disabled while the call waited
-fails `scope_unresolved` without starting the process.
+Every admitted exact entry is fenced, with or without attributes, on its
+version, creation time (to the second), display name, type and selector.
+After the call's permit the Broker rechecks each entry and decrypts its
+attributes; an entry that changed (any change advances its version), was
+deleted and recreated, or was disabled while the call waited fails
+`scope_unresolved` without starting the process. An entry deleted and
+recreated within the same second with identical fields counts as the same
+entry.
 
 ### Command-enforced actions
 
@@ -649,8 +652,9 @@ A command reports a failure with one of these codes:
 | `upstream_failed` | `upstream_failed` | 424 | error |
 
 - `message` reaches the caller. It is UTF-8, at most 1,024 bytes, possibly
-  empty, with no control characters except tab, and must not echo a supplied
-  secret ([secrets in responses](#secrets-in-responses)).
+  empty, with no control characters except tab, and must not contain a
+  supplied credential or proxy secret
+  ([secrets in responses](#secrets-in-responses)).
 - `upstream_rate_limited` may carry `retryAfterSeconds` inside `error`, from 1
   to 86,400:
   `{"ok": false, "error": {"code": "upstream_rate_limited", "message": "Slow down.", "retryAfterSeconds": 30}}`.
@@ -682,8 +686,9 @@ optional `receipt`, which becomes the Broker's
 - `safeLocators` is a flat object of at most 16 entries, with keys of at most
   64 bytes and string (at most 256 bytes) or integer values, at most 1 KiB in
   total. Locators sit outside the sensitive pointer and may be copied into
-  compact CLI receipts, so they must hold identifiers only and never echo a
-  supplied secret ([secrets in responses](#secrets-in-responses)).
+  compact CLI receipts, so they must hold identifiers only and must not
+  contain a supplied credential or proxy secret
+  ([secrets in responses](#secrets-in-responses)).
 - A failed write's result reports `operationDispatched` beside its receipt:
   `false` only when the process never started. A successful write's result
   does not carry it.
@@ -691,20 +696,21 @@ optional `receipt`, which becomes the Broker's
 ### Secrets in responses
 
 Error messages, `verificationStage` and `safeLocators` keys and values leave
-the sensitive result, so none may echo a secret the request supplied. The
-Broker rejects such a response as a contract violation (`operation_failed`,
-logged as `secret_in_message`, `secret_in_receipt` for a verification stage,
-or `secret_in_locator`):
+the sensitive result, so none may contain a credential or proxy secret the
+request supplied. The Broker rejects such a response as a contract violation
+(`operation_failed`, logged as `secret_in_message`, `secret_in_receipt` for a
+verification stage, or `secret_in_locator`) when the text contains, anywhere:
 
-- Every supplied credential's token, and the Basic `username:token` form of a
-  `username_token` credential, anywhere in the text.
+- Every supplied credential's token, or the Basic `username:token` form of a
+  `username_token` credential.
 - The proxy password in every form the command receives it: raw,
   percent-encoded, inside the credentialed proxy URL and in the Basic
-  `username:password` form, anywhere in the text.
-- A private resource attribute value of 8 bytes or more anywhere in the text.
-  A shorter value, such as `eu` or `1`, is rejected only when it is the whole
-  message, stage, key or locator value, so short values do not reject
-  legitimate identifiers.
+  `username:password` form.
+
+Private resource attribute values are not checked. They are stored
+privately, but many, such as an issue key or a region, legitimately appear in
+replies. A command must keep any attribute it treats as a secret out of these
+fields.
 
 A verification response is checked against the credential it verified and
 the proxy secrets.
@@ -842,8 +848,8 @@ live, so a reused process ID is never signaled.*
 2. **Final checks.** After the permit, the Broker rechecks that the import
    is unchanged and available (quarantine, disable, operator removal or a
    changed command entry fail with `service_action_denied`), revalidates
-   every admitted exact resource against its identity and version fence and
-   decrypts its attributes (a changed, replaced or disabled entry fails with
+   every admitted exact resource against its fence (version, creation time,
+   display name, type and selector) and decrypts its attributes (a changed, replaced or disabled entry fails with
    `scope_unresolved`), and reads the credentials. Once the request is
    built, it checks the import fence and the action's availability again
    immediately before starting the process, so a change made in the meantime
@@ -934,7 +940,7 @@ record keeps the process facts:
 | `output_limit`, `pipes_held_open` | Stdout exceeded `max_output_bytes`, or a pipe stayed open after the drain |
 | `empty_response`, `invalid_json`, `response_shape`, `unknown_code`, `invalid_message`, `invalid_retry_after`, `output_schema` | The response document breaks the contract |
 | `receipt_on_read`, `invalid_receipt`, `invalid_locator` | The receipt breaks the contract |
-| `secret_in_message`, `secret_in_receipt`, `secret_in_locator` | The response echoes a supplied secret ([secrets in responses](#secrets-in-responses)) |
+| `secret_in_message`, `secret_in_receipt`, `secret_in_locator` | The response contains a supplied credential or proxy secret ([secrets in responses](#secrets-in-responses)) |
 
 Stderr is not logged by default, which keeps credentials a command might
 print out of the Broker's logs. To debug a command, an operator may set
@@ -952,7 +958,7 @@ not isolation. See [command imports in the security model](security-model.md#com
 
 | | Broker guarantees | The command must |
 | --- | --- | --- |
-| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no command output in responses or default logs; sensitive-marked results; no supplied secret in messages, stages or locators | Not log, persist or forward credentials or private attributes; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
+| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no command output in responses or default logs; sensitive-marked results; no supplied credential or proxy secret in messages, stages or locators | Not log, persist or forward credentials or private attributes; keep attributes it treats as secret out of messages, stages and locators; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
 | Broker-enforced | Every named resource is covered by a grant before the process starts; only that grant's credential is passed | Act only on the resources passed |
 | Command-enforced | Action-level authorization; one planner for invocation and discovery; only the credentials the passed grants use | Constrain queries and results to each grant, using that grant's credential, and answer `resource_forbidden` otherwise |
 
