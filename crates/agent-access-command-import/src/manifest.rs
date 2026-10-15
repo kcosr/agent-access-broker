@@ -143,11 +143,17 @@ pub(crate) fn whole_value_regex(pattern: &str) -> Result<regex::Regex, String> {
     if pattern.is_empty() || pattern.len() > MAX_PATTERN_BYTES {
         return Err(format!("patterns must have 1 to {MAX_PATTERN_BYTES} bytes"));
     }
-    regex::RegexBuilder::new(&format!(r"\A(?:{pattern})\z"))
-        .size_limit(MAX_COMPILED_PATTERN_BYTES)
-        .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
-        .build()
-        .map_err(|_| "a pattern is invalid or exceeds the regex budget".to_owned())
+    let compile = |source: &str| {
+        regex::RegexBuilder::new(source)
+            .size_limit(MAX_COMPILED_PATTERN_BYTES)
+            .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
+            .build()
+            .map_err(|_| "a pattern is invalid or exceeds the regex budget".to_owned())
+    };
+    // The bare source must be a complete expression on its own, so it cannot
+    // close the anchoring group and escape the anchors (`x)|(?s:.*`).
+    compile(pattern)?;
+    compile(&format!(r"\A(?:{pattern})\z"))
 }
 
 fn modes(value: &Value, label: &str) -> Result<Vec<ImportedCredentialMode>, String> {
@@ -899,6 +905,13 @@ pub(crate) mod tests {
         ] {
             assert!(whole_value_regex(&pattern).is_err(), "{pattern:.32}");
         }
+        // A source cannot close the anchoring group to escape the anchors.
+        for escape in ["x)|(?s:.*", ").*(?:", "x)|(?:"] {
+            assert!(whole_value_regex(escape).is_err(), "{escape}");
+        }
+        let mut manifest = sample();
+        manifest["resourceTypes"][0]["pattern"] = json!("OPS)|(?s:.*");
+        assert!(parse_value(&manifest).unwrap_err().contains("pattern"));
         let mut manifest = sample();
         manifest["resourceTypes"][0]["maxLength"] = json!(2);
         assert!(parse_value(&manifest).unwrap_err().contains("maxLength"));
