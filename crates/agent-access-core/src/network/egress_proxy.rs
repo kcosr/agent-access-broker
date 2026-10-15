@@ -15,10 +15,6 @@ use url::Url;
 
 /// Userinfo characters a credentialed proxy URL keeps literal: the RFC 3986
 /// unreserved set. Every other byte is percent-encoded.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the command network exports it")
-)]
 const USERINFO_LITERAL: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -77,10 +73,6 @@ impl EgressProxyEnvironment {
     }
 
     /// The `NO_PROXY` entries as given, in order, without empty entries.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the command network exports it")
-    )]
     pub(super) fn no_proxy_entries(&self) -> &[String] {
         &self.no_proxy.entries
     }
@@ -152,10 +144,6 @@ impl EgressProxyResolver {
     /// the environment proxy for HTTPS, then the global proxy, and otherwise
     /// direct. Imports have no service proxy. Resolves the global proxy's
     /// credential references.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the command network exports it")
-    )]
     pub(super) fn command_proxy(&self) -> Result<Option<ExportedProxy>, HostConfigError> {
         if let Some(proxy) = self.environment.proxy_for_scheme("https") {
             return Ok(Some(ExportedProxy(proxy)));
@@ -172,16 +160,8 @@ impl EgressProxyResolver {
 
 /// A proxy route exported to command imports, with its resolved credentials.
 /// Only the `network` module reads the credentials; `Debug` redacts them.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the command network exports it")
-)]
 pub(super) struct ExportedProxy(ProxyTarget);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the command network exports it")
-)]
 impl ExportedProxy {
     /// The proxy origin without credentials, such as
     /// `https://proxy.example:8443`.

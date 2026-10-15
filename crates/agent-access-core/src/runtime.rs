@@ -15,6 +15,8 @@ pub use command_authority::{
     CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
 };
 mod command_dispatch;
+#[cfg(test)]
+mod inherited_network_tests;
 mod discovery;
 mod import_control;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
@@ -45,7 +47,8 @@ use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
 use crate::network::{
-    ClientCaller, EgressProxyEnvironment, HostNetwork, PreparedOutboundTls, preflight_egress_proxy,
+    ClientCaller, EgressProxyEnvironment, HostNetwork, InheritedNetwork, PreparedOutboundTls,
+    preflight_egress_proxy,
 };
 use crate::{
     AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig, BrokerTokenClass,
@@ -1659,6 +1662,13 @@ pub struct BrokerRuntime {
     /// This generation's outbound network: limits, TLS trust and egress
     /// proxy selection over the proxy environment captured at startup.
     network: HostNetwork,
+    /// The network settings this generation's command imports inherit: its
+    /// proxy route and its `[network.outbound_tls]` trust mode and path.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the command request builder reads it")
+    )]
+    inherited_network: Arc<InheritedNetwork>,
     audit: AuditSink,
     audit_registry: Arc<AuditRuntimeRegistry>,
     /// The effective node ID; see [`crate::resolve_node_id`].
@@ -2012,6 +2022,8 @@ impl BrokerRuntime {
             .into();
         preflight_configured_egress_proxies(&config)?;
         prepare_upload_spool(&config.limits)?;
+        let inherited_network =
+            Arc::new(network.export_inherited_network(&config.network.outbound_tls)?);
         let mut provider_map = BTreeMap::new();
         for provider in providers {
             register_service_provider(&mut provider_map, &config, provider)?;
@@ -2197,6 +2209,7 @@ impl BrokerRuntime {
             browser_csrf_key,
             microsoft_oidc,
             network,
+            inherited_network,
             audit_registry,
             node_id,
             config_generation: None,
@@ -2763,6 +2776,15 @@ impl BrokerRuntime {
 
     pub fn outbound_tls(&self) -> &PreparedOutboundTls {
         self.network.outbound_tls()
+    }
+
+    /// The network settings this generation's command imports inherit.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the command request builder calls it")
+    )]
+    pub(crate) fn inherited_network(&self) -> &Arc<InheritedNetwork> {
+        &self.inherited_network
     }
 
     pub fn microsoft_oidc(&self) -> Option<&MicrosoftOidcRuntimeConfig> {

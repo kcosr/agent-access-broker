@@ -7,6 +7,7 @@
 //! replaced freely and must not stop the Broker.
 use crate::BrokerConfig;
 use crate::imports::{ImportEndpointForm, is_command_name};
+use crate::network::is_inherited_network_variable;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,21 +27,6 @@ pub const COMMAND_DEFAULT_WORKING_DIR: &str = "/";
 pub const COMMAND_MAX_ENV_VALUE_BYTES: usize = 4 * 1024;
 /// Most `env` entries one command may set.
 pub const COMMAND_MAX_ENV_ENTRIES: usize = 64;
-/// Variables the Broker may set from its egress settings when `network =
-/// "inherit"` (the trust variables only for the trust modes that use them);
-/// `env` may set them only with `network = "none"`.
-pub const COMMAND_NETWORK_VARIABLES: [&str; 9] = [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "NODE_EXTRA_CA_CERTS",
-];
-
 /// `[command_imports]`, keyed by approved command name.
 pub type CommandImportsConfig = BTreeMap<String, CommandImportConfig>;
 
@@ -197,7 +183,7 @@ pub(crate) fn validate_command_imports(config: &BrokerConfig, errors: &mut Vec<S
                     "{label}.env key {key:?} must match ^[A-Za-z_][A-Za-z0-9_]*$"
                 ));
             } else if command.network == CommandNetwork::Inherit
-                && COMMAND_NETWORK_VARIABLES.contains(&key.as_str())
+                && is_inherited_network_variable(key)
             {
                 errors.push(format!(
                     "{label}.env must not set {key}, which the Broker sets from its egress settings; use network = \"none\" to supply your own"
