@@ -151,6 +151,24 @@ impl EffectiveResourceTypes {
         &self.registry
     }
 
+    /// The registry's client-facing metadata, marking imported types with
+    /// their service and removed types as accepting no new resources.
+    pub(crate) fn metadata(&self) -> Vec<agent_access_provider::ResourceTypeMetadata> {
+        self.registry
+            .metadata()
+            .into_iter()
+            .map(|mut metadata| {
+                if let Some(ResourceTypeOwner::Imported { service, removed }) =
+                    self.owner(&metadata.id)
+                {
+                    metadata.removed = *removed;
+                    metadata.imported_service = Some(service.clone());
+                }
+                metadata
+            })
+            .collect()
+    }
+
     pub(crate) fn get(&self, id: &ResourceType) -> Option<&Arc<ResourceTypeDescriptor>> {
         self.registry.get(id)
     }
@@ -439,6 +457,24 @@ mod tests {
             })
         );
         assert_eq!(types.defining_service(&tickets), Some("tickets"));
+        let metadata = types.metadata();
+        let listed = |id: &ResourceType| {
+            metadata
+                .iter()
+                .find(|metadata| &metadata.id == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            (listed(&tickets).removed, listed(&tickets).imported_service),
+            (false, Some("tickets".to_owned()))
+        );
+        assert_eq!(
+            (listed(&boards).removed, listed(&boards).imported_service),
+            (true, Some("boards".to_owned()))
+        );
+        let git = listed(GIT_REPOSITORY_RESOURCE.id());
+        assert_eq!((git.removed, git.imported_service), (false, None));
         assert_eq!(types.get(&tickets).unwrap().label(), "Project");
         // A removed type stays registered for its resources and accepts no
         // new ones.

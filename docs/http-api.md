@@ -297,7 +297,10 @@ is not counted as an invocation.
 `GET /v1/resource-types` requires an authenticated caller (anonymous callers
 receive `identity_required`, as on the spec routes) and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution
-context. It returns `{"resourceTypes":[...]}` in registration order.
+context. It returns `{"resourceTypes":[...]}` in registration order. A type a
+command import declares carries its `importedService`; one that import no
+longer declares, kept for its remaining resources, is marked `removed: true`
+and accepts no new resources.
 
 `GET /v1/broker/status` requires normal Broker identity and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution

@@ -3454,7 +3454,7 @@ impl BrokerRuntime {
 
     /// Resource types this broker understands, for catalogs and clients.
     pub fn resource_type_metadata(&self) -> Vec<agent_access_provider::ResourceTypeMetadata> {
-        self.resource_types.registry().metadata()
+        self.resource_types.metadata()
     }
 
     /// This generation's resource type registry.

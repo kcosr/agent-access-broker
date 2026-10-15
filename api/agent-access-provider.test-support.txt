@@ -3485,9 +3485,11 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTyp
 pub agent_access_provider::ResourceTypeMetadata::attributes: alloc::vec::Vec<agent_access_provider::ResourceAttributeMetadata>
 pub agent_access_provider::ResourceTypeMetadata::example: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::id: agent_access_provider::ResourceType
+pub agent_access_provider::ResourceTypeMetadata::imported_service: core::option::Option<alloc::string::String>
 pub agent_access_provider::ResourceTypeMetadata::label: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::namespace: core::option::Option<agent_access_provider::NamespaceSelectorMetadata>
 pub agent_access_provider::ResourceTypeMetadata::plural_label: alloc::string::String
+pub agent_access_provider::ResourceTypeMetadata::removed: bool
 pub agent_access_provider::ResourceTypeMetadata::selectors: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for agent_access_provider::ResourceTypeMetadata
 pub fn agent_access_provider::ResourceTypeMetadata::clone(&self) -> agent_access_provider::ResourceTypeMetadata

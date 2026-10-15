@@ -514,6 +514,10 @@ All notable changes to this project are documented in this file.
   policy revision and reporting `resourceTypeEffects`. An import with accepted
   actions may accept a preview with no selections to apply only its metadata
   and type changes.
+- Resource type listings (`GET /v1/resource-types` and the runtime catalog's
+  `resourceTypes`) name a command import's types' `importedService` and mark a
+  removed type `removed: true`. The SDK's `ResourceTypeMetadata` gains the
+  `removed` and `imported_service` fields.
 
 ### Changed
 

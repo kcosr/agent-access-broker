@@ -694,6 +694,8 @@ impl ResourceTypeDescriptor {
                     members_label: namespace.members_label.to_string(),
                     example: namespace.example.to_string(),
                 }),
+            removed: false,
+            imported_service: None,
         }
     }
 }
@@ -712,6 +714,15 @@ pub struct ResourceTypeMetadata {
     pub attributes: Vec<ResourceAttributeMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<NamespaceSelectorMetadata>,
+    /// The type accepts no new resources: the imported service that
+    /// declared it no longer does, and it stays registered only for its
+    /// remaining resources. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+    /// The imported service whose accepted metadata declares the type;
+    /// omitted for the build's own types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_service: Option<String>,
 }
 
 /// Namespace selector support as clients see it.
@@ -1133,6 +1144,22 @@ mod tests {
 
         let metadata = project.metadata();
         assert_eq!(metadata.selectors, ["exact", "all"]);
+        // The registry marks imported and removed types; a descriptor's own
+        // metadata does neither, and both stay out of its encoding.
+        assert!(!metadata.removed);
+        assert_eq!(metadata.imported_service, None);
+        let encoded = serde_json::to_value(&metadata).unwrap();
+        assert!(encoded.get("removed").is_none() && encoded.get("importedService").is_none());
+        let mut marked = metadata.clone();
+        marked.removed = true;
+        marked.imported_service = Some("tickets".into());
+        let encoded = serde_json::to_value(&marked).unwrap();
+        assert_eq!(encoded["removed"], true);
+        assert_eq!(encoded["importedService"], "tickets");
+        assert_eq!(
+            serde_json::from_value::<ResourceTypeMetadata>(encoded).unwrap(),
+            marked
+        );
         assert_eq!(metadata.attributes.len(), 2);
         assert!(metadata.attributes.iter().all(|attribute| attribute.secret));
         assert_eq!(metadata.attributes[1].name, "webhookSecret");
