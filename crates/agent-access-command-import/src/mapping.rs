@@ -39,21 +39,83 @@ pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
     json!({"command": command})
 }
 
-/// The Broker type ID proposed for a manifest type: `<service>_<id>`, hyphens
-/// replaced by underscores, within the 64-byte type ID bound.
-pub(crate) fn proposed_type_id(service: &str, id: &str) -> String {
-    let mut proposed = format!("{service}_{id}").replace('-', "_");
-    proposed.truncate(64);
-    proposed.trim_end_matches('_').to_owned()
+/// The longest Broker type ID.
+const MAX_TYPE_ID_BYTES: usize = 64;
+
+/// `<service>_<tail>` with hyphens replaced by underscores, shortening only
+/// the service part so the whole tail fits the 64-byte type ID bound.
+/// Service names are ASCII and start with a lowercase letter, and a tail is
+/// at most 41 bytes, so at least 22 service bytes remain.
+fn type_id_with(service: &str, tail: &str) -> String {
+    let service = service.replace('-', "_");
+    let keep = MAX_TYPE_ID_BYTES
+        .saturating_sub(tail.len() + 1)
+        .min(service.len());
+    format!("{}_{tail}", &service[..keep])
+}
+
+/// The stable suffix that separates a colliding proposal: the first eight
+/// hex digits of the SHA-256 of the manifest type id.
+fn type_id_suffix(id: &str) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(id.as_bytes());
+    digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Broker type IDs for manifest type ids that have none yet: `<service>_<id>`
+/// with only the service part shortened. A proposal equal to another
+/// proposal, or to an ID the import already holds, becomes
+/// `<service>_<id>_<suffix>` instead. Proposals are deterministic.
+pub(crate) fn proposed_type_ids(service: &str, ids: &[&str], held: &[&str]) -> Vec<String> {
+    let base = ids
+        .iter()
+        .map(|id| type_id_with(service, id))
+        .collect::<Vec<_>>();
+    ids.iter()
+        .zip(&base)
+        .map(|(id, proposal)| {
+            let collides = held.contains(&proposal.as_str())
+                || base.iter().filter(|other| *other == proposal).count() > 1;
+            if collides {
+                type_id_with(service, &format!("{id}_{}", type_id_suffix(id)))
+            } else {
+                proposal.clone()
+            }
+        })
+        .collect()
 }
 
 /// The service-level metadata a manifest proposes. A type already accepted
-/// under the same manifest id keeps its Broker type ID.
+/// under the same manifest id keeps its Broker type ID; new types get
+/// [`proposed_type_ids`] that avoid every ID the import holds.
 pub(crate) fn proposed_metadata(
     service: &str,
     manifest: &Manifest,
     accepted: Option<&ImportedServiceMetadata>,
 ) -> ImportedServiceMetadata {
+    let accepted_types = accepted.map_or(&[][..], |accepted| &accepted.resource_types[..]);
+    let new_ids = manifest
+        .resource_types
+        .iter()
+        .filter(|declared| {
+            !accepted_types
+                .iter()
+                .any(|existing| existing.id == declared.id)
+        })
+        .map(|declared| declared.id.as_str())
+        .collect::<Vec<_>>();
+    let held = accepted_types
+        .iter()
+        .map(|existing| existing.broker_type.as_str())
+        .collect::<Vec<_>>();
+    let mut proposals = new_ids
+        .iter()
+        .copied()
+        .zip(proposed_type_ids(service, &new_ids, &held))
+        .collect::<std::collections::BTreeMap<_, _>>();
     ImportedServiceMetadata {
         format: COMMAND_FORMAT.into(),
         version: manifest.version.clone(),
@@ -64,17 +126,12 @@ pub(crate) fn proposed_metadata(
             .iter()
             .map(|declared| ImportedResourceTypeDeclaration {
                 id: declared.id.clone(),
-                broker_type: accepted
-                    .and_then(|accepted| {
-                        accepted
-                            .resource_types
-                            .iter()
-                            .find(|existing| existing.id == declared.id)
-                    })
-                    .map_or_else(
-                        || proposed_type_id(service, &declared.id),
-                        |existing| existing.broker_type.clone(),
-                    ),
+                broker_type: accepted_types
+                    .iter()
+                    .find(|existing| existing.id == declared.id)
+                    .map(|existing| existing.broker_type.clone())
+                    .or_else(|| proposals.remove(declared.id.as_str()))
+                    .unwrap_or_default(),
                 label: declared.label.clone(),
                 plural_label: declared.plural_label.clone(),
                 pattern: declared.pattern.clone(),
@@ -377,15 +434,102 @@ mod tests {
     }
 
     #[test]
+    fn proposed_type_ids_are_distinct_and_keep_the_type_id_whole() {
+        let service = format!("{}-qx", "a".repeat(60));
+        assert_eq!(service.len(), 63);
+        let mut value = crate::manifest::tests::sample();
+        let template = value["resourceTypes"][0].clone();
+        value["resourceTypes"] = json!(
+            [
+                "project_alpha_component_one",
+                "project_alpha_component_two",
+                "q_r",
+                "r"
+            ]
+            .iter()
+            .map(|id| {
+                let mut declared = template.clone();
+                declared["id"] = json!(id);
+                declared
+            })
+            .collect::<Vec<_>>()
+        );
+        value["actions"] = json!([]);
+        let manifest = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let proposed = proposed_metadata(&service, &manifest, None);
+        let ids = proposed
+            .resource_types
+            .iter()
+            .map(|declared| declared.broker_type.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            ids.len(),
+            "{ids:?}"
+        );
+        for (declared, id) in proposed.resource_types.iter().zip(&ids) {
+            assert!(id.len() <= 64, "{id}");
+            assert!(id.as_bytes()[0].is_ascii_lowercase(), "{id}");
+            assert!(
+                id.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                "{id}"
+            );
+            assert!(id.contains(&format!("_{}", declared.id)), "{id}");
+        }
+        // Distinct long ids keep their whole id with a shortened service part.
+        assert_eq!(
+            ids[0],
+            format!("{}_project_alpha_component_one", "a".repeat(36))
+        );
+        assert_eq!(
+            ids[1],
+            format!("{}_project_alpha_component_two", "a".repeat(36))
+        );
+        // `q_r` and `r` would both become `<60 a>_q_r`; each gets a stable suffix.
+        assert_ne!(ids[2], format!("{}_q_r", "a".repeat(60)));
+        assert_ne!(ids[3], format!("{}_q_r", "a".repeat(60)));
+        assert!(ids[2].ends_with(&format!("_q_r_{}", type_id_suffix("q_r"))));
+        assert!(ids[3].ends_with(&format!("_r_{}", type_id_suffix("r"))));
+        proposed.validate().unwrap();
+        // Proposals are deterministic, and avoid IDs the import already holds.
+        assert_eq!(proposed_metadata(&service, &manifest, None), proposed);
+        let mut accepted = proposed.clone();
+        accepted.resource_types.truncate(1);
+        accepted.resource_types[0].id = "retired".into();
+        accepted.resource_types[0].broker_type = ids[1].clone();
+        let refreshed = proposed_metadata(&service, &manifest, Some(&accepted));
+        assert_ne!(refreshed.resource_types[1].broker_type, ids[1]);
+        assert!(
+            refreshed.resource_types[1]
+                .broker_type
+                .ends_with(&type_id_suffix("project_alpha_component_two"))
+        );
+    }
+
+    #[test]
     fn proposed_type_ids_fit_the_type_id_bound() {
         assert_eq!(
-            proposed_type_id("ticket-ops", "project"),
-            "ticket_ops_project"
+            proposed_type_ids("ticket-ops", &["project"], &[]),
+            ["ticket_ops_project"]
         );
-        let long = proposed_type_id(&"s".repeat(60), "project");
-        assert_eq!(long, format!("{}_pro", "s".repeat(60)));
-        assert_eq!(proposed_type_id(&"s".repeat(63), "project"), "s".repeat(63));
-        assert_eq!(proposed_type_id(&"s".repeat(63), "_x"), "s".repeat(63));
+        assert_eq!(
+            proposed_type_ids(&"s".repeat(63), &["project"], &[]),
+            [format!("{}_project", "s".repeat(56))]
+        );
+        let id = "i".repeat(32);
+        let [suffixed] = proposed_type_ids(
+            &"s".repeat(63),
+            &[&id],
+            &[&format!("{}_{id}", "s".repeat(31))],
+        )
+        .try_into()
+        .unwrap();
+        assert_eq!(suffixed.len(), 64);
+        assert_eq!(
+            suffixed,
+            format!("{}_{id}_{}", "s".repeat(22), type_id_suffix(&id))
+        );
     }
 
     #[test]
