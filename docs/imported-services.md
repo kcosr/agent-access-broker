@@ -248,7 +248,9 @@ The runtime OpenAPI and JSON-send schemas carry exact request/result shapes and
 mark token input sensitive. List results include `commandImports`, the
 operator-approved command names (never paths) a `command` import may name as
 `command:<name>`; command import results include `commandVersion`, the version
-its accepted manifest reported, and the record's `acceptedMetadata`. List, inspect, and saved-preview reads permit
+its accepted manifest reported, and the record's `acceptedMetadata`. A command
+import's preview manifest carries the proposed `serviceMetadata` that acceptance
+stores. List, inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change

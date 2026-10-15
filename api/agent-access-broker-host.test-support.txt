@@ -981,6 +981,7 @@ pub agent_access_core::imports::metadata::ImportedServiceMetadata::resource_type
 pub agent_access_core::imports::metadata::ImportedServiceMetadata::verify: bool
 pub agent_access_core::imports::metadata::ImportedServiceMetadata::version: alloc::string::String
 impl agent_access_core::imports::metadata::ImportedServiceMetadata
+pub fn agent_access_core::imports::metadata::ImportedServiceMetadata::admits_bindings(&self, &agent_access_core::imports::definition::ImportedServiceDefinition) -> core::result::Result<(), alloc::string::String>
 pub fn agent_access_core::imports::metadata::ImportedServiceMetadata::validate(&self) -> core::result::Result<(), alloc::string::String>
 impl core::clone::Clone for agent_access_core::imports::metadata::ImportedServiceMetadata
 pub fn agent_access_core::imports::metadata::ImportedServiceMetadata::clone(&self) -> agent_access_core::imports::metadata::ImportedServiceMetadata
