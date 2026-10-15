@@ -299,6 +299,15 @@
     height: 15px;
     color: var(--wb-warning-text);
   }
+  /* A persistent editor bar while nothing needs attention: no changes yet,
+     or a complete draft ready to save. */
+  .wb-draftbar--neutral {
+    border-top-color: var(--wb-border);
+    background: var(--wb-surface);
+  }
+  .wb-draftbar--neutral > .wb-icon {
+    color: var(--wb-muted);
+  }
   /* Wraps (and pushes the actions to their own line) in narrow panes. */
   .wb-draftbar-text {
     flex: 1 1 220px;
