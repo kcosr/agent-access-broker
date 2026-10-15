@@ -1145,6 +1145,10 @@ writability, config generation, policy generation, grant counts, and managed
 policy revision metadata when available. `GET /v1/admin/policy/catalog` returns
 configured service/action/scope metadata plus known policy subjects so UIs can
 build grant forms without hardcoding provider- or gateway-specific fields.
+A command import's actions also carry `resourcesCheckedBy`: `broker` when the
+Broker checks the resources an action names before it runs, `command` when the
+command enforces the caller's grants itself, including for an action without a
+resource type. Other actions omit it.
 Resource forms take type choices from `GET /v1/resource-types`.
 It also returns configured execution-context choices and default/required
 metadata. Every grant create requires a non-empty unique `executionContexts`

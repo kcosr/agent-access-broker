@@ -146,6 +146,16 @@ impl CommandAuthorization {
     }
 }
 
+/// Who checks a command import action's resources, as policy editors show
+/// it: the Broker before dispatch, or the command from the grants it is
+/// passed (also for an action without a resource type).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourcesCheckedBy {
+    Broker,
+    Command,
+}
+
 /// Why a command-enforced action has no grants to pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandDenial {
@@ -200,6 +210,20 @@ impl BrokerRuntime {
     /// [`command_enforced_action`].
     pub(super) fn command_enforced(&self, service: &str, action: &str) -> bool {
         command_enforced_action(&self.imported_catalog, &self.services, service, action)
+    }
+
+    /// Who checks the resources of `action` of a command import, by the
+    /// classification the planner and policy validation use; `None` for
+    /// every other service's actions.
+    pub fn resources_checked_by(&self, service: &str, action: &str) -> Option<ResourcesCheckedBy> {
+        if !self.is_command_import(service) || self.action_descriptor(service, action).is_none() {
+            return None;
+        }
+        Some(if self.command_enforced(service, action) {
+            ResourcesCheckedBy::Command
+        } else {
+            ResourcesCheckedBy::Broker
+        })
     }
 
     /// Whether `action` of `service` supports credential `mode`. Policy

@@ -1029,6 +1029,18 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
             );
         }
         if principal == "alice" {
+            let (status, catalog) =
+                request(&app, &token, Method::GET, "/v1/admin/policy/catalog", None).await;
+            assert_eq!(status, StatusCode::OK, "{catalog}");
+            let tickets = catalog["result"]["services"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["service"] == "tickets")
+                .unwrap();
+            for action in tickets["actions"].as_array().unwrap() {
+                assert_eq!(action["resourcesCheckedBy"], "command", "{action}");
+            }
             let mine = discovered["actions"]
                 .as_array()
                 .unwrap()
@@ -1148,19 +1160,21 @@ async fn acceptance_refuses_changes_that_would_invalidate_retained_grants() {
     drop(runtime);
     let accepted_before = broker.runtime().imported_catalog().clone();
 
-    for (change, grant, expected) in [
+    for (change, grant, expected, code) in [
         // The action now names its project, so the Broker checks it and the
         // pair of modes becomes ambiguous.
         (
             json!({"resources": {"type": "project", "inputs": ["/project"]}}),
             "stats-alice-service",
             "ambiguous credential mode",
+            "credential_mode_ambiguous",
         ),
         // The action no longer supports personal mode.
         (
             json!({"credentialModes": ["service"]}),
             "stats-alice-user",
             "per_user is unsupported",
+            "credential_mode_invalid",
         ),
     ] {
         let mut refreshed = manifest.clone();
@@ -1200,6 +1214,16 @@ async fn acceptance_refuses_changes_that_would_invalidate_retained_grants() {
         let message = refused.to_string();
         assert!(message.contains(grant), "{refused}");
         assert!(message.contains(expected), "{refused}");
+        // The affected grants are also listed for clients.
+        let affected = refused["target"]["affectedGrants"].as_array().unwrap();
+        assert_eq!(affected.len(), 1, "{refused}");
+        assert_eq!(affected[0]["id"], grant, "{refused}");
+        assert_eq!(affected[0]["reasonCode"], code, "{refused}");
+        assert!(
+            affected[0]["reason"].as_str().unwrap().contains(expected),
+            "{refused}"
+        );
+        assert!(refused["target"].get("resources").is_none(), "{refused}");
         // The refresh quarantined the action; the refused acceptance kept
         // its accepted definition.
         let published = broker.runtime();

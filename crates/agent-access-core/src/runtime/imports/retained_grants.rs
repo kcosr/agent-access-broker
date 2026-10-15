@@ -65,13 +65,41 @@ impl BrokerRuntime {
         if issues.is_empty() {
             return Ok(());
         }
-        Err(ManagedStoreError::InputInvalid(format!(
-            "the change would leave retained grants invalid; update or remove them first: {}",
-            issues
-                .into_iter()
-                .map(|issue| issue.message)
-                .collect::<Vec<_>>()
-                .join("; ")
+        // Every issue message starts with the label of the grant it names.
+        let affected_grants = issues
+            .iter()
+            .map(|issue| {
+                let grant = snapshot
+                    .grants
+                    .iter()
+                    .zip(&labels)
+                    .find(|(_, label)| issue.message.starts_with(&format!("{label} ")))
+                    .map(|(grant, label)| {
+                        grant
+                            .managed_id()
+                            .map_or_else(|| label.clone(), str::to_owned)
+                    })
+                    .unwrap_or_default();
+                crate::ImportBlockingGrant {
+                    id: grant,
+                    reason_code: issue.code.to_owned(),
+                    reason: issue.message.clone(),
+                }
+            })
+            .collect();
+        Err(ManagedStoreError::ImportChangeBlocked(Box::new(
+            crate::ImportChangeBlocked {
+                message: format!(
+                    "the change would leave retained grants invalid; update or remove them first: {}",
+                    issues
+                        .iter()
+                        .map(|issue| issue.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+                affected_grants,
+                resources: Vec::new(),
+            },
         )))
     }
 }

@@ -7,7 +7,8 @@
 //! values are deleted without decrypting them.
 use super::*;
 use crate::imports::{
-    ImportedTypeAcceptance, ImportedTypeResource, ImportedTypeUsage, describe_type_violations,
+    IMPORT_TYPE_RESOURCE_SAMPLE, ImportedTypeAcceptance, ImportedTypeResource, ImportedTypeUsage,
+    describe_type_violations,
 };
 
 /// The values one acceptance deleted from one resource: the removed
@@ -141,7 +142,23 @@ pub(super) fn apply_type_acceptance(
     let usage = type_usage(conn, plan.resource_types())?;
     let violations = plan.violations(&usage);
     if !violations.is_empty() {
-        return Err(input_invalid(describe_type_violations(&violations)));
+        return Err(ManagedStoreError::ImportChangeBlocked(Box::new(
+            crate::ImportChangeBlocked {
+                message: describe_type_violations(&violations),
+                affected_grants: Vec::new(),
+                resources: violations
+                    .iter()
+                    .flat_map(|(broker_type, ids)| {
+                        ids.iter().take(IMPORT_TYPE_RESOURCE_SAMPLE).map(|id| {
+                            crate::ImportBlockingResource {
+                                resource_type: broker_type.clone(),
+                                id: id.clone(),
+                            }
+                        })
+                    })
+                    .collect(),
+            },
+        )));
     }
     let now = normalized_now_string();
     let mut effects = ImportedTypeEffects {

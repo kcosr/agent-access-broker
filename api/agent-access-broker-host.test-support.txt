@@ -1220,6 +1220,7 @@ pub agent_access_core::managed_store::ManagedStoreError::GroupNotFound
 pub agent_access_core::managed_store::ManagedStoreError::IdentityBindingConflict
 pub agent_access_core::managed_store::ManagedStoreError::IdentityBindingNotFound
 pub agent_access_core::managed_store::ManagedStoreError::IdentityVersionConflict
+pub agent_access_core::managed_store::ManagedStoreError::ImportChangeBlocked(alloc::boxed::Box<agent_access_core::managed_store::ImportChangeBlocked>)
 pub agent_access_core::managed_store::ManagedStoreError::InputInvalid(alloc::string::String)
 pub agent_access_core::managed_store::ManagedStoreError::LocalLoginFailed
 pub agent_access_core::managed_store::ManagedStoreError::LocalLoginLocked
@@ -1271,6 +1272,68 @@ impl core::marker::Unpin for agent_access_core::managed_store::ManagedStoreError
 impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ManagedStoreError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ManagedStoreError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ManagedStoreError
+#[non_exhaustive] pub struct agent_access_core::managed_store::ImportBlockingGrant
+pub agent_access_core::managed_store::ImportBlockingGrant::id: alloc::string::String
+pub agent_access_core::managed_store::ImportBlockingGrant::reason: alloc::string::String
+pub agent_access_core::managed_store::ImportBlockingGrant::reason_code: alloc::string::String
+impl core::clone::Clone for agent_access_core::managed_store::ImportBlockingGrant
+pub fn agent_access_core::managed_store::ImportBlockingGrant::clone(&self) -> agent_access_core::managed_store::ImportBlockingGrant
+impl core::cmp::Eq for agent_access_core::managed_store::ImportBlockingGrant
+impl core::cmp::PartialEq for agent_access_core::managed_store::ImportBlockingGrant
+pub fn agent_access_core::managed_store::ImportBlockingGrant::eq(&self, &agent_access_core::managed_store::ImportBlockingGrant) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::ImportBlockingGrant
+pub fn agent_access_core::managed_store::ImportBlockingGrant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::ImportBlockingGrant
+impl serde_core::ser::Serialize for agent_access_core::managed_store::ImportBlockingGrant
+pub fn agent_access_core::managed_store::ImportBlockingGrant::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::ImportBlockingGrant
+impl core::marker::Send for agent_access_core::managed_store::ImportBlockingGrant
+impl core::marker::Sync for agent_access_core::managed_store::ImportBlockingGrant
+impl core::marker::Unpin for agent_access_core::managed_store::ImportBlockingGrant
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ImportBlockingGrant
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ImportBlockingGrant
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ImportBlockingGrant
+#[non_exhaustive] pub struct agent_access_core::managed_store::ImportBlockingResource
+pub agent_access_core::managed_store::ImportBlockingResource::id: alloc::string::String
+pub agent_access_core::managed_store::ImportBlockingResource::resource_type: alloc::string::String
+impl core::clone::Clone for agent_access_core::managed_store::ImportBlockingResource
+pub fn agent_access_core::managed_store::ImportBlockingResource::clone(&self) -> agent_access_core::managed_store::ImportBlockingResource
+impl core::cmp::Eq for agent_access_core::managed_store::ImportBlockingResource
+impl core::cmp::PartialEq for agent_access_core::managed_store::ImportBlockingResource
+pub fn agent_access_core::managed_store::ImportBlockingResource::eq(&self, &agent_access_core::managed_store::ImportBlockingResource) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::ImportBlockingResource
+pub fn agent_access_core::managed_store::ImportBlockingResource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::ImportBlockingResource
+impl serde_core::ser::Serialize for agent_access_core::managed_store::ImportBlockingResource
+pub fn agent_access_core::managed_store::ImportBlockingResource::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::ImportBlockingResource
+impl core::marker::Send for agent_access_core::managed_store::ImportBlockingResource
+impl core::marker::Sync for agent_access_core::managed_store::ImportBlockingResource
+impl core::marker::Unpin for agent_access_core::managed_store::ImportBlockingResource
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ImportBlockingResource
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ImportBlockingResource
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ImportBlockingResource
+#[non_exhaustive] pub struct agent_access_core::managed_store::ImportChangeBlocked
+pub agent_access_core::managed_store::ImportChangeBlocked::affected_grants: alloc::vec::Vec<agent_access_core::managed_store::ImportBlockingGrant>
+pub agent_access_core::managed_store::ImportChangeBlocked::message: alloc::string::String
+pub agent_access_core::managed_store::ImportChangeBlocked::resources: alloc::vec::Vec<agent_access_core::managed_store::ImportBlockingResource>
+impl core::clone::Clone for agent_access_core::managed_store::ImportChangeBlocked
+pub fn agent_access_core::managed_store::ImportChangeBlocked::clone(&self) -> agent_access_core::managed_store::ImportChangeBlocked
+impl core::cmp::Eq for agent_access_core::managed_store::ImportChangeBlocked
+impl core::cmp::PartialEq for agent_access_core::managed_store::ImportChangeBlocked
+pub fn agent_access_core::managed_store::ImportChangeBlocked::eq(&self, &agent_access_core::managed_store::ImportChangeBlocked) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::ImportChangeBlocked
+pub fn agent_access_core::managed_store::ImportChangeBlocked::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::ImportChangeBlocked
+impl serde_core::ser::Serialize for agent_access_core::managed_store::ImportChangeBlocked
+pub fn agent_access_core::managed_store::ImportChangeBlocked::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::ImportChangeBlocked
+impl core::marker::Send for agent_access_core::managed_store::ImportChangeBlocked
+impl core::marker::Sync for agent_access_core::managed_store::ImportChangeBlocked
+impl core::marker::Unpin for agent_access_core::managed_store::ImportChangeBlocked
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ImportChangeBlocked
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ImportChangeBlocked
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ImportChangeBlocked
 pub struct agent_access_core::managed_store::ManagedPolicyGrantRecord
 pub agent_access_core::managed_store::ManagedPolicyGrantRecord::actions: alloc::vec::Vec<alloc::string::String>
 pub agent_access_core::managed_store::ManagedPolicyGrantRecord::created_at: alloc::string::String
@@ -1646,6 +1709,9 @@ struct agent_access_core::imports::metadata::ImportedResourceAttributeDeclaratio
 struct agent_access_core::imports::metadata::ImportedResourceTypeDeclaration: named fields
 struct agent_access_core::imports::metadata::ImportedServiceMetadata: named fields
 struct agent_access_core::imports::registration::ImportedAdapterRegistration: named fields, private fields
+struct agent_access_core::managed_store::ImportBlockingGrant: named fields, non-exhaustive
+struct agent_access_core::managed_store::ImportBlockingResource: named fields, non-exhaustive
+struct agent_access_core::managed_store::ImportChangeBlocked: named fields, non-exhaustive
 struct agent_access_core::managed_store::ManagedPolicyGrantRecord: named fields
 struct agent_access_core::managed_store::PolicyValidationIssue: named fields
 struct agent_access_core::managed_store::imported_store::ImportedActionRecord: named fields

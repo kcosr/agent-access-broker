@@ -1947,14 +1947,27 @@ pub(super) async fn management_store_error_response(
             broker_request_id = %context.broker_request_id, error = %error,
             "management store operation failed");
     }
-    let target = if let agent_access_core::ManagedStoreError::ResourceConflict(existing) = &error {
+    let mut details = serde_json::Map::new();
+    match &error {
+        agent_access_core::ManagedStoreError::ResourceConflict(existing) => {
+            details.insert("conflict".into(), json!(existing));
+        }
+        // The grants or resources an import change would leave invalid.
+        agent_access_core::ManagedStoreError::ImportChangeBlocked(blocked) => {
+            if let Value::Object(lists) = json!(blocked) {
+                details.extend(lists.into_iter().filter(|(key, _)| key != "message"));
+            }
+        }
+        _ => {}
+    }
+    let target = if details.is_empty() {
+        target
+    } else {
         let mut target = target
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        target.insert("conflict".into(), json!(existing));
+        target.extend(details);
         Some(Value::Object(target))
-    } else {
-        target
     };
     let message = management_store_public_error_message(operation, &error);
     management_context_error_response(context, status, operation, reason_code, &message, target)

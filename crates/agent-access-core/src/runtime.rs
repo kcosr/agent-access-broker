@@ -11,7 +11,9 @@ mod availability;
 mod client_category_tests;
 mod command_authority;
 pub(crate) use command_authority::command_enforced_action;
-pub use command_authority::{CommandAuthorization, CommandGrantAuthority, CommandResourceType};
+pub use command_authority::{
+    CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
+};
 mod discovery;
 mod import_control;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
@@ -8273,6 +8275,7 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
             "managed store schema is incompatible; a fresh database is required"
         }
         ManagedStoreError::InputInvalid(_) => "managed credential input is invalid",
+        ManagedStoreError::ImportChangeBlocked(_) => "imported service change is blocked",
         ManagedStoreError::CredentialInvalid(_) => "managed per_user credential is invalid",
         ManagedStoreError::CredentialEncryptFailed => {
             "managed per_user credential encryption failed"

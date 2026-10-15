@@ -83,7 +83,8 @@ credential rewrap. See [database operations](database.md).
    restoring such actions requires acceptance; affected grants require confirmation.
    A change that would leave a retained grant invalid, for example by removing a
    credential mode it uses, is refused and names the grants to update or remove
-   first.
+   first; the error's `target.affectedGrants` lists each as `{id, reasonCode,
+   reason}`, with the policy validation code and message.
 
 The service's **Actions** tab lists each saved action identifier, optional display
 label and description without another discovery request. Long descriptions have
@@ -307,7 +308,8 @@ transaction, under the managed policy mutation lock that resource writes also
 take. If a resource created or edited after the preview now prevents a change,
 for example a resource of a type gaining a required attribute or of a type being
 dropped, acceptance is rejected and names the resources; edit or delete them,
-or refresh. Any acceptance that changes the import's types also checks every
+or refresh. The error's `target.resources` lists them as `{type, id}`, at most
+100 per type. Any acceptance that changes the import's types also checks every
 stored resource and its attribute bindings against the new registry before it
 commits. An acceptance that deletes attribute values or drops a type advances
 the managed policy revision and publishes the resulting policy with the new

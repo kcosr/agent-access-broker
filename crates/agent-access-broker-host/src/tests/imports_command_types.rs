@@ -782,6 +782,13 @@ async fn refresh_applies_safe_type_changes_and_deletes_removed_attribute_values(
         rejected.to_string().contains("tickets_project: web"),
         "{rejected}"
     );
+    // The blocking resources are also listed for clients.
+    assert_eq!(
+        rejected["target"]["resources"],
+        json!([{"type": "tickets_project", "id": "web"}]),
+        "{rejected}"
+    );
+    assert!(rejected["target"].get("affectedGrants").is_none());
     let (status, patched) = patch_resource(
         &app,
         &token,

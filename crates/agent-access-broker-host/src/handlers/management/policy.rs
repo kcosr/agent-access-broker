@@ -123,6 +123,9 @@ struct PolicyActionCatalog {
     credential_modes: Vec<String>,
     lookup_required: bool,
     input_schema: Value,
+    /// For a command import's action, who checks its resources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resources_checked_by: Option<agent_access_core::ResourcesCheckedBy>,
 }
 
 #[derive(Debug, Serialize)]
@@ -543,6 +546,8 @@ pub(crate) async fn admin_policy_catalog(
                 .is_some()
             {
                 for action in &mut catalog.actions {
+                    action.resources_checked_by =
+                        runtime.resources_checked_by(&catalog.service, &action.action);
                     action.available = runtime
                         .imported_action_available(&catalog.service, &action.action)
                         && !catalog.configured_credential_modes.is_empty();
@@ -1749,6 +1754,7 @@ fn action_catalog(action: ActionCapabilities) -> PolicyActionCatalog {
         credential_modes: action.credential_modes,
         lookup_required: action.lookup_required,
         input_schema: action.input_schema,
+        resources_checked_by: None,
     }
 }
 

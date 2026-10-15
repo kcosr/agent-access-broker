@@ -239,6 +239,37 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
         "tickets_project"
     );
     project_resources(&app, &token).await;
+    // Policy editors see who checks each command action's resources.
+    let (status, catalog) =
+        request(&app, &token, Method::GET, "/v1/admin/policy/catalog", None).await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let checked_by = |service: &str| {
+        catalog["result"]["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["service"] == service)
+            .unwrap()["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| {
+                (
+                    action["action"].as_str().unwrap().to_owned(),
+                    action.get("resourcesCheckedBy").cloned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        checked_by("tickets"),
+        BTreeMap::from([
+            ("issue.bulk".to_owned(), Some(json!("broker"))),
+            ("issue.search".to_owned(), Some(json!("command"))),
+            ("issue.view".to_owned(), Some(json!("broker"))),
+        ])
+    );
+    assert!(checked_by("observability").values().all(Option::is_none));
 
     let runtime = broker.runtime();
     let store = runtime.managed_store().unwrap();
@@ -492,6 +523,25 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     assert!(message.contains("view-eng-user"), "{refused}");
     assert!(
         message.contains("does not support resource selections"),
+        "{refused}"
+    );
+    let affected = refused["target"]["affectedGrants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|grant| {
+            (
+                grant["id"].as_str().unwrap(),
+                grant["reasonCode"].as_str().unwrap(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        affected,
+        BTreeSet::from([
+            ("view-eng-user", "resource_selection_unsupported"),
+            ("view-ops-service", "resource_selection_unsupported"),
+        ]),
         "{refused}"
     );
     drop(app);
