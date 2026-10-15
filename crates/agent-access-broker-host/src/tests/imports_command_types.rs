@@ -228,6 +228,52 @@ fn action_statuses(result: &Value) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// The success completion records of acceptances, in order.
+fn acceptance_completions(fixture: &CommandFixture) -> Vec<Value> {
+    read_audit_records(Path::new(&fixture.config.audit.as_ref().unwrap().path))
+        .into_iter()
+        .filter(|record| {
+            record["providerAudit"]["management"]["operation"] == "admin.imports.accept"
+                && record["providerAudit"]["management"]["phase"] == "success"
+        })
+        .collect()
+}
+
+/// The `/v1/resource-types` entry of `id`.
+async fn listed_type(app: &Router, token: &str, id: &str) -> Value {
+    let (status, listed) = request(app, token, Method::GET, "/v1/resource-types", None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    listed["resourceTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("{id} is not listed: {listed}"))
+}
+
+async fn patch_resource(app: &Router, token: &str, id: &str, patch: Value) -> (StatusCode, Value) {
+    let (status, current) = request(
+        app,
+        token,
+        Method::GET,
+        &format!("/v1/admin/policy/resources/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    let mut body = patch;
+    body["expectedVersion"] = current["result"]["version"].clone();
+    request(
+        app,
+        token,
+        Method::PATCH,
+        &format!("/v1/admin/policy/resources/{id}"),
+        Some(body),
+    )
+    .await
+}
+
 /// The runtime's published attribute bindings equal the store's.
 fn assert_bindings_match_store(runtime: &BrokerRuntime) {
     let stored = runtime
@@ -275,6 +321,10 @@ async fn accepted_types_register_validate_privately_and_survive_restart() {
     for (ids, expected) in [
         (json!({"project": "git_repository"}), "already registered"),
         (json!({"project": "jira_project"}), "already registered"),
+        (
+            json!({"project": "unresolved_resource_type"}),
+            "already registered",
+        ),
         (json!({"project": "Tickets"}), "must match"),
         (json!({"project": "tickets_queue"}), "invalid or duplicated"),
         (json!({"board": "tickets_board"}), "does not declare"),
@@ -308,6 +358,25 @@ async fn accepted_types_register_validate_privately_and_survive_restart() {
     assert_eq!(types[0]["removed"], false);
     assert_eq!(types[1]["brokerType"], "tickets_queue");
     assert!(accepted.get("resourceTypeEffects").is_none(), "{accepted}");
+    // The completion audit records the Broker type IDs the acceptance added.
+    let completions = acceptance_completions(&fixture);
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    let target = &completions[0]["providerAudit"]["management"]["target"];
+    assert_eq!(target["service"], SERVICE);
+    assert_eq!(
+        target["resourceTypeIds"],
+        json!({"project": "ticket_project", "queue": "tickets_queue"})
+    );
+    // Listed types name their import; active ones are not marked removed.
+    let listed = listed_type(&app, &token, "ticket_project").await;
+    assert_eq!(listed["importedService"], SERVICE);
+    assert!(listed.get("removed").is_none(), "{listed}");
+    assert!(
+        listed_type(&app, &token, "git_repository")
+            .await
+            .get("importedService")
+            .is_none()
+    );
 
     // Accepted types are listed for every caller, with attribute names only.
     let (status, listed) = request(&app, &token, Method::GET, "/v1/resource-types", None).await;
@@ -551,20 +620,57 @@ async fn refresh_applies_safe_type_changes_and_deletes_removed_attribute_values(
         json!(["label", "attribute_text", "attribute_removed"])
     );
     assert_eq!(change["affectedResources"], json!(["eng", "ops"]));
+    // A value set after the preview is deleted too.
+    let (status, patched) = patch_resource(
+        &app,
+        &token,
+        "web",
+        json!({"attributes": {"webhookSecret": "late-secret"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    let generation = broker.runtime().policy_generation();
     let accepted = accept(&app, &token, &discovered).await;
+    let effects = &accepted["resourceTypeEffects"];
     assert_eq!(
-        accepted["resourceTypeEffects"],
-        json!({"deletedAttributeValues": [
+        effects["deletedAttributeValues"],
+        json!([
             {"resourceId": "eng", "attributes": ["webhookSecret"]},
-            {"resourceId": "ops", "attributes": ["webhookSecret"]}],
-            "droppedTypes": []})
+            {"resourceId": "ops", "attributes": ["webhookSecret"]},
+            {"resourceId": "web", "attributes": ["webhookSecret"]}])
     );
+    assert_eq!(effects["droppedTypes"], json!([]));
+    assert_eq!(effects["previousRevision"]["generation"], generation);
+    assert_eq!(effects["revision"]["generation"], generation + 1);
     let runtime = broker.runtime();
     assert_eq!(
         versions_of(&runtime),
-        [before[0] + 1, before[1] + 1, before[2]]
+        [before[0] + 1, before[1] + 1, before[2] + 2]
     );
     assert_eq!(runtime.policy_generation(), generation + 1);
+    assert!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .resource("web")
+            .unwrap()
+            .configured_attributes
+            .is_empty()
+    );
+    // The completion audit names the deleted attributes, never their values.
+    let completion = acceptance_completions(&fixture).pop().unwrap();
+    let target = &completion["providerAudit"]["management"]["target"];
+    assert_eq!(
+        target["deletedAttributeValues"],
+        effects["deletedAttributeValues"]
+    );
+    assert_eq!(target["deletedAttributeValueResources"], 3);
+    assert_eq!(target["droppedTypes"], json!([]));
+    assert_eq!(target["previousRevision"]["generation"], generation);
+    assert_eq!(target["revision"]["generation"], generation + 1);
+    for secret in ["first-secret", "second-secret", "late-secret"] {
+        assert!(!completion.to_string().contains(secret), "{completion}");
+    }
     let store = runtime.managed_store().unwrap();
     assert_eq!(
         store.resource("ops").unwrap().configured_attributes,
@@ -605,7 +711,7 @@ async fn refresh_applies_safe_type_changes_and_deletes_removed_attribute_values(
     let runtime = broker.runtime();
     assert_eq!(
         versions_of(&runtime),
-        [before[0] + 2, before[1] + 1, before[2]]
+        [before[0] + 2, before[1] + 1, before[2] + 2]
     );
     assert!(runtime.published_attribute_bindings().is_empty());
     assert_bindings_match_store(&runtime);
@@ -653,6 +759,37 @@ async fn refresh_applies_safe_type_changes_and_deletes_removed_attribute_values(
         "{rejected}"
     );
     delete_resource(&broker.runtime(), "legacy");
+    // An exact value edited after the preview so that it no longer fits the
+    // pending grammar rejects the acceptance too, naming the resource.
+    let (status, patched) = patch_resource(
+        &app,
+        &token,
+        "web",
+        json!({"selector": {"kind": "exact", "value": "WEBX"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    let (status, rejected) = accept_with(
+        &app,
+        &token,
+        &discovered,
+        all_selections(&discovered),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert!(
+        rejected.to_string().contains("tickets_project: web"),
+        "{rejected}"
+    );
+    let (status, patched) = patch_resource(
+        &app,
+        &token,
+        "web",
+        json!({"selector": {"kind": "exact", "value": "WEB"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
     let (status, preview) = request(
         &app,
         &token,
@@ -770,6 +907,9 @@ async fn incompatible_changes_need_a_new_id_and_removed_types_stay_until_unused(
         (json!("tickets_queue"), json!(true))
     );
     assert!(registered_types(&broker.runtime()).contains(&"tickets_queue".to_owned()));
+    let listed = listed_type(&app, &token, "tickets_queue").await;
+    assert_eq!(listed["removed"], true, "{listed}");
+    assert_eq!(listed["importedService"], SERVICE);
     let (status, rejected) =
         create_resource(&app, &token, "intake", "tickets_queue", "intake", json!({})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
@@ -815,9 +955,18 @@ async fn incompatible_changes_need_a_new_id_and_removed_types_stay_until_unused(
     let generation = broker.runtime().policy_generation();
     let (status, accepted) = accept_with(&app, &token, &discovered, json!([]), json!({})).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
+    let effects = &accepted["result"]["resourceTypeEffects"];
+    assert_eq!(effects["deletedAttributeValues"], json!([]));
     assert_eq!(
-        accepted["result"]["resourceTypeEffects"],
-        json!({"deletedAttributeValues": [], "droppedTypes": ["tickets_project", "tickets_queue"]})
+        effects["droppedTypes"],
+        json!(["tickets_project", "tickets_queue"])
+    );
+    assert_eq!(effects["previousRevision"]["generation"], generation);
+    assert_eq!(effects["revision"]["generation"], generation + 1);
+    let completion = acceptance_completions(&fixture).pop().unwrap();
+    assert_eq!(
+        completion["providerAudit"]["management"]["target"]["droppedTypes"],
+        effects["droppedTypes"]
     );
     assert_eq!(
         accepted["result"]["service"]["acceptedMetadata"]["resourceTypes"],
@@ -1048,4 +1197,205 @@ async fn concurrent_resource_writes_and_acceptance_leave_stored_resources_valid(
     drop(app);
     broker.stop().await;
     BrokerRuntime::new(fixture.config.clone()).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn attribute_rules_count_only_resources_that_can_hold_attribute_values() {
+    let fixture = CommandFixture::new(SERVICE, &initial_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    accepted_import(&app, &token).await;
+    // `all` selectors carry no attribute values, so a type whose only
+    // resource is one gains a required attribute in place.
+    for (id, resource_type) in [
+        ("all-projects", "tickets_project"),
+        ("all-queues", "tickets_queue"),
+    ] {
+        let (status, created) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            Some(
+                json!({"id": id, "resourceType": resource_type, "selector": {"kind": "all"},
+                "allowedExecutionContexts": ["default"]}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+    }
+    let owner = |project: &mut Value| {
+        project["attributes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "owner", "label": "Owner", "description": "", "required": true}));
+    };
+    // The queue type is removed at the same time; its `all` resource still
+    // keeps it.
+    fixture.write_manifest(&manifest(
+        vec![project_with(owner)],
+        vec![view_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    let change = type_change(&discovered, "project");
+    assert_eq!(change["outcome"], "applied", "{change}");
+    assert_eq!(change["resourceCount"], 1);
+    assert_eq!(change["blocked"], false);
+    assert_eq!(type_change(&discovered, "queue")["outcome"], "retained");
+    let accepted = accept(&app, &token, &discovered).await;
+    let project = &accepted["service"]["acceptedMetadata"]["resourceTypes"][0];
+    assert_eq!(project["attributes"][2]["name"], "owner");
+    assert_eq!(project["attributes"][2]["required"], true);
+    assert_bindings_match_store(&broker.runtime());
+
+    // An exact resource still holds values: the next required attribute
+    // needs a new type id.
+    let (status, created) = create_resource(
+        &app,
+        &token,
+        "ops",
+        "tickets_project",
+        "OPS",
+        json!({"owner": "avery"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    fixture.write_manifest(&manifest(
+        vec![project_with(|project| {
+            owner(project);
+            project["attributes"].as_array_mut().unwrap().push(
+                json!({"name": "team", "label": "Team", "description": "", "required": true}),
+            );
+        })],
+        vec![view_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    let change = type_change(&discovered, "project");
+    assert_eq!(change["outcome"], "needs_new_id", "{change}");
+    assert_eq!(change["blockingResources"], json!(["ops"]));
+    drop(app);
+    broker.stop().await;
+    BrokerRuntime::new(fixture.config.clone()).unwrap();
+}
+
+/// A credential-free manifest declaring `ids` as resource types and only an
+/// untyped action.
+fn many_types_manifest(ids: &[String]) -> Value {
+    manifest(
+        ids.iter()
+            .map(|id| {
+                json!({"id": id, "label": id, "pluralLabel": id, "example": "a",
+                    "pattern": "[a-z]+"})
+            })
+            .collect(),
+        vec![ping_action()],
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_full_command_renames_a_type_whose_old_type_keeps_its_resources() {
+    let ids = (1..=16).map(|n| format!("t{n:02}")).collect::<Vec<_>>();
+    let fixture = CommandFixture::new(SERVICE, &many_types_manifest(&ids));
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    accepted_import(&app, &token).await;
+    let (status, created) =
+        create_resource(&app, &token, "kept", "tickets_t01", "kept", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    // `t01` becomes `t17`: sixteen declared types plus the retained one.
+    let mut renamed = ids.clone();
+    renamed[0] = "t17".into();
+    fixture.write_manifest(&many_types_manifest(&renamed));
+    let discovered = discover(&app, &token).await;
+    assert_eq!(type_change(&discovered, "t01")["outcome"], "retained");
+    assert_eq!(type_change(&discovered, "t17")["change"], "added");
+    let accepted = accept(&app, &token, &discovered).await;
+    let types = accepted["service"]["acceptedMetadata"]["resourceTypes"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(types.len(), 17);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|declared| declared["removed"] == true)
+            .count(),
+        1
+    );
+    let registered = registered_types(&broker.runtime());
+    assert!(registered.contains(&"tickets_t01".to_owned()));
+    assert!(registered.contains(&"tickets_t17".to_owned()));
+    drop(app);
+    broker.stop().await;
+    BrokerRuntime::new(fixture.config.clone()).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn acceptance_checks_stored_resources_against_the_new_registry() {
+    let fixture = CommandFixture::new(SERVICE, &initial_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    accepted_import(&app, &token).await;
+    let (status, created) = create_resource(
+        &app,
+        &token,
+        "ops",
+        "tickets_project",
+        "OPS",
+        json!({"region": "eu-1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    // Stored state no planning rule looks at, written behind the Broker's
+    // back: an attribute the type does not declare.
+    let store_path = &fixture.config.managed_store.as_ref().unwrap().path;
+    rusqlite::Connection::open(store_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO resource_secret_material(resource_id,attribute_name,material_version,key_id,nonce,ciphertext)
+             VALUES('ops','stray','stray-version','test',zeroblob(12),zeroblob(16))",
+            [],
+        )
+        .unwrap();
+    // A label change applies no effects, yet the acceptance still checks
+    // every stored resource of the import against the new registry.
+    fixture.write_manifest(&manifest(
+        vec![
+            project_with(|project| project["label"] = json!("Space")),
+            queue_type(),
+        ],
+        vec![view_action(), queue_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    let (status, rejected) = accept_with(
+        &app,
+        &token,
+        &discovered,
+        all_selections(&discovered),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert!(
+        rejected.to_string().contains("unknown resource attribute"),
+        "{rejected}"
+    );
+    assert_eq!(
+        broker
+            .runtime()
+            .resource_type_metadata()
+            .into_iter()
+            .find(|metadata| metadata.id.as_str() == "tickets_project")
+            .unwrap()
+            .label,
+        "Project"
+    );
+    drop(app);
+    broker.stop().await;
 }

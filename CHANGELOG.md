@@ -513,7 +513,14 @@ All notable changes to this project are documented in this file.
   removed types with resources and drops unused ones, publishing the advanced
   policy revision and reporting `resourceTypeEffects`. An import with accepted
   actions may accept a preview with no selections to apply only its metadata
-  and type changes.
+  and type changes. Acceptances that add types, delete values or drop types
+  write a success completion audit record naming the added Broker type IDs,
+  the affected resources with deleted attribute names (never values), dropped
+  types and policy revisions; any acceptance that changes types checks every
+  stored resource against the new registry before it commits. Attribute rules
+  count only exact resources, since `all` resources hold no attribute values.
+  A command declares at most 16 types and an import keeps at most 16 removed
+  types besides them, and `unresolved_resource_type` is reserved.
 - Resource type listings (`GET /v1/resource-types` and the runtime catalog's
   `resourceTypes`) name a command import's types' `importedService` and mark a
   removed type `removed: true`. The SDK's `ResourceTypeMetadata` gains the

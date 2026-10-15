@@ -269,12 +269,16 @@ suffix). Before a type's first
 acceptance the administrator may choose another ID with the accept body's
 `resourceTypeIds`, keyed by the manifest type id; an ID must match
 `^[a-z][a-z0-9_]{0,63}$`, be distinct within the import and not be registered by
-the broker, a native backend or another import. Once accepted it is fixed.
-Accepted types appear in `GET /v1/resource-types`, keep their registration while
-the import is disabled or retired and across restarts, and validate their
-private attributes from the accepted declaration alone: known names, required
-attributes, the attribute pattern and the 8 KiB bound. All their attributes are
-private and encrypted, shown to administrators by name only.
+the broker, a native backend or another import; the broker also reserves
+`unresolved_resource_type`. Once accepted it is fixed. Accepted types appear in
+`GET /v1/resource-types` and the runtime catalog's `resourceTypes` with their
+`importedService`, keep their registration while the import is disabled or
+retired and across restarts, and validate their private attributes from the
+accepted declaration alone: known names, required attributes, the attribute
+pattern and the 8 KiB bound. All their attributes are private and encrypted,
+shown to administrators by name only. A command declares at most 16 types, and
+an import keeps at most 16 removed types besides them; the declared types'
+metadata is limited to 128 KiB and the accepted metadata to 256 KiB.
 
 A refresh compares each declared type with the accepted one. The preview's
 `resourceTypeChanges` records one decision per added, changed, restored or
@@ -290,8 +294,8 @@ now would be rejected because of the type.
 | New optional attribute, or a required attribute made optional | `applied` |
 | Removed attribute | `applied`; acceptance deletes its stored values and advances each affected resource's version (`affectedResources`) |
 | Pattern or `maxLength` change | `applied` when every stored exact value still matches; otherwise `blocked`, listing the values to edit or delete in `blockingResources` |
-| New required attribute, optional attribute made required, or changed attribute pattern, on a type with resources | `needs_new_id`: the accepted declaration stays and the actions using the type are unsupported, so a refresh quarantines them; declare the type under a new id |
-| Type no longer declared, with resources | `retained`: the type stays registered (`removed: true` in the accepted metadata) and accepts no new resources until its resources are deleted |
+| New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | `needs_new_id`: the accepted declaration stays and the actions using the type are unsupported, so a refresh quarantines them; declare the type under a new id. Resources with an `all` selector hold no attribute values and do not count |
+| Type no longer declared, with resources of any selector | `retained`: the type stays registered (`removed: true` in the accepted metadata and in resource type listings) and accepts no new resources until its resources are deleted |
 | Type no longer declared, without resources | `dropped` |
 
 Acceptance rechecks every decision that depends on stored resources inside its
@@ -299,11 +303,17 @@ transaction, under the managed policy mutation lock that resource writes also
 take. If a resource created or edited after the preview now prevents a change,
 for example a resource of a type gaining a required attribute or of a type being
 dropped, acceptance is rejected and names the resources; edit or delete them,
-or refresh. An acceptance that deletes attribute values or drops a type advances
+or refresh. Any acceptance that changes the import's types also checks every
+stored resource and its attribute bindings against the new registry before it
+commits. An acceptance that deletes attribute values or drops a type advances
 the managed policy revision and publishes the resulting policy with the new
 registry and catalog; its result includes `resourceTypeEffects` with the
-affected resources and dropped types. Type changes never quarantine actions on
-their own.
+affected resources, dropped types and the previous and new policy revisions.
+An acceptance that adds types, deletes values or drops types also writes a
+success completion audit record with the Broker type IDs it added, the affected
+resources with the deleted attribute names (never values; at most 100
+resources, with their total), the dropped types and the policy revisions. Type
+changes never quarantine actions on their own.
 
 An import that already has accepted actions may accept a preview with no
 selections. That acceptance stores the preview's service metadata and applies
