@@ -120,11 +120,12 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
 mod tests {
     use super::*;
     use crate::imports::{
-        AdapterDiscoveryError, ImportedActionDefinition, ImportedAdapter, ImportedDiscovery,
-        ImportedDiscoveryAuthentication, ImportedServiceDefinition, imported_adapter_registration,
+        AdapterDiscoveryError, ImportedActionDefinition, ImportedAdapter, ImportedAdapterContext,
+        ImportedDiscovery, ImportedDiscoveryAuthentication, ImportedProvider,
+        ImportedServiceDefinition, imported_adapter_registration,
     };
     use crate::{BackendRegistry, ProvidersConfig, parse_broker_config_raw};
-    use agent_access_provider::{BuildContext, ExecutionCredential, Provider, ProviderBuildError};
+    use agent_access_provider::{BuildContext, ExecutionCredential, ProviderBuildError};
     use std::sync::Arc;
 
     /// Validation-only adapter double; configuration checks never build one.
@@ -172,8 +173,9 @@ mod tests {
             _: &ImportedServiceDefinition,
             _: &[ImportedActionDefinition],
             _: Option<ExecutionCredential>,
+            _: &ImportedAdapterContext<'_>,
             _: &BuildContext<'_>,
-        ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+        ) -> Result<ImportedProvider, ProviderBuildError> {
             unreachable!("configuration validation never builds providers")
         }
         async fn discover(
@@ -181,6 +183,7 @@ mod tests {
             _: &ImportedServiceDefinition,
             _: &ImportedDiscoveryAuthentication,
             _: Option<ExecutionCredential>,
+            _: &ImportedAdapterContext<'_>,
             _: &BuildContext<'_>,
         ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
             unreachable!("configuration validation never discovers")

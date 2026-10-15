@@ -44,6 +44,7 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 windows-sys.workspace = true
+zeroize = "1.9"
 
 [dev-dependencies]
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }

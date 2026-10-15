@@ -172,6 +172,7 @@ async fn public_discovery_returns_picker_without_credentials_or_executable_opera
             &definition,
             &ImportedDiscoveryAuthentication::Anonymous,
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await
@@ -203,6 +204,7 @@ async fn private_document_token_is_separate_from_selected_execution_token() {
             &definition,
             &ImportedDiscoveryAuthentication::Static(credential("document-secret")),
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await
@@ -210,8 +212,15 @@ async fn private_document_token_is_separate_from_selected_execution_token() {
     let mut action = discovery.tools.into_iter().next().unwrap().definition;
     action.action = "item.update".into();
     let provider = OpenApiAdapter
-        .build(&definition, &[action], None, &host.context())
-        .unwrap();
+        .build(
+            &definition,
+            &[action],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     provider.invoke(invocation(input())).await.unwrap();
     let calls = fixture.state.calls.lock().unwrap();
     assert_eq!(calls[0].headers["x-definition-key"], "document-secret");
@@ -318,8 +327,15 @@ async fn execution_serializes_separate_locations_and_never_refetches_definition(
     let def = fixture.definition();
     let host = test_host();
     let provider = OpenApiAdapter
-        .build(&def, &[action(&def)], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[action(&def)],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     let result=provider.invoke(invocation(json!({"path":{"id":"space ü"},"query":{"q":"a&b=/x","tags":["a,b","c&d"]},"headers":{"Count":1.0},"body":{"value":"created"}}))).await.unwrap();
     assert_eq!(result.result["mutationStatus"], "applied_unverified");
     assert_eq!(result.result["retrySafe"], false);
@@ -343,8 +359,15 @@ async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
     let def = fixture.definition();
     let host = test_host();
     let provider = OpenApiAdapter
-        .build(&def, &[action(&def)], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[action(&def)],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     for id in ["..", "../secret", "%2f", "a\\b", "a/b"] {
         let mut value = input();
         value["path"]["id"] = json!(id);
@@ -385,8 +408,15 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
         let def = fixture.definition();
         let host = test_host();
         let provider = OpenApiAdapter
-            .build(&def, &[action(&def)], None, &host.context())
-            .unwrap();
+            .build(
+                &def,
+                &[action(&def)],
+                None,
+                &ImportedAdapterContext::default(),
+                &host.context(),
+            )
+            .unwrap()
+            .provider();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert_eq!(error.reason_code(), status_reason(status));
         if status == 429 {
@@ -409,8 +439,15 @@ async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
     let def = definition(&format!("{base}/api"), &format!("{base}/definition.json"));
     let host = test_host();
     let provider = OpenApiAdapter
-        .build(&def, &[action(&def)], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[action(&def)],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     let error = provider.invoke(invocation(input())).await.err().unwrap();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
     assert_eq!(error.message, "upstream HTTP operation did not complete");
@@ -437,8 +474,15 @@ async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {
         let def = fixture.definition();
         let host = test_host();
         let provider = OpenApiAdapter
-            .build(&def, &[action(&def)], None, &host.context())
-            .unwrap();
+            .build(
+                &def,
+                &[action(&def)],
+                None,
+                &ImportedAdapterContext::default(),
+                &host.context(),
+            )
+            .unwrap()
+            .provider();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert!(matches!(
             error.reason_code().standard(),
@@ -493,8 +537,15 @@ async fn no_content_operations_omit_empty_accept_and_return_null_body() {
     accepted.action = "item.update".into();
     let host = test_host();
     let provider = OpenApiAdapter
-        .build(&def, &[accepted], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[accepted],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     let result = provider.invoke(invocation(input())).await.unwrap();
     assert_eq!(
         result.result["upstreamHttp"],
@@ -518,6 +569,7 @@ async fn invalid_discovery_configuration_reports_its_cause_without_dispatch() {
             &def,
             &ImportedDiscoveryAuthentication::Anonymous,
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await

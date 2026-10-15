@@ -234,6 +234,7 @@ async fn discovers_every_page_retains_unsupported_rows_and_requires_reviewed_rea
             &definition(&fixture.endpoint),
             &ImportedDiscoveryAuthentication::Static(credential("discovery-only")),
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await
@@ -272,9 +273,11 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
             &definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     let result = agent_access_provider::host::with_provider_context(
         CorrelationContext::for_tests(),
         "example".into(),
@@ -325,9 +328,11 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
                 &definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -347,9 +352,11 @@ async fn input_and_credential_rejections_dispatch_nothing() {
             &definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     assert_eq!(
         provider
             .invoke(invocation(json!({}), "secret"))
@@ -393,9 +400,11 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
             &def,
             &[action()],
             Some(credential("front-door")),
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
         request = InvocationBuilder::from(request)
@@ -438,9 +447,11 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -470,9 +481,11 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -514,6 +527,7 @@ async fn duplicate_tools_repeated_cursors_and_malformed_metadata_fail_discovery(
                     &definition(&fixture.endpoint),
                     &ImportedDiscoveryAuthentication::Static(credential("secret")),
                     None,
+                    &ImportedAdapterContext::default(),
                     &host.context()
                 )
                 .await
@@ -535,9 +549,11 @@ async fn bounded_json_and_sse_results_include_discarded_bytes() {
                 &definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -561,9 +577,11 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
             &definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     let capture = test_support::install_trace_capture().start();
     let result = capture
         .run(agent_access_provider::host::with_provider_context(
@@ -695,6 +713,7 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
             &def,
             &ImportedDiscoveryAuthentication::Static(credential("secret")),
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await
@@ -703,8 +722,15 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
     let mut accepted = action();
     accepted.input_schema["properties"]["count"] = json!({"type":"integer","x-mcp-header":"Count"});
     let provider = McpAdapter
-        .build(&def, &[accepted], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[accepted],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     for region in ["east", " café ", "=?base64?YQ==?=", "line\r\nbreak"] {
         let result = provider
             .invoke(invocation(json!({"region":region}), "secret"))
@@ -867,6 +893,7 @@ async fn oauth_discovery_revalidates_each_page_and_stops_when_lease_is_revoked()
                     request.execution().delegated().cloned().unwrap(),
                 ),
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
             .await;
@@ -925,9 +952,11 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
             &oauth_definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     let (request, _) = leased_invocation(&fixture.endpoint, false);
     let request = InvocationBuilder::from(request)
         .execution(ExecutionAccess::Delegated(
@@ -976,9 +1005,11 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
                 &oauth_definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         let result = provider.invoke(request).await;
         if status == StatusCode::OK {
@@ -1022,9 +1053,11 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
                 &oauth_definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let (mut request, lease) = leased_invocation(&fixture.endpoint, failure == "revoked");
         if failure == "resource" {
             let mut access = lease.access.lock().unwrap();

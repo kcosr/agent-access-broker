@@ -6,12 +6,12 @@
 //! implemented.
 use agent_access_core::imports::{
     AdapterDiscoveryError, ImportEndpointForm, ImportedActionDefinition, ImportedAdapter,
-    ImportedAdapterRegistration, ImportedDiscovery, ImportedDiscoveryAuthentication,
-    ImportedServiceDefinition, imported_adapter_registration,
+    ImportedAdapterContext, ImportedAdapterRegistration, ImportedDiscovery,
+    ImportedDiscoveryAuthentication, ImportedProvider, ImportedServiceDefinition,
+    imported_adapter_registration,
 };
-use agent_access_provider::{BuildContext, ExecutionCredential, Provider, ProviderBuildError};
+use agent_access_provider::{BuildContext, ExecutionCredential, ProviderBuildError};
 use async_trait::async_trait;
-use std::sync::Arc;
 
 /// The import kind this adapter serves, `adapterKind` in imported definitions.
 const KIND: &str = "command";
@@ -55,8 +55,9 @@ impl ImportedAdapter for CommandAdapter {
         _definition: &ImportedServiceDefinition,
         _actions: &[ImportedActionDefinition],
         _transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         _host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+    ) -> Result<ImportedProvider, ProviderBuildError> {
         Err(ProviderBuildError::invalid(UNAVAILABLE))
     }
     async fn discover(
@@ -64,6 +65,7 @@ impl ImportedAdapter for CommandAdapter {
         _definition: &ImportedServiceDefinition,
         _authentication: &ImportedDiscoveryAuthentication,
         _transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         _host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         Err(AdapterDiscoveryError::Configuration(UNAVAILABLE.into()))

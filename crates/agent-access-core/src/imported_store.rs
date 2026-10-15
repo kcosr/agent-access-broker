@@ -64,6 +64,11 @@ pub struct ImportedServiceRecord {
     pub version: u64,
     pub actions: Vec<ImportedActionRecord>,
     pub slot_versions: BTreeMap<ImportedCredentialPurpose, String>,
+    /// The service-level metadata stored with the last accepted actions
+    /// (`accepted_metadata_json`); `None` for MCP and OpenAPI imports and
+    /// before a command import's first acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -825,6 +830,7 @@ fn service_record(
         version,
         actions,
         slot_versions,
+        accepted_metadata: None,
         created_at,
         created_by,
         updated_at,

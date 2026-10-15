@@ -35,8 +35,9 @@ impl ImportedAdapter for SyntheticImport {
         _: &ImportedServiceDefinition,
         _: &[ImportedActionDefinition],
         _: Option<ExecutionCredential>,
+        _: &ImportedAdapterContext<'_>,
         _: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+    ) -> Result<ImportedProvider, ProviderBuildError> {
         unreachable!("eligibility never builds providers")
     }
     async fn discover(
@@ -44,6 +45,7 @@ impl ImportedAdapter for SyntheticImport {
         _: &ImportedServiceDefinition,
         _: &ImportedDiscoveryAuthentication,
         _: Option<ExecutionCredential>,
+        _: &ImportedAdapterContext<'_>,
         _: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         unreachable!("eligibility never discovers")

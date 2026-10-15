@@ -809,6 +809,7 @@ fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
         version: 1,
         actions: vec![],
         slot_versions: Default::default(),
+        accepted_metadata: None,
         created_at: String::new(),
         created_by: "admin".into(),
         updated_at: String::new(),

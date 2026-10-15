@@ -1,6 +1,7 @@
 //! Immutable imported catalogs are published with the enclosing runtime snapshot.
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
+use crate::imports::{ImportEndpointForm, ImportedAdapterContext, ImportedProvider};
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
@@ -10,7 +11,7 @@ mod mcp_names;
 /// callers cannot substitute arbitrary providers or attest their own token writes.
 pub struct PreparedImportedProviders {
     base_catalog: Arc<ImportedCatalog>,
-    providers: BTreeMap<String, Arc<dyn Provider>>,
+    providers: BTreeMap<String, ImportedProvider>,
     service: String,
     definition: ImportedServiceDefinition,
     status: ImportedServiceStatus,
@@ -50,7 +51,7 @@ impl PreparedImportedProviders {
         self,
         runtime: &BrokerRuntime,
         catalog: &ImportedCatalog,
-    ) -> Result<BTreeMap<String, Arc<dyn Provider>>, ManagedStoreError> {
+    ) -> Result<BTreeMap<String, ImportedProvider>, ManagedStoreError> {
         if !Arc::ptr_eq(&self.base_catalog, &runtime.imported_catalog) {
             return Err(preparation_mismatch());
         }
@@ -97,7 +98,10 @@ impl PreparedImportedProviders {
             }
             match (runtime.providers.get(name), self.providers.get(name)) {
                 (None, None) => {}
-                (Some(old), Some(prepared)) if Arc::ptr_eq(old, prepared) => {}
+                (Some(old), Some(prepared))
+                    if Arc::ptr_eq(old, &prepared.provider())
+                        && runtime.command_providers.get(name).is_some()
+                            == prepared.command().is_some() => {}
                 _ => return Err(preparation_mismatch()),
             }
         }
@@ -115,6 +119,40 @@ fn enabled_definitions(record: &ImportedServiceRecord) -> Vec<ImportedActionDefi
     actions.sort_by(|left, right| left.action.cmp(&right.action));
     actions
 }
+/// Core's adapter inputs for `record`: its accepted metadata and, for a
+/// `command:<name>` endpoint, the operator's `[command_imports.<name>]` entry.
+pub(super) fn adapter_context<'a>(
+    config: &'a BrokerConfig,
+    record: &'a ImportedServiceRecord,
+) -> ImportedAdapterContext<'a> {
+    let command = record
+        .definition
+        .endpoint()
+        .ok()
+        .and_then(|endpoint| endpoint.command_name().map(str::to_owned))
+        .and_then(|name| config.command_imports.get(&name));
+    ImportedAdapterContext::new(record.accepted_metadata.as_ref(), command)
+}
+
+/// Whether an adapter built the provider shape its endpoint form requires:
+/// a command hook exactly for `command:<name>` endpoints.
+fn provider_matches_endpoint(
+    definition: &ImportedServiceDefinition,
+    provider: &ImportedProvider,
+) -> bool {
+    matches!(
+        (
+            definition.endpoint().map(|endpoint| endpoint.form()),
+            provider
+        ),
+        (Ok(ImportEndpointForm::Http), ImportedProvider::Upstream(_))
+            | (
+                Ok(ImportEndpointForm::Command),
+                ImportedProvider::Command(_)
+            )
+    )
+}
+
 fn preparation_mismatch() -> ManagedStoreError {
     ManagedStoreError::InputInvalid(
         "prepared imported provider does not match the committed definition or credential".into(),
@@ -399,6 +437,14 @@ impl BrokerRuntime {
     pub fn imported_catalog(&self) -> &ImportedCatalog {
         &self.imported_catalog
     }
+    /// The command hook of an available command import; core calls it
+    /// instead of `Provider::invoke` for that service.
+    pub fn command_provider(
+        &self,
+        service: &str,
+    ) -> Option<&Arc<dyn crate::imports::CommandProvider>> {
+        self.command_providers.get(service)
+    }
     pub fn import_operator_allowed(&self, definition: &ImportedServiceDefinition) -> bool {
         destination_allowed(&self.config, definition)
     }
@@ -577,10 +623,12 @@ impl BrokerRuntime {
         let mut config = (*self.config).clone();
         let mut services = (*self.services).clone();
         let mut providers = (*self.providers).clone();
+        let mut command_providers = (*self.command_providers).clone();
         for old in &self.imported_catalog.services {
             let name = &old.definition.service;
             services.remove(name);
             providers.remove(name);
+            command_providers.remove(name);
             config.credentials.per_user.remove(name);
             config.limits.invocations.services.remove(name);
         }
@@ -647,12 +695,18 @@ impl BrokerRuntime {
                 ));
             }
         }
-        providers.extend(imported_providers);
+        for (name, provider) in imported_providers {
+            if let Some(command) = provider.command() {
+                command_providers.insert(name.clone(), command.clone());
+            }
+            providers.insert(name, provider.provider());
+        }
         effective_credentials(&mut config, &catalog);
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
+        next.command_providers = Arc::new(command_providers);
         next.imported_catalog = Arc::new(catalog);
         next.initialize_import_dispatch(Some(self));
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
@@ -776,7 +830,7 @@ pub(super) fn build_providers(
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
-) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
+) -> Result<BTreeMap<String, ImportedProvider>, RuntimeError> {
     // Each generation reports approved commands it cannot use yet.
     for warning in crate::command_import_warnings(config) {
         tracing::warn!(event = "command_import_config_warning", warning = %warning);
@@ -850,7 +904,14 @@ pub(super) fn build_providers(
         }) {
             continue;
         }
-        if let Ok(provider) = adapter.build(definition, &actions, transport, &host) {
+        if let Ok(provider) = adapter.build(
+            definition,
+            &actions,
+            transport,
+            &adapter_context(config, record),
+            &host,
+        ) && provider_matches_endpoint(definition, &provider)
+        {
             providers.insert(definition.service.clone(), provider);
         }
     }
@@ -951,9 +1012,12 @@ impl BrokerRuntime {
             .services
             .iter()
             .filter_map(|old| {
-                self.providers
-                    .get(&old.definition.service)
-                    .map(|provider| (old.definition.service.clone(), provider.clone()))
+                let name = &old.definition.service;
+                let provider = match self.command_providers.get(name) {
+                    Some(command) => ImportedProvider::Command(command.clone()),
+                    None => ImportedProvider::Upstream(self.providers.get(name)?.clone()),
+                };
+                Some((name.clone(), provider))
             })
             .collect::<BTreeMap<_, _>>();
         let definition = &record.definition;
@@ -1050,8 +1114,16 @@ impl BrokerRuntime {
             None,
         );
         let provider = adapter
-            .build(definition, &actions, transport, &host)
-            .map_err(|_| {
+            .build(
+                definition,
+                &actions,
+                transport,
+                &adapter_context(&self.config, record),
+                &host,
+            )
+            .ok()
+            .filter(|provider| provider_matches_endpoint(definition, provider))
+            .ok_or_else(|| {
                 ManagedStoreError::InputInvalid("imported provider could not be prepared".into())
             })?;
         prepared

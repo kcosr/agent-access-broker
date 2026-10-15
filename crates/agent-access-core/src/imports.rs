@@ -3,12 +3,16 @@
 //! assembly selects. This is Broker implementation, not a supported
 //! extension interface; only the shipped import adapters implement it.
 mod adapter;
+mod command;
 mod definition;
+mod metadata;
 mod registration;
 mod schema;
 
 pub use adapter::*;
+pub use command::*;
 pub use definition::*;
+pub use metadata::*;
 pub use registration::{
     ImportOAuthCompanion, ImportedAdapterRegistration, imported_adapter_registration,
 };
