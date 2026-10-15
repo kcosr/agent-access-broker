@@ -287,6 +287,8 @@ test("administrator imports the reference command, grants it, and agents invoke 
     await page.screenshot({ path: testInfo.outputPath("command-personal-verified.png") });
   });
 
+  const deniedRequests: string[] = [];
+  const spawnedRequests: string[] = [];
   const token = (await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/avery/agent-tokens", {
     method: "POST",
     body: { name: "ticketing-agent", ttl: "8h", allowedServices: ["ticketing"], allowedExecutionContexts: ["internal"] }
@@ -300,9 +302,13 @@ test("administrator imports the reference command, grants it, and agents invoke 
     expect(JSON.stringify(create)).toContain("OPS-43");
     expect(create.result).toMatchObject({ mutationStatus: "applied_unverified", retrySafe: false, safeLocators: { issue: "OPS-43" } });
     expect(JSON.stringify(create)).not.toContain(WEBHOOK_SECRET);
-    // An uncovered project is denied before the command runs.
+    // The Broker denies an uncovered project itself; its audit below shows
+    // that no process started.
     const denied = await invoke(token, "issue.view", { project: "SEC", issue: 7 });
+    const denial = await denied.json();
     expect(denied.status).toBe(403);
+    expect(denial).toMatchObject({ reasonCode: "service_action_denied", error: { message: "policy denied service action for resolved scopes" } });
+    deniedRequests.push(denial.brokerRequestId);
   });
 
   await test.step("command-checked actions get the caller's grants with the personal credential", async () => {
@@ -316,7 +322,8 @@ test("administrator imports the reference command, grants it, and agents invoke 
     const refusal = await refused.json();
     expect(refused.status, JSON.stringify(refusal)).toBe(403);
     // The command started and refused the write: nothing was applied.
-    expect(refusal).toMatchObject({ reasonCode: "service_action_denied", result: { mutationStatus: "not_applied", operationDispatched: true } });
+    expect(refusal).toMatchObject({ reasonCode: "service_action_denied", result: { mutationStatus: "not_applied", operationDispatched: true }, error: { message: "Project SEC is outside your access." } });
+    spawnedRequests.push(refusal.brokerRequestId);
     const whoami = await invokeOk(token, "whoami", {});
     expect(whoami.result.upstreamCommand).toMatchObject({ caller: { principal: "avery", kind: "user", displayName: "Avery Example", token: { label: "ticketing-agent" } }, context: "internal", access: { credential: "user", account: "avery" } });
   });
@@ -341,7 +348,14 @@ test("administrator imports the reference command, grants it, and agents invoke 
     await page.getByText("Provider details", { exact: true }).click();
     await expect(page.getByText('"contractViolation": false').first()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("command-audit-raw.png") });
-    const audit = await browserManagementRequest<{ items: Array<{ action?: string; providerAudit?: { command?: unknown; commandAuthorization?: unknown; verification?: { command?: unknown } } }> }>(page, "/v1/admin/audit/events?service=ticketing");
+    const audit = await browserManagementRequest<{ items: Array<{ action?: string; brokerRequestId?: string; providerAudit?: { command?: { spawned?: boolean }; commandAuthorization?: unknown; verification?: { command?: unknown } } }> }>(page, "/v1/admin/audit/events?service=ticketing");
+    // The Broker's denial started no process; the command's refusal did.
+    for (const id of deniedRequests) {
+      const record = audit.items.find((item) => item.brokerRequestId === id);
+      expect(record, id).toBeTruthy();
+      expect(record?.providerAudit?.command?.spawned ?? false).toBe(false);
+    }
+    for (const id of spawnedRequests) expect(audit.items.find((item) => item.brokerRequestId === id)?.providerAudit?.command?.spawned).toBe(true);
     for (const secret of [SERVICE_TOKEN, PERSONAL_TOKEN, WEBHOOK_SECRET]) expect(JSON.stringify(audit)).not.toContain(secret);
     const created = audit.items.find((record) => record.action === "issue.create" && record.providerAudit?.command);
     expect(created?.providerAudit?.command).toMatchObject({ name: "ticketing", spawned: true, exitCode: 0, contractViolation: false, operationDispatched: true });
