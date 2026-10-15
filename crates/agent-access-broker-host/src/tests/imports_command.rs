@@ -86,7 +86,7 @@ impl CommandFixture {
         self.issue("admin", BrokerTokenClass::Admin, json!({}))
     }
 
-    fn issue(&self, principal: &str, class: BrokerTokenClass, scopes: Value) -> String {
+    pub(super) fn issue(&self, principal: &str, class: BrokerTokenClass, scopes: Value) -> String {
         self.imports
             .runtime
             .managed_store()
@@ -167,7 +167,12 @@ fn clock_manifest() -> Value {
 }
 
 /// Discovers, accepts every supported tool as a read and returns the result.
-async fn discover_and_accept(app: &Router, token: &str, service: &str, current: &Value) -> Value {
+pub(super) async fn discover_and_accept(
+    app: &Router,
+    token: &str,
+    service: &str,
+    current: &Value,
+) -> Value {
     let (status, discovered) = request(
         app,
         token,
@@ -753,7 +758,7 @@ async fn credential_modes_stay_within_the_accepted_declaration() {
 }
 
 /// Initializes an HTTP MCP session for `token` and returns its tool names.
-async fn mcp_tool_names(app: &Router, token: &str) -> Vec<String> {
+pub(super) async fn mcp_tool_names(app: &Router, token: &str) -> Vec<String> {
     let send = |message: Value, session: Option<&str>| {
         let request = super::mcp::request(Method::POST, Some(token), session, Some(message));
         tower::ServiceExt::oneshot(app.clone(), request)
@@ -794,7 +799,7 @@ async fn mcp_tool_names(app: &Router, token: &str) -> Vec<String> {
         .collect()
 }
 
-fn command_grant(
+pub(super) fn command_grant(
     id: &str,
     subject: &str,
     action: &str,
@@ -1055,7 +1060,7 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
 
 /// Creates `tickets` with `modes`, discovers and accepts it, stores a
 /// service credential when service mode is bound, and enables it.
-async fn enabled_tickets(app: &Router, token: &str, modes: &[&str]) -> Value {
+pub(super) async fn enabled_tickets(app: &Router, token: &str, modes: &[&str]) -> Value {
     let (status, created) = request(
         app,
         token,

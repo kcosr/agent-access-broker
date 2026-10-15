@@ -19326,6 +19326,7 @@ async fn token_issuance_waits_for_policy_coordinator_and_all_concurrent_requests
 mod managed_identity;
 
 mod imports_command;
+mod imports_command_authority;
 mod imports_command_types;
 mod imports_management;
 
