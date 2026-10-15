@@ -168,8 +168,8 @@ fn resource_attribute_schemas_require_private_fields_only_on_exact_creation() {
             "Destinations",
             "alerts",
             |_| true,
-        )
-        .with_attributes(&ATTRIBUTES);
+            &ATTRIBUTES,
+        );
     let types = agent_access_provider::ResourceTypeRegistry::new([&RESOURCE]).unwrap();
     let routes = http_route_specs(&types);
     let create = routes

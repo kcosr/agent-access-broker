@@ -3311,13 +3311,12 @@ pub fn agent_access_provider::ResourceTypeDescriptor::is_canonical_target(&self,
 pub const fn agent_access_provider::ResourceTypeDescriptor::label(&self) -> &str
 pub fn agent_access_provider::ResourceTypeDescriptor::metadata(&self) -> agent_access_provider::ResourceTypeMetadata
 pub const fn agent_access_provider::ResourceTypeDescriptor::namespace(&self) -> core::option::Option<&agent_access_provider::NamespaceSelectorDescriptor>
-pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
 pub fn agent_access_provider::ResourceTypeDescriptor::pattern(&self) -> core::option::Option<&agent_access_provider::ResourcePattern>
 pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &str
 pub fn agent_access_provider::ResourceTypeDescriptor::selector_kinds(&self) -> alloc::vec::Vec<&'static str>
 pub fn agent_access_provider::ResourceTypeDescriptor::validate_attributes(&self, &agent_access_provider::ResourceSelector, &agent_access_provider::ResourceAttributes, bool) -> core::result::Result<(), alloc::string::String>
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_action_inputs(self, agent_access_provider::ResourceActionInputs) -> Self
-pub const fn agent_access_provider::ResourceTypeDescriptor::with_attributes(self, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_namespace(self, agent_access_provider::NamespaceSelectorDescriptor) -> Self
 impl core::clone::Clone for agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::clone(&self) -> agent_access_provider::ResourceTypeDescriptor

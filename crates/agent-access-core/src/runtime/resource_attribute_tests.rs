@@ -11,8 +11,8 @@ static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     "Fixture destinations",
     "one",
     |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
-)
-.with_attributes(&ATTRIBUTES);
+    &ATTRIBUTES,
+);
 static ATTRIBUTES: [ResourceAttributeDescriptor; 1] = [ResourceAttributeDescriptor::required(
     "endpoint",
     "Endpoint",

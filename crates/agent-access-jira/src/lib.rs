@@ -122,6 +122,7 @@ pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescripto
     "Jira projects",
     "ENG",
     is_project_key,
+    &[],
 );
 
 /// Jira's authoritative service definition. Every action is authorized

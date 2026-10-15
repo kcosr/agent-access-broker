@@ -25,8 +25,8 @@ pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDesc
     "Teams notification destinations",
     "release-alerts",
     valid_destination,
-)
-.with_attributes(&TEAMS_DESTINATION_ATTRIBUTES);
+    &TEAMS_DESTINATION_ATTRIBUTES,
+);
 
 static TEAMS_DESTINATION_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
     [ResourceAttributeDescriptor::required(

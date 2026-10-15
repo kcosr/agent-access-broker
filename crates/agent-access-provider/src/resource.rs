@@ -73,7 +73,9 @@ const MAX_COMPILED_PATTERN_BYTES: usize = 256 * 1024;
 /// Patterns use the syntax of the [`regex`](https://docs.rs/regex) crate,
 /// whose matching time is linear in the value length; lookaround and
 /// backreferences are unsupported. The pattern is anchored at both ends, so
-/// `[A-Z]{2,10}` accepts `OPS` but not `OPS-1`. The source is at most 8 KiB,
+/// `[A-Z]{2,10}` accepts `OPS` but not `OPS-1`, and must be a complete
+/// expression on its own: `x)|(?s:.*` is rejected rather than escaping the
+/// anchors. The source is at most 8 KiB,
 /// the length bound is 1 to 8,192 bytes, and the compiled pattern must fit
 /// 256 KiB program and lazy DFA budgets.
 ///
@@ -85,6 +87,7 @@ const MAX_COMPILED_PATTERN_BYTES: usize = 256 * 1024;
 /// assert!(!pattern.is_match("OPS-1"));
 /// assert!(!pattern.is_match("ABCDEFGHIJK"));
 /// assert!(ResourcePattern::new("(unclosed", 10).is_err());
+/// assert!(ResourcePattern::new("x)|(?s:.*", 10).is_err());
 /// ```
 #[derive(Clone)]
 pub struct ResourcePattern {
@@ -111,16 +114,23 @@ impl ResourcePattern {
                 "resource pattern maximum length must be 1 to {MAX_PATTERN_VALUE_BYTES} bytes"
             ));
         }
-        let regex = regex::RegexBuilder::new(&format!(r"\A(?:{source})\z"))
-            .size_limit(MAX_COMPILED_PATTERN_BYTES)
-            .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
-            .build()
-            .map_err(|error| match error {
-                regex::Error::CompiledTooBig(_) => {
-                    "resource pattern exceeds the compilation budget".to_string()
-                }
-                _ => "resource pattern is not a valid regular expression".to_string(),
-            })?;
+        let compile = |pattern: &str| {
+            regex::RegexBuilder::new(pattern)
+                .size_limit(MAX_COMPILED_PATTERN_BYTES)
+                .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
+                .build()
+                .map_err(|error| match error {
+                    regex::Error::CompiledTooBig(_) => {
+                        "resource pattern exceeds the compilation budget".to_string()
+                    }
+                    _ => "resource pattern is not a valid regular expression".to_string(),
+                })
+        };
+        // The bare source must be a complete expression on its own, so it
+        // cannot close the anchoring group and escape the anchors, as
+        // `x)|(?s:.*` would.
+        compile(&source)?;
+        let regex = compile(&format!(r"\A(?:{source})\z"))?;
         Ok(Self {
             source: source.into(),
             max_length,
@@ -200,11 +210,13 @@ const fn cow_str<'a>(value: &'a Cow<'static, str>) -> &'a str {
 }
 
 /// Defines a resource type: its canonical target grammar, the selector forms
-/// it supports, and the labels clients show. Backends declare these as
-/// statics with the `const` builder and a [`ResourceTypeRegistry`] makes
-/// them resolvable. A type declared at runtime, such as one an imported
-/// service describes, is built with [`ResourceTypeDescriptor::declared`] from
-/// owned labels, a [`ResourcePattern`] and declared attributes.
+/// it supports, its private attributes and the labels clients show. Backends
+/// declare these as statics with the `const` constructor and builders, and a
+/// [`ResourceTypeRegistry`] makes them resolvable. A type declared at
+/// runtime, such as one an imported service describes, is built with
+/// [`ResourceTypeDescriptor::declared`] from owned labels, a
+/// [`ResourcePattern`] and declared attributes. Both forms take their
+/// attributes at construction.
 ///
 /// ```
 /// use agent_access_provider::{
@@ -224,6 +236,7 @@ const fn cow_str<'a>(value: &'a Cow<'static, str>) -> &'a str {
 ///     "Items",
 ///     "shelf/item",
 ///     is_item,
+///     &[],
 /// )
 /// .with_namespace(NamespaceSelectorDescriptor::new(
 ///     is_shelf,
@@ -251,8 +264,8 @@ pub struct ResourceTypeDescriptor {
 pub type ResourceActionInputs =
     fn(&ResourceSelector) -> Option<serde_json::Map<String, serde_json::Value>>;
 
-/// A private string field owned and validated by a resource type: declared
-/// in a static descriptor's `const` attribute list, or with
+/// A private string field owned and validated by a resource type: an entry
+/// of a static descriptor's `static` attribute list, or built with
 /// [`ResourceAttributeDescriptor::declared`] for a declared type.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -443,14 +456,18 @@ impl ResourceTypeDescriptor {
     /// `plural_label`, whose canonical targets `canonical` accepts. Exact
     /// selectors and every resolved target of the type must satisfy it,
     /// which keeps namespace prefix matching sound; `example` must be one.
-    /// The type supports exact and all selectors, has no private attributes
-    /// and maps selectors to no action inputs.
+    /// Exact, managed resources of the type carry the private string
+    /// `attributes`, `&[]` for none. Declare a nonempty list as its own
+    /// `static`: attribute descriptors own their data, so an inline array is
+    /// not promoted to a `'static` borrow. The type supports exact and all
+    /// selectors and maps selectors to no action inputs.
     pub const fn new(
         id: ResourceType,
         label: &'static str,
         plural_label: &'static str,
         example: &'static str,
         canonical: fn(&str) -> bool,
+        attributes: &'static [ResourceAttributeDescriptor],
     ) -> Self {
         Self {
             id,
@@ -459,7 +476,7 @@ impl ResourceTypeDescriptor {
             example: Cow::Borrowed(example),
             canonical: ValueGrammar::Function(canonical),
             namespace: None,
-            attributes: Cow::Borrowed(&[]),
+            attributes: Cow::Borrowed(attributes),
             action_inputs: None,
         }
     }
@@ -526,25 +543,6 @@ impl ResourceTypeDescriptor {
     /// below it.
     pub const fn with_namespace(mut self, namespace: NamespaceSelectorDescriptor) -> Self {
         self.namespace = Some(namespace);
-        self
-    }
-
-    /// Declares the private string attributes exact, managed resources of
-    /// the type carry. Declare the list as its own `static`: attribute
-    /// descriptors own their data, so an inline array is not promoted to a
-    /// `'static` borrow. A declared type takes its attributes at
-    /// construction; calling this on one panics.
-    pub const fn with_attributes(
-        mut self,
-        attributes: &'static [ResourceAttributeDescriptor],
-    ) -> Self {
-        let previous = std::mem::replace(&mut self.attributes, Cow::Borrowed(attributes));
-        assert!(
-            matches!(previous, Cow::Borrowed(_)),
-            "a declared resource type takes its attributes at construction"
-        );
-        // A borrowed list owns nothing, and a `const fn` cannot run the drop.
-        std::mem::forget(previous);
         self
     }
 
@@ -851,6 +849,7 @@ pub static GIT_REPOSITORY_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescrip
     "Git repositories",
     "engineering/payments",
     is_canonical_repository_path,
+    &[],
 )
 .with_namespace(NamespaceSelectorDescriptor::new(
     is_repository_selector_path,
@@ -1051,6 +1050,21 @@ mod tests {
                 .unwrap_err()
                 .contains("exceeds 8192 bytes")
         );
+        // A source must be a complete expression on its own: one that closes
+        // the anchoring group would otherwise match any value.
+        for escape in ["x)|(?s:.*", ").*(?:", "x)|(?:", "a)|(b"] {
+            assert_eq!(
+                ResourcePattern::new(escape, 64).unwrap_err(),
+                "resource pattern is not a valid regular expression",
+                "{escape}"
+            );
+        }
+        // Flags and terminated comments stay inside the anchors; a trailing
+        // verbose-mode comment would swallow them and is rejected.
+        let verbose = ResourcePattern::new("(?x) a # comment\n", 8).unwrap();
+        assert!(verbose.is_match("a"));
+        assert!(!verbose.is_match("ab"));
+        assert!(ResourcePattern::new("(?x) a # comment", 8).is_err());
         // Verbose-mode whitespace counts toward the source bound only.
         let padded = format!("(?x)a{}", " ".repeat(8 * 1024 - 5));
         assert!(ResourcePattern::new(padded, 8192).unwrap().is_match("a"));
@@ -1283,19 +1297,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a declared resource type takes its attributes at construction")]
-    fn declared_resource_types_reject_static_attribute_lists() {
-        static ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
-            [ResourceAttributeDescriptor::optional(
-                "region",
-                "Region",
-                "Hosting region.",
-                |value| !value.is_empty(),
-            )];
-        let _ = declared_project().with_attributes(&ATTRIBUTES);
-    }
-
-    #[test]
     fn static_resource_types_keep_their_const_form() {
         static ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
             [ResourceAttributeDescriptor::required(
@@ -1310,8 +1311,8 @@ mod tests {
             "Destinations",
             "alerts",
             |value| !value.is_empty() && !value.contains('/'),
-        )
-        .with_attributes(&ATTRIBUTES);
+            &ATTRIBUTES,
+        );
         const LABEL_LENGTH: usize = TYPE.label().len();
         const ATTRIBUTE_COUNT: usize = TYPE.attributes().len();
         assert_eq!((LABEL_LENGTH, ATTRIBUTE_COUNT), (11, 1));

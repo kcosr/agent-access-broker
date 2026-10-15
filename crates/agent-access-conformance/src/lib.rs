@@ -54,6 +54,7 @@ pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     "Conformance items",
     "shelf-one/item-one",
     |value| is_item_path(value, 2..=4),
+    &[],
 )
 .with_namespace(NamespaceSelectorDescriptor::new(
     |value| is_item_path(value, 1..=3),
@@ -73,8 +74,8 @@ pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeD
     "Conformance endpoints",
     "alerts",
     is_endpoint_name,
-)
-.with_attributes(&CONFORMANCE_ENDPOINT_ATTRIBUTES);
+    &CONFORMANCE_ENDPOINT_ATTRIBUTES,
+);
 
 static CONFORMANCE_ENDPOINT_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
     [ResourceAttributeDescriptor::required(

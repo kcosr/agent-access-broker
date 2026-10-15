@@ -1423,6 +1423,7 @@ static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor
     "Unresolved resource types",
     "",
     |_| false,
+    &[],
 );
 
 #[derive(Debug, Clone)]

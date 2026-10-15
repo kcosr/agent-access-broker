@@ -206,6 +206,7 @@ pub static FAKE_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescripto
     "Fake projects",
     "TEST",
     is_fake_project_key,
+    &[],
 );
 
 fn is_fake_project_key(value: &str) -> bool {
