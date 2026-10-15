@@ -22,9 +22,12 @@ pub struct CommandProcessFactsSnapshot {
     /// Milliseconds from the spawn until the leader was reaped and its pipes
     /// drained.
     pub duration_ms: Option<u64>,
-    /// The process broke the command contract, such as by exceeding its
-    /// output limit or leaving its pipes open after it exited.
-    pub contract_violation: bool,
+    /// Whether the process broke the command contract, such as by
+    /// exceeding its output limit, leaving its pipes open after it exited,
+    /// or printing an invalid response; `None` until the run reaches a
+    /// verdict, as for a process that never started or that the Broker
+    /// stopped before reading its response.
+    pub contract_violation: Option<bool>,
 }
 
 /// A shared cell of one command run's process facts. Clones share the cell.
@@ -60,7 +63,14 @@ impl CommandProcessFacts {
 
     /// The process or its response broke the command contract.
     pub fn record_contract_violation(&self) {
-        self.facts().contract_violation = true;
+        self.facts().contract_violation = Some(true);
+    }
+
+    /// The process ended on its own without breaking the command contract,
+    /// or its response was read and kept it; a violation already recorded
+    /// stands.
+    pub fn record_contract_kept(&self) {
+        self.facts().contract_violation.get_or_insert(false);
     }
 
     /// The facts recorded so far.
@@ -90,7 +100,9 @@ mod tests {
         assert_eq!(reader.snapshot().exit_code, None);
 
         facts.record_finished(None, Some(9), Duration::from_millis(1500));
+        assert_eq!(reader.snapshot().contract_violation, None);
         facts.record_contract_violation();
+        facts.record_contract_kept();
         assert_eq!(
             reader.snapshot(),
             CommandProcessFactsSnapshot {
@@ -98,8 +110,11 @@ mod tests {
                 exit_code: None,
                 signal: Some(9),
                 duration_ms: Some(1500),
-                contract_violation: true,
+                contract_violation: Some(true),
             }
         );
+        let kept = CommandProcessFacts::new();
+        kept.record_contract_kept();
+        assert_eq!(kept.snapshot().contract_violation, Some(false));
     }
 }

@@ -298,7 +298,10 @@ impl CommandImportProvider {
         secrets: &CommandSecrets,
     ) -> Result<ProviderResult, ProviderError> {
         match response::invoke(&self.service, action, read_only, &completed.stdout, secrets) {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                facts.record_contract_kept();
+                outcome
+            }
             Err(violation) => Err(self.violation(
                 &completed,
                 facts,
@@ -320,12 +323,18 @@ impl CommandImportProvider {
         secrets: &CommandSecrets,
     ) -> Result<ProviderCredentialVerification, ProviderError> {
         match response::verify(&self.service, &completed.stdout, secrets) {
-            Ok(Ok(())) => Ok(ProviderCredentialVerification::new(
-                0,
-                facts.snapshot().duration_ms.unwrap_or(0),
-                serde_json::json!({}),
-            )),
-            Ok(Err(error)) => Err(error),
+            Ok(Ok(())) => {
+                facts.record_contract_kept();
+                Ok(ProviderCredentialVerification::new(
+                    0,
+                    facts.snapshot().duration_ms.unwrap_or(0),
+                    serde_json::json!({}),
+                ))
+            }
+            Ok(Err(error)) => {
+                facts.record_contract_kept();
+                Err(error)
+            }
             Err(violation) => {
                 Err(self.violation(&completed, facts, CommandOperation::Verify, violation, true))
             }

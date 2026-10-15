@@ -515,7 +515,7 @@ async fn the_hook_runs_invoke_and_verify_under_the_permit_it_is_handed() {
     let recorded = facts.snapshot();
     assert!(recorded.spawned);
     assert_eq!(recorded.exit_code, Some(2));
-    assert!(!recorded.contract_violation);
+    assert_eq!(recorded.contract_violation, Some(false));
     assert_eq!(registry.in_use("ticketing"), 0);
     assert_eq!(registry.live_processes(), 0);
 
@@ -568,7 +568,7 @@ async fn the_hook_runs_invoke_and_verify_under_the_permit_it_is_handed() {
             "mutationStatus": "applied_unverified", "retrySafe": false})
     );
     assert_eq!(facts.snapshot().exit_code, Some(0));
-    assert!(!facts.snapshot().contract_violation);
+    assert_eq!(facts.snapshot().contract_violation, Some(false));
     let verified = answering
         .verify_command(CommandVerification::new(
             request(),

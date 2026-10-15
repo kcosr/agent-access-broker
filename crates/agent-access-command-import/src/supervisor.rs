@@ -109,6 +109,15 @@ impl ProcessOutcome {
             Termination::OutputExceeded | Termination::PipesHeldOpen
         )
     }
+
+    /// Whether the leader ended on its own with a failure, a non-zero exit
+    /// or a signal the Broker did not send, which leaves no document to read
+    /// but breaks no command contract. A clean exit's verdict waits for its
+    /// document; a run the Broker stopped has none.
+    pub(crate) fn ended_on_its_own(&self) -> bool {
+        self.termination == Termination::Exited
+            && self.exit.is_some_and(|exit| exit.code != Some(0))
+    }
 }
 
 /// The invocation's side of a supervised process. Dropping it before the
@@ -357,6 +366,8 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
     );
     if outcome.contract_violation() {
         facts.record_contract_violation();
+    } else if outcome.ended_on_its_own() {
+        facts.record_contract_kept();
     }
     // The facts are recorded, then the process is dropped and the permit
     // returns to the budget before the supervisor leaves the registry, all
@@ -630,7 +641,7 @@ mod tests {
         assert_eq!(outcome.termination, Termination::OutputExceeded);
         assert!(outcome.contract_violation());
         assert!(outcome.stdout.is_empty());
-        assert!(facts.snapshot().contract_violation);
+        assert_eq!(facts.snapshot().contract_violation, Some(true));
     }
 
     #[tokio::test]
@@ -660,7 +671,7 @@ mod tests {
         assert_eq!(outcome.termination, Termination::OutputExceeded);
         assert!(outcome.contract_violation());
         assert!(outcome.stdout.is_empty());
-        assert!(facts.snapshot().contract_violation);
+        assert_eq!(facts.snapshot().contract_violation, Some(true));
         assert_eq!(signals.groups(), [GROUP]);
     }
 
@@ -755,7 +766,8 @@ mod tests {
         assert_eq!(recorded.exit_code, Some(0));
         assert_eq!(recorded.signal, None);
         assert!(recorded.duration_ms.is_some());
-        assert!(!recorded.contract_violation);
+        // A clean exit's verdict waits for its document.
+        assert_eq!(recorded.contract_violation, None);
     }
 
     #[tokio::test]
