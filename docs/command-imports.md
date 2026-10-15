@@ -496,7 +496,7 @@ A Broker-enforced request (`issue.view`):
       "attributes": { "region": "eu-1", "webhookSecret": "s3cr3t-example" } }] },
   "credentials": { "user": { "kind": "username_token", "username": "avery", "token": "pat-example" } },
   "network": { "proxy": { "url": "https://proxy.example.net:8443" }, "noProxy": [".internal.example"],
-    "caBundle": "/var/lib/agent-access-broker/spool/command-imports/ca-3f9c2e.pem" }
+    "trust": "system_plus_custom", "caCertificate": "/etc/agent-access-broker/corporate-ca.pem" }
 }
 ```
 
@@ -634,7 +634,7 @@ wire mode:
 { "format": "agent-access-command/1", "requestId": "brk_01JA7Q4F7N1P",
   "deadline": "2026-10-14T15:06:00Z",
   "credential": { "mode": "service", "kind": "username_token", "username": "svc-tickets", "token": "svc-example" },
-  "network": { "proxy": null, "noProxy": [], "caBundle": "/var/lib/agent-access-broker/spool/command-imports/ca-3f9c2e.pem" } }
+  "network": { "proxy": null, "noProxy": [], "trust": "system", "caCertificate": null } }
 ```
 
 `{"ok": true, ...}` shows **Verified**; an error shows **Failed** with the
@@ -689,25 +689,26 @@ can reach. With `inherit`, the request's `network` object is the contract:
   else none, with its credentials if it needs them. Imports have no
   service-specific proxy.
 - `noProxy`: the Broker's `NO_PROXY` entries, as given.
-- `caBundle`: a PEM file holding exactly the trust roots the Broker loaded for
-  its current configuration, whichever
-  [`network.outbound_tls`](configuration.md#networkoutbound_tls) mode is in
-  use.
+- `trust`: the [`network.outbound_tls`](configuration.md#networkoutbound_tls)
+  trust mode: `"system"` (the platform store), `"custom"` (only the
+  certificates in `caCertificate`) or `"system_plus_custom"` (both).
+- `caCertificate`: the configured `network.outbound_tls.ca_certificate` path,
+  or `null` under `system` trust.
 
-Bundle files are written under `<limits.upload_spool_dir>/command-imports/`,
-named by the SHA-256 of their contents, with mode 0600. A file is never
-rewritten or deleted while the Broker runs, so a running or queued call keeps
-the roots it started with across reloads, and a rejected reload changes no
-file in use. Startup removes leftover files.
+The Broker passes the configured path as is; certificates never appear in the
+request. The command reads the file itself.
 
 As a convenience, the Broker also sets `HTTPS_PROXY`, `HTTP_PROXY`,
 `https_proxy`, `http_proxy` (with any proxy credentials percent-encoded in the
-URL), `NO_PROXY`, `no_proxy`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and
-`NODE_EXTRA_CA_CERTS`. Prefer the explicit fields: runtimes differ. For
-example, Node's built-in `fetch` ignores the proxy variables unless the command
-configures a proxy agent, and `NODE_EXTRA_CA_CERTS` adds to Node's bundled
-roots rather than replacing them. Proxy credentials in the environment are
-readable by other processes of the same user, which the trust model accepts.
+URL), `NO_PROXY` and `no_proxy`. Under `custom` trust it sets `SSL_CERT_FILE`
+and `REQUESTS_CA_BUNDLE` to the path, since they replace a runtime's default
+roots; under `custom` and `system_plus_custom` it sets `NODE_EXTRA_CA_CERTS`,
+since it adds to Node's bundled roots. `system` trust sets none of them. Prefer
+the explicit fields: runtimes differ. For example, Node's built-in `fetch`
+ignores the proxy variables unless the command configures a proxy agent, and a
+runtime's default roots need not match the platform store the Broker uses.
+Proxy credentials in the environment are readable by other processes of the
+same user, which the trust model accepts.
 
 ## Process lifecycle and limits
 

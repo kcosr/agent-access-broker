@@ -54,7 +54,7 @@ def request(action, inputs, authorization, credentials=CREDENTIALS):
         "format": "agent-access-command/1", "action": action, "context": "internal",
         "requestId": "brk_01JA7Q2W9V8X", "deadline": "2026-10-14T15:04:35Z",
         "caller": CALLER, "inputs": inputs, "authorization": authorization,
-        "network": {"proxy": None, "noProxy": [], "caBundle": "/nonexistent/ca.pem"},
+        "network": {"proxy": None, "noProxy": [], "trust": "system", "caCertificate": None},
     }
     if credentials is not None:
         document["credentials"] = credentials
@@ -421,7 +421,7 @@ class VerifyTests(unittest.TestCase):
                "deadline": "2026-10-14T15:06:00Z",
                "credential": {"mode": "service", "kind": "username_token",
                               "username": "svc-tickets", "token": SERVICE_TOKEN},
-               "network": {"proxy": None, "noProxy": [], "caBundle": "/nonexistent/ca.pem"}}
+               "network": {"proxy": None, "noProxy": [], "trust": "system", "caCertificate": None}}
 
     def test_verify(self):
         self.assertEqual(one_document(self, run("verify", self.REQUEST)),
