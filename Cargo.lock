@@ -201,6 +201,10 @@ dependencies = [
  "agent-access-core",
  "agent-access-provider",
  "async-trait",
+ "libc",
+ "regex",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

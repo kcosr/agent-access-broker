@@ -11,3 +11,10 @@ role = "adapter"
 agent-access-core = { path = "../agent-access-core" }
 agent-access-provider = { path = "../agent-access-provider" }
 async-trait.workspace = true
+libc.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
