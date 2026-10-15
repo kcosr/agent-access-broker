@@ -279,7 +279,12 @@ fn the_runtime_exports_the_captured_proxy_route() {
     assert_eq!(network.environment(), variables);
     assert_eq!(
         network.supplied_secrets().collect::<Vec<_>>(),
-        ["env@pass", "env%40pass", proxied]
+        [
+            "env@pass",
+            "env%40pass",
+            "ZW52IHVzZXI6ZW52QHBhc3M=",
+            proxied
+        ]
     );
     let debug = format!("{network:?}");
     assert!(debug.contains("<redacted>"), "{debug}");

@@ -16,6 +16,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
@@ -76,6 +77,9 @@ struct ProxyCredentials {
     password: Zeroizing<String>,
     /// The password as the credentialed URL carries it.
     encoded_password: Zeroizing<String>,
+    /// The Basic form, base64 of `username:password`, as a command building a
+    /// `Proxy-Authorization` header would send it.
+    basic: Zeroizing<String>,
 }
 
 impl InheritedNetwork {
@@ -92,6 +96,10 @@ impl InheritedNetwork {
                     username: Zeroizing::new(username.to_owned()),
                     password: Zeroizing::new(password.to_owned()),
                     encoded_password: Zeroizing::new(encoded),
+                    basic: Zeroizing::new(
+                        base64::engine::general_purpose::STANDARD
+                            .encode(Zeroizing::new(format!("{username}:{password}")).as_bytes()),
+                    ),
                 },
             ),
         });
@@ -160,9 +168,10 @@ impl InheritedNetwork {
     }
 
     /// The secrets these settings supply to a command, in every form a
-    /// command receives them: the proxy password, its percent-encoded form
-    /// when that differs, and the credentialed URL of the proxy variables,
-    /// when the password is not empty. Command output must not echo them.
+    /// command receives or derives them: the proxy password, its
+    /// percent-encoded form when that differs, the Basic form of the username
+    /// and password, and the credentialed URL of the proxy variables, when
+    /// the password is not empty. Command output must not echo them.
     pub(crate) fn supplied_secrets(&self) -> impl Iterator<Item = &str> {
         self.proxy
             .iter()
@@ -173,6 +182,7 @@ impl InheritedNetwork {
                     .then_some(credentials.encoded_password.as_str());
                 std::iter::once(credentials.password.as_str())
                     .chain(encoded)
+                    .chain(std::iter::once(credentials.basic.as_str()))
                     .chain(std::iter::once(proxy.credentialed_url.as_str()))
             })
     }
@@ -358,11 +368,17 @@ mod tests {
                 ("NODE_EXTRA_CA_CERTS", CA_PATH),
             ])
         );
-        // The password, its percent-encoded form and the credentialed URL
-        // the environment carries are all supplied secrets.
+        // The password, its percent-encoded form, the Basic form of the
+        // username and password, and the credentialed URL the environment
+        // carries are all supplied secrets.
         assert_eq!(
             network.supplied_secrets().collect::<Vec<_>>(),
-            ["p@ss:w/rd", "p%40ss%3Aw%2Frd", proxied]
+            [
+                "p@ss:w/rd",
+                "p%40ss%3Aw%2Frd",
+                "cHJveHkgdXNlcjpwQHNzOncvcmQ=",
+                proxied
+            ]
         );
         let debug = format!("{network:?}");
         assert!(debug.contains("<redacted>"), "{debug}");
