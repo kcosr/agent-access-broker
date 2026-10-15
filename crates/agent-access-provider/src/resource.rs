@@ -75,9 +75,9 @@ const MAX_COMPILED_PATTERN_BYTES: usize = 256 * 1024;
 /// backreferences are unsupported. The pattern is anchored at both ends, so
 /// `[A-Z]{2,10}` accepts `OPS` but not `OPS-1`, and must be a complete
 /// expression on its own: `x)|(?s:.*` is rejected rather than escaping the
-/// anchors. The source is at most 8 KiB,
-/// the length bound is 1 to 8,192 bytes, and the compiled pattern must fit
-/// 256 KiB program and lazy DFA budgets.
+/// anchors, and a verbose-mode (`(?x)`) comment must end with a newline. The
+/// source is at most 8 KiB, the length bound is 1 to 8,192 bytes, and the
+/// compiled pattern must fit 256 KiB program and lazy DFA budgets.
 ///
 /// ```
 /// use agent_access_provider::ResourcePattern;
@@ -119,18 +119,27 @@ impl ResourcePattern {
                 .size_limit(MAX_COMPILED_PATTERN_BYTES)
                 .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
                 .build()
-                .map_err(|error| match error {
-                    regex::Error::CompiledTooBig(_) => {
-                        "resource pattern exceeds the compilation budget".to_string()
-                    }
-                    _ => "resource pattern is not a valid regular expression".to_string(),
-                })
         };
+        let over_budget = |error: &regex::Error| matches!(error, regex::Error::CompiledTooBig(_));
         // The bare source must be a complete expression on its own, so it
         // cannot close the anchoring group and escape the anchors, as
         // `x)|(?s:.*` would.
-        compile(&source)?;
-        let regex = compile(&format!(r"\A(?:{source})\z"))?;
+        compile(&source).map_err(|error| {
+            if over_budget(&error) {
+                "resource pattern exceeds the compilation budget"
+            } else {
+                "resource pattern is not a valid regular expression"
+            }
+        })?;
+        // A complete source can fail once anchored only by ending inside a
+        // verbose-mode comment, which would swallow the closing anchor.
+        let regex = compile(&format!(r"\A(?:{source})\z")).map_err(|error| {
+            if over_budget(&error) {
+                "resource pattern exceeds the compilation budget"
+            } else {
+                "resource pattern must end a verbose-mode comment with a newline"
+            }
+        })?;
         Ok(Self {
             source: source.into(),
             max_length,
@@ -1064,7 +1073,10 @@ mod tests {
         let verbose = ResourcePattern::new("(?x) a # comment\n", 8).unwrap();
         assert!(verbose.is_match("a"));
         assert!(!verbose.is_match("ab"));
-        assert!(ResourcePattern::new("(?x) a # comment", 8).is_err());
+        assert_eq!(
+            ResourcePattern::new("(?x) a # comment", 8).unwrap_err(),
+            "resource pattern must end a verbose-mode comment with a newline"
+        );
         // Verbose-mode whitespace counts toward the source bound only.
         let padded = format!("(?x)a{}", " ".repeat(8 * 1024 - 5));
         assert!(ResourcePattern::new(padded, 8192).unwrap().is_match("a"));
