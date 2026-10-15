@@ -14,6 +14,7 @@ pub(crate) use command_authority::command_enforced_action;
 pub use command_authority::{
     CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
 };
+mod command_dispatch;
 mod discovery;
 mod import_control;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
@@ -1753,10 +1754,6 @@ pub struct PreparedInvocation {
     body_part_specs: Vec<BrokerBodyPartSpec>,
     /// The admitted authority of a command import's call, for its request
     /// `authorization` block and audit; `None` for every other service.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the command request builder consumes it")
-    )]
     command_authorization: Option<CommandAuthorization>,
     finalize_context: FinalizeContext,
 }
@@ -5195,17 +5192,25 @@ impl BrokerRuntime {
             state,
             response_options,
             body_part_specs: _,
-            command_authorization: _,
+            command_authorization,
             finalize_context,
         } = prepared;
         let correlation = request.correlation().clone();
         let service = request.service().to_owned();
         let action = request.action().to_owned();
         let execution_context = finalize_context.execution_context.clone();
+        // A command import runs through its command hook, and its call waits
+        // for a budget permit before the final checks; until its hook is
+        // called, no process has started.
+        let command_call = self.command_provider(&service).is_some();
+        let mut command_started = false;
         // Staging happens before the final invocation exists: the body is
         // already consumed, then the revision fences run and only the admitted
         // resource's attributes are decrypted.
         let result = with_provider_context(correlation, service.clone(), action.clone(), async {
+            let command = self
+                .command_dispatch(&service, finalize_context.started)
+                .await?;
             let mut resource_attributes = ResourceAttributes::default();
             if self
                 .action_descriptor(&service, &action)
@@ -5257,19 +5262,49 @@ impl BrokerRuntime {
                 HookPhase::Invocation,
                 domain_reasons,
             );
-            let result = run_provider_hook(
-                hook.clone(),
-                provider.invoke(agent_access_provider::host::invocation(
-                    request,
-                    body_parts,
-                    resource_attributes,
-                    state,
-                )),
-            )
-            .await?;
+            let result = match command {
+                Some(command_dispatch::CommandDispatch {
+                    provider: command_provider,
+                    permit,
+                    deadline,
+                }) => {
+                    let invocation = self
+                        .command_invocation(
+                            permit,
+                            deadline,
+                            &request,
+                            command_authorization,
+                            resource_attributes,
+                            &finalize_context,
+                        )
+                        .await?;
+                    command_started = true;
+                    run_provider_hook(hook.clone(), command_provider.invoke_command(invocation))
+                        .await?
+                }
+                None => {
+                    run_provider_hook(
+                        hook.clone(),
+                        provider.invoke(agent_access_provider::host::invocation(
+                            request,
+                            body_parts,
+                            resource_attributes,
+                            state,
+                        )),
+                    )
+                    .await?
+                }
+            };
             Ok(checked_result_stream(result, hook))
         })
         .await;
+        let result = result.map_err(|error| {
+            if command_call && !command_started {
+                self.command_not_started(&service, &action, error)
+            } else {
+                error
+            }
+        });
         let result = result.and_then(|result| {
             if !require_stream
                 || result

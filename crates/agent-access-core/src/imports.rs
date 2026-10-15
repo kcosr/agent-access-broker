@@ -6,6 +6,7 @@
 mod adapter;
 mod authority;
 mod command;
+mod command_facts;
 mod command_registry;
 mod definition;
 mod metadata;
@@ -16,6 +17,7 @@ mod type_changes;
 pub use adapter::*;
 pub use authority::*;
 pub use command::*;
+pub use command_facts::{CommandProcessFacts, CommandProcessFactsSnapshot};
 pub use command_registry::{
     CommandAcquireError, CommandPermit, CommandProcessControl, CommandRegistry,
     CommandRegistryClosed, LiveCommandProcess,

@@ -291,9 +291,16 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-command-import`: the `command` import kind for
   operator-approved local executables (`[command_imports.<name>]`, endpoints
   `command:<name>`): `describe` manifest parsing and mapping (`manifest.rs`,
-  `mapping.rs`) and the command provider whose hook core calls instead of
-  `Provider::invoke`; `registration()` selects it, with no OAuth companion.
-  Fixture commands live in its `tests/fixtures/`.
+  `mapping.rs`), the command provider whose hook core calls instead of
+  `Provider::invoke`, and Unix process supervision (`run.rs`, `process.rs`,
+  `supervisor.rs` with its process-control test double): one process group per
+  run, the signal lock, `WNOWAIT` exit observation and the budget slot each
+  supervisor holds until it has reaped its process. Core keeps the per-command
+  budgets and live supervisors in `imports/command_registry.rs`, carried across
+  runtime generations and closed by the shutdown drain; its dispatch step
+  (`runtime/command_dispatch.rs`) takes a slot before the final checks.
+  `registration()` selects it, with no OAuth companion. Fixture commands live
+  in its `tests/fixtures/`.
 - `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
 - `crates/agent-access-fake`: development fixtures, each selected separately:
   the `fake` backend used by smoke tests and fixtures, the `oauth_stub`

@@ -2145,9 +2145,9 @@ LANG = "C.UTF-8"
 | --- | --- |
 | `<name>` | `^[a-z][a-z0-9_-]{0,62}$` |
 | `path` | Absolute executable path. A missing or non-executable file only warns, so binaries can be replaced without stopping the Broker |
-| `timeout` | `s`, `m` or `h` syntax, 1 second to 10 minutes; covers the wait for a concurrency slot |
-| `max_output_bytes` | 1 to `limits.max_upstream_response_bytes` |
-| `max_concurrent` | 1 to `limits.max_concurrent_requests`; shared by every import of this command |
+| `timeout` | `s`, `m` or `h` syntax, 1 second to 10 minutes; covers the wait for a concurrency slot. `describe` runs within the lesser of this and the 60-second discovery deadline |
+| `max_output_bytes` | 1 to `limits.max_upstream_response_bytes`; `describe` output is bounded by the 16 MiB manifest limit instead |
+| `max_concurrent` | 1 to `limits.max_concurrent_requests`; shared by every import of this command and by its `describe`, `invoke` and `verify` runs, across reloads. A reload that lowers it holds new runs until usage falls below the new value |
 | `working_dir` | Absolute path |
 | `network` | `inherit` passes the Broker's egress proxy route, its `NO_PROXY` entries, and the `[network.outbound_tls]` trust mode with the configured `ca_certificate` path, never certificates; `none` passes nothing. Neither restricts what the command can reach |
 | `log_stderr` | Opt-in for including up to 4 KiB of escaped stderr in failure logs. The Broker cannot redact secrets a command prints, so validation warns while it is on |
@@ -2161,7 +2161,21 @@ trust variables to the configured `ca_certificate` path, for the trust modes
 that use it); use `network = "none"` to supply your own. `config validate`, startup and reload stay offline and never run a
 command; they report warnings for missing executables, enabled `log_stderr`, and
 entries no allowed `command` kind can use. Removing an entry makes its imports
-unavailable but keeps their records, grants and credentials.
+unavailable but keeps their records, grants and credentials. Running processes
+finish under the settings that started them; a reload that changes or removes
+an entry fails the command's calls still waiting for a slot with
+`service_action_denied`, without starting a process.
+
+Each run starts `<path> describe`, `invoke` or `verify` in its own process
+group with stdin, stdout and stderr piped; request data travels only on stdin.
+Stdout over its limit, or pipes a descendant keeps open more than one second
+after the command exits, fail the call; the first 4 KiB of stderr are kept and
+the rest discarded. At the command deadline, on shutdown, or when the Broker
+abandons the call, the whole process group is killed with `SIGKILL` and reaped
+before its concurrency slot is released. Each failure logs one
+`command_import_failed` event with the service, action, request ID, operation,
+exit status or signal and failure category, and never command output; its
+`stderr` field appears only with `log_stderr`.
 
 ## Imported MCP OAuth
 

@@ -6,6 +6,7 @@
 //! empty environment plus the configured variables, its working directory,
 //! and stdin, stdout and stderr piped. Request data never travels in its
 //! arguments or environment.
+use crate::run::CommandOperation;
 use agent_access_core::imports::CommandProcessControl;
 use std::ffi::OsString;
 use std::future::Future;
@@ -23,24 +24,6 @@ pub(crate) const POST_EXIT_DRAIN: Duration = Duration::from_secs(1);
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 /// How often a leader's exit is checked when child signals are unavailable.
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// The command operation a process runs, passed as its only argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CommandOperation {
-    Describe,
-    Invoke,
-    Verify,
-}
-
-impl CommandOperation {
-    pub(crate) fn argument(self) -> &'static str {
-        match self {
-            Self::Describe => "describe",
-            Self::Invoke => "invoke",
-            Self::Verify => "verify",
-        }
-    }
-}
 
 /// How to start one command process. `env` is the whole environment: the
 /// configured variables and the network settings.
@@ -434,7 +417,7 @@ pub(crate) async fn read_stderr<R: AsyncRead + Unpin>(mut pipe: R, capture: &mut
 mod tests {
     use super::*;
     use crate::supervisor::{SupervisionLimits, SupervisorHandle, Termination, start_command};
-    use agent_access_core::imports::CommandRegistry;
+    use agent_access_core::imports::{CommandProcessFacts, CommandRegistry};
     use std::path::Path;
     use tokio::time::Instant;
 
@@ -476,7 +459,7 @@ mod tests {
             .acquire("fixture", 4, limits.deadline)
             .await
             .unwrap();
-        start_command(permit, launch, stdin, limits).unwrap()
+        start_command(permit, launch, stdin, limits, CommandProcessFacts::new()).unwrap()
     }
 
     fn temp_file(name: &str) -> PathBuf {
@@ -760,6 +743,7 @@ mod tests {
             &launch("missing.sh", &[]),
             StdinPayload::empty(),
             limits(Duration::from_secs(5), 1024),
+            CommandProcessFacts::new(),
         )
         .err()
         .unwrap();
@@ -786,6 +770,7 @@ mod tests {
                     deadline,
                     max_output_bytes: 1024,
                 },
+                CommandProcessFacts::new(),
             )
             .unwrap();
             let group = handle.process_group();

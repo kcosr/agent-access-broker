@@ -6,13 +6,17 @@
 //! supervisor registers with the command registry before it spawns, so
 //! shutdown can kill its process group whatever became of the invocation.
 //! It returns the permit only after the group is killed and reaped and every
-//! I/O branch has finished. It never finalizes or audits a call.
+//! I/O branch has finished. It records the process facts into the run's
+//! shared cell before it returns the permit, so they outlive the invocation;
+//! it never finalizes or audits a call.
 use crate::process::{
     self, CommandLaunch, GroupSignals, KillCause, OsSignals, POST_EXIT_DRAIN, ProcessExit,
     SignalLock, StderrCapture, StdinPayload, StdoutCapture, SupervisedProcess, read_stderr,
     read_stdout, write_stdin,
 };
-use agent_access_core::imports::{CommandPermit, CommandProcessControl, LiveCommandProcess};
+use agent_access_core::imports::{
+    CommandPermit, CommandProcessControl, CommandProcessFacts, LiveCommandProcess,
+};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,24 +125,35 @@ impl<S: GroupSignals> Drop for SupervisorHandle<S> {
     }
 }
 
-/// Starts `launch` under a supervisor that owns `permit`.
+/// Starts `launch` under a supervisor that owns `permit` and records into
+/// `facts`.
 pub(crate) fn start_command(
     permit: CommandPermit,
     launch: &CommandLaunch,
     stdin: StdinPayload,
     limits: SupervisionLimits,
+    facts: CommandProcessFacts,
 ) -> Result<SupervisorHandle<OsSignals>, StartError> {
-    start(permit, OsSignals, || process::spawn(launch), stdin, limits)
+    start(
+        permit,
+        OsSignals,
+        || process::spawn(launch),
+        stdin,
+        limits,
+        facts,
+    )
 }
 
 /// Registers a supervisor for `permit`, spawns the process unless a kill
-/// was already requested, and hands both to the supervisor task.
+/// was already requested, and hands both to the supervisor task. The facts
+/// count the process as spawned once the supervisor owns it with its pipes.
 pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
     permit: CommandPermit,
     signals: S,
     spawn: impl FnOnce() -> io::Result<P>,
     stdin: StdinPayload,
     limits: SupervisionLimits,
+    facts: CommandProcessFacts,
 ) -> Result<SupervisorHandle<S>, StartError> {
     let lock = Arc::new(SignalLock::new(signals));
     let control: Arc<dyn CommandProcessControl> = lock.clone();
@@ -165,6 +180,7 @@ pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
             "the spawned command has no pipes",
         )));
     };
+    facts.record_spawned();
     let (deliver, outcome) = oneshot::channel();
     tokio::spawn(supervise(
         process,
@@ -173,7 +189,7 @@ pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
         live,
         stdin,
         limits,
-        deliver,
+        Supervision { facts, deliver },
     ));
     Ok(SupervisorHandle {
         lock,
@@ -199,6 +215,13 @@ type Pipes<P> = (
     <P as SupervisedProcess>::Stderr,
 );
 
+/// Where the supervisor reports: the run's facts cell and the invocation's
+/// outcome channel.
+struct Supervision {
+    facts: CommandProcessFacts,
+    deliver: oneshot::Sender<ProcessOutcome>,
+}
+
 /// The supervisor task: drives the stdin writer, the stdout and stderr
 /// readers and the exit watcher concurrently, so no pipe can block another,
 /// and kills the group at the deadline or on output overflow. When the
@@ -211,7 +234,7 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
     live: LiveCommandProcess,
     stdin: StdinPayload,
     limits: SupervisionLimits,
-    deliver: oneshot::Sender<ProcessOutcome>,
+    Supervision { facts, deliver }: Supervision,
 ) {
     let started = Instant::now();
     let unwind = KillOnUnwind(&lock);
@@ -293,10 +316,19 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
         stderr,
         duration: started.elapsed(),
     };
+    facts.record_finished(
+        outcome.exit.and_then(|exit| exit.code),
+        outcome.exit.and_then(|exit| exit.signal),
+        outcome.duration,
+    );
+    if outcome.contract_violation() {
+        facts.record_contract_violation();
+    }
     drop(unwind);
     drop(process);
-    // The permit returns to the budget before the supervisor leaves the
-    // registry, and both before the outcome is delivered.
+    // The facts are recorded and the permit returns to the budget before the
+    // supervisor leaves the registry, and all before the outcome is
+    // delivered.
     drop(live);
     let _ = deliver.send(outcome);
 }
@@ -305,8 +337,7 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
 mod tests {
     use super::double::{GROUP, ProcessDriver, RecordingSignals, fake_process};
     use super::*;
-    use crate::process::CommandOperation;
-    use agent_access_core::imports::CommandRegistry;
+    use agent_access_core::imports::{CommandProcessFactsSnapshot, CommandRegistry};
     use futures_util::FutureExt;
     use tokio::io::AsyncReadExt;
 
@@ -337,6 +368,25 @@ mod tests {
         stdin_capacity: usize,
         limits: SupervisionLimits,
     ) -> (SupervisorHandle<RecordingSignals>, ProcessDriver) {
+        started_with_facts(
+            registry,
+            signals,
+            stdin,
+            stdin_capacity,
+            limits,
+            CommandProcessFacts::new(),
+        )
+        .await
+    }
+
+    async fn started_with_facts(
+        registry: &CommandRegistry,
+        signals: &RecordingSignals,
+        stdin: &[u8],
+        stdin_capacity: usize,
+        limits: SupervisionLimits,
+        facts: CommandProcessFacts,
+    ) -> (SupervisorHandle<RecordingSignals>, ProcessDriver) {
         let permit = registry.acquire(COMMAND, 1, far()).await.unwrap();
         let (process, driver) = fake_process(exited_ok(), stdin_capacity);
         let handle = start(
@@ -345,6 +395,7 @@ mod tests {
             move || Ok(process),
             StdinPayload::new(stdin.to_vec()),
             limits,
+            facts,
         )
         .unwrap();
         (handle, driver)
@@ -370,13 +421,6 @@ mod tests {
         })
         .await
         .expect("the supervisor kills the group");
-    }
-
-    #[test]
-    fn each_operation_is_its_own_single_argument() {
-        assert_eq!(CommandOperation::Describe.argument(), "describe");
-        assert_eq!(CommandOperation::Invoke.argument(), "invoke");
-        assert_eq!(CommandOperation::Verify.argument(), "verify");
     }
 
     #[tokio::test]
@@ -530,7 +574,16 @@ mod tests {
     async fn stdout_over_the_cap_kills_the_group() {
         let registry = CommandRegistry::new();
         let signals = RecordingSignals::default();
-        let (handle, mut driver) = started(&registry, &signals, b"", 1024, limits(far(), 8)).await;
+        let facts = CommandProcessFacts::new();
+        let (handle, mut driver) = started_with_facts(
+            &registry,
+            &signals,
+            b"",
+            1024,
+            limits(far(), 8),
+            facts.clone(),
+        )
+        .await;
 
         driver.write_stdout(b"0123456789").await;
         killed(&signals, 1).await;
@@ -544,6 +597,47 @@ mod tests {
         assert_eq!(outcome.termination, Termination::OutputExceeded);
         assert!(outcome.contract_violation());
         assert!(outcome.stdout.is_empty());
+        assert!(facts.snapshot().contract_violation);
+    }
+
+    #[tokio::test]
+    async fn facts_outlive_a_dropped_handle_and_are_final_before_the_permit_returns() {
+        let registry = CommandRegistry::new();
+        let signals = RecordingSignals::default();
+        let facts = CommandProcessFacts::new();
+        let (handle, mut driver) = started_with_facts(
+            &registry,
+            &signals,
+            b"",
+            1024,
+            limits(far(), 1024),
+            facts.clone(),
+        )
+        .await;
+        assert_eq!(
+            facts.snapshot(),
+            CommandProcessFactsSnapshot {
+                spawned: true,
+                ..Default::default()
+            }
+        );
+
+        // The host interrupted the invocation; the facts known then stay
+        // readable, and the rest arrive once the leader is reaped.
+        drop(handle);
+        driver.exit();
+        driver.reaping().await;
+        assert_eq!(facts.snapshot().exit_code, None);
+        driver.finish_reaping();
+        driver.close_output();
+        released(&registry).await;
+
+        let recorded = facts.snapshot();
+        assert!(recorded.spawned);
+        assert_eq!(recorded.exit_code, Some(0));
+        assert_eq!(recorded.signal, None);
+        assert!(recorded.duration_ms.is_some());
+        assert!(!recorded.contract_violation);
     }
 
     #[tokio::test]
@@ -563,6 +657,7 @@ mod tests {
             },
             StdinPayload::empty(),
             limits(far(), 1024),
+            CommandProcessFacts::new(),
         )
         .unwrap();
         assert_eq!(signals.groups(), [GROUP]);
@@ -583,6 +678,7 @@ mod tests {
         let permit = registry.acquire(COMMAND, 1, far()).await.unwrap();
         assert_eq!(registry.close_and_drain(Duration::ZERO).await, 0);
         let mut spawned = false;
+        let facts = CommandProcessFacts::new();
 
         let error = start(
             permit,
@@ -593,12 +689,14 @@ mod tests {
             },
             StdinPayload::empty(),
             limits(far(), 1024),
+            facts.clone(),
         )
         .err()
         .unwrap();
 
         assert!(matches!(error, StartError::Cancelled));
         assert!(!spawned);
+        assert!(!facts.snapshot().spawned);
         assert!(signals.groups().is_empty());
         assert_eq!(registry.in_use(COMMAND), 0);
     }
@@ -615,6 +713,7 @@ mod tests {
             || Err(io::Error::from(io::ErrorKind::NotFound)),
             StdinPayload::empty(),
             limits(far(), 1024),
+            CommandProcessFacts::new(),
         )
         .err()
         .unwrap();

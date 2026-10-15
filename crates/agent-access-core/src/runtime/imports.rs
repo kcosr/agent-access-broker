@@ -638,6 +638,8 @@ impl BrokerRuntime {
                                 }
                                 && destination_allowed(&old.config, &record.definition)
                                     == destination_allowed(&self.config, &record.definition)
+                                && adapter_context(&old.config, record).command
+                                    == adapter_context(&self.config, record).command
                                 && old.providers.contains_key(name)
                                     == self.providers.contains_key(name)
                         })

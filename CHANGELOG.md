@@ -525,6 +525,18 @@ All notable changes to this project are documented in this file.
   `resourceTypes`) name a command import's types' `importedService` and mark a
   removed type `removed: true`. The SDK's `ResourceTypeMetadata` gains the
   `removed` and `imported_service` fields.
+- Command import runs (`describe` now, `invoke` and `verify` through the
+  command hook) start one process in its own process group, with an empty
+  environment plus the configured `env` and request data only on stdin, under
+  a supervisor that caps stdout, keeps 4 KiB of stderr, kills the group at the
+  command deadline and reaps it before releasing its slot. Each command name
+  has one concurrency budget of `max_concurrent` slots, shared by its imports,
+  runs and runtime generations; calls wait for a slot before their final
+  checks and fail `upstream_timeout` when none frees by their deadline, and a
+  reload that changes the command's entry fences calls still waiting. Failures
+  log `command_import_failed`. Shutdown kills and reaps command processes
+  after the operation drain, including those whose call already ended, and
+  reports any it could not reap.
 
 ### Changed
 

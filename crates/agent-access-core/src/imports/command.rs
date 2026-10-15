@@ -14,21 +14,28 @@
 //! The order of a call is fixed:
 //!
 //! 1. admission: input schema, policy and the authority plan;
-//! 2. a permit from the command name's concurrency budget, waited for until
-//!    the call deadline;
+//! 2. a [`CommandPermit`] from the command name's concurrency budget, waited
+//!    for until the call deadline;
 //! 3. final checks immediately before spawning: the import dispatch fence
 //!    (which also compares the `[command_imports.<name>]` entry), resource
 //!    attribute bindings, and the credentials;
 //! 4. core builds the [`CommandRequest`];
-//! 5. core calls the hook, which spawns `<path> invoke` or `<path> verify`.
+//! 5. core calls the hook, which hands the permit to the supervisor of the
+//!    `<path> invoke` or `<path> verify` process it spawns.
+//!
+//! The supervisor keeps the permit until the process group is killed and
+//! reaped, and records what happened to the process into the call's
+//! [`CommandProcessFacts`], which outlive the invocation future.
 //!
 //! The SDK's no-plaintext rule is unchanged for every other provider; the hook
 //! is part of the internal import contract and changes no supported API.
+use super::{CommandPermit, CommandProcessFacts};
 use agent_access_provider::{
     Provider, ProviderCredentialVerification, ProviderError, ProviderResult, ReasonCode,
 };
 use async_trait::async_trait;
 use serde::Serialize;
+use std::ffi::OsString;
 use std::io::Write;
 use tokio::time::Instant;
 use zeroize::Zeroize;
@@ -123,25 +130,40 @@ impl Drop for ZeroizingWriter {
 pub struct CommandInvocation {
     action: String,
     read_only: bool,
-    request: CommandRequest,
-    deadline: Instant,
+    run: CommandRun,
 }
 
 impl CommandInvocation {
     /// Core builds one per call, in the order the module documentation
-    /// states; adapter tests may build their own.
+    /// states; adapter tests may build their own. It has no network
+    /// variables and a fresh facts cell until
+    /// [`Self::with_environment`] and [`Self::with_facts`] supply them.
     pub fn new(
         action: String,
         read_only: bool,
         request: CommandRequest,
         deadline: Instant,
+        permit: CommandPermit,
     ) -> Self {
         Self {
             action,
             read_only,
-            request,
-            deadline,
+            run: CommandRun::new(request, deadline, permit),
         }
+    }
+
+    /// The network variables core sets, from the Broker's egress settings,
+    /// beside the configured `env` of the command.
+    pub fn with_environment(mut self, environment: Vec<(&'static str, OsString)>) -> Self {
+        self.run.environment = environment;
+        self
+    }
+
+    /// The cell the supervisor records the process facts into, shared with
+    /// whoever finalizes the call.
+    pub fn with_facts(mut self, facts: CommandProcessFacts) -> Self {
+        self.run.facts = facts;
+        self
     }
 
     /// The Broker action ID of the accepted action.
@@ -157,13 +179,18 @@ impl CommandInvocation {
 
     /// The request for `<path> invoke`.
     pub fn request(&self) -> &CommandRequest {
-        &self.request
+        &self.run.request
     }
 
     /// The command deadline set at admission: the earlier of admission plus
     /// the command's `timeout` and the host operation deadline.
     pub fn deadline(&self) -> Instant {
-        self.deadline
+        self.run.deadline
+    }
+
+    /// What the process run takes over.
+    pub fn into_run(self) -> CommandRun {
+        self.run
     }
 }
 
@@ -172,33 +199,77 @@ impl CommandInvocation {
 /// whose accepted metadata declares `verify: true`; otherwise verification
 /// is unsupported, as the provider contract defines.
 pub struct CommandVerification {
-    request: CommandRequest,
-    deadline: Instant,
+    run: CommandRun,
 }
 
 impl CommandVerification {
-    /// Core builds one per verification; adapter tests may build their own.
-    pub fn new(request: CommandRequest, deadline: Instant) -> Self {
-        Self { request, deadline }
+    /// Core builds one per verification, after taking `permit` from the
+    /// command's budget; adapter tests may build their own.
+    pub fn new(request: CommandRequest, deadline: Instant, permit: CommandPermit) -> Self {
+        Self {
+            run: CommandRun::new(request, deadline, permit),
+        }
+    }
+
+    /// The network variables core sets beside the configured `env`.
+    pub fn with_environment(mut self, environment: Vec<(&'static str, OsString)>) -> Self {
+        self.run.environment = environment;
+        self
+    }
+
+    /// The cell the supervisor records the process facts into.
+    pub fn with_facts(mut self, facts: CommandProcessFacts) -> Self {
+        self.run.facts = facts;
+        self
     }
 
     /// The request for `<path> verify`.
     pub fn request(&self) -> &CommandRequest {
-        &self.request
+        &self.run.request
     }
 
     pub fn deadline(&self) -> Instant {
-        self.deadline
+        self.run.deadline
+    }
+
+    /// What the process run takes over.
+    pub fn into_run(self) -> CommandRun {
+        self.run
+    }
+}
+
+/// What one `invoke` or `verify` process takes over from core: its stdin
+/// request, its deadline, the budget permit its supervisor holds until the
+/// process group is reaped, the network variables set beside the configured
+/// `env`, and the facts cell the supervisor records into.
+pub struct CommandRun {
+    pub request: CommandRequest,
+    pub deadline: Instant,
+    pub permit: CommandPermit,
+    pub environment: Vec<(&'static str, OsString)>,
+    pub facts: CommandProcessFacts,
+}
+
+impl CommandRun {
+    fn new(request: CommandRequest, deadline: Instant, permit: CommandPermit) -> Self {
+        Self {
+            request,
+            deadline,
+            permit,
+            environment: Vec::new(),
+            facts: CommandProcessFacts::new(),
+        }
     }
 }
 
 /// The command hook a command import's provider implements beside
 /// [`Provider`].
 ///
-/// Each method runs one process, maps its response and never finalizes or
-/// audits: core's owned operation does that once. A failure before the
-/// process starts reports `operation_dispatched: false`; after spawning, a
-/// generic failure is `operation_failed` with an `unknown` write receipt.
+/// Each method runs one process under the permit it is handed, maps its
+/// response and never finalizes or audits: core's owned operation does that
+/// once. A failure before the process starts leaves the facts unspawned and
+/// reports a `not_applied` write receipt; after spawning, a generic failure
+/// is `operation_failed` with an `unknown` write receipt.
 #[async_trait]
 pub trait CommandProvider: Provider {
     /// Runs `<path> invoke` for one admitted call.

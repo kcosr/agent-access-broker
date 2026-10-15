@@ -153,7 +153,12 @@ also includes a same-origin browser portal frontend:
   use `command:<name>` endpoints approved in `[command_imports]`; core passes the
   approved entry and the accepted service metadata to the adapter, and runs a
   command import's calls through its command hook with a core-built request
-  instead of `Provider::invoke`.
+  instead of `Provider::invoke`. Every `describe`, `invoke` and `verify` run
+  starts one process under a supervisor holding a slot of the command's
+  concurrency budget. Core keeps the budgets in a command registry that each
+  runtime generation inherits, as it does import dispatch fences, so every
+  import and generation of a command shares one budget; the fence also
+  changes when the command's `[command_imports]` entry does.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.
@@ -919,7 +924,15 @@ sequenceDiagram
 13. **Provider invoke**, then **finalize/audit**. The final invocation is built
    only after staging: the body is consumed, the revision fences run, and only
    the admitted resource's private attributes are decrypted. Its fields are
-   private and read through accessors, and it never serializes.
+   private and read through accessors, and it never serializes. A command
+   import's call first waits, until its command deadline (the earlier of
+   admission plus the command's `timeout` and the host operation deadline),
+   for a slot of its command's concurrency budget, then runs these final checks
+   and calls the command hook, which hands the slot to the supervisor of the
+   one process it starts. A call that gets no slot fails `upstream_timeout`,
+   and one that finds the budget closed by shutdown fails
+   `operation_cancelled`; a write that never started a process reports
+   `not_applied`.
 
 The lookup credential is never returned to the caller; the execution credential
 is placed only into the `ProviderInvocation`.
