@@ -204,7 +204,6 @@ dependencies = [
  "agent-access-provider",
  "async-trait",
  "libc",
- "regex",
  "serde_json",
  "sha2",
  "tokio",
