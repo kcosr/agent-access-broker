@@ -245,7 +245,10 @@ The matching admin routes are under `/v1/admin/imports`:
 | PUT / DELETE | `/{service}/credentials/{purpose}` | Write / remove execution, discovery, or transport token |
 
 The runtime OpenAPI and JSON-send schemas carry exact request/result shapes and
-mark token input sensitive. List, inspect, and saved-preview reads permit
+mark token input sensitive. List results include `commandImports`, the
+operator-approved command names (never paths) a `command` import may name as
+`command:<name>`; command import results include `commandVersion`, the version
+its accepted manifest reported, and the record's `acceptedMetadata`. List, inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change

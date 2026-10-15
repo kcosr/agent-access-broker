@@ -986,6 +986,12 @@ fn prepare_update(
             let accepted_metadata = manifest
                 .service_metadata()
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
+            // Only command imports record service metadata, and they always do.
+            if accepted_metadata.is_some()
+                != runtime.import_records_service_metadata(&record.definition)
+            {
+                return Err(invalid("stored discovery preview is invalid"));
+            }
             if body.selections.is_empty() {
                 return Err(invalid("select at least one discovered tool"));
             }

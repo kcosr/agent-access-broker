@@ -985,6 +985,14 @@ impl BrokerRuntime {
         Ok(())
     }
 
+    /// Whether acceptance stores service metadata for `definition`: exactly
+    /// for `command:<name>` endpoints.
+    pub fn import_records_service_metadata(&self, definition: &ImportedServiceDefinition) -> bool {
+        definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
+    }
+
     /// Whether `definition` declares no execution credential, so enabling
     /// it needs no provisioned credential.
     pub fn import_credential_free(&self, definition: &ImportedServiceDefinition) -> bool {
