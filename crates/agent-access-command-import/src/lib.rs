@@ -150,6 +150,7 @@ impl ImportedAdapter for CommandAdapter {
             }
         }
         Ok(ImportedProvider::Command(Arc::new(CommandImportProvider {
+            service: definition.service.clone(),
             actions: compiled,
             command: command.clone(),
             metadata: metadata.clone(),
@@ -210,6 +211,7 @@ impl ImportedAdapter for CommandAdapter {
                     CommandAcquireError::DeadlineExceeded => describe_timeout(),
                 })?;
         let output = run::execute(run::Run {
+            service: &definition.service,
             command: &command,
             operation: CommandOperation::Describe,
             permit,
@@ -229,7 +231,7 @@ impl ImportedAdapter for CommandAdapter {
                 ReasonCode::OperationCancelled,
                 "the Broker is shutting down",
             ),
-            RunFailure::TimedOut => describe_timeout(),
+            RunFailure::DeadlineBeforeStart | RunFailure::TimedOut => describe_timeout(),
             RunFailure::OutputLimit => discovery_failure(
                 ReasonCode::OperationFailed,
                 "the command's describe output exceeds 16 MiB",
@@ -269,6 +271,7 @@ impl ImportedAdapter for CommandAdapter {
 /// resources at admission. Each call runs one supervised process of the
 /// approved command; core never calls [`Provider::invoke`] on it.
 struct CommandImportProvider {
+    service: String,
     actions: BTreeMap<String, CompiledAction>,
     command: CommandImportConfig,
     #[expect(dead_code, reason = "the request contract reads its declarations")]
@@ -364,6 +367,7 @@ impl CommandProvider for CommandImportProvider {
         let run = invocation.into_run();
         let facts = run.facts.clone();
         let completed = run::execute(run::Run {
+            service: &self.service,
             command: &self.command,
             operation: CommandOperation::Invoke,
             permit: run.permit,
@@ -385,6 +389,7 @@ impl CommandProvider for CommandImportProvider {
         let run = verification.into_run();
         let facts = run.facts.clone();
         let completed = run::execute(run::Run {
+            service: &self.service,
             command: &self.command,
             operation: CommandOperation::Verify,
             permit: run.permit,

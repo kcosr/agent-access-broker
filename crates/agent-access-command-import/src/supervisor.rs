@@ -40,6 +40,8 @@ pub(crate) struct SupervisionLimits {
 pub(crate) enum StartError {
     /// The Broker is shutting down (`operation_cancelled`).
     Cancelled,
+    /// The command deadline passed before the spawn (`upstream_timeout`).
+    DeadlineExceeded,
     /// The executable could not be started (`operation_failed`).
     Spawn(io::Error),
 }
@@ -62,8 +64,8 @@ pub(crate) enum Termination {
     Unobserved,
 }
 
-/// The result of one supervised process.
-#[derive(Debug)]
+/// The result of one supervised process. Its `Debug` shows only the sizes
+/// of the command's output, never the output itself.
 pub(crate) struct ProcessOutcome {
     pub(crate) termination: Termination,
     /// The reaped leader's status; `None` when it was not reaped.
@@ -72,6 +74,20 @@ pub(crate) struct ProcessOutcome {
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: StderrCapture,
     pub(crate) duration: Duration,
+}
+
+impl std::fmt::Debug for ProcessOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcessOutcome")
+            .field("termination", &self.termination)
+            .field("exit", &self.exit)
+            .field("stdout_bytes", &self.stdout.len())
+            .field("stderr_kept_bytes", &self.stderr.kept.len())
+            .field("stderr_truncated", &self.stderr.truncated)
+            .field("duration", &self.duration)
+            .finish()
+    }
 }
 
 impl ProcessOutcome {
@@ -145,8 +161,9 @@ pub(crate) fn start_command(
 }
 
 /// Registers a supervisor for `permit`, spawns the process unless a kill
-/// was already requested, and hands both to the supervisor task. The facts
-/// count the process as spawned once the supervisor owns it with its pipes.
+/// was already requested or the deadline has passed, and hands both to the
+/// supervisor task. The facts count the process as spawned once the
+/// supervisor owns it with its pipes.
 pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
     permit: CommandPermit,
     signals: S,
@@ -162,6 +179,10 @@ pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
         .map_err(|_| StartError::Cancelled)?;
     if !lock.may_spawn() {
         return Err(StartError::Cancelled);
+    }
+    // A permit granted at or after the deadline starts nothing.
+    if Instant::now() >= limits.deadline {
+        return Err(StartError::DeadlineExceeded);
     }
     let mut process = match spawn() {
         Ok(process) => process,
@@ -182,11 +203,16 @@ pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
     };
     facts.record_spawned();
     let (deliver, outcome) = oneshot::channel();
-    tokio::spawn(supervise(
+    // The task owns the process through a guard that exists before the
+    // task first runs, so dropping the task unpolled still kills the group.
+    let owned = Owned {
         process,
+        _live: live,
+        lock: Arc::clone(&lock),
+    };
+    tokio::spawn(supervise(
+        owned,
         pipes,
-        Arc::clone(&lock),
-        live,
         stdin,
         limits,
         Supervision { facts, deliver },
@@ -199,13 +225,20 @@ pub(crate) fn start<P: SupervisedProcess, S: GroupSignals>(
     })
 }
 
-/// Kills a still-live group if the supervisor task ends abnormally, before
-/// its permit is returned.
-struct KillOnUnwind<'a, S: GroupSignals>(&'a SignalLock<S>);
+/// What the supervisor task owns: the process, its registration and its
+/// signal lock. Dropping it, however the task ends and even before the task
+/// first runs, kills a still-live group before the process is dropped and
+/// then the permit returned.
+struct Owned<P: SupervisedProcess, S: GroupSignals> {
+    process: P,
+    /// The registration and its permit, held until dropped.
+    _live: LiveCommandProcess,
+    lock: Arc<SignalLock<S>>,
+}
 
-impl<S: GroupSignals> Drop for KillOnUnwind<'_, S> {
+impl<P: SupervisedProcess, S: GroupSignals> Drop for Owned<P, S> {
     fn drop(&mut self) {
-        self.0.kill_and_release();
+        self.lock.kill_and_release();
     }
 }
 
@@ -228,16 +261,14 @@ struct Supervision {
 /// leader exits it kills and releases the group, reaps the leader, aborts
 /// the writer and drains the readers for at most [`POST_EXIT_DRAIN`].
 async fn supervise<P: SupervisedProcess, S: GroupSignals>(
-    mut process: P,
+    mut owned: Owned<P, S>,
     (stdin_pipe, stdout_pipe, stderr_pipe): Pipes<P>,
-    lock: Arc<SignalLock<S>>,
-    live: LiveCommandProcess,
     stdin: StdinPayload,
     limits: SupervisionLimits,
     Supervision { facts, deliver }: Supervision,
 ) {
     let started = Instant::now();
-    let unwind = KillOnUnwind(&lock);
+    let lock = Arc::clone(&owned.lock);
     let mut stdout = StdoutCapture::default();
     let mut stderr = StderrCapture::default();
     let (observed, exit, drained) = {
@@ -254,7 +285,7 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
         let (mut writing, mut reading_stdout, mut reading_stderr, mut timing) =
             (true, true, true, true);
         let exited = {
-            let exit = process.exited();
+            let exit = owned.process.exited();
             tokio::pin!(exit);
             loop {
                 tokio::select! {
@@ -275,7 +306,7 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
         let observed = exited.is_ok();
         let exit = if observed {
             lock.kill_and_release();
-            process.reap().await.ok()
+            owned.process.reap().await.ok()
         } else {
             lock.release_unsignalled();
             None
@@ -297,11 +328,14 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
         .is_ok();
         (observed, exit, drained)
     };
+    // Stdout can also overflow while draining after the exit, when the group
+    // is already released and records no kill cause.
     let termination = match (observed, lock.kill_cause()) {
         (false, _) => Termination::Unobserved,
         (true, Some(KillCause::Deadline)) => Termination::TimedOut,
         (true, Some(KillCause::OutputExceeded)) => Termination::OutputExceeded,
         (true, Some(KillCause::Requested)) => Termination::Killed,
+        (true, None) if stdout.overflowed => Termination::OutputExceeded,
         (true, None) if !drained => Termination::PipesHeldOpen,
         (true, None) => Termination::Exited,
     };
@@ -324,12 +358,11 @@ async fn supervise<P: SupervisedProcess, S: GroupSignals>(
     if outcome.contract_violation() {
         facts.record_contract_violation();
     }
-    drop(unwind);
-    drop(process);
-    // The facts are recorded and the permit returns to the budget before the
-    // supervisor leaves the registry, and all before the outcome is
-    // delivered.
-    drop(live);
+    // The facts are recorded, then the process is dropped and the permit
+    // returns to the budget before the supervisor leaves the registry, all
+    // before the outcome is delivered.
+    drop(lock);
+    drop(owned);
     let _ = deliver.send(outcome);
 }
 
@@ -601,6 +634,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stdout_overflowing_after_the_exit_is_a_contract_violation() {
+        let registry = CommandRegistry::new();
+        let signals = RecordingSignals::default();
+        let facts = CommandProcessFacts::new();
+        let (handle, mut driver) = started_with_facts(
+            &registry,
+            &signals,
+            b"",
+            1024,
+            limits(far(), 8),
+            facts.clone(),
+        )
+        .await;
+
+        // The process writes past the cap and exits before the supervisor
+        // first reads stdout, so the overflow is found while draining.
+        driver.write_stdout(b"0123456789").await;
+        driver.exit();
+        driver.reaping().await;
+        driver.finish_reaping();
+        driver.close_output();
+        let outcome = handle.outcome().await;
+
+        assert_eq!(outcome.termination, Termination::OutputExceeded);
+        assert!(outcome.contract_violation());
+        assert!(outcome.stdout.is_empty());
+        assert!(facts.snapshot().contract_violation);
+        assert_eq!(signals.groups(), [GROUP]);
+    }
+
+    #[test]
+    fn a_supervisor_dropped_before_it_first_runs_kills_the_group() {
+        let registry = CommandRegistry::new();
+        let signals = RecordingSignals::default();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (handle, _driver) = runtime.block_on(async {
+            let permit = registry.acquire(COMMAND, 1, far()).await.unwrap();
+            let (process, driver) = fake_process(exited_ok(), 1024);
+            let handle = start(
+                permit,
+                signals.clone(),
+                move || Ok(process),
+                StdinPayload::empty(),
+                limits(far(), 1024),
+                CommandProcessFacts::new(),
+            )
+            .unwrap();
+            (handle, driver)
+        });
+        assert!(signals.groups().is_empty());
+
+        // The runtime shuts down before the supervisor task first runs.
+        drop(runtime);
+        assert_eq!(signals.groups(), [GROUP]);
+        assert_eq!(registry.in_use(COMMAND), 0);
+        assert_eq!(registry.live_processes(), 0);
+        drop(handle);
+        assert_eq!(signals.groups(), [GROUP]);
+    }
+
+    #[test]
+    fn outcomes_never_show_command_output_in_debug() {
+        let stdout = b"stdout-document".to_vec();
+        let stderr = b"stderr-diagnostic".to_vec();
+        let outcome = ProcessOutcome {
+            termination: Termination::Exited,
+            exit: Some(exited_ok()),
+            stdout: stdout.clone(),
+            stderr: StderrCapture {
+                kept: stderr.clone(),
+                truncated: false,
+            },
+            duration: Duration::ZERO,
+        };
+        let debug = format!("{outcome:?}");
+        assert!(!debug.contains(&format!("{stdout:?}")), "{debug}");
+        assert!(!debug.contains(&format!("{stderr:?}")), "{debug}");
+        assert!(!debug.contains("stdout-document"), "{debug}");
+        assert!(debug.contains("stdout_bytes: 15"), "{debug}");
+    }
+
+    #[tokio::test]
     async fn facts_outlive_a_dropped_handle_and_are_final_before_the_permit_returns() {
         let registry = CommandRegistry::new();
         let signals = RecordingSignals::default();
@@ -699,6 +817,36 @@ mod tests {
         assert!(!facts.snapshot().spawned);
         assert!(signals.groups().is_empty());
         assert_eq!(registry.in_use(COMMAND), 0);
+    }
+
+    #[tokio::test]
+    async fn a_permit_whose_deadline_has_passed_never_spawns() {
+        let registry = CommandRegistry::new();
+        let signals = RecordingSignals::default();
+        let permit = registry.acquire(COMMAND, 1, far()).await.unwrap();
+        let facts = CommandProcessFacts::new();
+        let mut spawned = false;
+
+        let error = start(
+            permit,
+            signals.clone(),
+            || {
+                spawned = true;
+                Ok(fake_process(exited_ok(), 1024).0)
+            },
+            StdinPayload::empty(),
+            limits(Instant::now(), 1024),
+            facts.clone(),
+        )
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, StartError::DeadlineExceeded));
+        assert!(!spawned);
+        assert!(!facts.snapshot().spawned);
+        assert!(signals.groups().is_empty());
+        assert_eq!(registry.in_use(COMMAND), 0);
+        assert_eq!(registry.live_processes(), 0);
     }
 
     #[tokio::test]

@@ -1,11 +1,16 @@
+//! Commands run on Unix only, so most cases and their helpers are Unix-only.
 use super::*;
+#[cfg(unix)]
+use agent_access_core::imports::{CommandRegistry, CommandRequest, ImportedCredentialKind};
 use agent_access_core::imports::{
-    CommandRegistry, CommandRequest, ImportedCredentialBinding, ImportedCredentialDelivery,
-    ImportedCredentialKind, ImportedCredentialMode,
+    ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
 };
+#[cfg(unix)]
 use agent_access_provider::test_support::{InvocationBuilder, TestHost, bearer_credential};
+#[cfg(unix)]
 use serde_json::json;
 
+#[cfg(unix)]
 fn command(fixture: &str) -> CommandImportConfig {
     CommandImportConfig {
         path: format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")),
@@ -36,6 +41,7 @@ fn definition(modes: &[ImportedCredentialMode]) -> ImportedServiceDefinition {
     }
 }
 
+#[cfg(unix)]
 async fn discover(
     definition: &ImportedServiceDefinition,
     command: Option<&CommandImportConfig>,
@@ -44,6 +50,7 @@ async fn discover(
     discover_with(definition, command, accepted, &CommandRegistry::new()).await
 }
 
+#[cfg(unix)]
 async fn discover_with(
     definition: &ImportedServiceDefinition,
     command: Option<&CommandImportConfig>,
@@ -62,6 +69,7 @@ async fn discover_with(
         .await
 }
 
+#[cfg(unix)]
 fn failed_reason(error: AdapterDiscoveryError) -> agent_access_provider::ProviderReason {
     match error {
         AdapterDiscoveryError::Failed(error) => error.reason_code(),
@@ -309,6 +317,7 @@ async fn describe_draws_from_the_command_budget() {
 /// The command hook of `command`'s import, built from its accepted
 /// discovery, with the first action reviewed as a read and the rest as
 /// writes.
+#[cfg(unix)]
 async fn command_hook(
     command: &CommandImportConfig,
 ) -> (
@@ -347,6 +356,7 @@ async fn command_hook(
 }
 
 /// `command` running the fixture `fixture` instead.
+#[cfg(unix)]
 fn command_at(fixture: &str, command: &CommandImportConfig) -> CommandImportConfig {
     CommandImportConfig {
         path: format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")),
@@ -354,10 +364,12 @@ fn command_at(fixture: &str, command: &CommandImportConfig) -> CommandImportConf
     }
 }
 
+#[cfg(unix)]
 fn request() -> CommandRequest {
     CommandRequest::encode(&json!({"format": "agent-access-command/1"})).unwrap()
 }
 
+#[cfg(unix)]
 async fn permit(registry: &CommandRegistry) -> agent_access_core::imports::CommandPermit {
     registry
         .acquire(
@@ -628,6 +640,7 @@ async fn invoke_processes_get_the_request_only_on_stdin_and_the_network_variable
     let mut command = command("process/environment.sh");
     command.env.insert("LANG".into(), "C.UTF-8".into());
     let completed = run::execute(run::Run {
+        service: "ticketing",
         command: &command,
         operation: CommandOperation::Invoke,
         permit: permit(&registry).await,

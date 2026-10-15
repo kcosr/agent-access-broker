@@ -36,6 +36,8 @@ impl CommandOperation {
 
 /// One run of `command`.
 pub(crate) struct Run<'a> {
+    /// The import whose command runs, named in failure logs.
+    pub(crate) service: &'a str,
     pub(crate) command: &'a CommandImportConfig,
     pub(crate) operation: CommandOperation,
     /// The budget permit the run's supervisor holds until the process group
@@ -57,30 +59,40 @@ pub(crate) fn output_limit(command: &CommandImportConfig) -> usize {
 }
 
 /// A run whose leader exited 0 and closed its pipes in time.
+#[cfg_attr(not(unix), allow(dead_code, reason = "commands run on Unix only"))]
 pub(crate) struct Completed {
     /// The document to read.
     pub(crate) stdout: Vec<u8>,
-    #[expect(
-        dead_code,
-        reason = "the response contract logs the violations it finds"
+    #[cfg_attr(
+        unix,
+        expect(
+            dead_code,
+            reason = "the response contract logs the violations it finds"
+        )
     )]
     stderr: Vec<u8>,
 }
 
+#[cfg_attr(not(unix), allow(dead_code, reason = "commands run on Unix only"))]
 impl Completed {
     /// Logs a contract violation found in the document, as a run failure
     /// is logged.
-    #[expect(
-        dead_code,
-        reason = "the response contract logs the violations it finds"
+    #[cfg_attr(
+        unix,
+        expect(
+            dead_code,
+            reason = "the response contract logs the violations it finds"
+        )
     )]
     pub(crate) fn log_violation(
         &self,
+        service: &str,
         command: &CommandImportConfig,
         operation: CommandOperation,
         category: &str,
     ) {
         log_failure(
+            service,
             command,
             operation,
             category,
@@ -99,17 +111,21 @@ impl Completed {
 /// returns the permit. A failure is logged.
 #[cfg(unix)]
 pub(crate) async fn execute(run: Run<'_>) -> Result<Completed, RunFailure> {
-    let (command, operation) = (run.command, run.operation);
+    let (service, command, operation) = (run.service, run.command, run.operation);
     let outcome = match unix::start(run) {
         Ok(handle) => handle.outcome().await,
         Err(error) => {
             let (failure, spawn_error) = match error {
                 crate::supervisor::StartError::Cancelled => (RunFailure::Cancelled, None),
+                crate::supervisor::StartError::DeadlineExceeded => {
+                    (RunFailure::DeadlineBeforeStart, None)
+                }
                 crate::supervisor::StartError::Spawn(error) => {
                     (RunFailure::Spawn, Some(error.kind()))
                 }
             };
             log_failure(
+                service,
                 command,
                 operation,
                 failure.category(),
@@ -129,6 +145,7 @@ pub(crate) async fn execute(run: Run<'_>) -> Result<Completed, RunFailure> {
         Some(failure) => {
             let exit = outcome.exit;
             log_failure(
+                service,
                 command,
                 operation,
                 failure.category(),
@@ -149,6 +166,7 @@ pub(crate) async fn execute(run: Run<'_>) -> Result<Completed, RunFailure> {
 #[cfg(not(unix))]
 pub(crate) async fn execute(run: Run<'_>) -> Result<Completed, RunFailure> {
     let Run {
+        service,
         command,
         operation,
         permit,
@@ -168,6 +186,7 @@ pub(crate) async fn execute(run: Run<'_>) -> Result<Completed, RunFailure> {
     ));
     let failure = RunFailure::Spawn;
     log_failure(
+        service,
         command,
         operation,
         failure.category(),
@@ -258,11 +277,14 @@ mod unix {
 
 /// Why a run left no document to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code, reason = "commands run on Unix only"))]
 pub(crate) enum RunFailure {
     /// The executable could not be started.
     Spawn,
     /// The Broker began shutting down before the process started.
     Cancelled,
+    /// The command deadline passed before the process started.
+    DeadlineBeforeStart,
     /// The command deadline passed and the group was killed.
     TimedOut,
     /// Shutdown killed the group.
@@ -285,6 +307,7 @@ impl RunFailure {
         match self {
             Self::Spawn => "spawn_failed",
             Self::Cancelled => "shutdown_before_start",
+            Self::DeadlineBeforeStart => "deadline_before_start",
             Self::TimedOut => "timeout",
             Self::Stopped => "shutdown",
             Self::ExitStatus => "exit_status",
@@ -297,7 +320,10 @@ impl RunFailure {
 
     /// Whether the process started, so a write may have been applied.
     pub(crate) fn started(self) -> bool {
-        !matches!(self, Self::Spawn | Self::Cancelled)
+        !matches!(
+            self,
+            Self::Spawn | Self::Cancelled | Self::DeadlineBeforeStart
+        )
     }
 
     /// The failure of an `invoke` call: nothing was applied before the
@@ -325,6 +351,10 @@ impl RunFailure {
                 ReasonCode::OperationCancelled,
                 "operation stopped during broker shutdown",
             ),
+            Self::DeadlineBeforeStart => (
+                ReasonCode::UpstreamTimeout,
+                "The tool did not start in time.",
+            ),
             Self::TimedOut => (
                 ReasonCode::UpstreamTimeout,
                 "The tool did not finish in time.",
@@ -350,21 +380,31 @@ struct FailureDetails<'a> {
     spawn_error: Option<std::io::ErrorKind>,
 }
 
-/// Logs one `command_import_failed` line: the service and action of the
-/// current hook, the Broker request ID, the operation, the exit status or
-/// signal and `category`, never command output or paths. With
-/// `log_stderr`, the process's kept stderr joins it, control characters
-/// escaped.
+/// Who a failure log line names: the import, the action of the current
+/// hook (the operation outside one), and the Broker request ID of the current
+/// invocation (empty outside one, as for discovery).
+fn log_subject(service: &str, operation: CommandOperation) -> (String, String, String) {
+    let action = agent_access_provider::current_provider_action()
+        .map(|(_, action)| action)
+        .unwrap_or_else(|| operation.argument().to_owned());
+    let request_id = agent_access_provider::current_correlation_context()
+        .map(|correlation| correlation.broker_request_id)
+        .unwrap_or_default();
+    (service.to_owned(), action, request_id)
+}
+
+/// Logs one `command_import_failed` line: the import, the action, the Broker
+/// request ID, the operation, the exit status or signal and `category`,
+/// never command output or paths. With `log_stderr`, the process's kept
+/// stderr joins it, control characters escaped.
 fn log_failure(
+    service: &str,
     command: &CommandImportConfig,
     operation: CommandOperation,
     category: &str,
     details: FailureDetails<'_>,
 ) {
-    let (service, action) = agent_access_provider::current_provider_action().unwrap_or_default();
-    let request_id = agent_access_provider::current_correlation_context()
-        .map(|correlation| correlation.broker_request_id)
-        .unwrap_or_default();
+    let (service, action, request_id) = log_subject(service, operation);
     let stderr = details
         .stderr
         .filter(|_| command.log_stderr)
@@ -459,6 +499,14 @@ mod tests {
         };
         assert_eq!(receipt(RunFailure::Spawn).unwrap(), "not_applied");
         assert_eq!(receipt(RunFailure::Cancelled).unwrap(), "not_applied");
+        assert_eq!(
+            receipt(RunFailure::DeadlineBeforeStart).unwrap(),
+            "not_applied"
+        );
+        assert_eq!(
+            RunFailure::DeadlineBeforeStart.error().reason_code(),
+            ReasonCode::UpstreamTimeout
+        );
         for failure in [
             RunFailure::TimedOut,
             RunFailure::Stopped,
@@ -482,6 +530,28 @@ mod tests {
         assert_eq!(
             RunFailure::Spawn.error().reason_code(),
             ReasonCode::OperationFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_logs_name_the_import_and_its_hook() {
+        assert_eq!(
+            log_subject("ticketing", CommandOperation::Describe),
+            ("ticketing".into(), "describe".into(), String::new())
+        );
+        let hook = agent_access_provider::host::hook_context(
+            "ticketing",
+            "import.discover",
+            agent_access_provider::HookPhase::CredentialVerification,
+            &[],
+        );
+        let subject = agent_access_provider::host::with_hook_context(hook, async {
+            log_subject("ticketing", CommandOperation::Describe)
+        })
+        .await;
+        assert_eq!(
+            subject,
+            ("ticketing".into(), "import.discover".into(), String::new())
         );
     }
 

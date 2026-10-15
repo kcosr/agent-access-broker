@@ -155,8 +155,9 @@ impl CommandRegistry {
 
     /// Waits until `command`'s budget grants a permit under `limit`, the
     /// caller's generation's `max_concurrent`, or until `deadline`. Waiters
-    /// are served in arrival order. Dropping the future withdraws the
-    /// request, releasing a permit granted to it in the meantime.
+    /// are served in arrival order; a call whose deadline has already passed
+    /// gets no permit. Dropping the future withdraws the request, releasing a
+    /// permit granted to it in the meantime.
     pub async fn acquire(
         &self,
         command: &str,
@@ -167,6 +168,9 @@ impl CommandRegistry {
             let mut state = self.state();
             if state.closed {
                 return Err(CommandAcquireError::Closed);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(CommandAcquireError::DeadlineExceeded);
             }
             let id = state.next_id();
             let budget = state.budgets.entry(command.to_owned()).or_default();
@@ -526,6 +530,18 @@ mod tests {
         assert_eq!(registry.in_use("ticketing"), 1);
         drop(held);
         assert_eq!(registry.in_use("ticketing"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_call_whose_deadline_has_passed_gets_no_permit() {
+        let registry = CommandRegistry::new();
+        let expired = Instant::now();
+        assert_eq!(
+            registry.acquire("ticketing", 4, expired).await.unwrap_err(),
+            CommandAcquireError::DeadlineExceeded
+        );
+        assert_eq!(registry.in_use("ticketing"), 0);
+        assert_eq!(registry.waiting("ticketing"), 0);
     }
 
     #[tokio::test]

@@ -26,8 +26,8 @@ const READ_CHUNK_BYTES: usize = 8 * 1024;
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How to start one command process. `env` is the whole environment: the
-/// configured variables and the network settings.
-#[derive(Debug, Clone)]
+/// configured variables and the network settings, which can carry proxy
+/// credentials, so it has no `Debug`.
 pub(crate) struct CommandLaunch {
     pub(crate) program: PathBuf,
     pub(crate) operation: CommandOperation,
@@ -92,7 +92,9 @@ pub(crate) trait SupervisedProcess: Send + 'static {
     fn reap(&mut self) -> impl Future<Output = io::Result<ProcessExit>> + Send;
 }
 
-/// Sends `SIGKILL` to a process group. Only a [`SignalLock`] calls it.
+/// Sends `SIGKILL` to a process group and its leader, whose process ID is
+/// the group ID. Only a [`SignalLock`] calls it, while the unreaped leader
+/// still reserves that ID.
 pub(crate) trait GroupSignals: Send + Sync + 'static {
     fn kill_group(&self, group: i32);
 }
@@ -110,9 +112,12 @@ impl GroupSignals for OsSignals {
         }
         // SAFETY: kill has no memory-safety preconditions; a negative ID
         // names a process group. A group whose members all exited fails with
-        // ESRCH, which needs no handling.
+        // ESRCH, which needs no handling. The leader is signalled by its own
+        // ID too, in case it left its group: it is unreaped, so the ID is
+        // still its own.
         unsafe {
             libc::kill(-group, libc::SIGKILL);
+            libc::kill(group, libc::SIGKILL);
         }
     }
 }
@@ -128,9 +133,9 @@ pub(crate) enum KillCause {
     Requested,
 }
 
-/// The only way to signal a process group. It guards one state: before the
-/// spawn, `live`, or `released`. A kill request sends `SIGKILL` only while
-/// the group is live. The exit path sends its own `SIGKILL` and marks the
+/// The only way to signal a process group and its leader. It guards one
+/// state: before the spawn, `live`, or `released`. A kill request sends
+/// `SIGKILL` only while the group is live. The exit path sends its own `SIGKILL` and marks the
 /// group released under the same lock, before reaping releases the leader's
 /// ID, so a kill can never reach a reused ID; requests after release are
 /// no-ops. A request before the spawn prevents it, or kills the group as
@@ -351,7 +356,7 @@ pub(crate) async fn write_stdin<W: AsyncWrite + Unpin>(mut pipe: W, payload: Std
 }
 
 /// Stdout as read so far.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct StdoutCapture {
     pub(crate) bytes: Vec<u8>,
     pub(crate) overflowed: bool,
@@ -389,7 +394,7 @@ pub(crate) async fn read_stdout<R: AsyncRead + Unpin>(
 }
 
 /// Stderr as read so far: its first [`STDERR_KEPT_BYTES`].
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct StderrCapture {
     pub(crate) kept: Vec<u8>,
     pub(crate) truncated: bool,
@@ -470,17 +475,14 @@ mod tests {
         ))
     }
 
-    /// The leader was reaped by its supervisor: it is no longer this
-    /// process's child, so no zombie of it remains.
+    /// The leader was reaped by its supervisor: no process, running or
+    /// zombie, has its ID. Probing never reaps, so it cannot take another
+    /// test's child that reused the ID.
     fn assert_reaped(pid: i32) {
-        // SAFETY: waitpid with WNOHANG and a null status pointer only
-        // queries the child table.
-        let result = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
-        assert_eq!(result, -1, "leader {pid} is still this process's child");
-        assert_eq!(
-            io::Error::last_os_error().raw_os_error(),
-            Some(libc::ECHILD)
-        );
+        // SAFETY: signal 0 only checks whether the process exists.
+        let result = unsafe { libc::kill(pid, 0) };
+        assert_eq!(result, -1, "leader {pid} still exists");
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
     /// A process outside this process's children has stopped running: it is
@@ -512,6 +514,56 @@ mod tests {
             .trim()
             .parse()
             .unwrap()
+    }
+
+    /// Kills and reaps the test's own children when it ends, even on
+    /// failure.
+    struct Children(Vec<std::process::Child>);
+
+    impl Drop for Children {
+        fn drop(&mut self) {
+            for child in &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn a_kill_reaches_a_leader_that_left_its_process_group() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let sleeper = |group: i32| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "exec sleep 30"])
+                .process_group(group)
+                .spawn()
+                .unwrap()
+        };
+        let anchor = sleeper(0);
+        let anchor_group = i32::try_from(anchor.id()).unwrap();
+        let mut children = Children(vec![anchor]);
+        // The leader runs in another group, as if it had left its own.
+        children.0.push(sleeper(anchor_group));
+        let leader = i32::try_from(children.0[1].id()).unwrap();
+
+        let lock = SignalLock::new(OsSignals);
+        lock.go_live(leader);
+        lock.kill(KillCause::Requested);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = children.0[1].try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the leader outside its group was not killed"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        // The other group was not signalled.
+        assert!(children.0[0].try_wait().unwrap().is_none());
     }
 
     #[cfg(target_os = "linux")]
