@@ -18,7 +18,7 @@ cat "$MANIFEST"
 "#;
 
 pub(super) struct CommandFixture {
-    imports: Fixture,
+    pub(super) imports: Fixture,
     directory: tempfile::TempDir,
     pub(super) config: BrokerConfig,
 }
@@ -26,10 +26,15 @@ pub(super) struct CommandFixture {
 impl CommandFixture {
     /// The import fixture with `command` allowed and `name` approved.
     pub(super) fn new(name: &str, manifest: &Value) -> Self {
+        Self::with_script(name, manifest, RECORDING_COMMAND)
+    }
+
+    /// [`Self::new`] running `script`, which gets `$MARKER` and `$MANIFEST`.
+    pub(super) fn with_script(name: &str, manifest: &Value, script_text: &str) -> Self {
         let imports = fixture();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("command.sh");
-        std::fs::write(&script, RECORDING_COMMAND).unwrap();
+        std::fs::write(&script, script_text).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -73,12 +78,12 @@ impl CommandFixture {
         std::fs::write(self.path("manifest.json"), manifest.to_string()).unwrap();
     }
 
-    fn path(&self, name: &str) -> PathBuf {
+    pub(super) fn path(&self, name: &str) -> PathBuf {
         self.directory.path().join(name)
     }
 
     /// The subcommands the command ran, in order.
-    fn runs(&self) -> Vec<String> {
+    pub(super) fn runs(&self) -> Vec<String> {
         read_runs(&self.path("runs"))
     }
 
