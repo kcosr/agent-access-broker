@@ -2071,14 +2071,21 @@ impl BrokerRuntime {
             previous.is_none(),
         )?;
         validate_managed_policy_subjects(&config, managed_store.as_ref())?;
-        let resource_types = EffectiveResourceTypes::composition(config.providers.registry());
-        let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         let imported_catalog = managed_store
             .as_ref()
             .map(ManagedStore::imported_catalog)
             .transpose()
             .map_err(runtime_managed_store_error)?
             .unwrap_or_default();
+        // Stored imported types join the registry before anything validates
+        // the stored resources and descriptors that use them.
+        let resource_types = EffectiveResourceTypes::composition(config.providers.registry())
+            .with_imported(
+                &imported_catalog,
+                previous.map(|previous| &*previous.resource_types),
+            )
+            .map_err(|message| RuntimeError::ManagedStore { message })?;
+        let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         for record in &imported_catalog.services {
             let name = &record.definition.service;
             if let Some(owner) = imported_service_collision(&config, &services, name) {

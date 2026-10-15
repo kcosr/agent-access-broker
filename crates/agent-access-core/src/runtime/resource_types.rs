@@ -1,12 +1,14 @@
 //! The effective resource type registry of one runtime generation.
 //!
 //! A generation understands the composition's static types (the host's own
-//! `git_repository` and every selected native's types). The registry is built
-//! with the generation and published with it in one swap, so the registry,
-//! the service descriptors and the policy snapshot a request reads always
-//! agree. Each type has one owner, which decides how the private attribute
-//! values of its resources are validated.
-use crate::{BackendRegistry, ProvidersConfig};
+//! `git_repository` and every selected native's types) and the types its
+//! imports accepted. The registry is built with the generation and published
+//! with it in one swap, so the registry, the imported catalog, the service
+//! descriptors and the policy snapshot a request reads always agree. Each
+//! type has one owner, which decides how the private attribute values of its
+//! resources are validated.
+use crate::imports::{ImportedResourceTypeDeclaration, imported_type_descriptor};
+use crate::{BackendRegistry, ImportedCatalog, ProvidersConfig};
 use agent_access_provider::{
     ResourceAttributes, ResourceSelector, ResourceType, ResourceTypeDescriptor,
     ResourceTypeRegistry,
@@ -22,6 +24,21 @@ pub(crate) enum ResourceTypeOwner {
     /// A selected native backend, by kind. A native service is named after
     /// its kind.
     Backend(&'static str),
+    /// An imported service, whose accepted metadata declares the type and
+    /// alone validates its attributes. A type the service's source no longer
+    /// declares is `removed`: it stays registered for its stored resources
+    /// and accepts no new ones.
+    Imported { service: String, removed: bool },
+}
+
+impl std::fmt::Display for ResourceTypeOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Host => f.write_str("the broker"),
+            Self::Backend(kind) => write!(f, "the {kind} backend"),
+            Self::Imported { service, .. } => write!(f, "imported service {service}"),
+        }
+    }
 }
 
 /// A generation's resource types and their owners.
@@ -29,6 +46,15 @@ pub(crate) enum ResourceTypeOwner {
 pub(crate) struct EffectiveResourceTypes {
     registry: ResourceTypeRegistry,
     owners: BTreeMap<ResourceType, ResourceTypeOwner>,
+    /// Each import's accepted declarations and the descriptors built from
+    /// them, which the next generation reuses while they are unchanged.
+    imported: BTreeMap<String, ImportedTypes>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportedTypes {
+    declarations: Vec<ImportedResourceTypeDeclaration>,
+    descriptors: Vec<Arc<ResourceTypeDescriptor>>,
 }
 
 impl EffectiveResourceTypes {
@@ -45,7 +71,80 @@ impl EffectiveResourceTypes {
                 (id.clone(), owner)
             })
             .collect();
-        Self { registry, owners }
+        Self {
+            registry,
+            owners,
+            imported: BTreeMap::new(),
+        }
+    }
+
+    /// These composition types followed by every type the imports in
+    /// `catalog` accepted, whatever the import's status, so stored resources
+    /// stay valid while an import is disabled or retired. Descriptors of an
+    /// import whose declarations `previous` already holds are reused. An
+    /// imported type ID that another owner registers fails the build.
+    pub(crate) fn with_imported(
+        &self,
+        catalog: &ImportedCatalog,
+        previous: Option<&Self>,
+    ) -> Result<Self, String> {
+        let mut descriptors = self.registry.descriptors().cloned().collect::<Vec<_>>();
+        let mut owners = self.owners.clone();
+        let mut imported = BTreeMap::new();
+        for record in &catalog.services {
+            let Some(metadata) = &record.accepted_metadata else {
+                continue;
+            };
+            if metadata.resource_types.is_empty() {
+                continue;
+            }
+            let service = &record.definition.service;
+            let types = match previous
+                .and_then(|previous| previous.imported.get(service))
+                .filter(|types| types.declarations == metadata.resource_types)
+            {
+                Some(types) => types.clone(),
+                None => ImportedTypes {
+                    declarations: metadata.resource_types.clone(),
+                    descriptors: metadata
+                        .resource_types
+                        .iter()
+                        .map(|declared| {
+                            imported_type_descriptor(declared).map(Arc::new).map_err(|error| {
+                                format!(
+                                    "imported service {service} resource type {} is invalid: {error}",
+                                    declared.broker_type
+                                )
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                },
+            };
+            for (declared, descriptor) in types.declarations.iter().zip(&types.descriptors) {
+                if let Some(owner) = owners.get(descriptor.id()) {
+                    return Err(format!(
+                        "imported service {service} resource type {} collides with a type of {owner}",
+                        descriptor.id()
+                    ));
+                }
+                owners.insert(
+                    descriptor.id().clone(),
+                    ResourceTypeOwner::Imported {
+                        service: service.clone(),
+                        removed: declared.removed,
+                    },
+                );
+                descriptors.push(Arc::clone(descriptor));
+            }
+            imported.insert(service.clone(), types);
+        }
+        let registry =
+            ResourceTypeRegistry::from_shared(descriptors).map_err(|errors| errors.join("; "))?;
+        Ok(Self {
+            registry,
+            owners,
+            imported,
+        })
     }
 
     pub(crate) fn registry(&self) -> &ResourceTypeRegistry {
@@ -65,14 +164,41 @@ impl EffectiveResourceTypes {
     pub(crate) fn defining_service(&self, id: &ResourceType) -> Option<&str> {
         match self.owner(id)? {
             ResourceTypeOwner::Backend(kind) => Some(kind),
+            ResourceTypeOwner::Imported { service, .. } => Some(service),
             ResourceTypeOwner::Host => None,
+        }
+    }
+
+    /// Whether `id` is registered by an owner other than imported service
+    /// `service`, which a new imported type may therefore not take.
+    pub(crate) fn registered_outside(&self, id: &str, service: &str) -> bool {
+        ResourceType::new(id).is_ok_and(|id| {
+            self.owner(&id).is_some_and(|owner| {
+                !matches!(owner, ResourceTypeOwner::Imported { service: owner, .. } if owner == service)
+            })
+        })
+    }
+
+    /// Rejects a new resource of a type its imported service removed: the
+    /// type stays registered only for its stored resources.
+    pub(crate) fn require_new_resources(&self, id: &ResourceType) -> Result<(), String> {
+        match self.owner(id) {
+            Some(ResourceTypeOwner::Imported {
+                service,
+                removed: true,
+            }) => Err(format!(
+                "resource type {id} was removed from imported service {service} and accepts no new resources"
+            )),
+            _ => Ok(()),
         }
     }
 
     /// Validates a resource's private attribute values against its type's
     /// declaration and, for a native type, against the owning backend's
-    /// configured checks. `require_all` requires every required attribute,
-    /// as a creation does; a patch supplies only the values it changes.
+    /// configured checks; an imported type's declaration is its only check,
+    /// so it needs no configured backend. `require_all` requires every
+    /// required attribute, as a creation does; a patch supplies only the
+    /// values it changes.
     pub(crate) fn validate_attributes(
         &self,
         providers: &ProvidersConfig,
@@ -99,6 +225,7 @@ impl EffectiveResourceTypes {
                 .get_kind(kind)
                 .ok_or_else(|| "resource backend must be configured".to_string())?
                 .validate_resource_attributes(resource_type, attributes),
+            Some(ResourceTypeOwner::Imported { .. }) => Ok(()),
             Some(ResourceTypeOwner::Host) | None => {
                 Err("resource backend must be configured".into())
             }
@@ -106,10 +233,296 @@ impl EffectiveResourceTypes {
     }
 }
 
+impl super::BrokerRuntime {
+    /// The registry a generation with `catalog` publishes: the composition's
+    /// types and every accepted imported type, reusing this generation's
+    /// descriptors for unchanged imports.
+    pub(super) fn imported_resource_types(
+        &self,
+        catalog: &ImportedCatalog,
+    ) -> Result<EffectiveResourceTypes, crate::ManagedStoreError> {
+        EffectiveResourceTypes::composition(self.config.providers.registry())
+            .with_imported(catalog, Some(&self.resource_types))
+            .map_err(crate::ManagedStoreError::InputInvalid)
+    }
+
+    /// Whether a new type of imported service `service` may not take
+    /// `broker_type` because the composition or another import registers it.
+    pub fn imported_resource_type_taken(&self, service: &str, broker_type: &str) -> bool {
+        self.resource_types.registered_outside(broker_type, service)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::imports::{
+        ImportedDiscoveryCredential, ImportedResourceAttributeDeclaration,
+        ImportedServiceDefinition, ImportedServiceMetadata,
+    };
+    use crate::{ImportedServiceRecord, ImportedServiceStatus};
     use agent_access_provider::GIT_REPOSITORY_RESOURCE;
+
+    fn declaration(broker_type: &str, removed: bool) -> ImportedResourceTypeDeclaration {
+        ImportedResourceTypeDeclaration {
+            id: "project".into(),
+            broker_type: broker_type.into(),
+            removed,
+            label: "Project".into(),
+            plural_label: "Projects".into(),
+            pattern: "[A-Z][A-Z0-9]{1,9}".into(),
+            max_length: 256,
+            example: "OPS".into(),
+            attributes: vec![ImportedResourceAttributeDeclaration {
+                name: "region".into(),
+                label: "Region".into(),
+                description: "Hosting region.".into(),
+                required: true,
+                pattern: Some("[a-z0-9-]{1,32}".into()),
+            }],
+        }
+    }
+
+    fn record(
+        service: &str,
+        status: ImportedServiceStatus,
+        types: Vec<ImportedResourceTypeDeclaration>,
+    ) -> ImportedServiceRecord {
+        ImportedServiceRecord {
+            definition: ImportedServiceDefinition {
+                service: service.into(),
+                display_name: service.into(),
+                adapter_kind: "command".into(),
+                endpoint: format!("command:{service}"),
+                connection_settings: BTreeMap::new(),
+                execution_bindings: Vec::new(),
+                discovery: ImportedDiscoveryCredential::Anonymous,
+                transport_auth: false,
+                invocation_limit: None,
+            },
+            status,
+            version: 1,
+            actions: Vec::new(),
+            slot_versions: BTreeMap::new(),
+            accepted_metadata: Some(ImportedServiceMetadata {
+                format: "agent-access-command/1".into(),
+                version: "1.0.0".into(),
+                credential: None,
+                verify: false,
+                resource_types: types,
+            }),
+            created_at: String::new(),
+            created_by: String::new(),
+            updated_at: String::new(),
+            updated_by: String::new(),
+        }
+    }
+
+    fn catalog(records: Vec<ImportedServiceRecord>) -> ImportedCatalog {
+        ImportedCatalog {
+            revision: 1,
+            services: records,
+        }
+    }
+
+    #[test]
+    fn imported_resource_types_join_the_registry_whatever_their_import_status() {
+        let backends = crate::tests::test_backend_registry();
+        let composition = EffectiveResourceTypes::composition(&backends);
+        let catalog = catalog(vec![
+            record(
+                "tickets",
+                ImportedServiceStatus::Retired,
+                vec![declaration("tickets_project", false)],
+            ),
+            record(
+                "boards",
+                ImportedServiceStatus::Disabled,
+                vec![declaration("boards_project", true)],
+            ),
+        ]);
+        let types = composition.with_imported(&catalog, None).unwrap();
+        let tickets = ResourceType::new("tickets_project").unwrap();
+        let boards = ResourceType::new("boards_project").unwrap();
+        // Composition types come first, then imported types in catalog order.
+        let ids = types.registry().ids().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            &ids[..composition.registry().ids().count()],
+            composition.registry().ids().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(&ids[ids.len() - 2..], [tickets.clone(), boards.clone()]);
+        assert_eq!(
+            types.owner(&tickets),
+            Some(&ResourceTypeOwner::Imported {
+                service: "tickets".into(),
+                removed: false
+            })
+        );
+        assert_eq!(types.defining_service(&tickets), Some("tickets"));
+        assert_eq!(types.get(&tickets).unwrap().label(), "Project");
+        // A removed type stays registered for its resources and accepts no
+        // new ones.
+        assert!(types.require_new_resources(&tickets).is_ok());
+        assert!(
+            types
+                .require_new_resources(&boards)
+                .unwrap_err()
+                .contains("accepts no new resources")
+        );
+        assert!(
+            types
+                .require_new_resources(GIT_REPOSITORY_RESOURCE.id())
+                .is_ok()
+        );
+        // Types an owner registers cannot be taken by another import.
+        assert!(types.registered_outside("git_repository", "tickets"));
+        assert!(types.registered_outside("boards_project", "tickets"));
+        assert!(!types.registered_outside("tickets_project", "tickets"));
+        assert!(!types.registered_outside("unregistered_type", "tickets"));
+
+        // Imported attributes validate from the declaration alone, without a
+        // configured backend.
+        let providers = ProvidersConfig::default();
+        let exact = ResourceSelector::Exact {
+            value: "OPS".into(),
+        };
+        let attributes = |values: &[(&str, &str)]| {
+            ResourceAttributes::from(
+                values
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        };
+        assert!(
+            types
+                .validate_attributes(
+                    &providers,
+                    &tickets,
+                    &exact,
+                    &attributes(&[("region", "eu-1")]),
+                    true
+                )
+                .is_ok()
+        );
+        for (values, require_all, message) in [
+            (
+                vec![("region", "EU 1")],
+                true,
+                "resource attribute region is invalid",
+            ),
+            (
+                vec![("owner", "avery")],
+                false,
+                "unknown resource attribute",
+            ),
+            (vec![], true, "required resource attributes are missing"),
+        ] {
+            assert_eq!(
+                types
+                    .validate_attributes(
+                        &providers,
+                        &tickets,
+                        &exact,
+                        &attributes(&values),
+                        require_all
+                    )
+                    .unwrap_err(),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn imported_resource_types_reuse_unchanged_descriptors_and_reject_collisions() {
+        let backends = crate::tests::test_backend_registry();
+        let composition = EffectiveResourceTypes::composition(&backends);
+        let first = composition
+            .with_imported(
+                &catalog(vec![
+                    record(
+                        "tickets",
+                        ImportedServiceStatus::Enabled,
+                        vec![declaration("tickets_project", false)],
+                    ),
+                    record(
+                        "boards",
+                        ImportedServiceStatus::Enabled,
+                        vec![declaration("boards_project", false)],
+                    ),
+                ]),
+                None,
+            )
+            .unwrap();
+        let mut changed = declaration("boards_project", false);
+        changed.label = "Board".into();
+        let next = composition
+            .with_imported(
+                &catalog(vec![
+                    record(
+                        "tickets",
+                        ImportedServiceStatus::Disabled,
+                        vec![declaration("tickets_project", false)],
+                    ),
+                    record("boards", ImportedServiceStatus::Enabled, vec![changed]),
+                ]),
+                Some(&first),
+            )
+            .unwrap();
+        let tickets = ResourceType::new("tickets_project").unwrap();
+        let boards = ResourceType::new("boards_project").unwrap();
+        assert!(Arc::ptr_eq(
+            next.get(&tickets).unwrap(),
+            first.get(&tickets).unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            next.get(&boards).unwrap(),
+            first.get(&boards).unwrap()
+        ));
+        assert_eq!(next.get(&boards).unwrap().label(), "Board");
+
+        for (types, owner) in [
+            (vec![declaration("git_repository", false)], "the broker"),
+            (vec![declaration("jira_project", false)], "the jira backend"),
+            (
+                vec![declaration("tickets_project", false)],
+                "imported service tickets",
+            ),
+        ] {
+            let error = composition
+                .with_imported(
+                    &catalog(vec![
+                        record(
+                            "tickets",
+                            ImportedServiceStatus::Enabled,
+                            vec![declaration("tickets_project", false)],
+                        ),
+                        record("boards", ImportedServiceStatus::Enabled, types),
+                    ]),
+                    None,
+                )
+                .unwrap_err();
+            assert!(
+                error.contains("collides") && error.contains(owner),
+                "{error}"
+            );
+        }
+        let mut invalid = declaration("boards_project", false);
+        invalid.pattern = "(unclosed".into();
+        assert!(
+            composition
+                .with_imported(
+                    &catalog(vec![record(
+                        "boards",
+                        ImportedServiceStatus::Enabled,
+                        vec![invalid]
+                    )]),
+                    None,
+                )
+                .unwrap_err()
+                .contains("is invalid")
+        );
+    }
 
     #[test]
     fn composition_resource_types_have_host_and_backend_owners() {

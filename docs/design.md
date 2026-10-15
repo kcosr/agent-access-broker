@@ -335,10 +335,12 @@ carry the same package metadata. Parsing a configuration routes each provider ta
 to its backend's parser and rejects unregistered kinds; the registry also
 supplies the resource type registry (the broker's own `git_repository` type
 plus every backend's types, in registration order). Each runtime generation
-builds its effective registry from it, recording which backend, or the broker,
-owns each type; the generation publishes that registry together with its service
+builds its effective registry from it and from the resource types its imports
+accepted, recording which backend, import, or the broker owns each type; the
+generation publishes that registry together with its imported catalog, service
 descriptors and policy snapshot, and a type's owner validates the private
-attribute values of its resources. Development fixtures are
+attribute values of its resources. Startup builds the registry from stored
+import metadata before it validates stored resources. Development fixtures are
 ordinary registrations: the binary selects the `oauth_stub` records backend
 last, so its `oauth_collection` type lists last, and selects the `stub` OAuth
 dialect alongside the production dialects. An empty registry has neither.

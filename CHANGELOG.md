@@ -494,6 +494,13 @@ All notable changes to this project are documented in this file.
   `commandImports` (approved names only) and command import results
   `commandVersion`. Command invocations fail closed before any process starts
   in this build.
+- Command imports register the resource types their manifests declare under
+  Broker type IDs proposed as `<service>_<id>`. Accepted types are listed by
+  `GET /v1/resource-types`, stay registered while the import is disabled or
+  retired and across restarts, which build them from stored import metadata
+  before validating stored resources, and validate their private attributes
+  from the declaration without a configured backend. A type marked removed in
+  the accepted metadata accepts no new resources.
 
 ### Changed
 

@@ -33,6 +33,14 @@ as `resourceTypes` in the runtime catalog (`/v1/spec/catalog`);
 - `oauth_collection` supports `exact` and `all` selectors; it belongs to the
   development `oauth_stub` service.
 
+Command imports add the resource types their accepted manifests declare, after
+the build's types, with `exact` and `all` selectors. Their selector grammar,
+labels and private attributes come from the accepted declaration, which alone
+validates attribute values; they stay registered while the import is disabled or
+retired. A type the command no longer declares stays registered for its
+remaining resources but accepts no new ones, until a later acceptance drops it.
+See [Imported resource types](imported-services.md#imported-resource-types).
+
 A resource whose type is not registered, or whose selector form or value the
 type rejects, fails TOML validation, managed mutations, and managed startup with
 an error naming the resource and type. Removing a backend from a build therefore

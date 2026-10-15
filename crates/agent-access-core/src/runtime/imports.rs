@@ -668,6 +668,8 @@ impl BrokerRuntime {
         self.validate_import_mcp_names(&catalog)?;
         let changed_service = prepared.service.clone();
         let imported_providers = prepared.validate(self, &catalog)?;
+        // The registry publishes with the catalog that declares its types.
+        let resource_types = Arc::new(self.imported_resource_types(&catalog)?);
         let mut next = self.clone();
         let mut config = (*self.config).clone();
         let mut services = (*self.services).clone();
@@ -753,6 +755,7 @@ impl BrokerRuntime {
         effective_credentials(&mut config, &catalog);
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
+        next.resource_types = resource_types;
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);

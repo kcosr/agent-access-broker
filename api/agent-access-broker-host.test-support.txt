@@ -955,6 +955,7 @@ pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::label
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::max_length: u32
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::pattern: alloc::string::String
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::plural_label: alloc::string::String
+pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::removed: bool
 impl core::clone::Clone for agent_access_core::imports::metadata::ImportedResourceTypeDeclaration
 pub fn agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::clone(&self) -> agent_access_core::imports::metadata::ImportedResourceTypeDeclaration
 impl core::cmp::Eq for agent_access_core::imports::metadata::ImportedResourceTypeDeclaration

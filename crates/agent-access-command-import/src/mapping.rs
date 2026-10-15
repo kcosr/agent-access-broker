@@ -158,6 +158,7 @@ pub(crate) fn proposed_metadata(
                     .map(|existing| existing.broker_type.clone())
                     .or_else(|| proposals.remove(declared.id.as_str()))
                     .unwrap_or_default(),
+                removed: false,
                 label: declared.label.clone(),
                 plural_label: declared.plural_label.clone(),
                 pattern: declared.pattern.clone(),

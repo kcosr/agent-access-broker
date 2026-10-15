@@ -32,6 +32,9 @@ impl BrokerRuntime {
         let _guard = self.managed_policy_mutation_guard()?;
         let store = self.managed_policy_store()?.clone();
         let baseline = store.policy_validation_baseline()?;
+        self.resource_types
+            .require_new_resources(&request.resource_type)
+            .map_err(ManagedStoreError::InputInvalid)?;
         self.validate_resource_attributes(
             &request.resource_type,
             &request.selector,
@@ -56,6 +59,16 @@ impl BrokerRuntime {
         let existing = store.resource(&request.id)?;
         if existing.version != request.expected_version {
             return Err(ManagedStoreError::VersionConflict);
+        }
+        // Moving a resource into a removed type adds a resource to it.
+        if let Some(resource_type) = request
+            .resource_type
+            .as_ref()
+            .filter(|resource_type| **resource_type != existing.definition.resource_type)
+        {
+            self.resource_types
+                .require_new_resources(resource_type)
+                .map_err(ManagedStoreError::InputInvalid)?;
         }
         self.validate_resource_attributes(
             request

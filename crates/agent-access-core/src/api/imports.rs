@@ -283,8 +283,8 @@ fn accepted_metadata() -> Value {
         }}]},
         "verify":{"type":"boolean"},
         "resourceTypes":{"type":"array","items":{"type":"object","additionalProperties":false,
-            "required":["id","brokerType","label","pluralLabel","pattern","maxLength","example","attributes"],"properties":{
-                "id":{"type":"string"},"brokerType":{"type":"string"},"label":{"type":"string"},"pluralLabel":{"type":"string"},
+            "required":["id","brokerType","removed","label","pluralLabel","pattern","maxLength","example","attributes"],"properties":{
+                "id":{"type":"string"},"brokerType":{"type":"string"},"removed":{"type":"boolean"},"label":{"type":"string"},"pluralLabel":{"type":"string"},
                 "pattern":{"type":"string"},"maxLength":{"type":"integer","minimum":1},"example":{"type":"string"},
                 "attributes":{"type":"array","items":attribute}
             }}}

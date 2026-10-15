@@ -89,6 +89,8 @@ impl ImportedCredentialKind {
 }
 
 /// A declared resource type and the Broker type ID it is registered under.
+/// Every accepted type stays registered, also while its import is disabled
+/// or retired, so stored resources of it stay valid.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedResourceTypeDeclaration {
@@ -96,8 +98,13 @@ pub struct ImportedResourceTypeDeclaration {
     /// `resourceType` names.
     pub id: String,
     /// The Broker resource type ID, `^[a-z][a-z0-9_]{0,63}$`; proposed as
-    /// `<service>_<id>` and fixed after first acceptance.
+    /// `<service>_<id>`, editable before first acceptance and fixed after it.
     pub broker_type: String,
+    /// The source no longer declares the type but resources of it remain:
+    /// it stays registered for them and accepts no new resources until a
+    /// later acceptance drops it once they are deleted. Always `false` in a
+    /// source's own declaration.
+    pub removed: bool,
     pub label: String,
     pub plural_label: String,
     /// Matched against the whole exact selector value.
@@ -125,7 +132,8 @@ fn bounded_text(value: &str, max: usize) -> bool {
 }
 
 /// The source bound of declared patterns: nonempty and at most 8 KiB. The
-/// grammar is the SDK resource pattern's; adapters compile it.
+/// grammar is the SDK resource pattern's, compiled where adapters parse
+/// manifests and where the registry builds the type, never on reads.
 fn pattern_source(value: &str) -> bool {
     !value.is_empty() && value.len() <= 8 * 1024
 }
@@ -267,6 +275,7 @@ mod tests {
             resource_types: vec![ImportedResourceTypeDeclaration {
                 id: "project".into(),
                 broker_type: "ticketing_project".into(),
+                removed: false,
                 label: "Project".into(),
                 plural_label: "Projects".into(),
                 pattern: "[A-Z][A-Z0-9]{1,9}".into(),
@@ -293,7 +302,7 @@ mod tests {
             json!({"format":"agent-access-command/1","version":"1.4.0",
                 "credential":{"kind":"username_token","modes":["service","per_user"]},
                 "verify":true,
-                "resourceTypes":[{"id":"project","brokerType":"ticketing_project","label":"Project",
+                "resourceTypes":[{"id":"project","brokerType":"ticketing_project","removed":false,"label":"Project",
                     "pluralLabel":"Projects","pattern":"[A-Z][A-Z0-9]{1,9}","maxLength":256,
                     "example":"OPS","attributes":[{"name":"region","label":"Region",
                     "description":"Hosting region.","required":false,"pattern":"[a-z0-9-]{1,32}"}]}]})
