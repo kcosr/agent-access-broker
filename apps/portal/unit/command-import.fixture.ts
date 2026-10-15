@@ -186,7 +186,19 @@ export function commandPolicyService(data: ImportPreviewResult): PolicyServiceCa
     displayName: "Ticketing",
     surface: "invoke",
     available: data.service.status === "enabled",
-    actions: data.service.actions.map((entry) => ({ action: entry.definition.action, readOnly: entry.definition.readOnly, description: entry.definition.description, requiredScopeTypes: [], credentialModes: ["service", "per_user"], lookupRequired: false, inputSchema: entry.definition.inputSchema })),
+    actions: data.service.actions.map((entry) => {
+      const resources = (entry.definition.annotations as { command?: { resources?: { type: string; inputs?: string[] } } }).command?.resources;
+      return {
+        action: entry.definition.action,
+        readOnly: entry.definition.readOnly,
+        description: entry.definition.description,
+        requiredScopeTypes: resources ? ["ticketing_project"] : [],
+        credentialModes: ["service", "per_user"],
+        lookupRequired: false,
+        inputSchema: entry.definition.inputSchema,
+        resourcesCheckedBy: resources?.inputs ? ("broker" as const) : ("command" as const)
+      };
+    }),
     resourceScopes: {},
     configuredCredentialModes: ["service", "per_user"],
     lookupCredentialConfigured: false

@@ -21,6 +21,17 @@ test("a broken JSON success response is reported as unreadable", async () => {
   await expect(brokerApi.session()).rejects.toThrow("unreadable response (HTTP 200)");
 });
 
+test("refused import changes carry the grants and resources that block them", async () => {
+  const affectedGrants = [{ id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "managed policy grant grant-search uses an unsupported credential mode" }];
+  const resources = [{ type: "ticketing_project", id: "legacy" }];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "input is invalid: refused" }, target: { service: "ticketing", affectedGrants, resources } }), { status: 400 })));
+  await expect(brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ticketing", { expectedVersion: 1, expectedCatalogRevision: 1, manifestHash: "hash", selections: [], confirmAffectedGrants: false })).rejects.toMatchObject({ status: 400, blocked: { affectedGrants, resources } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "select at least one discovered tool" }, target: { service: "ticketing" } }), { status: 400 })));
+  const plain = await brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ticketing", { expectedVersion: 1, expectedCatalogRevision: 1, manifestHash: "hash", selections: [], confirmAffectedGrants: false }).catch((error: unknown) => error);
+  expect(plain).toMatchObject({ message: "select at least one discovered tool" });
+  expect((plain as { blocked?: unknown }).blocked).toBeUndefined();
+});
+
 test("management errors preserve structured conflict identity independently of message text", async () => {
   const conflict = { kind: "resource", id: "existing", displayName: "Payments API", version: 2 };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "Already exists" }, target: { conflict } }), { status: 400 })));

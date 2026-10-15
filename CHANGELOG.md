@@ -577,10 +577,12 @@ All notable changes to this project are documented in this file.
   import with accepted actions may accept a preview with no selections. The
   Import tab shows the accepted version, credential, verification and resource
   types and takes the username of a `username_token` execution credential; the
-  Actions tab and action drawer show who checks each action's resources.
-  Acceptance messages report deleted attribute values and dropped types, and
-  rejections that name resources or grants list them. Resource creation no
-  longer offers removed imported types.
+  Actions tab, action drawer and grant editor (from the policy catalog's
+  `resourcesCheckedBy`) show who checks each action's resources. Acceptance
+  messages report deleted attribute values and dropped types, and a refused
+  import change lists the retained grants and stored resources in its
+  `target.affectedGrants` and `target.resources`, linked to where they are
+  fixed. Resource creation no longer offers removed imported types.
 
 ### Changed
 

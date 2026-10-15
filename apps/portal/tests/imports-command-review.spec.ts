@@ -166,16 +166,22 @@ test("a refresh lists type changes and may accept only the metadata and type cha
   expect(api.errors).toEqual([]);
 });
 
-test("a rejected acceptance lists the resources to fix", async ({ page }) => {
+test("a refused acceptance lists the retained grants and stored resources to fix", async ({ page }) => {
   const api = await mockCommandImportApi(page, commandRefreshed());
-  api.acceptError = "resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (ticketing_project: legacy, web; ticketing_queue: triage-queue)";
+  api.acceptBlocked = {
+    affectedGrants: [{ id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "issue.search no longer supports per_user" }],
+    resources: [{ type: "ticketing_project", id: "legacy" }, { type: "ticketing_project", id: "web" }]
+  };
   await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
   await page.getByRole("button", { name: "Review preview", exact: true }).click();
   const dialog = review(page);
   await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
   const alert = dialog.getByRole("alert");
-  await expect(alert).toContainText("resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (input_invalid)");
-  await expect(alert.getByRole("listitem")).toHaveText(["ticketing_project: legacy, web", "ticketing_queue: triage-queue"]);
+  await expect(alert).toContainText("This change would leave retained grants invalid. Update or remove them first:");
+  await expect(alert).toContainText("Stored resources no longer fit these resource type changes.");
+  await expect(alert.getByRole("listitem")).toHaveText(["grant-search: issue.search no longer supports per_user", "Projects ticketing_project: legacy, web"]);
+  await expect(alert.getByRole("link", { name: "grant-search", exact: true })).toHaveAttribute("href", "/ui/admin/policies?grant=grant-search");
+  await expect(alert.getByRole("link", { name: "legacy", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resources?item=legacy");
   expect(api.errors).toEqual([]);
 });
 

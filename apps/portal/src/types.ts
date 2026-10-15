@@ -513,7 +513,12 @@ export type PolicyActionCatalog = {
   credentialModes: string[];
   lookupRequired: boolean;
   inputSchema: Record<string, unknown>;
+  /** A command import's action: whether the Broker or the command checks its resources. */
+  resourcesCheckedBy?: ResourcesCheckedBy;
 };
+
+/** `broker` checks the resources an action names before it runs; `command` enforces the caller's grants itself. */
+export type ResourcesCheckedBy = "broker" | "command";
 
 export type PolicyServiceCatalog = {
   available?: boolean;

@@ -128,6 +128,16 @@ export type ImportResourceTypeChange = {
   /** Accepting now would be rejected because of this type. */
   blocked: boolean;
 };
+/**
+ * Why an import change was refused (`target.affectedGrants`, `target.resources`):
+ * retained grants it would leave invalid, with the policy validation code and
+ * message, and stored resources (at most 100 per type) its resource type
+ * changes no longer fit.
+ */
+export type ImportChangeBlocked = {
+  affectedGrants: Array<{ id: string; reasonCode: string; reason: string }>;
+  resources: Array<{ type: string; id: string }>;
+};
 /** What an acceptance did to stored resources and types. */
 export type ImportResourceTypeEffects = {
   deletedAttributeValues: Array<{ resourceId: string; attributes: string[] }>;

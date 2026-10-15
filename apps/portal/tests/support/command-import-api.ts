@@ -3,7 +3,7 @@
 // writes, plus the catalog reads the Catalog pages make. Each discovery and
 // acceptance moves the import to the next queued state; requests are recorded.
 import type { Page } from "@playwright/test";
-import type { ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
+import type { ImportChangeBlocked, ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
 import type { ResourceRecord, Session } from "../../src/types";
 import { RESOURCE_TYPES } from "../../unit/resource-types.fixture";
 import { COMMAND_RESOURCE_TYPES, commandDraft, commandImportList, commandPolicyService } from "../../unit/command-import.fixture";
@@ -15,8 +15,8 @@ export type CommandImportApi = {
   discoveries: ImportPreviewResult[];
   /** States the next acceptances publish, in order, with the effects they report. */
   acceptances: Array<{ result: ImportPreviewResult; effects?: ImportResourceTypeEffects }>;
-  /** A rejection the next acceptance answers with instead. */
-  acceptError: string | null;
+  /** A refusal the next acceptance answers with instead, as `target` lists. */
+  acceptBlocked: Partial<ImportChangeBlocked> | null;
   commandImports: string[];
   resources: ResourceRecord[];
   created: ImportDefinition[];
@@ -47,14 +47,15 @@ function recordResult(data: ImportPreviewResult) {
 }
 
 export async function mockCommandImportApi(page: Page, current: ImportPreviewResult | null = null): Promise<CommandImportApi> {
-  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptError: null, commandImports: ["ticketing", "deploy-tools"], resources: [], created: [], accepted: [], credentials: [], errors: [] };
+  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resources: [], created: [], accepted: [], credentials: [], errors: [] };
   page.on("pageerror", (error) => api.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     const method = request.method();
     const service = /^\/v1\/admin\/imports\/ticketing(?:\/(.*))?$/.exec(pathname);
-    const fail = (status: number, message: string) => route.fulfill({ status, json: { ok: false, decision: "deny", reasonCode: "input_invalid", requestId: "fixture", brokerRequestId: "fixture", operation: "imports", principal: "admin", error: { message } } });
+    const fail = (message: string, blocked: Partial<ImportChangeBlocked>) =>
+      route.fulfill({ status: 400, json: { ok: false, decision: "deny", reasonCode: "input_invalid", requestId: "fixture", brokerRequestId: "fixture", operation: "imports", principal: "admin", target: { service: "ticketing", ...blocked }, error: { message } } });
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = ADMIN_SESSION;
     else if (pathname === "/v1/resource-types" || pathname === "/v1/me") {
@@ -75,8 +76,8 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
         result = api.current;
       } else if (tail === "accept") {
         api.accepted.push(request.postDataJSON() as Record<string, unknown>);
-        if (api.acceptError) {
-          await fail(400, api.acceptError);
+        if (api.acceptBlocked) {
+          await fail("input is invalid: the import change is blocked", api.acceptBlocked);
           return;
         }
         const next = api.acceptances.shift();

@@ -16,12 +16,14 @@ import {
   resourceTypeEffectsText,
   resourceTypeIdIssues
 } from "../src/lib/import-command";
-import { importErrorList, importReviewRows, importSelectionError, metadataOnlyAcceptance, selectedImportActions } from "../src/lib/imports";
+import { importReviewRows, importSelectionError, metadataOnlyAcceptance, selectedImportActions } from "../src/lib/imports";
 import { creatableResourceTypes, indexResourceTypes } from "../src/lib/resource-types";
 import { ImportEditor } from "../src/features/catalog/import-editor";
-import { ImportReview } from "../src/features/catalog/import-review";
+import { ImportErrorAlert, ImportReview } from "../src/features/catalog/import-review";
+import { ApiError } from "../src/api";
 import { ImportTokenModal } from "../src/features/catalog/import-token-modal";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
+import { GrantActionSelector } from "../src/components/grant-actions";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 import { COMMAND_RESOURCE_TYPES, CREATE, OAUTH_NOTICE, PROJECT, SEARCH, VIEW, WHOAMI, commandAccepted, commandDefinition, commandDiscovered, commandDraft, commandRefreshed, stdinBinding } from "./command-import.fixture";
 
@@ -106,6 +108,28 @@ describe("resources checked by", () => {
     // An undeclared type is shown by its id; escaped pointer segments are decoded.
     const escaped = { ...VIEW, annotations: { command: { resources: { type: "board", inputs: ["/a~1b", "/c~0d"] } } } };
     expect(resourceCheckText(commandResourceCheck(escaped), [PROJECT])).toBe("Broker · board, from a/b, c~d");
+  });
+});
+
+describe("grant editor", () => {
+  test("command-import actions say who checks their resources and command rows point to the caveat", () => {
+    const html = renderToStaticMarkup(
+      createElement(GrantActionSelector, {
+        available: [
+          { action: "issue.view", description: "Show one issue.", readOnly: true, resourcesCheckedBy: "broker" },
+          { action: "issue.search", description: "Search issues.", readOnly: true, resourcesCheckedBy: "command" },
+          { action: "item.read", description: "An MCP tool.", readOnly: true }
+        ],
+        selected: [],
+        disabled: false,
+        commandCaveatId: "caveat",
+        onChange: () => {}
+      })
+    );
+    expect(html).toContain("<b>Resources checked by: Broker. </b>Show one issue.");
+    expect(html).toContain("<b>Resources checked by: Command. </b>Search issues.");
+    expect(html).not.toMatch(/Resources checked by: [A-Za-z]+\. <\/b>An MCP tool/);
+    expect(html.match(/aria-describedby="caveat /g)).toHaveLength(1);
   });
 });
 
@@ -222,21 +246,28 @@ describe("command import preview", () => {
 });
 
 describe("acceptance errors", () => {
-  test("rejections that name resources or grants become lists; other messages stay whole", () => {
-    expect(
-      importErrorList("resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (ticketing_project: legacy, web; ticketing_queue: triage)")
-    ).toEqual({
-      message: "resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview",
-      items: ["ticketing_project: legacy, web", "ticketing_queue: triage"]
+  test("refusals list the retained grants and stored resources to fix, linked to them", () => {
+    const blocked = new ApiError("input is invalid: refused", 400, "input_invalid", undefined, undefined, undefined, {
+      affectedGrants: [{ id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "the action no longer supports per_user" }],
+      resources: [
+        { type: "ticketing_project", id: "legacy" },
+        { type: "ticketing_project", id: "web" },
+        { type: "ticketing_queue", id: "triage" }
+      ]
     });
-    expect(importErrorList("resource type changes no longer apply to stored resources; edit or delete them, or refresh the preview (ticketing_project: legacy)").items).toEqual([
-      "ticketing_project: legacy"
-    ]);
-    expect(importErrorList("the change would leave retained grants invalid; update or remove them first: managed policy grant g1 credentialMode is unsupported; managed policy grant g2 credentialMode is unsupported")).toEqual({
-      message: "the change would leave retained grants invalid; update or remove them first",
-      items: ["managed policy grant g1 credentialMode is unsupported", "managed policy grant g2 credentialMode is unsupported"]
-    });
-    expect(importErrorList("select at least one discovered tool")).toEqual({ message: "select at least one discovered tool", items: [] });
+    const html = renderToStaticMarkup(createElement(ImportErrorAlert, { error: blocked }));
+    expect(html).toContain("This change would leave retained grants invalid. Update or remove them first:");
+    expect(html).toContain('href="/ui/admin/policies?grant=grant-search"');
+    expect(html).toContain("the action no longer supports per_user");
+    expect(html).toContain("Stored resources no longer fit these resource type changes.");
+    expect(html).toContain('href="/ui/admin/catalog/resources?item=legacy"');
+    expect(html).toContain('href="/ui/admin/catalog/resources?item=triage"');
+    expect(html.match(/<li>/g)).toHaveLength(3);
+    // The message text is not parsed; other failures show it as it is.
+    expect(html).not.toContain("refused");
+    const plain = renderToStaticMarkup(createElement(ImportErrorAlert, { error: new ApiError("select at least one discovered tool", 400, "input_invalid") }));
+    expect(plain).toContain("select at least one discovered tool (input_invalid)");
+    expect(plain).not.toContain("<li>");
   });
 });
 

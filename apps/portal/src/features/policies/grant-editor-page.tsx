@@ -2,7 +2,7 @@ import { canWritePolicies } from "../../lib/capabilities";
 // Admin › Policies › grant editor: a full page with a section index, live
 // effective-access and JSON previews, and a sticky Save/Cancel bar with a
 // validation summary. Handles create, edit, duplicate, and read-only inspect.
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBlocker, useNavigate, useParams, useSearchParams } from "react-router";
 import type { PolicySubjectKind, PolicyGrantDraft } from "../../app-types";
 import type { PolicyCatalogResult, PolicyValidationMessage } from "../../types";
@@ -47,6 +47,7 @@ import { FieldGroup, FormError } from "../../components/form";
 import { DiscardChangesDialog } from "../../components/discard-changes-dialog";
 import { EffectiveAccessPanel } from "../../components/effective-access";
 import { GrantActionSelector, WriteCapability } from "../../components/grant-actions";
+import { COMMAND_CHECK_CAVEAT } from "../../lib/import-command";
 import { GrantResourcePicker } from "../../components/resource-picker";
 import { paths, portalReturnTo } from "../../app/paths";
 import { useSession } from "../../app/session";
@@ -460,6 +461,9 @@ function ServiceSection({ draft, catalog, readonly, lockService, update, message
   const credentialModes = commonCredentialModes(service, draft.actions);
   const supported = commonSupportedCredentialModes(service, draft.actions);
   const modeOptions = uniqueSortedOptions(draft.actions.length > 0 ? supported : credentialModes, draft.credentialMode);
+  // A command import's actions that the command checks: grants pass to it as boundaries.
+  const caveatId = useId();
+  const commandChecked = Boolean(service?.actions.some((action) => action.resourcesCheckedBy === "command"));
 
   function changeService(serviceName: string) {
     const next = policyService(catalog, serviceName);
@@ -498,10 +502,15 @@ function ServiceSection({ draft, catalog, readonly, lockService, update, message
           </Select>
         </Field>
         {service ? (
-          <GrantActionSelector key={service.service} available={service.actions} selected={draft.actions} disabled={readonly} onChange={setActions} />
+          <GrantActionSelector key={service.service} available={service.actions} selected={draft.actions} disabled={readonly} commandCaveatId={commandChecked ? caveatId : undefined} onChange={setActions} />
         ) : (
           <p className="pt-prose">Choose a service to select its actions.</p>
         )}
+        {commandChecked ? (
+          <p id={caveatId} className="pt-prose wb-small">
+            <b>Resources checked by: Command.</b> {COMMAND_CHECK_CAVEAT}
+          </p>
+        ) : null}
         <Field label="Credential mode" hint="Whose upstream credential the actions use: each caller's own (per_user) or the service's shared one (service).">
           <Select
             value={draft.credentialMode}

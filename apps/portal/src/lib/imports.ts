@@ -91,14 +91,3 @@ export function affectedImportGrants(data: ImportPreviewResult, rows: ImportRevi
 export function importVersions(data: { catalogRevision: number; service: ImportedServiceRecord }) {
   return { expectedVersion: data.service.version, expectedCatalogRevision: data.catalogRevision };
 }
-/**
- * A rejection that names what to fix, as `message (a; b)` or `message: a; b`,
- * split into the message and its items, such as the resources that block a
- * resource type change or the retained grants a change would invalidate. Any
- * other message stays whole.
- */
-export function importErrorList(text: string): { message: string; items: string[] } {
-  const listed = /^(.*\S) \(([^()]*[;:][^()]*)\)$/s.exec(text) ?? /^([^:]*?): (.*;.*)$/s.exec(text);
-  if (!listed) return { message: text, items: [] };
-  return { message: listed[1]!, items: listed[2]!.split("; ").map((item) => item.trim()).filter(Boolean) };
-}

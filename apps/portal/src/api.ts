@@ -1,4 +1,4 @@
-import type { ImportActionStatus, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
+import type { ImportActionStatus, ImportChangeBlocked, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
   IdentityTokenMetadata,
@@ -59,7 +59,7 @@ type ManagementEnvelope<T> = {
   brokerRequestId: string;
   operation: string;
   principal: string;
-  target?: { conflict?: unknown };
+  target?: { conflict?: unknown } & ImportChangeBlocked;
   result?: T;
   error?: { message: string };
 };
@@ -88,8 +88,10 @@ export class ApiError extends Error {
   readonly requestId?: string;
   readonly brokerRequestId?: string;
   readonly conflict?: unknown;
+  /** What a refused import change would leave invalid. */
+  readonly blocked?: ImportChangeBlocked;
 
-  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown) {
+  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown, blocked?: ImportChangeBlocked) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -97,7 +99,15 @@ export class ApiError extends Error {
     this.requestId = requestId;
     this.brokerRequestId = brokerRequestId;
     this.conflict = conflict;
+    this.blocked = blocked;
   }
+}
+
+/** A management target's lists of what blocks an import change, when present. */
+function importChangeBlocked(target: ManagementEnvelope<unknown>["target"]): ImportChangeBlocked | undefined {
+  const affectedGrants = Array.isArray(target?.affectedGrants) ? target.affectedGrants : [];
+  const resources = Array.isArray(target?.resources) ? target.resources : [];
+  return affectedGrants.length || resources.length ? { affectedGrants, resources } : undefined;
 }
 
 function requestId() {
@@ -182,7 +192,8 @@ async function managementRequest<T>(path: string, init: RequestInit = {}, sessio
       envelope?.reasonCode,
       envelope?.requestId,
       envelope?.brokerRequestId,
-      envelope?.target?.conflict
+      envelope?.target?.conflict,
+      importChangeBlocked(envelope?.target)
     );
   }
   return envelope.result;

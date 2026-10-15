@@ -17,7 +17,7 @@ import type {
   ImportScopedMcpIssueCode,
   ImportScopedMcpWarning
 } from "../../import-types";
-import { affectedImportGrants, importErrorList, importItemNoun, importReviewRows, importSelectionError, type ImportReviewRow } from "../../lib/imports";
+import { affectedImportGrants, importItemNoun, importReviewRows, importSelectionError, type ImportReviewRow } from "../../lib/imports";
 import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
 import {
   COMMAND_CHECK_CAVEAT,
@@ -35,7 +35,9 @@ import {
   typeChangeOutcome
 } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
-import { Badge, Banner, Button, Checkbox, Disclosure, Field, FilterInput, Input, KeyValue, Select, Time, cx, plural, toneClass, type Tone } from "../../workbench";
+import { AppLink, Badge, Banner, Button, Checkbox, Disclosure, Field, FilterInput, Input, KeyValue, Select, Time, cx, plural, toneClass, type Tone } from "../../workbench";
+import { paths } from "../../app/paths";
+import { resourceTypePluralLabel, useResourceTypes } from "../../lib/resource-types";
 import { LongText, modalFrame, type EditorFrame } from "./catalog-ui";
 
 export const SCOPED_MCP_ISSUE_TEXT: Record<ImportScopedMcpIssueCode, string> = {
@@ -122,20 +124,60 @@ function ResourcesCheckedBy({ definition, types, caveatId }: { definition: Impor
   );
 }
 
-/** An acceptance failure; a rejection naming resources or grants to fix lists them. */
-function ImportErrorAlert({ error }: { error: unknown }) {
+/**
+ * An acceptance failure. A change refused because retained grants or stored
+ * resources would not stay valid lists them, linked to where they are fixed.
+ */
+export function ImportErrorAlert({ error }: { error: unknown }) {
+  const types = useResourceTypes();
   if (!error) return null;
-  const { message, items } = importErrorList(error instanceof ApiError ? error.message : errorMessage(error));
+  const blocked = error instanceof ApiError ? error.blocked : undefined;
+  if (!blocked) {
+    return (
+      <div className="wb-form-error" role="alert">
+        {errorMessage(error)}
+      </div>
+    );
+  }
+  const resources = new Map<string, string[]>();
+  for (const resource of blocked.resources) resources.set(resource.type, [...(resources.get(resource.type) ?? []), resource.id]);
   return (
     <div className="wb-form-error" role="alert">
-      {message}
-      {error instanceof ApiError && error.reasonCode ? ` (${error.reasonCode})` : null}
-      {items.length ? (
-        <ul className="pt-catalog-error-list">
-          {items.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
+      {blocked.affectedGrants.length ? (
+        <>
+          This change would leave retained grants invalid. Update or remove them first:
+          <ul className="pt-catalog-error-list">
+            {blocked.affectedGrants.map((grant) => (
+              <li key={grant.id}>
+                <AppLink href={paths.policies({ grant: grant.id })} className="wb-link wb-mono">
+                  {grant.id}
+                </AppLink>
+                : {grant.reason}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {resources.size ? (
+        <>
+          Stored resources no longer fit these resource type changes. Edit or delete them, or refresh the preview:
+          <ul className="pt-catalog-error-list">
+            {[...resources].map(([type, entries]) => (
+              <li key={type}>
+                {resourceTypePluralLabel(types, type)} <span className="wb-mono wb-muted">{type}</span>:{" "}
+                {entries.map((id, index) => (
+                  <Fragment key={id}>
+                    {index ? ", " : null}
+                    <AppLink href={paths.resources(id)} className="wb-link wb-mono">
+                      {id}
+                    </AppLink>
+                  </Fragment>
+                ))}
+                {entries.length >= 100 ? " and possibly more" : null}
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
     </div>
   );
