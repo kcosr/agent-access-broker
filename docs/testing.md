@@ -135,7 +135,8 @@ Broker acceptance tests use the `test-support` feature of
 assembly's composition and identity on one real configuration file, either a
 TOML document written privately (`0600` in a `0700` fixture directory) or a
 test-owned path, through the same startup as `serve`: configuration validation,
-state locks, readiness, reload publication, and operation and audit drain. Its
+state locks, readiness, reload publication, and operation, command-process and
+audit drain. Its
 loopback listeners are bound to ephemeral ports when the fixture is created, so
 a configuration can name their addresses, such as `[mcp] public_url`. It
 installs no process signal handler or global log subscriber. The lifecycle's
@@ -144,8 +145,9 @@ starts the broker; tasks that request handlers spawn themselves report to the
 default dispatcher. `RunningBroker::reload` and `shutdown` stand in for SIGUSR2
 and SIGTERM. As in the process, connections still open at the shutdown deadline
 are cut off. `join` ends HTTP MCP sessions a client left open, as process exit
-does, and returns a drain report once every state lock is released, so a test
-can restart on the same state. `ProviderFixture` is a fixture control, not an
+does, and returns a drain report (unfinished operations and command processes,
+a forced cut-off, an audit drain failure) once every state lock is released, so
+a test can restart on the same state. `ProviderFixture` is a fixture control, not an
 embedding API: it supplies the provider of a selected native kind that the
 configuration configures, built for each generation, while configuration
 validation, admission and generation ownership still apply.

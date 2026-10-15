@@ -276,8 +276,8 @@ provider is built for it), then binds the listeners and starts serving. A
 [reload](#dynamic-config-reload) validates a candidate configuration and builds
 a new generation within the same composition; operations keep the generation
 that admitted them. Changing what is linked requires a new build and a restart.
-[Shutdown](#process-shutdown) drains listeners, operations and audit within a
-bounded budget.
+[Shutdown](#process-shutdown) drains listeners, operations, command-import
+processes and audit within a bounded budget.
 
 ### Core vs provider responsibilities
 
@@ -2109,8 +2109,13 @@ reaches its reserved final phase (the final quarter, capped at one second). That
 phase bounds forced-stop unknown-outcome finalization without extending the hard
 shutdown deadline. Disconnected operations
 remain tracked and keep permits until finalization; shutdown does not overlook
-them merely because their response connection disappeared. The audit writer shuts
-down after operation draining. Unfinished finalization is reported explicitly;
+them merely because their response connection disappeared. Command-import
+processes can outlive their operation, so after operation draining the shared
+command registry closes: calls that have not spawned fail before dispatch, every
+live process supervisor is asked to kill its process group, and shutdown waits
+within the remaining budget until each has reaped its process and returned its
+concurrency permit, reporting those that have not. The audit writer shuts
+down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.
 

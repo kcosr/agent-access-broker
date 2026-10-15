@@ -569,12 +569,13 @@ impl RunningBroker {
         }
     }
 
-    /// Waits for a requested shutdown to drain listeners, operations and
-    /// audit, then for every state lock the application acquired to be
-    /// released, so another broker may start on the same state. Fails with
-    /// the serve error, or when a lock stays held past the shutdown timeout
-    /// plus a short grace period. HTTP MCP sessions still open after the
-    /// drain are closed, as process exit would end them.
+    /// Waits for a requested shutdown to drain listeners, operations,
+    /// command processes and audit, then for every state lock the
+    /// application acquired to be released, so another broker may start on
+    /// the same state. Fails with the serve error, or when a lock stays held
+    /// past the shutdown timeout plus a short grace period. HTTP MCP
+    /// sessions still open after the drain are closed, as process exit
+    /// would end them.
     pub async fn join(mut self) -> anyhow::Result<ShutdownReport> {
         let task = self.task.take().expect("a running broker has a task");
         let drained = task
@@ -760,6 +761,7 @@ impl From<ConfigOperationResponse> for ReloadOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShutdownReport {
     unfinished_operations: usize,
+    unfinished_command_processes: usize,
     forced: bool,
     audit_error: Option<String>,
 }
@@ -768,6 +770,12 @@ impl ShutdownReport {
     /// Operations still unfinalized when the operation drain ended.
     pub fn unfinished_operations(&self) -> usize {
         self.unfinished_operations
+    }
+
+    /// Command-import processes whose supervisors had not reaped them and
+    /// returned their budget permits when the shutdown drain ended.
+    pub fn unfinished_command_processes(&self) -> usize {
+        self.unfinished_command_processes
     }
 
     /// Whether listeners or lifecycle tasks were cut off at the shutdown
@@ -781,9 +789,13 @@ impl ShutdownReport {
         self.audit_error.as_deref()
     }
 
-    /// Every operation finished, nothing was cut off and audit drained.
+    /// Every operation finished, every command process was reaped with its
+    /// permit returned, nothing was cut off and audit drained.
     pub fn is_clean(&self) -> bool {
-        self.unfinished_operations == 0 && !self.forced && self.audit_error.is_none()
+        self.unfinished_operations == 0
+            && self.unfinished_command_processes == 0
+            && !self.forced
+            && self.audit_error.is_none()
     }
 }
 
@@ -791,6 +803,7 @@ impl From<DrainReport> for ShutdownReport {
     fn from(report: DrainReport) -> Self {
         Self {
             unfinished_operations: report.unfinished_operations,
+            unfinished_command_processes: report.unfinished_command_processes,
             forced: report.forced,
             audit_error: report.audit_error,
         }

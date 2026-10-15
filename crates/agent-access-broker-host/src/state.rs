@@ -946,6 +946,17 @@ impl ReloadableState {
         self.operations.shutdown(timeout).await
     }
 
+    /// Closes the command registry every generation shares, kills each live
+    /// command process group and waits up to `timeout` for the supervisors
+    /// to reap them and return their permits. Returns how many have not.
+    pub(crate) async fn shutdown_command_processes(&self, timeout: Duration) -> usize {
+        self.current()
+            .runtime
+            .command_registry()
+            .close_and_drain(timeout)
+            .await
+    }
+
     pub(crate) fn cancel_terminal_audits(&self) -> usize {
         self.audit_registry.cancel_terminal_audits()
     }
