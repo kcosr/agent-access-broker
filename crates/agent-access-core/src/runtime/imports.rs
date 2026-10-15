@@ -583,15 +583,26 @@ impl BrokerRuntime {
         let Some(record) = self.imported_catalog.service(service) else {
             return true;
         };
+        self.imported_service_dispatchable(service)
+            && record.actions.iter().any(|entry| {
+                entry.definition.action == action && entry.status == ImportedActionStatus::Enabled
+            })
+    }
+
+    /// Whether the imported `service` still dispatches under this
+    /// generation: its dispatch fence was not retired by a later change of
+    /// its record or operator settings, it is enabled and allowed, and its
+    /// provider is built. `false` for a service that is not imported.
+    pub(crate) fn imported_service_dispatchable(&self, service: &str) -> bool {
+        let Some(record) = self.imported_catalog.service(service) else {
+            return false;
+        };
         self.import_dispatch
             .get(service)
             .is_some_and(|current| current.load(Ordering::Acquire))
             && record.status == ImportedServiceStatus::Enabled
             && destination_allowed(&self.config, &record.definition)
             && self.providers.contains_key(service)
-            && record.actions.iter().any(|entry| {
-                entry.definition.action == action && entry.status == ImportedActionStatus::Enabled
-            })
     }
 
     pub fn imported_mode_available(&self, service: &str, mode: &str) -> bool {

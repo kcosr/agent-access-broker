@@ -19,7 +19,7 @@ mod local_password_failures;
 pub(crate) mod oauth;
 mod principal_service_limits;
 mod resource_attributes;
-pub(crate) use resource_attributes::AdmittedResourceEntry;
+pub(crate) use resource_attributes::{AdmittedResourceEntry, CommandResourceAttributes};
 mod resources;
 use crate::fs_permissions;
 use crate::load_secret_ref_value;

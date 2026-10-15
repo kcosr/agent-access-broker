@@ -1451,6 +1451,7 @@ impl PolicySnapshot {
             generation,
             resource_catalog: ManagedResourceCatalog {
                 attribute_bindings: Vec::new(),
+                resource_fences: Default::default(),
                 resources: config.policy.resources.clone(),
                 resource_groups: config.policy.resource_groups.clone(),
             },
@@ -5337,6 +5338,18 @@ impl BrokerRuntime {
                     let invocation = self
                         .command_invocation(permit, deadline, &request, &finalize_context)
                         .await?;
+                    #[cfg(any(test, feature = "test-support"))]
+                    crate::test_support::pause_command_dispatch(&service).await;
+                    // Building the request awaited the store; the import must
+                    // still dispatch before its credentials reach the command.
+                    // Dropping the invocation zeroizes its request and returns
+                    // its slot.
+                    if !self.imported_action_available(&service, &action) {
+                        return Err(ProviderError::deny(
+                            ReasonCode::ServiceActionDenied,
+                            "imported service changed or is unavailable; repeat discovery",
+                        ));
+                    }
                     command_started = true;
                     run_provider_hook(hook.clone(), command_provider.invoke_command(invocation))
                         .await?

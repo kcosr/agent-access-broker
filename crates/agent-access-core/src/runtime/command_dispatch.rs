@@ -23,9 +23,9 @@ use crate::imports::{
     RequestResource, VerifyRequest, wire_deadline, wire_mode,
 };
 use crate::{
-    AdmittedResourceEntry, CommandImportConfig, CommandNetwork, CredentialVerificationTarget,
+    AdmittedResourceEntry, CommandImportConfig, CommandNetwork, CommandResourceAttributes,
+    CredentialVerificationTarget, ResourceFence,
 };
-use zeroize::Zeroizing;
 
 /// An admitted command-import call holding its budget permit.
 pub(super) struct CommandDispatch {
@@ -257,6 +257,9 @@ impl BrokerRuntime {
                                     .iter()
                                     .any(|allowed| allowed == context.as_str())
                         })?;
+                        // Only a stored entry has an identity fence; a
+                        // value without one is passed as its value alone.
+                        let fence: &ResourceFence = catalog.resource_fences.get(&definition.id)?;
                         let binding = catalog
                             .attribute_bindings
                             .iter()
@@ -269,6 +272,7 @@ impl BrokerRuntime {
                                 resource_type: definition.resource_type.clone(),
                                 selector_value: value.clone(),
                                 display_name: definition.display_name.clone(),
+                                fence: fence.clone(),
                                 binding,
                             },
                         ))
@@ -380,15 +384,16 @@ impl BrokerRuntime {
     }
 
     /// Revalidates and decrypts, after the permit, the resource entries
-    /// admission recorded: each must still be the same enabled exact entry
-    /// in `context` with the admitted attribute versions, and its attributes
-    /// must satisfy the type's current declaration. A replaced or changed
-    /// entry fails `scope_unresolved`.
+    /// admission recorded: each must still be the same stored row and the
+    /// same enabled exact entry in `context` with the admitted attribute
+    /// versions, and its attributes must satisfy the type's current
+    /// declaration. A replaced, recreated or changed entry fails
+    /// `scope_unresolved`.
     async fn command_resources(
         &self,
         admitted: &AdmittedCommand,
         context: &str,
-    ) -> Result<BTreeMap<String, ResourceAttributes>, ProviderError> {
+    ) -> Result<BTreeMap<String, CommandResourceAttributes>, ProviderError> {
         if admitted.resources.is_empty() {
             return Ok(BTreeMap::new());
         }
@@ -409,18 +414,38 @@ impl BrokerRuntime {
             .into_iter()
             .zip(values)
             .map(|(entry, attributes)| {
-                self.validate_resource_attributes(
-                    &entry.resource_type,
-                    &ResourceSelector::Exact {
-                        value: entry.selector_value.clone(),
-                    },
-                    &attributes,
-                    true,
-                )
-                .map_err(|_| resource_changed())?;
+                if !self.command_attributes_valid(&entry.resource_type, &attributes) {
+                    return Err(resource_changed());
+                }
                 Ok((entry.selector_value, attributes))
             })
             .collect()
+    }
+
+    /// Whether decrypted attribute `values` satisfy the current declaration
+    /// of `resource_type`: known names, non-empty values within 8 KiB that
+    /// pass their patterns, and every required attribute present. Checked
+    /// in place, so the plaintext is never copied out of zeroizing storage.
+    fn command_attributes_valid(
+        &self,
+        resource_type: &ResourceType,
+        values: &CommandResourceAttributes,
+    ) -> bool {
+        const MAX_ATTRIBUTE_BYTES: usize = 8 * 1024;
+        let Some(descriptor) = self.resource_types.get(resource_type) else {
+            return values.is_empty();
+        };
+        let fields = descriptor.attributes();
+        values.iter().all(|(name, value)| {
+            fields.iter().any(|field| {
+                field.name() == name
+                    && !value.is_empty()
+                    && value.len() <= MAX_ATTRIBUTE_BYTES
+                    && field.is_valid(value)
+            })
+        }) && fields
+            .iter()
+            .all(|field| !field.is_required() || values.contains_key(field.name()))
     }
 
     /// The credentials a request carries, resolved after the permit: one
@@ -635,8 +660,12 @@ impl BrokerRuntime {
     /// Verifies the personal credential `target` names, which `owner` holds
     /// as `name` for the command import `service`, by running `<path>
     /// verify` under the command's budget. `None` when the command does not
-    /// declare `verify`, so verification is unsupported. The verification
-    /// audit, or the failure's, records the process facts.
+    /// declare `verify`, so verification is unsupported. The import must
+    /// still dispatch under this generation when the verification is
+    /// admitted, after its slot, and immediately before the process starts;
+    /// a reload or change that retired it fails `service_action_denied`
+    /// without supplying the credential. The verification audit, or the
+    /// failure's, records the process facts.
     pub async fn verify_command_credential(
         &self,
         service: &str,
@@ -656,9 +685,11 @@ impl BrokerRuntime {
         if !verify {
             return Ok(None);
         }
+        self.command_import_fenced(service)?;
         let (_, profile) = self.personal_command_credential(service)?;
         let deadline = self.command_deadline(service, Instant::now())?;
         let permit = self.command_permit(service, deadline).await?;
+        self.command_import_fenced(service)?;
         let store = self
             .managed_store
             .clone()
@@ -696,8 +727,19 @@ impl BrokerRuntime {
         .map(Some)
     }
 
+    /// `Ok` while the command import `service` still dispatches under this
+    /// generation; `service_action_denied` once a change retired it.
+    fn command_import_fenced(&self, service: &str) -> Result<(), ProviderError> {
+        if self.imported_service_dispatchable(service) {
+            Ok(())
+        } else {
+            Err(imported_service_changed())
+        }
+    }
+
     /// Runs `<path> verify` for the personal `credential` under `permit`
-    /// until `deadline`, in the credential-verification hook.
+    /// until `deadline`, in the credential-verification hook, once the
+    /// import's fence holds immediately before the process starts.
     async fn run_command_verification(
         &self,
         service: &str,
@@ -726,6 +768,7 @@ impl BrokerRuntime {
         if let Some(network) = network {
             verification = verification.with_environment(network.environment());
         }
+        self.command_import_fenced(service)?;
         let admitted = AdmittedCommand {
             name: name.to_owned(),
             authorization: CommandAuthorization::Command {
@@ -768,7 +811,7 @@ impl BrokerRuntime {
 fn request_authorization(
     authorization: &CommandAuthorization,
     entries: &BTreeMap<String, AdmittedResourceEntry>,
-    resolved: BTreeMap<String, ResourceAttributes>,
+    resolved: BTreeMap<String, CommandResourceAttributes>,
     credential_free: bool,
 ) -> Result<RequestAuthorization, ProviderError> {
     let credential = |mode: &str| -> Result<Option<&'static str>, ProviderError> {
@@ -783,12 +826,7 @@ fn request_authorization(
             value.clone(),
             entry.resource_id.clone(),
             entry.display_name.clone(),
-            resolved
-                .get(value)
-                .into_iter()
-                .flat_map(ResourceAttributes::iter)
-                .map(|(name, value)| (name.to_owned(), Zeroizing::new(value.to_owned())))
-                .collect(),
+            resolved.get(value).cloned().unwrap_or_default(),
         ),
         None => RequestResource::value(value.clone()),
     };

@@ -245,3 +245,69 @@ fn read_sqlite_record_json(path: &Path) -> Vec<String> {
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
 }
+
+/// Pauses the command-import calls of one service after core has built
+/// their request and before it rechecks the import's dispatch fence and
+/// calls the command hook, so a test can change what a call was admitted
+/// under inside that window. Dropping the pause releases every held call and
+/// stops pausing. Use a service name no concurrent test shares.
+pub struct CommandDispatchPause {
+    service: String,
+    state: Arc<CommandPauseState>,
+}
+
+struct CommandPauseState {
+    reached: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+fn command_pauses() -> &'static std::sync::Mutex<BTreeMap<String, Arc<CommandPauseState>>> {
+    static PAUSES: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, Arc<CommandPauseState>>>> =
+        std::sync::OnceLock::new();
+    PAUSES.get_or_init(Default::default)
+}
+
+impl CommandDispatchPause {
+    pub fn new(service: &str) -> Self {
+        let state = Arc::new(CommandPauseState {
+            reached: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        command_pauses()
+            .lock()
+            .unwrap()
+            .insert(service.to_owned(), Arc::clone(&state));
+        Self {
+            service: service.to_owned(),
+            state,
+        }
+    }
+
+    /// Waits until a call of the service is held.
+    pub async fn reached(&self) {
+        self.state.reached.acquire().await.unwrap().forget();
+    }
+
+    /// Lets one held call continue.
+    pub fn release(&self) {
+        self.state.release.add_permits(1);
+    }
+}
+
+impl Drop for CommandDispatchPause {
+    fn drop(&mut self) {
+        command_pauses().lock().unwrap().remove(&self.service);
+        self.state.release.close();
+    }
+}
+
+/// Holds a command-import call of `service` while a test pauses it.
+pub(crate) async fn pause_command_dispatch(service: &str) {
+    let state = command_pauses().lock().unwrap().get(service).cloned();
+    if let Some(state) = state {
+        state.reached.add_permits(1);
+        if let Ok(permit) = state.release.acquire().await {
+            permit.forget();
+        }
+    }
+}

@@ -11,6 +11,20 @@ pub struct ManagedResourceCatalog {
     /// Private versioned references used during execution; never exported.
     #[serde(skip)]
     pub attribute_bindings: Vec<ResourceAttributeBinding>,
+    /// Each stored resource's identity fence, by ID, published with the
+    /// catalog so a call can tell whether the entry it was admitted with
+    /// was later changed, or deleted and recreated; never exported.
+    #[serde(skip)]
+    pub resource_fences: BTreeMap<String, ResourceFence>,
+}
+
+/// What identifies one stored resource row: its version, which every change
+/// advances, and its creation time (to the second), which tells a row
+/// recreated later from the one it replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceFence {
+    pub version: i64,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -712,7 +726,20 @@ pub(super) fn resource_catalog(
             })
         })
         .collect::<Result<Vec<_>, ManagedStoreError>>()?;
+    let resource_fences = records
+        .iter()
+        .map(|record| {
+            (
+                record.definition.id.clone(),
+                ResourceFence {
+                    version: record.version,
+                    created_at: record.created_at.clone(),
+                },
+            )
+        })
+        .collect();
     let catalog = ManagedResourceCatalog {
+        resource_fences,
         resources: records
             .into_iter()
             .map(|record| record.definition)
@@ -1289,6 +1316,7 @@ mod tests {
         );
         let catalog = ManagedResourceCatalog {
             attribute_bindings: Vec::new(),
+            resource_fences: Default::default(),
             resources: vec![ResourceDefinition {
                 id: "configured".into(),
                 display_name: None,
