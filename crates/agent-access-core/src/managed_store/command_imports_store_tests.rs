@@ -150,6 +150,29 @@ fn service_rows(conn: &Connection) -> Vec<Vec<String>> {
 
 #[test]
 fn migration_027_copies_schema_026_slot_rows_byte_for_byte() {
+    upgrade_preserves_import_rows("026_trusted_user_identity");
+}
+
+#[test]
+fn upgrades_from_schema_025_keep_import_rows_byte_for_byte() {
+    upgrade_preserves_import_rows("025_principal_access");
+}
+
+// Each pending migration first validates the previous schema, so the 023 and
+// 024 validators run on stores without the 027 column.
+#[test]
+fn upgrades_from_schema_024_keep_import_rows_byte_for_byte() {
+    upgrade_preserves_import_rows("024_oauth_discovery_revision");
+}
+
+#[test]
+fn upgrades_from_schema_023_keep_import_rows_byte_for_byte() {
+    upgrade_preserves_import_rows("023_imported_services");
+}
+
+/// A store at schema `from` holding import rows and every kind of slot
+/// upgrades to the current schema with its rows byte-for-byte unchanged.
+fn upgrade_preserves_import_rows(from: &str) {
     let (_temp, _config, latest, ring) = fixture();
     drop(latest);
     let temp = tempfile::TempDir::new().unwrap();
@@ -160,23 +183,20 @@ fn migration_027_copies_schema_026_slot_rows_byte_for_byte() {
     }
     let config = ManagedStoreConfig {
         kind: "sqlite".into(),
-        path: temp.path().join("schema-026.sqlite").display().to_string(),
+        path: temp.path().join(format!("schema-{from}.sqlite")).display().to_string(),
         auto_migrate: true,
         require_registered_principal_for_invocation: false,
     };
-    let through_026 = MANAGED_STORE_MIGRATIONS
+    let through = MANAGED_STORE_MIGRATIONS
         .iter()
-        .position(|migration| migration.version == MANAGED_STORE_COMMAND_IMPORTS_VERSION)
-        .unwrap();
-    assert_eq!(
-        MANAGED_STORE_MIGRATIONS[through_026 - 1].version,
-        "026_trusted_user_identity"
-    );
+        .position(|migration| migration.version == from)
+        .unwrap()
+        + 1;
     let previous = ManagedStore::open_with_catalog(
         &config,
         ManagedStoreOpenMode::Startup,
         ManagedStoreMigrationCatalog {
-            migrations: &MANAGED_STORE_MIGRATIONS[..through_026],
+            migrations: &MANAGED_STORE_MIGRATIONS[..through],
         },
     )
     .unwrap();

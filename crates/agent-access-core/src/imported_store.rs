@@ -794,7 +794,24 @@ fn preview(conn: &Connection, service: &str) -> Result<Option<ImportedPreview>, 
     json.map(|v| serde_json::from_str(&v).map_err(|_| invalid_data()))
         .transpose()
 }
+/// The imported-service columns of a schema. A structural validator of an
+/// earlier migration runs before later migrations add columns, so it reads
+/// only the columns its own schema has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportSchema {
+    /// `023_imported_services` through `026_trusted_user_identity`: no
+    /// `accepted_metadata_json`.
+    BeforeCommandImports,
+    /// `027_command_imports` and later.
+    CommandImports,
+}
 fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
+    catalog_at(conn, ImportSchema::CommandImports)
+}
+fn catalog_at(
+    conn: &Connection,
+    schema: ImportSchema,
+) -> Result<ImportedCatalog, ManagedStoreError> {
     let mut statement = conn
         .prepare("SELECT service FROM imported_services ORDER BY service")
         .map_err(sql_unavailable)?;
@@ -805,7 +822,7 @@ fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
     )?;
     let services = names
         .iter()
-        .map(|name| service_record(conn, name)?.ok_or_else(invalid_data))
+        .map(|name| service_record_at(conn, name, schema)?.ok_or_else(invalid_data))
         .collect::<Result<Vec<_>, _>>()?;
     let result = ImportedCatalog {
         revision: revision(conn)?,
@@ -819,6 +836,17 @@ fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
+    service_record_at(conn, service, ImportSchema::CommandImports)
+}
+fn service_record_at(
+    conn: &Connection,
+    service: &str,
+    schema: ImportSchema,
+) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
+    let metadata_column = match schema {
+        ImportSchema::BeforeCommandImports => "NULL",
+        ImportSchema::CommandImports => "accepted_metadata_json",
+    };
     type ServiceRow = (
         String,
         String,
@@ -829,7 +857,7 @@ fn service_record(
         String,
         Option<String>,
     );
-    let row: Option<ServiceRow> = conn.query_row("SELECT definition_json,status,version,created_at,created_by,updated_at,updated_by,accepted_metadata_json FROM imported_services WHERE service=?1",[service],|r| Ok((r.get(0)?,r.get(1)?,row_version(r,2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional().map_err(sql_unavailable)?;
+    let row: Option<ServiceRow> = conn.query_row(&format!("SELECT definition_json,status,version,created_at,created_by,updated_at,updated_by,{metadata_column} FROM imported_services WHERE service=?1"),[service],|r| Ok((r.get(0)?,r.get(1)?,row_version(r,2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional().map_err(sql_unavailable)?;
     let Some((
         definition,
         status,
@@ -1317,7 +1345,7 @@ pub(super) fn validate_structure_with_extension(
     run_quick_check(conn)?;
     check_secret_material_ready(conn, None)?;
     check_policy_revision_ready(conn)?;
-    catalog(conn)?;
+    catalog_at(conn, ImportSchema::BeforeCommandImports)?;
     Ok(())
 }
 
