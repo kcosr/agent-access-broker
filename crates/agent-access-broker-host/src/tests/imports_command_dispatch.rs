@@ -208,6 +208,7 @@ fn assert_not_applied(status: StatusCode, body: &Value, expected: StatusCode, re
     assert_eq!(status, expected, "{body}");
     assert_eq!(body["reasonCode"], reason, "{body}");
     assert_eq!(body["result"]["mutationStatus"], "not_applied", "{body}");
+    assert_eq!(body["result"]["operationDispatched"], false, "{body}");
 }
 
 fn far() -> tokio::time::Instant {
@@ -248,7 +249,8 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
     assert_eq!(registry.in_use("clock"), 0);
 
     // An unchanged reload keeps the fence: the queued call passes the final
-    // checks, then fails closed building its request.
+    // checks and runs its process, which this command fails, so the write's
+    // outcome is unknown.
     let held = registry.acquire("clock", 1, far()).await.unwrap();
     let queued = tokio::spawn(invoke(
         app.clone(),
@@ -260,12 +262,13 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
     broker.reload_config(&changed).await;
     drop(held);
     let (status, body) = queued.await.unwrap();
-    assert_not_applied(
-        status,
-        &body,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "operation_failed",
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body["reasonCode"], "operation_failed", "{body}");
+    assert_eq!(
+        body["result"],
+        json!({"mutationStatus": "unknown", "retrySafe": false, "operationDispatched": true})
     );
+    assert_eq!(imports.started("invoke").len(), 1);
 
     // A call that gets no permit by its deadline fails upstream_timeout; a
     // read reports no receipt.
@@ -298,8 +301,8 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
         "operation_cancelled",
     );
 
-    // Only discovery ever started a process.
-    assert!(imports.started("invoke").is_empty());
+    // Only the call that passed its final checks started a process.
+    assert_eq!(imports.started("invoke").len(), 1);
     assert_eq!(imports.started("describe").len(), 1);
     drop(app);
     broker.stop().await;

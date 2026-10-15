@@ -19327,6 +19327,7 @@ mod managed_identity;
 
 mod imports_command;
 mod imports_command_authority;
+mod imports_command_contract;
 mod imports_command_dispatch;
 mod imports_command_types;
 mod imports_management;

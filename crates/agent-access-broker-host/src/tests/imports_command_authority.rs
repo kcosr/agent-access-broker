@@ -2,9 +2,9 @@
 //! router, store, runtime publication and linked `command` adapter: the
 //! Broker checks named resources before dispatch, command-enforced actions
 //! pass their top band's grants, and caller discovery, resource discovery
-//! and MCP agree with invocation. Dispatch fails closed until processes run,
-//! so an admitted call ends `operation_failed` and audit shows which
-//! credential mode it used.
+//! and MCP agree with invocation. The recording command answers only
+//! `describe`, so an admitted call runs its process, ends `operation_failed`,
+//! and audit shows which credential mode it used.
 use super::imports_command::{CommandFixture, enabled_tickets, mcp_tool_names, request, versions};
 use super::imports_foundation::import_broker;
 use super::*;
@@ -134,8 +134,8 @@ async fn project_resources(app: &Router, token: &str) {
     .await;
 }
 
-/// The outcome of one call: `admitted` when it reached the dispatch step,
-/// which fails closed until processes run, else the denial's reason.
+/// The outcome of one call: `admitted` when it ran its process, which the
+/// recording command fails, else the denial's reason.
 async fn outcome(app: &Router, agent: &str, action: &str, inputs: Value) -> String {
     let (_, response) = request(
         app,
@@ -477,7 +477,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     }
     assert_eq!(
         outcome(&app, &charlie, "issue.view", json!({"project": "ENG"})).await,
-        "credential_not_found"
+        "credential_not_provisioned"
     );
 
     // A refresh that makes the view untyped would leave its grants'
