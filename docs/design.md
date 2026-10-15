@@ -885,7 +885,16 @@ sequenceDiagram
    merges it. A provider whose own required state is missing or of another type
    fails closed with a `broker_provider_contract_failed` error.
 9. **Deny-by-default policy selection.** The resolved scope set is authorized;
-   the credential mode is selected from the surviving grant.
+   the credential mode is selected from the surviving grant. A command import's
+   action that names its resources in typed inputs is Broker-enforced and uses
+   this selection. Its other actions are command-enforced: after the adapter's
+   scope hook checks their inputs, the command authority planner passes the
+   caller's top precedence band, each grant with its own credential mode and
+   finite or all-except boundary, intersected with the agent token's resource
+   restriction. It omits grants that end up empty, then grants whose
+   credential is not locally available, never consults a lower band, and
+   resolves no credential at admission. Caller discovery uses the same
+   planner.
 10. **Execution-credential resolution.** The credential for the selected mode is
    loaded.
 11. **Lookup-credential resolution.** If final policy selects `per_user`, any

@@ -5,10 +5,11 @@ Base administrators can connect a generic upstream MCP HTTP server or import an
 its own credentials, invocation limit, and accepted action catalog. Nothing in the
 importer depends on Grafana, Prometheus, or a particular vendor.
 
-This model grants whole actions. A grant still names subjects, execution contexts,
-actions, and a configured credential mode; imported actions have no broker resource
-scopes. Use context-specific grants when the entire action is appropriate for that
-context. An upstream search or generic API tool may reach everything its backend
+MCP and OpenAPI imports grant whole actions. A grant still names subjects, execution
+contexts, actions, and a configured credential mode; their actions have no broker
+resource scopes. Use context-specific grants when the entire action is appropriate for
+that context. Command imports may also declare resource types, which the Broker
+checks before the command runs or passes to the command with the caller's grants. An upstream search or generic API tool may reach everything its backend
 credential can access. Importing it does not create folder, project, namespace, or
 query-level containment. Use a compiled provider when that containment is needed.
 
