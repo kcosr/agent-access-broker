@@ -5339,6 +5339,12 @@ impl BrokerRuntime {
         }
         let top_band = top_policy_band(candidates);
         let credential_mode = single_policy_credential_mode(&top_band)?;
+        if !self.action_supports_mode(service, action, &credential_mode) {
+            return Err(ProviderError::deny(
+                ReasonCode::CredentialNotProvisioned,
+                "selected credential mode is not supported by this action",
+            ));
+        }
         if !credential_mode_available(
             &self.effective_credentials,
             service,

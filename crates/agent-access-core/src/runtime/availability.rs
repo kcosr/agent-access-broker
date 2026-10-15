@@ -56,6 +56,9 @@ struct UnavailableCredential {
     reason: String,
     unknown: bool,
     administrator: bool,
+    /// The store or key failure behind an unavailable credential, which
+    /// invocation reports as itself; `None` when the credential is absent.
+    failure: Option<Box<ProviderError>>,
 }
 
 impl UnavailableCredential {
@@ -82,6 +85,7 @@ impl UnavailableCredential {
             reason: error.reason_code().as_str().into(),
             unknown,
             administrator,
+            failure: administrator.then(|| Box::new(error)),
         }
     }
 
@@ -99,6 +103,7 @@ impl UnavailableCredential {
         Self {
             reason: error.code().into(),
             unknown,
+            failure: None,
             administrator: unknown
                 || matches!(
                     error,
@@ -279,15 +284,16 @@ impl BrokerRuntime {
     }
 
     /// Whether the caller's execution credential for `mode` is locally
-    /// usable, by the check caller discovery applies.
-    pub(super) fn execution_credential_usable(
+    /// usable, by the check caller discovery applies: `Err(None)` when it is
+    /// absent, `Err(Some(error))` when the store or its keys failed.
+    pub(super) fn execution_credential_check(
         &self,
         service: &str,
         mode: &str,
         identity: &IdentityContext,
-    ) -> bool {
+    ) -> Result<(), Option<Box<ProviderError>>> {
         self.check_discovery_credential(service, mode, identity, false)
-            .is_ok()
+            .map_err(|unavailable| unavailable.failure)
     }
 
     fn check_discovery_credential(

@@ -440,6 +440,7 @@ impl BrokerRuntime {
                 self.policy_candidates_for_action(snapshot, identity, context, service, action);
             candidate_clauses_for_modes(&candidates, |mode| {
                 mode_available(mode)
+                    && self.action_supports_mode(service, action, mode)
                     && credential_mode_available(
                         &self.effective_credentials,
                         service,

@@ -132,14 +132,12 @@ impl Provider for PlannedProvider {
                         resources
                             .inputs
                             .iter()
-                            .map(|pointer| {
-                                request
-                                    .inputs()
-                                    .pointer(pointer)
-                                    .unwrap()
-                                    .as_str()
-                                    .unwrap()
-                                    .to_owned()
+                            .flat_map(|pointer| match request.inputs().pointer(pointer) {
+                                Some(Value::Array(values)) => values
+                                    .iter()
+                                    .map(|value| value.as_str().unwrap().to_owned())
+                                    .collect(),
+                                other => vec![other.unwrap().as_str().unwrap().to_owned()],
                             })
                             .collect(),
                     )
@@ -258,7 +256,8 @@ fn action(name: &str, command: Value) -> ImportedActionRecord {
             label: None,
             description: format!("{name} action."),
             input_schema: json!({"type": "object",
-                "properties": {"project": {"type": "string"}, "query": {"type": "string"}}}),
+                "properties": {"project": {"type": "string"}, "query": {"type": "string"},
+                    "projects": {"type": "array", "items": {"type": "string"}}}}),
             output_schema: None,
             annotations: json!({"command": command}),
             read_only: true,
@@ -277,6 +276,20 @@ fn actions() -> Vec<ImportedActionRecord> {
         ),
         action("issue.search", json!({"resources": {"type": "project"}})),
         action("issue.stats", json!({})),
+        action(
+            "issue.bulk",
+            json!({"resources": {"type": "project", "inputs": ["/projects"]}}),
+        ),
+        // Actions a refresh narrowed to service mode.
+        action(
+            "issue.svc_search",
+            json!({"resources": {"type": "project"}, "credentialModes": ["service"]}),
+        ),
+        action(
+            "issue.svc_view",
+            json!({"resources": {"type": "project", "inputs": ["/project"]},
+                "credentialModes": ["service"]}),
+        ),
     ]
 }
 
@@ -359,16 +372,33 @@ fn import_config() -> BrokerConfig {
     config
 }
 
-/// Publishes the credential-free import through runtime publication, then
-/// installs `grants`. With `per_user`, the test also marks personal mode
-/// configured: a credential-free import's credentials are locally present
-/// without a managed store, so both modes are available to the planner.
+/// Publishes the import through runtime publication, then installs
+/// `grants`. Without `per_user` the import is credential-free: service mode
+/// only. With `per_user` it binds both modes and holds a service slot, and
+/// the test marks its credentials present without a managed store, as a
+/// credential-free import's are, so both modes are available to the planner
+/// while each action's modes come from the real mapping.
 fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
     let base = BrokerRuntime::new(config()).unwrap();
     let mut config = import_config();
     let mut base = base.clone();
     base.config = Arc::new(config.clone());
-    let record = record(&[], actions());
+    let record = if per_user {
+        let mut record = record(
+            &[
+                ImportedCredentialMode::Service,
+                ImportedCredentialMode::PerUser,
+            ],
+            actions(),
+        );
+        record.slot_versions.insert(
+            crate::imports::ImportedCredentialPurpose::Execution,
+            "fixture".into(),
+        );
+        record
+    } else {
+        record(&[], actions())
+    };
     let prepared = base.prepare_imported_service_change(&record, None).unwrap();
     let mut runtime = base
         .with_imported_catalog(
@@ -380,11 +410,11 @@ fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
         )
         .unwrap();
     if per_user {
-        let mut credentials = (*runtime.effective_credentials).clone();
-        credentials
-            .imported_modes
-            .insert(SERVICE.into(), vec!["service".into(), "per_user".into()]);
-        runtime.effective_credentials = Arc::new(credentials);
+        let mut services = (*runtime.services).clone();
+        let mut descriptor = (*services[SERVICE]).clone();
+        descriptor.credentials.execution_required = false;
+        services.insert(SERVICE.into(), Arc::new(descriptor));
+        runtime.services = Arc::new(services);
     }
     config.policy.grants = grants;
     runtime
@@ -582,6 +612,9 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
     let corrupt = descriptor.action("issue.corrupt").unwrap();
+    // The unresolved scope is command-enforced, so retained grants mixing
+    // modes stay valid; it never reaches a resource.
+    assert!(corrupt.search_contained);
     assert_eq!(
         descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()].resource_type,
         *UNRESOLVED_RESOURCE_TYPE.id()
@@ -593,8 +626,9 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         &crate::runtime::tests::base_fake_config(),
     );
     assert!(unlinked.actions.iter().all(|action| {
-        unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type
-            == *UNRESOLVED_RESOURCE_TYPE.id()
+        action.search_contained
+            && unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type
+                == *UNRESOLVED_RESOURCE_TYPE.id()
     }));
     // A credential-free import's actions use service mode.
     let free = crate::runtime::imports::descriptor(&record(&[], actions()), &config);
@@ -1220,4 +1254,162 @@ async fn one_subject_may_mix_modes_only_for_command_enforced_actions() {
             ("service".into(), all_except(&[]), Some(10)),
         ]
     );
+}
+
+#[tokio::test]
+async fn grants_in_modes_an_action_no_longer_supports_are_never_passed() {
+    let runtime = runtime(
+        vec![
+            grant(
+                "group:engineering",
+                "issue.svc_search",
+                "per_user",
+                10,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:support",
+                "issue.svc_search",
+                "service",
+                10,
+                &["p-ops"],
+                &[],
+            ),
+            grant(
+                "group:engineering",
+                "issue.svc_search",
+                "service",
+                0,
+                &["p-all"],
+                &[],
+            ),
+            grant(
+                "group:engineering",
+                "issue.svc_view",
+                "per_user",
+                10,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:engineering",
+                "issue.svc_view",
+                "service",
+                0,
+                &["p-all"],
+                &[],
+            ),
+        ],
+        true,
+    );
+    let caller = identity(None);
+    // The planner omits the personal grant as an unavailable credential;
+    // the lower band is still never consulted.
+    let prepared = prepare(&runtime, &caller, "issue.svc_search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [("service".into(), finite(&["OPS"]), Some(10))]
+    );
+    assert_eq!(
+        discovered(&runtime, &caller, "issue.svc_search"),
+        Some(reached(&prepared))
+    );
+    // Native selection denies the unsupported mode instead of using it.
+    let denied = prepare(
+        &runtime,
+        &caller,
+        "issue.svc_view",
+        json!({"project": "ENG"}),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(denied.reason_code(), ReasonCode::CredentialNotProvisioned);
+    let admitted = prepare(
+        &runtime,
+        &caller,
+        "issue.svc_view",
+        json!({"project": "SEC"}),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        admitted.command_authorization,
+        Some(CommandAuthorization::Broker { ref credential_mode, .. }) if credential_mode == "service"
+    ));
+    // Discovery agrees: only values the service grant wins are reachable.
+    assert_eq!(
+        discovered(&runtime, &caller, "issue.svc_view"),
+        Some(BTreeSet::from(["SEC", "HR", "FIN"]))
+    );
+}
+
+#[tokio::test]
+async fn broker_enforced_arrays_need_one_grant_covering_every_value() {
+    let runtime = runtime(
+        vec![
+            grant(
+                "group:engineering",
+                "issue.bulk",
+                "per_user",
+                10,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:support",
+                "issue.bulk",
+                "service",
+                10,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+        true,
+    );
+    let caller = identity(None);
+    for (projects, reason) in [
+        // SEC is excluded from the personal grant and outside the service one.
+        (json!(["ENG", "SEC"]), ReasonCode::ServiceActionDenied),
+        // Both grants cover OPS alone: the native rule finds that ambiguous.
+        (json!(["OPS"]), ReasonCode::ServiceActionDenied),
+    ] {
+        assert_eq!(
+            prepare(
+                &runtime,
+                &caller,
+                "issue.bulk",
+                json!({"projects": projects})
+            )
+            .await
+            .err()
+            .unwrap()
+            .reason_code(),
+            reason,
+            "{projects}"
+        );
+    }
+    let prepared = prepare(
+        &runtime,
+        &caller,
+        "issue.bulk",
+        json!({"projects": ["ENG", "OPS"]}),
+    )
+    .await
+    .unwrap();
+    let Some(CommandAuthorization::Broker {
+        credential_mode,
+        values,
+        grant,
+        ..
+    }) = prepared.command_authorization.as_ref()
+    else {
+        panic!("expected a Broker-enforced plan")
+    };
+    assert_eq!(credential_mode, "per_user");
+    assert_eq!(values, &["ENG", "OPS"]);
+    assert_eq!(grant.subject, "group:engineering");
 }

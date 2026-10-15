@@ -4,7 +4,12 @@
 use crate::mapping::CompiledAction;
 use agent_access_provider::{ProviderError, ReasonCode, ResourceScopes};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
+/// The most distinct resources one call to a Broker-enforced action may
+/// name. Policy checks every value before dispatch, and the request passes
+/// each one with its entry and attributes within the 1 MiB request bound.
+pub(crate) const MAX_RESOURCE_VALUES: usize = 1_000;
 
 fn input_invalid(message: &'static str) -> ProviderError {
     ProviderError::deny(ReasonCode::InputInvalid, message)
@@ -12,8 +17,9 @@ fn input_invalid(message: &'static str) -> ProviderError {
 
 /// The resources `inputs` name for `action`: for a Broker-enforced action,
 /// its declared type's scope with every value at its input pointers, in
-/// pointer and array order without duplicates; for every other action, none.
-/// Canonical form and grant coverage are core's to check.
+/// pointer and array order without duplicates, at most
+/// [`MAX_RESOURCE_VALUES`]; for every other action, none. Canonical form and
+/// grant coverage are core's to check.
 pub(crate) fn resolve(
     action: &CompiledAction,
     inputs: &Value,
@@ -31,20 +37,29 @@ pub(crate) fn resolve(
     else {
         return Ok(ResourceScopes::new());
     };
-    let mut values: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut values = Vec::new();
     for pointer in &resources.inputs {
         let named = match inputs.pointer(pointer) {
-            Some(Value::String(value)) => vec![value.as_str()],
+            Some(Value::String(value)) => vec![value],
             Some(Value::Array(items)) => items
                 .iter()
-                .map(Value::as_str)
+                .map(|item| match item {
+                    Value::String(value) => Some(value),
+                    _ => None,
+                })
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| input_invalid("a resource input must hold strings"))?,
             _ => return Err(input_invalid("a resource input is missing")),
         };
         for value in named {
-            if !values.iter().any(|seen| seen == value) {
-                values.push(value.to_owned());
+            if seen.insert(value.as_str()) {
+                if values.len() == MAX_RESOURCE_VALUES {
+                    return Err(input_invalid(
+                        "the action names more than 1,000 distinct resources",
+                    ));
+                }
+                values.push(value.clone());
             }
         }
     }
@@ -126,6 +141,28 @@ mod tests {
                 "{inputs}"
             );
         }
+    }
+
+    #[test]
+    fn broker_enforced_actions_name_a_bounded_number_of_distinct_resources() {
+        let only_array = action(json!({"type": "project", "inputs": ["/others"]}), schema());
+        let named = |others: Vec<String>| json!({"project": "OPS", "others": others, "issue": 1});
+        let distinct = |count: usize| (0..count).map(|index| format!("P{index}")).collect();
+        let resolved = resolve(&only_array, &named(distinct(MAX_RESOURCE_VALUES))).unwrap();
+        assert_eq!(resolved["project"].len(), MAX_RESOURCE_VALUES);
+        assert_eq!(
+            resolve(&only_array, &named(distinct(MAX_RESOURCE_VALUES + 1)))
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::InputInvalid
+        );
+        // Duplicates count once, in linear time.
+        let mut repeated = distinct(MAX_RESOURCE_VALUES);
+        repeated.extend(std::iter::repeat_n("P0".to_owned(), 200_000));
+        assert_eq!(
+            resolve(&only_array, &named(repeated)).unwrap()["project"].len(),
+            MAX_RESOURCE_VALUES
+        );
     }
 
     #[test]

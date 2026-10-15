@@ -11,6 +11,7 @@ mod authority;
 #[cfg(test)]
 mod command_tests;
 mod mcp_names;
+mod retained_grants;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
 /// callers cannot substitute arbitrary providers or attest their own token writes.
@@ -774,6 +775,7 @@ impl BrokerRuntime {
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
         next.policy_snapshot = Arc::new(ArcSwap::from(self.policy_snapshot()));
         next.check_import_catalog_budgets()?;
+        next.check_retained_import_grants(&changed_service)?;
         Ok(next)
     }
 

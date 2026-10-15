@@ -1035,4 +1035,344 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
     }
     drop(app);
     broker.stop().await;
+    // Dispatch fails closed until processes run, so the passed grants are
+    // visible only in audit: alice's call passed both modes and records
+    // none; charlie's passed the service grant alone.
+    let audit = fixture.config.audit.as_ref().unwrap().path.clone();
+    let modes = read_audit_records(Path::new(&audit))
+        .into_iter()
+        .filter(|record| record["service"] == "tickets" && record["action"] == "issue.stats")
+        .map(|record| {
+            (
+                record["principal"].as_str().unwrap().to_owned(),
+                record.get("credentialMode").cloned().unwrap_or(Value::Null),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(modes["alice"], Value::Null, "{modes:?}");
+    assert_eq!(modes["charlie"], json!("service"), "{modes:?}");
+}
+
+/// Creates `tickets` with `modes`, discovers and accepts it, stores a
+/// service credential when service mode is bound, and enables it.
+async fn enabled_tickets(app: &Router, token: &str, modes: &[&str]) -> Value {
+    let (status, created) = request(
+        app,
+        token,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(definition("tickets", "tickets", modes)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let mut current = discover_and_accept(app, token, "tickets", &created["result"]).await;
+    if modes.contains(&"service") {
+        let mut secret = versions(&current);
+        secret["token"] = json!("svc-example");
+        let (status, stored) = request(
+            app,
+            token,
+            Method::PUT,
+            "/v1/admin/imports/tickets/credentials/execution",
+            Some(secret),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{stored}");
+        current = stored["result"].clone();
+    }
+    let mut enable = versions(&current);
+    enable["status"] = json!("enabled");
+    let (status, enabled) = request(
+        app,
+        token,
+        Method::POST,
+        "/v1/admin/imports/tickets/status",
+        Some(enable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    enabled["result"].clone()
+}
+
+fn project_type() -> Value {
+    json!({"id": "project", "label": "Project", "pluralLabel": "Projects",
+        "example": "OPS", "pattern": "[A-Z][A-Z0-9]{1,9}"})
+}
+
+/// A refresh whose accepted actions would leave retained grants invalid at
+/// the next start is refused, naming the grants, so the administrator fixes
+/// them first; nothing is published.
+#[cfg(unix)]
+#[tokio::test]
+async fn acceptance_refuses_changes_that_would_invalidate_retained_grants() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service", "per_user"]},
+        "resourceTypes": [project_type()],
+        "actions": [
+            {"name": "issue.stats", "description": "Issue statistics.", "readOnly": true,
+             "inputSchema": {"type": "object", "required": ["project"],
+                "properties": {"project": {"type": "string"}}}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    enabled_tickets(&app, &token, &["service", "per_user"]).await;
+    let runtime = broker.runtime();
+    for grant in [
+        command_grant(
+            "stats-alice-user",
+            "user:alice",
+            "issue.stats",
+            "per_user",
+            0,
+        ),
+        command_grant(
+            "stats-alice-service",
+            "user:alice",
+            "issue.stats",
+            "service",
+            0,
+        ),
+    ] {
+        runtime.create_managed_policy_grant(grant).unwrap();
+    }
+    drop(runtime);
+    let accepted_before = broker.runtime().imported_catalog().clone();
+
+    for (change, grant, expected) in [
+        // The action now names its project, so the Broker checks it and the
+        // pair of modes becomes ambiguous.
+        (
+            json!({"resources": {"type": "project", "inputs": ["/project"]}}),
+            "stats-alice-service",
+            "ambiguous credential mode",
+        ),
+        // The action no longer supports personal mode.
+        (
+            json!({"credentialModes": ["service"]}),
+            "stats-alice-user",
+            "per_user is unsupported",
+        ),
+    ] {
+        let mut refreshed = manifest.clone();
+        for (key, value) in change.as_object().unwrap() {
+            refreshed["actions"][0][key] = value.clone();
+        }
+        fixture.write_manifest(&refreshed);
+        let current = request(&app, &token, Method::GET, "/v1/admin/imports/tickets", None)
+            .await
+            .1;
+        let (status, discovered) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/tickets/discover",
+            Some(versions(&current["result"])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{discovered}");
+        let discovered = &discovered["result"];
+        let tool = &discovered["preview"]["manifest"]["tools"][0];
+        assert!(tool["unsupportedReason"].is_null(), "{tool}");
+        let mut accept = versions(discovered);
+        accept["manifestHash"] = discovered["preview"]["manifestHash"].clone();
+        accept["selections"] = json!([{"source": tool["definition"]["source"],
+            "action": "issue.stats", "readOnly": true}]);
+        accept["confirmAffectedGrants"] = json!(true);
+        let (status, refused) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/tickets/accept",
+            Some(accept),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        let message = refused.to_string();
+        assert!(message.contains(grant), "{refused}");
+        assert!(message.contains(expected), "{refused}");
+        // The refresh quarantined the action; the refused acceptance kept
+        // its accepted definition.
+        let published = broker.runtime();
+        let action = &published
+            .imported_catalog()
+            .service("tickets")
+            .unwrap()
+            .actions[0];
+        assert_eq!(
+            action.definition,
+            accepted_before.service("tickets").unwrap().actions[0].definition,
+            "nothing was published"
+        );
+        assert_eq!(
+            action.status,
+            agent_access_core::ImportedActionStatus::Quarantined
+        );
+    }
+    drop(app);
+    broker.stop().await;
+    // The retained grants still load.
+    BrokerRuntime::new(fixture.config.clone()).unwrap();
+}
+
+/// Without the command adapter, a command import's actions authorize nothing,
+/// and retained grants that mix modes for one subject still load.
+#[cfg(unix)]
+#[tokio::test]
+async fn startup_keeps_mixed_mode_grants_of_an_unlinked_command_import() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service", "per_user"]},
+        "actions": [
+            {"name": "issue.stats", "description": "Issue statistics.", "readOnly": true,
+             "inputSchema": {"type": "object"}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    enabled_tickets(&app, &token, &["service", "per_user"]).await;
+    let runtime = broker.runtime();
+    for grant in [
+        command_grant(
+            "stats-alice-user",
+            "user:alice",
+            "issue.stats",
+            "per_user",
+            0,
+        ),
+        command_grant(
+            "stats-alice-service",
+            "user:alice",
+            "issue.stats",
+            "service",
+            0,
+        ),
+    ] {
+        runtime.create_managed_policy_grant(grant).unwrap();
+    }
+    drop((runtime, app));
+    broker.stop().await;
+
+    let mut unlinked = fixture.config.clone();
+    unlinked.providers = agent_access_core::ProvidersConfig::new(Arc::new(
+        agent_access_core::BackendRegistry::new(crate::backend_registry().registrations())
+            .unwrap()
+            .with_oauth_dialects([
+                &agent_access_gmail::GOOGLE_OAUTH_DIALECT,
+                &agent_access_fake::STUB_OAUTH_DIALECT,
+            ])
+            .unwrap()
+            .with_imported_adapters([agent_access_core::imports::imported_adapter_registration(
+                agent_access_provider::module_metadata!(),
+                &super::conformance_import::CONFORMANCE_IMPORT_ADAPTER,
+                None,
+            )])
+            .unwrap(),
+    ));
+    unlinked
+        .imports
+        .allowed_kinds
+        .retain(|kind| kind != "command");
+    let restarted = BrokerRuntime::new(unlinked).unwrap();
+    assert!(
+        restarted
+            .imported_service_unavailable_reason("tickets")
+            .is_some()
+    );
+    assert!(restarted.command_provider("tickets").is_none());
+}
+
+/// Real adapter scope resolution and credential checks at admission: inputs
+/// are checked against the schema, a Broker-enforced action names at most
+/// 1,000 resources, and a stored credential that cannot be decrypted denies
+/// with its own reason instead of looking absent.
+#[cfg(unix)]
+#[tokio::test]
+async fn admission_checks_inputs_bounds_resources_and_reports_credential_failures() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service", "per_user"]},
+        "resourceTypes": [project_type()],
+        "actions": [
+            {"name": "issue.stats", "description": "Issue statistics.", "readOnly": true,
+             "inputSchema": {"type": "object", "additionalProperties": false}},
+            {"name": "issue.bulk", "description": "Show issues of projects.", "readOnly": true,
+             "inputSchema": {"type": "object", "required": ["projects"],
+                "properties": {"projects": {"type": "array", "items": {"type": "string"}}}},
+             "resources": {"type": "project", "inputs": ["/projects"]}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    enabled_tickets(&app, &token, &["service", "per_user"]).await;
+    broker
+        .runtime()
+        .create_managed_policy_grant(command_grant(
+            "stats-alice-service",
+            "user:alice",
+            "issue.stats",
+            "service",
+            0,
+        ))
+        .unwrap();
+    let agent = fixture.issue(
+        "alice",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+    );
+    let invoke = |action: &'static str, inputs: Value| {
+        let (app, agent) = (app.clone(), agent.clone());
+        async move {
+            request(
+                &app,
+                &agent,
+                Method::POST,
+                &format!("/v1/invoke/tickets/{action}"),
+                Some(json!({"inputs": inputs})),
+            )
+            .await
+            .1["reasonCode"]
+                .clone()
+        }
+    };
+    assert_eq!(
+        invoke("issue.stats", json!({"extra": 1})).await,
+        "input_invalid"
+    );
+    // The call is admitted and fails closed at dispatch.
+    assert_eq!(invoke("issue.stats", json!({})).await, "operation_failed");
+    let projects = |count: usize| json!({"projects": (0..count).map(|index| format!("P{index}")).collect::<Vec<_>>()});
+    assert_eq!(invoke("issue.bulk", projects(1001)).await, "input_invalid");
+    // Within the bound, policy decides; no grant covers these projects.
+    assert_eq!(
+        invoke("issue.bulk", projects(1000)).await,
+        "service_action_denied"
+    );
+
+    // A stored service credential that cannot be decrypted is reported.
+    let store = &fixture.config.managed_store.as_ref().unwrap().path;
+    rusqlite::Connection::open(store)
+        .unwrap()
+        .execute(
+            "UPDATE imported_secret_material SET ciphertext = zeroblob(length(ciphertext)) \
+             WHERE service = 'tickets'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        invoke("issue.stats", json!({})).await,
+        "credential_decrypt_failed"
+    );
+    drop(app);
+    broker.stop().await;
 }

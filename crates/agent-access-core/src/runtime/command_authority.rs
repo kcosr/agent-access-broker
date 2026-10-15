@@ -147,7 +147,7 @@ impl CommandAuthorization {
 }
 
 /// Why a command-enforced action has no grants to pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandDenial {
     /// No grant of the caller covers the action in this context, or the top
     /// band's boundaries hold no resources.
@@ -156,8 +156,9 @@ enum CommandDenial {
     TokenInapplicable,
     /// The agent token's resource restriction leaves no resources.
     TokenEmpty,
-    /// Every remaining grant's credential is unavailable.
-    Credentials,
+    /// Every remaining grant's credential is unavailable, or its mode is
+    /// not one the action supports; these modes were omitted.
+    Credentials(BTreeSet<String>),
 }
 
 /// Whether `service` is a command import of `imported`.
@@ -201,6 +202,14 @@ impl BrokerRuntime {
         command_enforced_action(&self.imported_catalog, &self.services, service, action)
     }
 
+    /// Whether `action` of `service` supports credential `mode`. Policy
+    /// validation keeps grants within an action's modes, but a refresh can
+    /// narrow them under a retained grant; selection never uses such a grant.
+    pub(super) fn action_supports_mode(&self, service: &str, action: &str, mode: &str) -> bool {
+        self.action_descriptor(service, action)
+            .is_some_and(|descriptor| descriptor.credential_modes.iter().any(|m| m == mode))
+    }
+
     /// The command resource type of a scoped action of a command import.
     fn command_resource_type(&self, service: &str, action: &str) -> Option<CommandResourceType> {
         let (scope, binding) = self.services.get(service)?.action_resource_scope(action)?;
@@ -231,8 +240,9 @@ impl BrokerRuntime {
     /// Plans a command-enforced action from its top band: each grant's
     /// boundary as finite values or all-except, intersected with the agent
     /// token's resource restriction; grants that end up empty, then grants
-    /// whose credential mode `mode_available` rejects, are omitted. The
-    /// same grant matched through several subjects is passed once.
+    /// whose credential mode the action does not support or `mode_available`
+    /// rejects, are omitted. The same grant matched through several subjects
+    /// is passed once.
     #[allow(clippy::too_many_arguments)]
     fn plan_command_grants(
         &self,
@@ -256,7 +266,8 @@ impl BrokerRuntime {
             Some(boundary) => Some(search_scope_from_boundary(&boundary)),
         };
         let mut grants = Vec::<CommandGrantAuthority>::new();
-        let (mut token_emptied, mut credentials_missing) = (false, false);
+        let mut token_emptied = false;
+        let mut omitted_modes = BTreeSet::new();
         for candidate in band {
             let granted = if resource_type.is_some() {
                 search_scope_from_boundary(&candidate.boundary)
@@ -272,8 +283,10 @@ impl BrokerRuntime {
                 token_emptied |= !granted.is_empty();
                 continue;
             }
-            if !mode_available(&candidate.credential_mode) {
-                credentials_missing = true;
+            if !self.action_supports_mode(service, action, &candidate.credential_mode)
+                || !mode_available(&candidate.credential_mode)
+            {
+                omitted_modes.insert(candidate.credential_mode.as_str());
                 continue;
             }
             let grant = matched_grant_audit(snapshot, candidate);
@@ -290,8 +303,8 @@ impl BrokerRuntime {
             });
         }
         if grants.is_empty() {
-            return Err(if credentials_missing {
-                CommandDenial::Credentials
+            return Err(if !omitted_modes.is_empty() {
+                CommandDenial::Credentials(omitted_modes.into_iter().map(str::to_owned).collect())
             } else if token_emptied {
                 CommandDenial::TokenEmpty
             } else {
@@ -465,17 +478,26 @@ impl BrokerRuntime {
     ) -> Result<CommandAuthorization, ProviderError> {
         let band = self.command_band(snapshot, identity, context, service, action);
         let mut available = BTreeSet::new();
+        let mut failures = BTreeMap::new();
         for mode in band
             .iter()
             .map(|candidate| candidate.credential_mode.clone())
             .collect::<BTreeSet<_>>()
         {
-            if self.command_mode_configured(service, &mode)
-                && self
-                    .command_credential_present(service, &mode, identity)
-                    .await
+            if !self.command_mode_configured(service, &mode) {
+                continue;
+            }
+            match self
+                .command_credential_check(service, &mode, identity)
+                .await
             {
-                available.insert(mode);
+                Ok(()) => {
+                    available.insert(mode);
+                }
+                Err(Some(failure)) => {
+                    failures.insert(mode, *failure);
+                }
+                Err(None) => {}
             }
         }
         self.plan_command_grants(
@@ -488,10 +510,17 @@ impl BrokerRuntime {
             |mode| available.contains(mode),
         )
         .map_err(|denial| match (denial, token) {
-            (CommandDenial::Credentials, _) => ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "no credential of the caller's command grants is provisioned",
-            ),
+            // A store or key failure behind an omitted credential is reported
+            // as itself, as credential resolution would report it.
+            (CommandDenial::Credentials(omitted), _) => omitted
+                .iter()
+                .find_map(|mode| failures.remove(mode))
+                .unwrap_or_else(|| {
+                    ProviderError::deny(
+                        ReasonCode::CredentialNotProvisioned,
+                        "no credential of the caller's command grants is provisioned",
+                    )
+                }),
             (CommandDenial::TokenInapplicable, Some(parsed)) => token_caveat_denial(
                 parsed.source,
                 service,
@@ -576,19 +605,21 @@ impl BrokerRuntime {
 
     /// Whether the caller's credential for `mode` is present locally,
     /// checked off the async executor like other managed-store reads.
-    async fn command_credential_present(
+    /// `Err(None)` when the credential is absent, `Err(Some(error))` when the
+    /// store or its keys failed to answer.
+    async fn command_credential_check(
         &self,
         service: &str,
         mode: &str,
         identity: &IdentityContext,
-    ) -> bool {
+    ) -> Result<(), Option<Box<ProviderError>>> {
         let runtime = self.clone();
         let (service, mode, identity) = (service.to_owned(), mode.to_owned(), identity.clone());
         managed_store_blocking(move || {
-            Ok(runtime.execution_credential_usable(&service, &mode, &identity))
+            Ok(runtime.execution_credential_check(&service, &mode, &identity))
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_else(|error| Err(Some(Box::new(provider_error_from_managed_store(error)))))
     }
 
     /// The Broker-enforced authority of a command import's scoped action,

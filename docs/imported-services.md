@@ -81,6 +81,9 @@ credential rewrap. See [database operations](database.md).
    or behaviorally changed accepted tools are quarantined immediately after a complete
    discovery. Existing grants are retained. Reviewing changed schemas/annotations or
    restoring such actions requires acceptance; affected grants require confirmation.
+   A change that would leave a retained grant invalid, for example by removing a
+   credential mode it uses, is refused and names the grants to update or remove
+   first.
 
 The service's **Actions** tab lists each saved action identifier, optional display
 label and description without another discovery request. Long descriptions have

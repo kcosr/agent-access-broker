@@ -892,9 +892,14 @@ sequenceDiagram
    caller's top precedence band, each grant with its own credential mode and
    finite or all-except boundary, intersected with the agent token's resource
    restriction. It omits grants that end up empty, then grants whose
-   credential is not locally available, never consults a lower band, and
-   resolves no credential at admission. Caller discovery uses the same
-   planner.
+   credential mode the action does not support or whose credential is not
+   locally available, never consults a lower band, and resolves no credential
+   at admission. As for native selection, a grant whose selection reaches no
+   enabled, context-eligible resource is not a candidate, so it never hides a
+   lower band. Caller discovery uses the same planner. A Broker-enforced
+   action names at most 1,000 distinct resources per call; more are invalid
+   input. An import change that would leave a retained grant invalid at the
+   next start is refused and names the grants to fix first.
 10. **Execution-credential resolution.** The credential for the selected mode is
    loaded.
 11. **Lookup-credential resolution.** If final policy selects `per_user`, any

@@ -56,9 +56,10 @@ fn broker_type(record: &ImportedServiceRecord, source_type: &str) -> ResourceTyp
 /// An unreadable declaration authorizes nothing, and neither does any
 /// action of a command import whose adapter this Broker does not link (the
 /// import is unavailable): both bind an unresolved scope, under which every
-/// retained grant, with or without resources, stays valid. Other imports
-/// declare no resources, so without their adapter they keep the action-only
-/// shape.
+/// retained grant, with or without resources, stays valid. A command
+/// import's unresolved scope is command-enforced, so retained grants mixing
+/// modes stay valid too; its boundary is always empty. Other imports declare
+/// no resources, so without their adapter they keep the action-only shape.
 pub(super) fn action_shape(
     record: &ImportedServiceRecord,
     adapter: Option<&dyn ImportedAdapter>,
@@ -69,7 +70,7 @@ pub(super) fn action_shape(
         scope: Some(ImportedActionScope {
             name: UNREADABLE_SCOPE.into(),
             resource_type: UNRESOLVED_RESOURCE_TYPE.id().clone(),
-            search_contained: false,
+            search_contained: command_endpoint(&record.definition),
         }),
         credential_modes: declared_modes.to_vec(),
     };
