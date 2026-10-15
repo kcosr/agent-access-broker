@@ -142,6 +142,13 @@ export function typeChangeOutcome(change: ImportResourceTypeChange): string {
 const TYPE_ID = /^[a-z][a-z0-9_]{0,63}$/;
 
 /**
+ * The Broker type IDs an administrator typed for added types, by source type
+ * id. A Map, since type ids come from the manifest and may name
+ * `Object.prototype` members such as `constructor`.
+ */
+export type ResourceTypeIdChoices = ReadonlyMap<string, string>;
+
+/**
  * Problems with the Broker type IDs of added types, by source type id: the ID
  * grammar, IDs repeated within the import, and an ID another owner has
  * registered: the Broker's own proposal when the preview says so, or any ID
@@ -151,12 +158,12 @@ const TYPE_ID = /^[a-z][a-z0-9_]{0,63}$/;
 export function resourceTypeIdIssues(
   changes: readonly ImportResourceTypeChange[],
   metadata: ImportServiceMetadata | undefined,
-  ids: ImportResourceTypeIds,
+  ids: ResourceTypeIdChoices,
   registered: ResourceTypes,
   service: string
-): Record<string, string> {
-  const issues: Record<string, string> = {};
-  const chosen = (id: string, brokerType: string) => ids[id]?.trim() ?? brokerType;
+): ReadonlyMap<string, string> {
+  const issues = new Map<string, string>();
+  const chosen = (id: string, brokerType: string) => ids.get(id)?.trim() ?? brokerType;
   const editable = new Set(changes.filter((change) => change.editable).map((change) => change.id));
   const counts = new Map<string, number>();
   for (const declared of metadata?.resourceTypes ?? []) {
@@ -165,18 +172,20 @@ export function resourceTypeIdIssues(
   }
   for (const change of changes.filter((entry) => entry.editable)) {
     const value = chosen(change.id, change.brokerType);
-    if (!TYPE_ID.test(value)) issues[change.id] = "Use up to 64 lowercase letters, digits or underscores, starting with a letter.";
-    else if ((counts.get(value) ?? 0) > 1) issues[change.id] = "Another type of this import uses this ID.";
-    else if ((change.blocked && value === change.brokerType) || (registered.has(value) && registered.get(value)!.importedService !== service)) issues[change.id] = "This ID is already registered. Choose another.";
+    if (!TYPE_ID.test(value)) issues.set(change.id, "Use up to 64 lowercase letters, digits or underscores, starting with a letter.");
+    else if ((counts.get(value) ?? 0) > 1) issues.set(change.id, "Another type of this import uses this ID.");
+    else if ((change.blocked && value === change.brokerType) || (registered.has(value) && registered.get(value)!.importedService !== service))
+      issues.set(change.id, "This ID is already registered. Choose another.");
   }
   return issues;
 }
 
 /** The accept body's `resourceTypeIds`: only added types whose ID the administrator changed. */
-export function chosenResourceTypeIds(changes: readonly ImportResourceTypeChange[], ids: ImportResourceTypeIds): ImportResourceTypeIds {
+export function chosenResourceTypeIds(changes: readonly ImportResourceTypeChange[], ids: ResourceTypeIdChoices): ImportResourceTypeIds {
+  // `Object.fromEntries` defines own properties, so even `__proto__` is sent as a key.
   return Object.fromEntries(
     changes.flatMap((change) => {
-      const value = ids[change.id]?.trim();
+      const value = ids.get(change.id)?.trim();
       return change.editable && value && value !== change.brokerType ? [[change.id, value]] : [];
     })
   );

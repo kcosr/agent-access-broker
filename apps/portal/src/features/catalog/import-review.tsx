@@ -12,7 +12,6 @@ import type {
   ImportPreviewResult,
   ImportResourceTypeChange,
   ImportResourceTypeDeclaration,
-  ImportResourceTypeIds,
   ImportScopedMcp,
   ImportScopedMcpIssueCode,
   ImportScopedMcpWarning
@@ -32,7 +31,8 @@ import {
   resourceCheckText,
   resourceTypeIdIssues,
   typeChangeDetails,
-  typeChangeOutcome
+  typeChangeOutcome,
+  type ResourceTypeIdChoices
 } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
 import { AppLink, Badge, Banner, Button, Checkbox, Disclosure, Field, FilterInput, Input, KeyValue, Select, Time, cx, plural, toneClass, type Tone } from "../../workbench";
@@ -282,8 +282,8 @@ function CommandPreview({
   onTypeId
 }: {
   data: ImportPreviewResult;
-  typeIds: ImportResourceTypeIds;
-  issues: Record<string, string>;
+  typeIds: ResourceTypeIdChoices;
+  issues: ReadonlyMap<string, string>;
   pending: boolean;
   onTypeId: (id: string, value: string) => void;
 }) {
@@ -325,8 +325,8 @@ function CommandPreview({
             key={id}
             declared={metadata.resourceTypes.find((declared) => declared.id === id)}
             change={change}
-            typeId={typeIds[id] ?? change?.brokerType ?? ""}
-            issue={issues[id]}
+            typeId={typeIds.get(id) ?? change?.brokerType ?? ""}
+            issue={issues.get(id)}
             pending={pending}
             onTypeId={(value) => onTypeId(id, value)}
           />
@@ -350,7 +350,7 @@ const CHANGE_TONE: Record<ImportReviewRow["change"], Tone> = {
 export type ImportReviewProps = {
   data: ImportPreviewResult;
   onClose: () => void;
-  onAccept: (rows: ImportReviewRow[], confirmAffectedGrants: boolean, resourceTypeIds: ImportResourceTypeIds) => Promise<unknown>;
+  onAccept: (rows: ImportReviewRow[], confirmAffectedGrants: boolean, resourceTypeIds: ResourceTypeIdChoices) => Promise<unknown>;
   /** Offered for an empty OpenAPI draft whose operations need an API security scheme first. */
   onConfigure?: (() => void) | undefined;
   frame?: EditorFrame;
@@ -360,7 +360,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   const writable = canWriteAdmin(useSession().session);
   const caveatId = useId();
   const [rows, setRows] = useState(() => importReviewRows(data));
-  const [typeIds, setTypeIds] = useState<ImportResourceTypeIds>({});
+  const [typeIds, setTypeIds] = useState<ResourceTypeIdChoices>(() => new Map());
   const [confirmed, setConfirmed] = useState(false);
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState(false);
@@ -376,7 +376,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   const typeIssues = resourceTypeIdIssues(changes, metadata, typeIds, registeredTypes, data.service.definition.service);
   const blockedTypes = blockedTypeChanges(changes);
   const invalid = importSelectionError(data, rows);
-  const typeProblem = Object.keys(typeIssues).length
+  const typeProblem = typeIssues.size
     ? "Choose valid, unused Broker type IDs."
     : blockedTypes.length
       ? `Resolve the blocked resource type ${plural(blockedTypes.length, "change")} first.`
@@ -434,7 +434,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
           typeIds={typeIds}
           issues={typeIssues}
           pending={pending || !writable}
-          onTypeId={(id, value) => setTypeIds((current) => ({ ...current, [id]: value }))}
+          onTypeId={(id, value) => setTypeIds((current) => new Map(current).set(id, value))}
         />
       ) : null}
       <Disclosure summary="Discovery source details">

@@ -83,10 +83,14 @@ export function importSelectionError(data: ImportPreviewResult, rows: ImportRevi
   }
   return null;
 }
+/** `record[key]` only when the record itself has it: keys such as action names may name `Object.prototype` members. */
+function ownEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
 export function affectedImportGrants(data: ImportPreviewResult, rows: ImportReviewRow[]): string[] {
   return [...new Set(rows.filter((row) => row.selected && row.selectable && row.existing && row.existing.status !== "retired"
     && (row.existing.status !== "enabled" || row.readOnly !== row.existing.definition.readOnly || behaviorChanged(row.existing.definition, row.tool.definition)))
-    .flatMap((row) => data.affectedGrantsByAction[row.existing!.definition.action] ?? []))].sort();
+    .flatMap((row) => ownEntry(data.affectedGrantsByAction, row.existing!.definition.action) ?? []))].sort();
 }
 export function importVersions(data: { catalogRevision: number; service: ImportedServiceRecord }) {
   return { expectedVersion: data.service.version, expectedCatalogRevision: data.catalogRevision };

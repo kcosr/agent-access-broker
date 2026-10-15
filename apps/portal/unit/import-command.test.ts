@@ -14,9 +14,10 @@ import {
   commandResourceCheck,
   resourceCheckText,
   resourceTypeEffectsText,
-  resourceTypeIdIssues
+  resourceTypeIdIssues,
+  type ResourceTypeIdChoices
 } from "../src/lib/import-command";
-import { importReviewRows, importSelectionError, metadataOnlyAcceptance, selectedImportActions } from "../src/lib/imports";
+import { affectedImportGrants, importReviewRows, importSelectionError, metadataOnlyAcceptance, selectedImportActions } from "../src/lib/imports";
 import { creatableResourceTypes, indexResourceTypes } from "../src/lib/resource-types";
 import { ImportEditor } from "../src/features/catalog/import-editor";
 import { ImportErrorAlert, ImportReview } from "../src/features/catalog/import-review";
@@ -25,7 +26,7 @@ import { ImportTokenModal } from "../src/features/catalog/import-token-modal";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
 import { GrantActionSelector } from "../src/components/grant-actions";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
-import { COMMAND_RESOURCE_TYPES, CREATE, OAUTH_NOTICE, PROJECT, REFRESHED_RESOURCE_TYPES, SEARCH, VIEW, WHOAMI, commandAccepted, commandDefinition, commandDiscovered, commandRefreshed, stdinBinding } from "./command-import.fixture";
+import { COMMAND_RESOURCE_TYPES, CREATE, OAUTH_NOTICE, PROJECT, PROTOTYPE_NAMES, REFRESHED_RESOURCE_TYPES, SEARCH, VIEW, WHOAMI, commandAccepted, commandDefinition, commandDiscovered, commandRefreshed, prototypeNamedDiscovered, stdinBinding } from "./command-import.fixture";
 
 /** An accepted MCP or OpenAPI import with a pending refresh: no service metadata. */
 function urlImport(kind: "mcp_http" | "openapi_http"): ImportPreviewResult {
@@ -52,6 +53,11 @@ function urlImport(kind: "mcp_http" | "openapi_http"): ImportPreviewResult {
 function renderEditor(data?: ImportPreviewResult, commandImports = ["ticketing", "deploy-tools"]) {
   return renderToStaticMarkup(createElement(ImportEditor, { principal: "admin", data, availableKinds: ["command"], commandImports, authentication: [], onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
 }
+/** Typed Broker type ID choices, keyed by source type id. */
+function choices(entries: Record<string, string>): ResourceTypeIdChoices {
+  return new Map(Object.entries(entries));
+}
+
 function renderReview(data: ImportPreviewResult) {
   return renderToStaticMarkup(createElement(ImportReview, { data, onClose: () => {}, onAccept: async () => true, frame: inlineFrame }));
 }
@@ -243,25 +249,26 @@ describe("command import preview", () => {
     const changes = data.resourceTypeChanges!;
     const metadata = data.preview!.manifest.serviceMetadata;
     const registered = indexResourceTypes([...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES]);
-    const issues = (list: typeof changes, declared: typeof metadata, ids: Record<string, string>, service = "ticketing") => resourceTypeIdIssues(list, declared, ids, registered, service);
-    expect(issues(changes, metadata, {})).toEqual({});
-    expect(chosenResourceTypeIds(changes, {})).toEqual({});
-    expect(chosenResourceTypeIds(changes, { project: " ticketing_project " })).toEqual({});
-    expect(chosenResourceTypeIds(changes, { project: "tickets_project" })).toEqual({ project: "tickets_project" });
-    expect(issues(changes, metadata, { project: "Tickets" }).project).toContain("lowercase");
+    const issues = (list: typeof changes, declared: typeof metadata, ids: Record<string, string>, service = "ticketing") =>
+      resourceTypeIdIssues(list, declared, choices(ids), registered, service);
+    expect(issues(changes, metadata, {}).size).toBe(0);
+    expect(chosenResourceTypeIds(changes, choices({}))).toEqual({});
+    expect(chosenResourceTypeIds(changes, choices({ project: " ticketing_project " }))).toEqual({});
+    expect(chosenResourceTypeIds(changes, choices({ project: "tickets_project" }))).toEqual({ project: "tickets_project" });
+    expect(issues(changes, metadata, { project: "Tickets" }).get("project")).toContain("lowercase");
     // Another added type of the import may not take the same ID.
     const twice = { ...metadata!, resourceTypes: [...metadata!.resourceTypes, { ...PROJECT, id: "board", brokerType: "ticketing_board" }] };
     const both = [...changes, { ...changes[0]!, id: "board", brokerType: "ticketing_board" }];
-    expect(issues(both, twice, { board: "ticketing_project" }).board).toContain("Another type");
+    expect(issues(both, twice, { board: "ticketing_project" }).get("board")).toContain("Another type");
     // A chosen ID another owner registers is refused before acceptance;
     // this import's own registered types are not another owner's.
-    expect(issues(changes, metadata, { project: "jira_project" }).project).toContain("already registered");
-    expect(issues(changes, metadata, { project: "ticketing_queue" })).toEqual({});
-    expect(issues(changes, metadata, { project: "ticketing_queue" }, "other")).toHaveProperty("project");
+    expect(issues(changes, metadata, { project: "jira_project" }).get("project")).toContain("already registered");
+    expect(issues(changes, metadata, { project: "ticketing_queue" }).size).toBe(0);
+    expect(issues(changes, metadata, { project: "ticketing_queue" }, "other").has("project")).toBe(true);
     // A proposal another owner registered must be replaced; a new choice clears it.
     const taken = [{ ...changes[0]!, blocked: true }];
-    expect(issues(taken, metadata, {}).project).toContain("already registered");
-    expect(issues(taken, metadata, { project: "tickets_project" })).toEqual({});
+    expect(issues(taken, metadata, {}).get("project")).toContain("already registered");
+    expect(issues(taken, metadata, { project: "tickets_project" }).size).toBe(0);
     expect(blockedTypeChanges(taken)).toEqual([]);
   });
 
@@ -327,6 +334,46 @@ describe("acceptance errors", () => {
     const plain = renderToStaticMarkup(createElement(ImportErrorAlert, { error: new ApiError("select at least one discovered tool", 400, "input_invalid") }));
     expect(plain).toContain("select at least one discovered tool (input_invalid)");
     expect(plain).not.toContain("<li>");
+  });
+});
+
+describe("manifest names that are Object.prototype members", () => {
+  test("type ids render in the preview with their proposed Broker type IDs", () => {
+    const html = renderReview(prototypeNamedDiscovered());
+    for (const id of PROTOTYPE_NAMES) expect(html).toContain(`Broker type ID for ${id}`);
+    expect(html).toContain('value="ticketing_constructor"');
+    expect(html).toContain('value="ticketing_proto__"');
+    expect(html).toContain('value="ticketing_tostring"');
+    expect(html).not.toContain("Use up to 64 lowercase letters");
+    expect(html).not.toContain("already registered");
+  });
+
+  test("type ID choices and issues are keyed by own entries, and overrides are sent as own keys", () => {
+    const data = prototypeNamedDiscovered();
+    const changes = data.resourceTypeChanges!;
+    const metadata = data.preview!.manifest.serviceMetadata;
+    const registered = indexResourceTypes([...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES]);
+    expect(resourceTypeIdIssues(changes, metadata, new Map(), registered, "ticketing").size).toBe(0);
+    expect(chosenResourceTypeIds(changes, new Map())).toEqual({});
+    const typed = new Map([["constructor", "tickets_constructor"], ["__proto__", "tickets_proto"], ["toString", "Tickets"]]);
+    expect(resourceTypeIdIssues(changes, metadata, typed, registered, "ticketing")).toEqual(
+      new Map([["toString", "Use up to 64 lowercase letters, digits or underscores, starting with a letter."]])
+    );
+    const sent = chosenResourceTypeIds(changes, typed);
+    expect(Object.hasOwn(sent, "__proto__")).toBe(true);
+    expect(JSON.stringify(sent)).toBe('{"constructor":"tickets_constructor","__proto__":"tickets_proto","toString":"Tickets"}');
+  });
+
+  test("an action named constructor names only the grants the Broker lists for it", () => {
+    const data = commandRefreshed();
+    data.service.actions = data.service.actions.map((record) =>
+      record.definition.action === "issue.search" ? { ...record, definition: { ...record.definition, action: "constructor" } } : record
+    );
+    data.affectedGrantsByAction = {};
+    const rows = importReviewRows(data).map((row) => (row.existing?.definition.action === "constructor" ? { ...row, selected: true } : row));
+    expect(affectedImportGrants(data, rows)).toEqual([]);
+    data.affectedGrantsByAction = Object.fromEntries([["constructor", ["grant-search"]]]);
+    expect(affectedImportGrants(data, rows)).toEqual(["grant-search"]);
   });
 });
 

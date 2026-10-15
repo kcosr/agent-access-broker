@@ -221,3 +221,42 @@ export function commandPolicyService(data: ImportPreviewResult): PolicyServiceCa
     lookupCredentialConfigured: false
   };
 }
+
+/**
+ * Manifest names that are also `Object.prototype` members. The manifest
+ * grammar admits `constructor` as a type id and `constructor` and
+ * `toString` as attribute names; the portal must not trip on any of them.
+ */
+export const PROTOTYPE_NAMES = ["constructor", "__proto__", "toString"] as const;
+
+/** Resource types named after each prototype member, each with attributes named after them; `toString` is required. */
+export function prototypeNamedTypes(): ImportResourceTypeDeclaration[] {
+  return PROTOTYPE_NAMES.map((id) => ({
+    ...PROJECT,
+    id,
+    brokerType: `ticketing_${id.replace(/^_+/, "").toLowerCase()}`,
+    label: `Type ${id}`,
+    pluralLabel: `Types ${id}`,
+    attributes: PROTOTYPE_NAMES.map((name) => ({ name, label: `Attribute ${name}`, description: `The ${name} attribute.`, required: name === "toString", pattern: null }))
+  }));
+}
+
+/** A discovery of the default manifest plus the prototype-named types, each with an editable proposed Broker type ID. */
+export function prototypeNamedDiscovered(): ImportPreviewResult {
+  const data = commandDiscovered();
+  const types = [PROJECT, ...prototypeNamedTypes()];
+  data.preview!.manifest.serviceMetadata = commandMetadata("1.4.0", types);
+  data.resourceTypeChanges = types.map((type) => change({ id: type.id, brokerType: type.brokerType, change: "added", outcome: "applied", editable: true }));
+  return data;
+}
+
+/** The prototype-named types as `GET /v1/resource-types` lists them once accepted. */
+export const PROTOTYPE_RESOURCE_TYPES: ResourceTypeMetadata[] = prototypeNamedTypes().map((type) => ({
+  id: type.brokerType,
+  label: type.label,
+  pluralLabel: type.pluralLabel,
+  example: type.example,
+  selectors: ["exact", "all"],
+  attributes: type.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })),
+  importedService: "ticketing"
+}));

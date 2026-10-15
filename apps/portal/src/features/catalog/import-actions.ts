@@ -11,11 +11,10 @@ import type {
   ImportPreviewResult,
   ImportPurpose,
   ImportRecordResult,
-  ImportResourceTypeIds,
   ImportServiceStatus
 } from "../../import-types";
 import { importVersions, selectedImportActions, type ImportReviewRow } from "../../lib/imports";
-import { chosenResourceTypeIds, resourceTypeEffectsText } from "../../lib/import-command";
+import { chosenResourceTypeIds, resourceTypeEffectsText, type ResourceTypeIdChoices } from "../../lib/import-command";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { Session } from "../../types";
 import { useToast } from "../../workbench";
@@ -92,7 +91,7 @@ export function useImportActions() {
     }
 
     /** Accepts the selected actions; a command preview also takes the chosen Broker type IDs of its new resource types. */
-    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ImportResourceTypeIds = {}): Promise<ImportRecordResult> {
+    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ResourceTypeIdChoices): Promise<ImportRecordResult> {
       const preview = data.preview;
       if (!preview) return Promise.reject(new Error("This preview has expired. Run discovery again."));
       const selections = selectedImportActions(rows);

@@ -1,5 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
-import { COMMAND_RESOURCE_TYPES, REFRESHED_RESOURCE_TYPES, commandAccepted, commandDiscovered, commandPolicyService, commandRefreshed } from "../unit/command-import.fixture";
+import {
+  COMMAND_RESOURCE_TYPES,
+  PROTOTYPE_NAMES,
+  PROTOTYPE_RESOURCE_TYPES,
+  REFRESHED_RESOURCE_TYPES,
+  commandAccepted,
+  commandDiscovered,
+  commandPolicyService,
+  commandRefreshed,
+  prototypeNamedDiscovered
+} from "../unit/command-import.fixture";
 import { mockCommandImportApi } from "./support/command-import-api";
 import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
 
@@ -306,6 +316,42 @@ test("accepted resource types reach the resource editor without a reload", async
   await drawer.getByLabel("Resource type", { exact: true }).selectOption("ticketing_project");
   await expect(drawer.getByLabel("Owner", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { loadedOnce?: boolean }).loadedOnce)).toBe(true);
+  expect(api.errors).toEqual([]);
+});
+
+test("type ids and attribute names that are Object.prototype members are previewed, accepted and edited", async ({ page }) => {
+  const api = await mockCommandImportApi(page, prototypeNamedDiscovered());
+  api.acceptances.push({ result: commandAccepted(), resourceTypes: [...COMMAND_RESOURCE_TYPES, ...PROTOTYPE_RESOURCE_TYPES] });
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const dialog = review(page);
+  // The proposed Broker type IDs are kept: no override is sent.
+  for (const [id, brokerType] of [["constructor", "ticketing_constructor"], ["__proto__", "ticketing_proto__"], ["toString", "ticketing_tostring"]]) {
+    await expect(dialog.getByLabel(`Broker type ID for ${id}`, { exact: true })).toHaveValue(brokerType);
+  }
+  await dialog.getByRole("checkbox", { name: "Accept issue.view", exact: true }).check();
+  await dialog.getByLabel("Effects for issue.view", { exact: true }).selectOption("read");
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  await expect(page.getByText("1 action accepted", { exact: true })).toBeVisible();
+  expect(api.accepted).toHaveLength(1);
+  expect(api.accepted[0]).not.toHaveProperty("resourceTypeIds");
+
+  // Attributes named after prototype members start empty, and a required one is asked for.
+  await page.getByRole("complementary", { name: "Catalog", exact: true }).getByRole("link", { name: /^Resources/ }).click();
+  await page.getByRole("main", { name: "Resources", exact: true }).getByRole("button", { name: "Add resource", exact: true }).first().click();
+  const drawer = page.getByRole("complementary", { name: "Add resource", exact: true });
+  await drawer.getByLabel("Resource type", { exact: true }).selectOption("ticketing_constructor");
+  for (const name of PROTOTYPE_NAMES) await expect(drawer.getByLabel(`Attribute ${name}`, { exact: true })).toHaveValue("");
+  await drawer.getByLabel("Canonical identifier", { exact: true }).fill("C1");
+  await drawer.getByRole("checkbox", { name: "internal", exact: true }).check();
+  await drawer.getByRole("button", { name: "Save resource", exact: true }).click();
+  await expect(drawer).toContainText("Enter the attribute tostring.");
+  expect(api.createdResources).toEqual([]);
+  await drawer.getByLabel("Attribute toString", { exact: true }).fill("ts-value");
+  await drawer.getByLabel("Attribute __proto__", { exact: true }).fill("proto-value");
+  await drawer.getByRole("button", { name: "Save resource", exact: true }).click();
+  await expect(page.getByText("Resource added", { exact: true })).toBeVisible();
+  expect(JSON.stringify(api.createdResources[0]?.attributes)).toBe('{"__proto__":"proto-value","toString":"ts-value"}');
   expect(api.errors).toEqual([]);
 });
 

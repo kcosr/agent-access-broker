@@ -508,7 +508,11 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   const [name, setName] = useState(record?.displayName ?? "");
   const [selectedContexts, setContexts] = useState(record?.allowedExecutionContexts ?? []);
   const [enabled, setEnabled] = useState(record?.enabled ?? true);
-  const [attributes, setAttributes] = useState<Record<string, string>>({});
+  // Attribute values and issues by attribute name. Names come from the type's
+  // declaration, which an imported command supplies, so they are Map keys:
+  // a name such as `constructor` or `value` must not meet an inherited or
+  // another field's entry.
+  const [attributes, setAttributes] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [attempted, setAttempted] = useState(false);
@@ -518,14 +522,22 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   if (!type) issues.type = "Choose a resource type.";
   if (kind !== "all" && !value.trim()) issues.value = kind === "namespace" ? "Enter the namespace." : "Enter the canonical identifier.";
   if (!selectedContexts.length) issues.contexts = "Select at least one execution context.";
-  for (const field of fields) if (field.required && !configured.includes(field.name) && !attributes[field.name]) issues[field.name] = `Enter the ${field.label.toLowerCase()}.`;
+  const attributeIssues = new Map(
+    fields.filter((field) => field.required && !configured.includes(field.name) && !attributes.get(field.name)).map((field) => [field.name, `Enter the ${field.label.toLowerCase()}.`])
+  );
   const shown = attempted ? issues : {};
+  const shownAttributeIssues = attempted ? attributeIssues : new Map<string, string>();
   const close = () => (onDone ? onDone() : list.close());
 
   async function save() {
     setAttempted(true);
-    if (Object.keys(issues).length) return;
-    const privateValues = Object.fromEntries(fields.flatMap((field) => (attributes[field.name] ? [[field.name, attributes[field.name]]] : [])));
+    if (Object.keys(issues).length || attributeIssues.size) return;
+    const privateValues = Object.fromEntries(
+      fields.flatMap((field) => {
+        const entered = attributes.get(field.name);
+        return entered ? [[field.name, entered]] : [];
+      })
+    );
     const body: ResourceWriteBody = {
       resourceType: type,
       selector: kind === "all" ? { kind } : { kind, value: value.trim() },
@@ -539,7 +551,7 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
     setError(null);
     try {
       const saved = await actions.saveResource(body, record?.id);
-      setAttributes({});
+      setAttributes(new Map());
       if (record) close();
       else list.open(saved.id, "replace");
     } catch (failure) {
@@ -587,7 +599,7 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
               value={type}
               disabled={configured.length > 0 || pending}
               onChange={(event) => {
-                setAttributes({});
+                setAttributes(new Map());
                 setType(event.target.value);
                 if (kind === "namespace" && !namespaceCoverage(types, event.target.value)) setKind("exact");
               }}
@@ -606,7 +618,7 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
               value={kind}
               disabled={configured.length > 0 || pending}
               onChange={(event) => {
-                setAttributes({});
+                setAttributes(new Map());
                 setKind(event.target.value as ResourceSelector["kind"]);
               }}
             >
@@ -629,12 +641,12 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
             <ResourceAttributeField
               field={field}
               configured={configured.includes(field.name)}
-              value={attributes[field.name] ?? ""}
+              value={attributes.get(field.name) ?? ""}
               busy={pending}
-              onChange={(next) => setAttributes((current) => ({ ...current, [field.name]: next }))}
+              onChange={(next) => setAttributes((current) => new Map(current).set(field.name, next))}
               onReveal={async () => (await attempt((current) => brokerApi.revealResourceAttribute(current, record!.id, field.name))).value}
             />
-            {shown[field.name] ? <p className="wb-field-error">{shown[field.name]}</p> : null}
+            {shownAttributeIssues.has(field.name) ? <p className="wb-field-error">{shownAttributeIssues.get(field.name)}</p> : null}
           </div>
         ))}
         <FieldGroup label="Allowed execution contexts" hint={shown.contexts ? <span className="pt-error">{shown.contexts}</span> : undefined}>
