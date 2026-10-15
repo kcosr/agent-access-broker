@@ -383,6 +383,8 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
 - `cloudbees_smoke.rs`
+- `command_import_smoke.rs` imports the reference command through the real CLI
+  and broker; see [command imports](#command-imports).
 - `rate_limit_errors.rs` answers the real CLI with synthetic broker 429
   responses (`rate_limited`, `upstream_rate_limited`, `concurrency_limited`) and
   checks exit 7, the single stderr `rate limited: ` line, the unchanged stdout
@@ -1914,17 +1916,44 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 
 Run it whenever the reference command or the contract it documents changes.
 
-The portal's command import coverage uses explicit API fixtures shaped like an
-import of the reference command (`apps/portal/unit/command-import.fixture.ts`)
-and starts no Broker and no command. `unit/import-command.test.ts` covers the
-approved-name picker and credential modes, stdin bindings, "Resources checked
-by", the preview's command metadata and resource type decisions, Broker type ID
-choices, metadata-only acceptance, acceptance error lists and removed types.
-`tests/imports-command-review.spec.ts` drives the same flows in the browser:
-draft creation with and without credentials, discovery and refresh review,
-acceptance bodies, the Actions tab, the username-and-token execution credential
-and resource creation without removed types. `tests/token-page.spec.ts` covers a
-command service's resource restrictions on the token page.
+`crates/agent-access/tests/command_import_smoke.rs`, part of `cargo test`,
+approves the reference command in a real broker and drives the shipped CLI:
+`describe` discovery and acceptance, the `username_token` service credential,
+resources of the imported type, grants in both credential modes, a personal
+credential verified by the command's `verify`, Broker-checked and
+command-checked reads and writes with their receipts, a denial before any
+process starts, the caller block, the absence of supplied secrets from every
+response, and the HTTP MCP tool listing. Both it and the portal's
+real-service spec run the command through `python3`; a missing interpreter
+fails them rather than skipping them.
+
+```bash
+cargo test --locked -p agent-access --test command_import_smoke
+```
+
+The portal's `tests/imports-command.spec.ts` runs the same reference command
+under a real Broker in the browser: importing it by its approved name, the
+preview's command metadata and "Resources checked by", the service credential
+with its username, the grant editor, the personal `username-token`
+credential form and its verification, HTTP invocation in both authorization
+modes with write receipts, the HTTP MCP listing, the Actions tab and audit
+records, and a refresh after the command is upgraded (reloaded with its `v2`
+manifest) with a resource type change and confirmed grants.
+
+The rest of the portal's command import coverage uses explicit API fixtures
+shaped like an import of the reference command
+(`apps/portal/unit/command-import.fixture.ts`) and starts no Broker and no
+command. `unit/import-command.test.ts` covers the approved-name picker and
+credential modes, stdin bindings, "Resources checked by" in the review and the
+grant editor, the preview's command metadata and resource type decisions,
+Broker type ID choices, metadata-only acceptance, the structured lists of a
+refused acceptance (`target.affectedGrants` and `target.resources`) and removed
+types. `tests/imports-command-review.spec.ts` drives the same flows in the
+browser: draft creation with and without credentials, discovery and refresh
+review, acceptance bodies and refusals, the Actions tab, the
+username-and-token execution credential and resource creation without removed
+types. `tests/token-page.spec.ts` covers a command service's resource
+restrictions on the token page.
 
 ### Local password method transitions
 

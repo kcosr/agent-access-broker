@@ -227,6 +227,10 @@ broker against a stubbed controller and drives typed and JSON-send downloads,
 stdio MCP output, bounded reads, build triggers, redirect rejection,
 and audit checks through the real `agent-access` binary.
 
+The command import smoke (`command_import_smoke.rs`) is included in `cargo
+test`; it imports the reference command through the real `agent-access`
+binary and needs `python3`, whose absence fails it.
+
 ## Layout
 
 - `crates/agent-access-provider`: the backend contract: service descriptors,
@@ -338,7 +342,8 @@ and audit checks through the real `agent-access` binary.
   workspace modules. Its library exports only those two functions.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
   `tests/fixtures/command-imports/ticketing.py` is the reference import
-  command, in Python's standard library only; run
+  command, in Python's standard library only, which `command_import_smoke.rs`
+  and the portal's `imports-command.spec.ts` import; run
   `python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py`
   when changing it, and keep it in step with `docs/command-imports.md`.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
