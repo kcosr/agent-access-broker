@@ -3,6 +3,7 @@
 //! assembly selects. This is Broker implementation, not a supported
 //! extension interface; only the shipped import adapters implement it.
 mod adapter;
+mod authority;
 mod command;
 mod definition;
 mod metadata;
@@ -11,6 +12,7 @@ mod schema;
 mod type_changes;
 
 pub use adapter::*;
+pub use authority::*;
 pub use command::*;
 pub use definition::*;
 pub use metadata::*;

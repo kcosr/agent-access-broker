@@ -1,7 +1,7 @@
 //! Protocol-specific implementation seam for managed imported services.
 use super::{
-    CommandProvider, ImportEndpointForm, ImportedActionDefinition, ImportedDiscoveryCredential,
-    ImportedServiceDefinition, ImportedServiceMetadata,
+    CommandProvider, ImportEndpointForm, ImportedActionAuthority, ImportedActionDefinition,
+    ImportedDiscoveryCredential, ImportedServiceDefinition, ImportedServiceMetadata,
 };
 use crate::CommandImportConfig;
 use agent_access_provider::{
@@ -158,6 +158,17 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// The resources an accepted action names and the credential modes it
+    /// supports, read offline from its definition; core maps them onto the
+    /// action's descriptor. The default declares neither: the action is
+    /// action-only and uses every bound mode. An error makes the action
+    /// authorize nothing.
+    fn action_authority(
+        &self,
+        _action: &ImportedActionDefinition,
+    ) -> Result<ImportedActionAuthority, String> {
+        Ok(ImportedActionAuthority::default())
+    }
     /// Exact accepted source name, derived offline without applying the narrower
     /// scoped MCP profile. Must succeed for every action accepted by validation.
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String>;

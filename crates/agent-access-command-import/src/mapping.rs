@@ -3,9 +3,10 @@
 //! metadata with Broker type IDs, and the OAuth notice.
 use crate::manifest::{ActionDeclaration, Manifest, ResourceDeclaration};
 use agent_access_core::imports::{
-    BoundedImportSchema, COMMAND_FORMAT, ImportedActionDefinition, ImportedCredentialMode,
-    ImportedDiscoveredTool, ImportedDiscovery, ImportedResourceTypeDeclaration,
-    ImportedServiceDefinition, ImportedServiceMetadata, credential_admits_bindings,
+    BoundedImportSchema, COMMAND_FORMAT, ImportedActionAuthority, ImportedActionDefinition,
+    ImportedActionResources, ImportedCredentialMode, ImportedDiscoveredTool, ImportedDiscovery,
+    ImportedResourceTypeDeclaration, ImportedServiceDefinition, ImportedServiceMetadata,
+    credential_admits_bindings,
 };
 use serde_json::{Map, Value, json};
 
@@ -281,15 +282,17 @@ fn supported(
     CompiledAction::new(definition).map(|_| ())
 }
 
-/// An accepted action as this adapter executes it: its manifest name and
-/// compiled schemas.
+/// An accepted action as this adapter executes it: its compiled schemas and
+/// its resource and credential declaration.
 pub(crate) struct CompiledAction {
     pub read_only: bool,
+    pub input: BoundedImportSchema,
     #[expect(
         dead_code,
         reason = "the response contract validates results against it"
     )]
     pub output: Option<BoundedImportSchema>,
+    pub authority: ImportedActionAuthority,
 }
 
 impl CompiledAction {
@@ -310,49 +313,31 @@ impl CompiledAction {
         {
             return Err("annotations.command has unsupported fields".into());
         }
-        if let Some(resources) = command.get("resources") {
-            let resources = resources
-                .as_object()
-                .ok_or("annotations.command.resources must be an object")?;
-            let declaration = ResourceDeclaration {
-                resource_type: resources
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .ok_or("annotations.command.resources.type is required")?
-                    .to_owned(),
-                inputs: match resources.get("inputs") {
-                    None => Vec::new(),
-                    Some(inputs) => inputs
-                        .as_array()
-                        .filter(|inputs| (1..=4).contains(&inputs.len()))
-                        .ok_or("annotations.command.resources.inputs is invalid")?
-                        .iter()
-                        .map(|input| input.as_str().map(str::to_owned))
-                        .collect::<Option<Vec<_>>>()
-                        .ok_or("annotations.command.resources.inputs is invalid")?,
-                },
-            };
-            if resources.keys().any(|key| key != "type" && key != "inputs") {
-                return Err("annotations.command.resources has unsupported fields".into());
-            }
-            for pointer in &declaration.inputs {
-                crate::manifest::resource_input(&definition.input_schema, pointer)?;
-            }
-        }
-        if let Some(modes) = command.get("credentialModes")
-            && !modes.as_array().is_some_and(|modes| {
-                !modes.is_empty()
-                    && modes
-                        .iter()
-                        .all(|mode| matches!(mode.as_str(), Some("service" | "per_user")))
+        let resources = command
+            .get("resources")
+            .map(|resources| resource_declaration(resources, &definition.input_schema))
+            .transpose()?;
+        let credential_modes = command
+            .get("credentialModes")
+            .map(|modes| {
+                modes
+                    .as_array()
+                    .filter(|modes| !modes.is_empty())
+                    .and_then(|modes| {
+                        modes
+                            .iter()
+                            .map(|mode| {
+                                serde_json::from_value::<ImportedCredentialMode>(mode.clone()).ok()
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .ok_or("annotations.command.credentialModes is invalid")
             })
-        {
-            return Err("annotations.command.credentialModes is invalid".into());
-        }
+            .transpose()?;
         if definition.input_schema.get("type").and_then(Value::as_str) != Some("object") {
             return Err("command action input schema must describe an object".into());
         }
-        BoundedImportSchema::compile(&definition.input_schema)?;
+        let input = BoundedImportSchema::compile(&definition.input_schema)?;
         let output = definition
             .output_schema
             .as_ref()
@@ -360,9 +345,54 @@ impl CompiledAction {
             .transpose()?;
         Ok(Self {
             read_only: definition.read_only,
+            input,
             output,
+            authority: ImportedActionAuthority {
+                resources: resources.map(|declaration| ImportedActionResources {
+                    resource_type: declaration.resource_type,
+                    inputs: declaration.inputs,
+                }),
+                credential_modes,
+            },
         })
     }
+}
+
+/// `annotations.command.resources`: a declared type and, for a
+/// Broker-enforced action, 1–4 pointers to required string or string-array
+/// inputs.
+fn resource_declaration(
+    resources: &Value,
+    input_schema: &Value,
+) -> Result<ResourceDeclaration, String> {
+    let resources = resources
+        .as_object()
+        .ok_or("annotations.command.resources must be an object")?;
+    if resources.keys().any(|key| key != "type" && key != "inputs") {
+        return Err("annotations.command.resources has unsupported fields".into());
+    }
+    let declaration = ResourceDeclaration {
+        resource_type: resources
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or("annotations.command.resources.type is required")?
+            .to_owned(),
+        inputs: match resources.get("inputs") {
+            None => Vec::new(),
+            Some(inputs) => inputs
+                .as_array()
+                .filter(|inputs| (1..=4).contains(&inputs.len()))
+                .ok_or("annotations.command.resources.inputs is invalid")?
+                .iter()
+                .map(|input| input.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or("annotations.command.resources.inputs is invalid")?,
+        },
+    };
+    for pointer in &declaration.inputs {
+        crate::manifest::resource_input(input_schema, pointer)?;
+    }
+    Ok(declaration)
 }
 
 /// The manifest name of a `{"name": ...}` source.
@@ -448,9 +478,38 @@ mod tests {
         );
         assert_eq!(metadata.resource_types[0].broker_type, "ticketing_project");
         assert_eq!(metadata.resource_types[0].attributes.len(), 2);
-        for tool in &discovery.tools {
-            CompiledAction::new(&tool.definition).unwrap();
-        }
+        // The view names its project in an input, so the Broker checks it;
+        // the search leaves its project type to the command.
+        let declared = discovery
+            .tools
+            .iter()
+            .map(|tool| CompiledAction::new(&tool.definition).unwrap().authority)
+            .collect::<Vec<_>>();
+        let both = Some(vec![
+            ImportedCredentialMode::Service,
+            ImportedCredentialMode::PerUser,
+        ]);
+        assert_eq!(
+            declared,
+            [
+                ImportedActionAuthority {
+                    resources: Some(ImportedActionResources {
+                        resource_type: "project".into(),
+                        inputs: vec!["/project".into()],
+                    }),
+                    credential_modes: both.clone(),
+                },
+                ImportedActionAuthority {
+                    resources: Some(ImportedActionResources {
+                        resource_type: "project".into(),
+                        inputs: Vec::new(),
+                    }),
+                    credential_modes: both,
+                },
+            ]
+        );
+        assert!(declared[0].resources.as_ref().unwrap().broker_enforced());
+        assert!(!declared[1].resources.as_ref().unwrap().broker_enforced());
         // An accepted type keeps its Broker type ID across refreshes.
         let mut accepted = metadata.clone();
         accepted.resource_types[0].broker_type = "tickets".into();
