@@ -334,7 +334,11 @@ it is a development fixture. OAuth dialect and import adapter registrations
 carry the same package metadata. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
 supplies the resource type registry (the broker's own `git_repository` type
-plus every backend's types, in registration order). Development fixtures are
+plus every backend's types, in registration order). Each runtime generation
+builds its effective registry from it, recording which backend, or the broker,
+owns each type; the generation publishes that registry together with its service
+descriptors and policy snapshot, and a type's owner validates the private
+attribute values of its resources. Development fixtures are
 ordinary registrations: the binary selects the `oauth_stub` records backend
 last, so its `oauth_collection` type lists last, and selects the `stub` OAuth
 dialect alongside the production dialects. An empty registry has neither.

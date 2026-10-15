@@ -437,6 +437,7 @@ fn private_attribute_type_metadata_is_generic_and_consumers_must_own_the_type() 
     crate::validate_private_resource_consumers(
         runtime.config(),
         &BTreeMap::from([("other".into(), Arc::new(foreign))]),
+        &runtime.resource_types,
         &mut errors,
     );
     assert!(

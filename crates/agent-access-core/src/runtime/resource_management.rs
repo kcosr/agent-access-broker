@@ -14,33 +14,15 @@ impl BrokerRuntime {
         attributes: &ResourceAttributes,
         require_all: bool,
     ) -> Result<(), ManagedStoreError> {
-        let Some(descriptor) = self.resource_types.get(resource_type) else {
-            // Leave metadata-only requests to the catalog's ordinary selector
-            // validation so it retains the resource ID in its diagnostics.
-            return if attributes.is_empty() {
-                Ok(())
-            } else {
-                Err(ManagedStoreError::InputInvalid(
-                    "unknown resource type".into(),
-                ))
-            };
-        };
-        descriptor
-            .validate_attributes(selector, attributes, require_all)
-            .map_err(ManagedStoreError::InputInvalid)?;
-        if !attributes.is_empty() {
-            let registry = self.config.providers.registry();
-            let backend = registry
-                .resource_owner(resource_type)
-                .and_then(|owner| self.config.providers.get_kind(owner))
-                .ok_or_else(|| {
-                    ManagedStoreError::InputInvalid("resource backend must be configured".into())
-                })?;
-            backend
-                .validate_resource_attributes(resource_type, attributes)
-                .map_err(ManagedStoreError::InputInvalid)?;
-        }
-        Ok(())
+        self.resource_types
+            .validate_attributes(
+                &self.config.providers,
+                resource_type,
+                selector,
+                attributes,
+                require_all,
+            )
+            .map_err(ManagedStoreError::InputInvalid)
     }
 
     pub fn create_managed_resource(

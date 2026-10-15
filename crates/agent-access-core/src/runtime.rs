@@ -34,6 +34,7 @@ pub use availability::{
 pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
+mod resource_types;
 use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
@@ -76,6 +77,7 @@ use http::HeaderMap;
 pub use resource_access::{
     EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, ResourceGroupOption,
 };
+pub(crate) use resource_types::EffectiveResourceTypes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1631,7 +1633,8 @@ pub struct BrokerRuntime {
     services: Arc<BTreeMap<String, Arc<ServiceDescriptor>>>,
     /// `[limits.invocations]` resolved for this generation.
     invocation_limits: Arc<crate::ConfiguredInvocationLimits>,
-    resource_types: Arc<ResourceTypeRegistry>,
+    /// This generation's resource types and their owners.
+    resource_types: Arc<EffectiveResourceTypes>,
     policy_snapshot: Arc<ArcSwap<PolicySnapshot>>,
     policy_mutation_lock: Arc<Mutex<()>>,
     identity_sources: Arc<Vec<IdentitySourceResolver>>,
@@ -2067,7 +2070,7 @@ impl BrokerRuntime {
             previous.is_none(),
         )?;
         validate_managed_policy_subjects(&config, managed_store.as_ref())?;
-        let resource_types = config.providers.registry().resource_types().clone();
+        let resource_types = EffectiveResourceTypes::composition(config.providers.registry());
         let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         let imported_catalog = managed_store
             .as_ref()
@@ -2120,7 +2123,7 @@ impl BrokerRuntime {
             &imports::retention_config(&config, &imported_catalog),
             managed_store.as_ref(),
             &services,
-            &resource_types,
+            resource_types.registry(),
         )?));
         let audit = AuditSink::new(
             config.audit.as_ref(),
@@ -2669,18 +2672,20 @@ impl BrokerRuntime {
         }
         // Type-specific selector checks mirror the store's structural catalog
         // checks, so an invalid resource is an input error, not a policy issue.
-        let resource_errors =
-            crate::validate_resource_definition_types(&self.resource_types, &catalog.resources);
+        let resource_errors = crate::validate_resource_definition_types(
+            self.resource_types.registry(),
+            &catalog.resources,
+        );
         if !resource_errors.is_empty() {
             return Err(ManagedStoreError::InputInvalid(resource_errors.join("; ")));
         }
-        resource_management::validate_attribute_bindings(&self.resource_types, catalog)?;
+        resource_management::validate_attribute_bindings(self.resource_types.registry(), catalog)?;
         self.validate_new_imported_grants(grants, &baseline.1)?;
         let issues = managed_policy_validation_issues(
             &imports::retention_config(&self.config, &self.imported_catalog),
             subjects,
             &self.services,
-            &self.resource_types,
+            self.resource_types.registry(),
             grants,
             catalog,
         );
@@ -3441,11 +3446,12 @@ impl BrokerRuntime {
 
     /// Resource types this broker understands, for catalogs and clients.
     pub fn resource_type_metadata(&self) -> Vec<agent_access_provider::ResourceTypeMetadata> {
-        self.resource_types.metadata()
+        self.resource_types.registry().metadata()
     }
 
+    /// This generation's resource type registry.
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
-        &self.resource_types
+        self.resource_types.registry()
     }
 
     pub fn service_descriptors(&self) -> impl Iterator<Item = &Arc<ServiceDescriptor>> {
@@ -6680,7 +6686,7 @@ pub(crate) fn imported_service_collision(
 fn build_service_descriptors(
     config: &BrokerConfig,
     providers: &BTreeMap<String, ServiceProvider>,
-    resource_types: &ResourceTypeRegistry,
+    resource_types: &EffectiveResourceTypes,
 ) -> Result<BTreeMap<String, Arc<ServiceDescriptor>>, RuntimeError> {
     let mut services = BTreeMap::new();
     let mut errors = Vec::new();
@@ -6699,9 +6705,9 @@ fn build_service_descriptors(
         }
     }
     for descriptor in services.values() {
-        errors.extend(descriptor.validate_resource_types(resource_types));
+        errors.extend(descriptor.validate_resource_types(resource_types.registry()));
     }
-    crate::validate_private_resource_consumers(config, &services, &mut errors);
+    crate::validate_private_resource_consumers(config, &services, resource_types, &mut errors);
     if errors.is_empty() {
         Ok(services)
     } else {

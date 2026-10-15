@@ -1744,10 +1744,13 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_browser_auth(config, &mut errors);
     validate_portal(config, &mut errors);
     mcp_config::validate(config, &mut errors);
-    let resource_types = config.providers.registry().resource_types();
+    // Imported types live in the managed store, and configuration cannot
+    // reference them, so offline validation sees the composition's types.
+    let effective_types = runtime::EffectiveResourceTypes::composition(config.providers.registry());
+    let resource_types = effective_types.registry();
     let services = configured_service_descriptors(config);
     validate_service_descriptors(&services, resource_types, &mut errors);
-    validate_private_resource_consumers(config, &services, &mut errors);
+    validate_private_resource_consumers(config, &services, &effective_types, &mut errors);
     validate_credentials(config, &services, &mut errors);
     validate_backends(config, &mut errors);
     validate_gateways(config, &mut errors);
@@ -4391,9 +4394,9 @@ fn validate_service_descriptors(
 fn validate_private_resource_consumers(
     config: &BrokerConfig,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    resource_types: &runtime::EffectiveResourceTypes,
     errors: &mut Vec<String>,
 ) {
-    let registry = config.providers.registry();
     for service in services.values() {
         for action in service
             .actions
@@ -4406,9 +4409,8 @@ fn validate_private_resource_consumers(
                 .and_then(|scope| service.resource_scopes.get(scope))
                 .map(|scope| &scope.resource_type);
             if !resource_type.is_some_and(|resource_type| {
-                registry.resource_owner(resource_type) == Some(service.service.as_str())
-                    && registry
-                        .resource_types()
+                resource_types.defining_service(resource_type) == Some(service.service.as_str())
+                    && resource_types
                         .get(resource_type)
                         .is_some_and(|ty| !ty.attributes().is_empty())
             }) {
@@ -4427,8 +4429,7 @@ fn validate_private_resource_consumers(
     }
     if config.policy.authority == "toml"
         && config.policy.resources.iter().any(|resource| {
-            registry
-                .resource_types()
+            resource_types
                 .get(&resource.resource_type)
                 .is_some_and(|ty| !ty.attributes().is_empty())
                 && matches!(resource.selector, ResourceSelector::Exact { .. })
