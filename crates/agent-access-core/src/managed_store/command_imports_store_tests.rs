@@ -507,3 +507,63 @@ fn accepted_metadata_is_written_with_acceptance_and_its_credential_is_fixed() {
         Err(ManagedStoreError::SchemaInvalid(_))
     ));
 }
+
+#[test]
+fn updates_keep_credential_modes_within_the_accepted_declaration() {
+    let update = |store: &ManagedStore, modes: &[ImportedCredentialMode]| {
+        let catalog = store.imported_catalog().unwrap();
+        let mut request = update(&catalog);
+        request.definition = command_definition(modes);
+        request.status = catalog.services[0].status;
+        store.update_imported_service(request, accept)
+    };
+    let mut service_only = command_metadata(Some(ImportedCredentialKind::Token));
+    service_only.credential.as_mut().unwrap().modes = vec![ImportedCredentialMode::Service];
+    let (_temp, _config, store, _ring) = fixture();
+    store
+        .create_imported_service(
+            command_definition(&[ImportedCredentialMode::Service]),
+            "admin",
+            accept,
+        )
+        .unwrap();
+    accept_command(&store, Some(service_only)).unwrap();
+    assert!(matches!(
+        update(&store, &[ImportedCredentialMode::Service, ImportedCredentialMode::PerUser]),
+        Err(ManagedStoreError::InputInvalid(message)) if message.contains("only the credential modes service")
+    ));
+    update(&store, &[ImportedCredentialMode::Service]).unwrap();
+
+    // A command without a credential takes no credential modes at all.
+    let (_temp, _config, store, _ring) = fixture();
+    store
+        .create_imported_service(command_definition(&[]), "admin", accept)
+        .unwrap();
+    accept_command(&store, Some(command_metadata(None))).unwrap();
+    assert!(matches!(
+        update(&store, &[ImportedCredentialMode::Service]),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    let (_temp, _config, store, _ring) = fixture();
+    store
+        .create_imported_service(
+            command_definition(&[ImportedCredentialMode::Service]),
+            "admin",
+            accept,
+        )
+        .unwrap();
+    assert!(matches!(
+        accept_command(&store, Some(command_metadata(None))),
+        Err(ManagedStoreError::InputInvalid(message)) if message.contains("declares no credential")
+    ));
+
+    // Acceptance checks the declaration it stores.
+    let (_temp, _config, store, _ring) = fixture();
+    store
+        .create_imported_service(command_definition(&[]), "admin", accept)
+        .unwrap();
+    assert!(matches!(
+        accept_command(&store, Some(command_metadata(Some(ImportedCredentialKind::Token)))),
+        Err(ManagedStoreError::InputInvalid(message)) if message.contains("declares a credential")
+    ));
+}

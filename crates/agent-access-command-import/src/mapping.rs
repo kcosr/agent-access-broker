@@ -5,7 +5,7 @@ use crate::manifest::{ActionDeclaration, Manifest, ResourceDeclaration};
 use agent_access_core::imports::{
     BoundedImportSchema, COMMAND_FORMAT, ImportedActionDefinition, ImportedCredentialMode,
     ImportedDiscoveredTool, ImportedDiscovery, ImportedResourceTypeDeclaration,
-    ImportedServiceDefinition, ImportedServiceMetadata,
+    ImportedServiceDefinition, ImportedServiceMetadata, credential_admits_bindings,
 };
 use serde_json::{Map, Value, json};
 
@@ -102,30 +102,7 @@ pub(crate) fn check_credential(
                 .into(),
         );
     }
-    let bound = definition
-        .execution_bindings
-        .iter()
-        .map(|binding| binding.owner_mode)
-        .collect::<Vec<_>>();
-    match &manifest.credential {
-        None if bound.is_empty() => Ok(()),
-        None => {
-            Err("the command declares no credential; remove the import's credential modes".into())
-        }
-        Some(_) if bound.is_empty() => {
-            Err("the command declares a credential; choose the import's credential modes".into())
-        }
-        Some(credential) if bound.iter().all(|mode| credential.modes.contains(mode)) => Ok(()),
-        Some(credential) => Err(format!(
-            "the command supports only the credential modes {}",
-            credential
-                .modes
-                .iter()
-                .map(|mode| mode.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    credential_admits_bindings(manifest.credential.as_ref(), definition)
 }
 
 /// The discovered tools and metadata of a validated manifest.

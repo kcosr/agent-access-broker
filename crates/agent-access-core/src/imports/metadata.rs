@@ -8,7 +8,7 @@
 //! column, in the same transaction as the accepted actions, and the record
 //! carries it as [`crate::ImportedServiceRecord::accepted_metadata`]. MCP and
 //! OpenAPI imports record none.
-use super::ImportedCredentialMode;
+use super::{ImportedCredentialMode, ImportedServiceDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -139,7 +139,49 @@ fn identifier(value: &str, max: usize) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
 }
 
+/// Whether `definition`'s execution bindings fit a declared credential:
+/// none for a command without a credential, and at least one, each of a
+/// declared mode, for a command with one. Stored slots, personal credentials
+/// and grants depend on that shape.
+pub fn credential_admits_bindings(
+    credential: Option<&ImportedCredentialDeclaration>,
+    definition: &ImportedServiceDefinition,
+) -> Result<(), String> {
+    let bound = &definition.execution_bindings;
+    match credential {
+        None if bound.is_empty() => Ok(()),
+        None => {
+            Err("the command declares no credential; remove the import's credential modes".into())
+        }
+        Some(_) if bound.is_empty() => {
+            Err("the command declares a credential; choose the import's credential modes".into())
+        }
+        Some(credential)
+            if bound
+                .iter()
+                .all(|binding| credential.modes.contains(&binding.owner_mode)) =>
+        {
+            Ok(())
+        }
+        Some(credential) => Err(format!(
+            "the command supports only the credential modes {}",
+            credential
+                .modes
+                .iter()
+                .map(|mode| mode.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 impl ImportedServiceMetadata {
+    /// Whether `definition`'s bindings fit this accepted credential
+    /// declaration; see [`credential_admits_bindings`].
+    pub fn admits_bindings(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
+        credential_admits_bindings(self.credential.as_ref(), definition)
+    }
+
     /// Structural bounds the store enforces before writing or after reading
     /// the column. Adapters own the semantic rules of their manifests.
     pub fn validate(&self) -> Result<(), String> {

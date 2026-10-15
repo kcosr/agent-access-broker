@@ -694,3 +694,60 @@ async fn refresh_keeps_grants_and_reacceptance_requires_confirming_them() {
     drop(app);
     broker.stop().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn credential_modes_stay_within_the_accepted_declaration() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service"]},
+        "actions": [
+            {"name": "issue.view", "description": "Show one issue.", "readOnly": true,
+             "inputSchema": {"type": "object"}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let (status, created) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(definition("tickets", "tickets", &["service"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let accepted = discover_and_accept(&app, &token, "tickets", &created["result"]).await;
+    // The command declares only service mode; a personal binding is refused.
+    let mut update = versions(&accepted);
+    update["definition"] = definition("tickets", "tickets", &["service", "per_user"]);
+    update["confirmAffectedGrants"] = json!(true);
+    let (status, refused) = request(
+        &app,
+        &token,
+        Method::PATCH,
+        "/v1/admin/imports/tickets",
+        Some(update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused.to_string().contains("credential modes"),
+        "{refused}"
+    );
+    let current = request(&app, &token, Method::GET, "/v1/admin/imports/tickets", None)
+        .await
+        .1;
+    assert_eq!(
+        current["result"]["service"]["definition"]["executionBindings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(app);
+    broker.stop().await;
+}

@@ -324,6 +324,21 @@ impl ManagedStore {
             ));
         }
         validate_retained_actions(&request.actions, &old.actions)?;
+        // The accepted credential declaration is fixed once stored, and it
+        // bounds the import's credential modes after every update, including
+        // the acceptance that stores it.
+        let metadata = match &request.accepted_preview {
+            Some(acceptance) => {
+                check_accepted_metadata(&old, acceptance.accepted_metadata.as_ref())?;
+                acceptance.accepted_metadata.as_ref()
+            }
+            None => old.accepted_metadata.as_ref(),
+        };
+        if let Some(metadata) = metadata {
+            metadata
+                .admits_bindings(&request.definition)
+                .map_err(input_invalid)?;
+        }
         // Retire old mappings before inserting replacements, regardless of the
         // caller's order, so the live-source uniqueness constraint stays valid.
         for action in request
@@ -356,7 +371,6 @@ impl ManagedStore {
         if let Some(acceptance) = &request.accepted_preview {
             write_accepted_metadata(
                 &tx,
-                &old,
                 &request.definition.service,
                 acceptance.accepted_metadata.as_ref(),
             )?;
@@ -750,13 +764,11 @@ fn finish<T>(
     tx.commit().map_err(sql_unavailable)?;
     Ok(ImportedMutationResult { catalog, value })
 }
-/// Stores the metadata accepted with the actions. The execution credential's
-/// declaration is fixed once stored: stored slots and personal credentials
-/// assume its kind, and grants its modes.
-fn write_accepted_metadata(
-    conn: &Connection,
+/// Checks the metadata an acceptance stores against the accepted record. The
+/// execution credential's declaration is fixed once stored: stored slots and
+/// personal credentials assume its kind, and grants its modes.
+fn check_accepted_metadata(
     old: &ImportedServiceRecord,
-    service: &str,
     metadata: Option<&ImportedServiceMetadata>,
 ) -> Result<(), ManagedStoreError> {
     if let (Some(previous), Some(metadata)) = (&old.accepted_metadata, metadata)
@@ -769,6 +781,15 @@ fn write_accepted_metadata(
     if old.accepted_metadata.is_some() && metadata.is_none() {
         return Err(input_invalid("accepted import metadata cannot be removed"));
     }
+    Ok(())
+}
+/// Stores the metadata accepted with the actions, already checked by
+/// [`check_accepted_metadata`].
+fn write_accepted_metadata(
+    conn: &Connection,
+    service: &str,
+    metadata: Option<&ImportedServiceMetadata>,
+) -> Result<(), ManagedStoreError> {
     let json = metadata
         .map(|metadata| {
             metadata.validate().map_err(input_invalid)?;
