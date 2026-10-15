@@ -2124,10 +2124,11 @@ shutdown deadline. Disconnected operations
 remain tracked and keep permits until finalization; shutdown does not overlook
 them merely because their response connection disappeared. Command-import
 processes can outlive their operation, so after operation draining the shared
-command registry closes: calls that have not spawned fail before dispatch, every
-live process supervisor is asked to kill its process group, and shutdown waits
-within the remaining budget until each has reaped its process and returned its
-concurrency permit, reporting those that have not. The audit writer shuts
+command registry closes: a call that reaches its command afterwards fails
+without starting a process, every live process supervisor is asked to kill its
+process group and leader, and shutdown waits within the remaining budget (at
+least 100 ms) until each has reaped its process and returned its concurrency
+permit, reporting those that have not. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.
