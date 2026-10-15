@@ -56,5 +56,6 @@ agent-access-provider = { path = "../agent-access-provider", features = ["test-s
 filetime.workspace = true
 rusqlite = { workspace = true, features = ["backup", "trace"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true
 wiremock.workspace = true

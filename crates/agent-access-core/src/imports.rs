@@ -1,10 +1,12 @@
 //! The internal import contract: imported-service definitions, bounded
-//! schemas, the protocol adapter seam and the opaque registration an
-//! assembly selects. This is Broker implementation, not a supported
-//! extension interface; only the shipped import adapters implement it.
+//! schemas, the protocol adapter seam, the opaque registration an assembly
+//! selects, and the command-import process budgets shared across runtime
+//! generations. This is Broker implementation, not a supported extension
+//! interface; only the shipped import adapters implement it.
 mod adapter;
 mod authority;
 mod command;
+mod command_registry;
 mod definition;
 mod metadata;
 mod registration;
@@ -14,6 +16,10 @@ mod type_changes;
 pub use adapter::*;
 pub use authority::*;
 pub use command::*;
+pub use command_registry::{
+    CommandAcquireError, CommandPermit, CommandProcessControl, CommandRegistry,
+    CommandRegistryClosed, LiveCommandProcess,
+};
 pub use definition::*;
 pub use metadata::*;
 pub use registration::{

@@ -1634,6 +1634,9 @@ pub struct BrokerRuntime {
     imported_catalog: Arc<crate::ImportedCatalog>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
+    /// Command-import budgets and live process supervisors, carried from
+    /// each generation to the next, as import dispatch fences are.
+    command_registry: crate::imports::CommandRegistry,
     scoped_mcp: Arc<BTreeMap<String, crate::mcp::ScopedMcpReadiness>>,
     /// Validated descriptors for providers and gateways, fixed per generation.
     services: Arc<BTreeMap<String, Arc<ServiceDescriptor>>>,
@@ -2180,6 +2183,9 @@ impl BrokerRuntime {
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
             import_dispatch: Arc::new(BTreeMap::new()),
+            command_registry: previous
+                .map(|previous| previous.command_registry.clone())
+                .unwrap_or_default(),
             scoped_mcp: Arc::new(BTreeMap::new()),
             invocation_limits,
             resource_types: Arc::new(resource_types),
@@ -2311,6 +2317,12 @@ impl BrokerRuntime {
 
     pub fn audit_registry(&self) -> Arc<AuditRuntimeRegistry> {
         Arc::clone(&self.audit_registry)
+    }
+
+    /// The command-import budgets and live process supervisors this
+    /// generation shares with every generation of the same Broker.
+    pub fn command_registry(&self) -> &crate::imports::CommandRegistry {
+        &self.command_registry
     }
 
     pub fn cancel_terminal_audits(&self) -> usize {
