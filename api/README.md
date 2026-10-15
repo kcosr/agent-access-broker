@@ -80,6 +80,11 @@ contracts section of each inventory shows the result per type.
   the presentation's `ActionPresentation` and `EmbeddedBody`) have private
   fields, are non-exhaustive and are declared with `const` constructors and
   builders; their data is read through `const` accessors.
+  `ResourceTypeDescriptor` and `ResourceAttributeDescriptor` also have
+  non-`const` `declared` constructors for types declared at runtime, whose
+  owned data the same accessors return, and a `ResourceTypeRegistry` holds
+  either form as a shared descriptor. `ResourcePattern`, a declared type's
+  value grammar, has private fields and a fallible constructor.
 - Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`,
   `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`,
   `CredentialPlacement`) and lent credential material (`DelegatedAccess`,

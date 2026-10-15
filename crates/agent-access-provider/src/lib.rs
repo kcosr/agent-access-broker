@@ -281,7 +281,7 @@ pub use reason::{Decision, HookPhase, InvalidReasonCodeId, ReasonCode, ReasonCod
 pub use resource::{
     GIT_REPOSITORY_RESOURCE, NamespaceSelectorDescriptor, NamespaceSelectorMetadata,
     ResourceActionInputs, ResourceAttributeDescriptor, ResourceAttributeMetadata,
-    ResourceAttributes, ResourceSelector, ResourceType, ResourceTypeDescriptor,
+    ResourceAttributes, ResourcePattern, ResourceSelector, ResourceType, ResourceTypeDescriptor,
     ResourceTypeMetadata, ResourceTypeRegistry, is_canonical_repository_path,
     is_repository_selector_path,
 };

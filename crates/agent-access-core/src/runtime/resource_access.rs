@@ -774,7 +774,7 @@ mod tests {
             execution_contexts: vec![ExecutionContext::new("default").unwrap()],
             resource_scope: Some(ActionResourceScope {
                 scope: "repository".to_string(),
-                resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
+                resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
             }),
             boundary,
         }
@@ -926,7 +926,7 @@ mod tests {
             for (index, candidate) in candidates.iter_mut().enumerate() {
                 candidate.resource_scope = Some(ActionResourceScope {
                     scope: scope.into(),
-                    resource_type,
+                    resource_type: Arc::new(resource_type.clone()),
                 });
                 candidate.subject = format!("group:group-{index}");
             }

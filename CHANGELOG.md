@@ -194,11 +194,22 @@ All notable changes to this project are documented in this file.
   - Static definitions have private fields and `const` builders:
     `ResourceTypeDescriptor::new(id, label, plural_label, example, canonical)`
     with `.with_namespace(NamespaceSelectorDescriptor::new(..))`,
-    `.with_attributes(&[ResourceAttributeDescriptor::required(..)])` and
-    `.with_action_inputs(..)`, read through `id()`, `label()`, `namespace()`,
-    `attributes()`, `action_inputs(selector)` and `is_valid`;
+    `.with_attributes(&ATTRIBUTES)` and `.with_action_inputs(..)`, read
+    through `id()`, `label()`, `namespace()`, `attributes()`,
+    `action_inputs(selector)` and `is_valid`;
     `presentation::ActionPresentation::new(bodies, whole)` and
-    `EmbeddedBody::new(owner_path, codec)`.
+    `EmbeddedBody::new(owner_path, codec)`. An attribute list is its own
+    `static` array of `ResourceAttributeDescriptor::required(..)` or
+    `optional(..)` entries; an inline `&[..]` array no longer compiles.
+  - Resource types can also be declared at runtime:
+    `ResourceTypeDescriptor::declared(id, label, plural_label, example,
+    pattern, attributes)` and `ResourceAttributeDescriptor::declared(name,
+    label, description, required, pattern)`, with `ResourcePattern::new(source,
+    max_length)` as the whole-value grammar. Descriptor accessors return
+    borrowed `&str` and `&[ResourceAttributeDescriptor]` instead of `'static`
+    data. `ResourceTypeRegistry` holds shared `Arc<ResourceTypeDescriptor>`
+    values: `get` and `descriptors` return them, and `from_shared` builds a
+    registry from them.
   - `UpstreamClientSpec::new(label, provider, base, egress, allowed_hosts,
     profile)` with `.with_status_reasons(..)`, and `RedirectRules::new(max,
     deadline)` with `.with_authorization(..)`, `.correlating_other_origins()`,

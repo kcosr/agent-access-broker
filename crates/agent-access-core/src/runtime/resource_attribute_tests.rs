@@ -12,12 +12,13 @@ static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     "one",
     |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
 )
-.with_attributes(&[ResourceAttributeDescriptor::required(
+.with_attributes(&ATTRIBUTES);
+static ATTRIBUTES: [ResourceAttributeDescriptor; 1] = [ResourceAttributeDescriptor::required(
     "endpoint",
     "Endpoint",
     "Private test endpoint",
     |value| value.starts_with("secret-"),
-)]);
+)];
 static BACKEND: BackendRegistration = BackendRegistration::new(
     agent_access_provider::module_metadata!(),
     "attribute_fixture",

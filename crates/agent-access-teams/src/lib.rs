@@ -26,12 +26,15 @@ pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDesc
     "release-alerts",
     valid_destination,
 )
-.with_attributes(&[ResourceAttributeDescriptor::required(
-    "webhookUrl",
-    "Webhook URL",
-    "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
-    valid_webhook_url,
-)]);
+.with_attributes(&TEAMS_DESTINATION_ATTRIBUTES);
+
+static TEAMS_DESTINATION_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
+    [ResourceAttributeDescriptor::required(
+        "webhookUrl",
+        "Webhook URL",
+        "Signed Microsoft Teams Workflows URL using the Anyone trigger setting",
+        valid_webhook_url,
+    )];
 
 fn valid_destination(value: &str) -> bool {
     !value.is_empty()

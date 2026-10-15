@@ -5360,7 +5360,8 @@ impl BrokerRuntime {
             resource_type: self
                 .resource_types
                 .get(&binding.resource_type)
-                .unwrap_or(&UNRESOLVED_RESOURCE_TYPE),
+                .cloned()
+                .unwrap_or_else(|| Arc::new(UNRESOLVED_RESOURCE_TYPE.clone())),
         })
     }
 
@@ -7655,7 +7656,7 @@ struct PolicyCandidate {
 #[derive(Debug, Clone)]
 struct ActionResourceScope {
     scope: String,
-    resource_type: &'static ResourceTypeDescriptor,
+    resource_type: Arc<ResourceTypeDescriptor>,
 }
 
 #[derive(Debug, Clone)]

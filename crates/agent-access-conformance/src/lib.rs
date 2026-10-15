@@ -74,12 +74,15 @@ pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeD
     "alerts",
     is_endpoint_name,
 )
-.with_attributes(&[ResourceAttributeDescriptor::required(
-    "signingKey",
-    "Signing key",
-    "Key the conformance upstream requires for pings to this endpoint",
-    |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
-)]);
+.with_attributes(&CONFORMANCE_ENDPOINT_ATTRIBUTES);
+
+static CONFORMANCE_ENDPOINT_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
+    [ResourceAttributeDescriptor::required(
+        "signingKey",
+        "Signing key",
+        "Key the conformance upstream requires for pings to this endpoint",
+        |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
+    )];
 
 /// An exact item is addressed by its whole path.
 fn item_inputs(selector: &ResourceSelector) -> Option<Map<String, Value>> {
