@@ -1074,9 +1074,10 @@ for supported protocol, schema bounds and remaining limitations.
 one process per call. They are the deliberate exception to the rule that import
 adapters never receive credential plaintext. The command makes its own
 upstream calls, so the Broker writes to its stdin the credentials the call
-uses, the private attributes of the resources it passes, any egress proxy
-credentials, and the caller's identity. Upstream credentials travel only on
-stdin: never in arguments, the environment, receipts, audit or logs. With
+uses, the decrypted private attributes of the resources it passes, any egress
+proxy credentials, and the caller's identity. Credentials and private
+attributes cross to the trusted command only on stdin: never in arguments,
+the environment, responses, receipts, audit or logs. With
 `network = "inherit"`, the proxy credentials also appear in the convenience
 proxy variables, where other processes of the same user can read them.
 
@@ -1094,14 +1095,26 @@ commands in separate deployments.
 
 The Broker still authenticates every call and applies context, token
 restrictions, grants, rate limits and audit; validates inputs against the
-accepted schema; rechecks the import, resource attributes and credentials just
-before starting the process; and never falls back from a personal to a service
-credential. An action that names its resources in its inputs is denied before
+accepted schema; after the call's concurrency permit, rechecks the import,
+every admitted resource's identity and version and the credentials, and checks
+the import and the action's availability again immediately before starting
+the process; and never falls back from a personal to a service credential. An action that names its resources in its inputs is denied before
 any process starts unless grants cover every resource, and receives only the
 selected credential. For any other action, the Broker passes the caller's
 top-precedence grants, each with its own credential, and the command must
 filter by them: an unfiltered command reaches whatever its credentials can, as
-other imports do. Command results are marked sensitive, failures never return
-command output, and receipts cannot carry the secrets supplied with the call.
-Stderr is not logged unless the operator enables `log_stderr` for a command,
-which can expose secrets the command prints.
+other imports do. Command results are marked sensitive, and failures never
+return command output.
+
+Error messages, verification stages and write-receipt locators leave the
+sensitive result and can reach callers, compact CLI receipts and audit, so the
+Broker rejects a response that echoes a supplied secret in them, as a contract
+violation (`operation_failed`). Every supplied credential, including the Basic
+`username:token` form, and the proxy password in raw, percent-encoded,
+credentialed-URL and Basic `username:password` forms are rejected anywhere in
+such a text. A private attribute value of 8 bytes or more is rejected anywhere
+too; a shorter one only when it is the entire text, so that short values do
+not reject legitimate identifiers. This catches accidental echoes; it does not
+make an untrusted command safe, since a command can encode or exfiltrate what
+it receives in other ways. Stderr is not logged unless the operator enables
+`log_stderr` for a command, which can expose secrets the command prints.

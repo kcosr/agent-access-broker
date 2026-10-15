@@ -296,12 +296,18 @@ covering grant selects, which `credentials` holds. For a command without a
 credential, `authorization` has no `credential` member and the request no
 `credentials`.
 
-Each resource carries its `value` and, for an enabled, context-eligible exact
-catalog entry, its `id`, `name` and private `attributes`. The Broker rechecks
-and decrypts attributes after the call's permit, immediately before starting
-the process. A value covered only by a grant that selects all resources of the
-type carries just its `value`. `resourceType` is the manifest's type ID, not
-the Broker type ID.
+Each resource carries its `value`. A value held by an enabled,
+context-eligible exact catalog entry also carries the entry's `id` and its
+private `attributes`, an empty object for an entry without any, and `name`
+when the entry has a display name. A value covered only by a grant that
+selects all resources of the type carries just its `value`. `resourceType` is
+the manifest's type ID, not the Broker type ID.
+
+Every admitted exact entry carries an identity and version fence, with or
+without attributes. After the call's permit the Broker rechecks each entry and
+decrypts its attributes; an entry that changed (any change advances its
+version), was deleted and recreated, or was disabled while the call waited
+fails `scope_unresolved` without starting the process.
 
 ### Command-enforced actions
 
@@ -332,9 +338,10 @@ invocation would pass.
 Each grant becomes `{"credential", "resources", "except"?}`. `credential` is
 the grant's wire mode, `service` or `user`, and is omitted for a command
 without a credential. `resources` is `"any"` or a list of resources shaped as
-for Broker-enforced actions. `except` appears only with `"any"` and lists
-excluded exact values: a grant of all resources minus a group exclusion is an
-all-except boundary, and plain `"any"` would broaden it. For an action without
+for Broker-enforced actions. `except` appears only with `"any"`, and only when
+it is not empty, and lists excluded exact values: a grant of all resources
+minus a group exclusion is an all-except boundary, and plain `"any"` would
+broaden it. For an action without
 a resource type, `authorization` has no `resourceType` and every entry is
 `{"resources": "any"}`, plus `credential` when the command has one.
 
@@ -374,7 +381,8 @@ value, and a removed credential fails with `credential_not_provisioned`.
 none. Grants for its actions use service mode, which counts as available
 without a stored credential, and enabling the service needs no credential.
 Requests carry no `credentials`, and neither `authorization` nor any of its
-grant entries has a `credential` member. Verification is not offered.
+grant entries has a `credential` member. Verification stays local; the
+command's `verify` is never run.
 
 The credential kind and the `stdin` delivery are fixed once actions are
 accepted. Stored credentials of both kinds take part in key readiness,
@@ -398,7 +406,7 @@ stdout and stderr piped. Its environment is empty apart from `env` and, with
 must:
 
 - **Set up first, then read the request from stdin**, without assuming it
-  arrives immediately.
+  arrives immediately, and read all of it.
 - Print exactly one JSON document on stdout (trailing whitespace is allowed)
   and exit with status 0, for errors too.
 - Keep any child processes in its process group.
@@ -513,7 +521,7 @@ command-enforced grant lists.
 | `format` | `agent-access-command/1` |
 | `action` | The manifest action `name` |
 | `requestId` | The Broker request ID |
-| `deadline` | The call's deadline, RFC 3339 UTC |
+| `deadline` | The call's deadline, RFC 3339 UTC in whole seconds, such as `2026-10-14T15:04:35Z` |
 | `context` | The execution context |
 | `caller` | The calling principal, below |
 | `inputs` | The inputs, already validated against the accepted input schema |
@@ -526,8 +534,8 @@ command-enforced grant lists.
 | `principal` | The principal ID |
 | `kind` | `user`, `service_account` or `system` |
 | `displayName`, `email` | When set on the principal |
-| `username` | `{namespace, name}` when a trusted username assertion identified the caller |
-| `token` | `{id, label}` when an agent token was used |
+| `username` | `{namespace, name}`, only when a trusted username assertion identified the caller |
+| `token` | `{id, label}`, only when the caller used an agent token |
 | `groups` | The caller's policy groups |
 
 A Broker-enforced request (`issue.view`):
@@ -582,7 +590,8 @@ sequenceDiagram
         B-->>G: Deny, and no process starts
     end
     B->>B: Wait for a permit until the deadline
-    B->>B: Final checks: import fence, resource attributes, credentials
+    B->>B: Final checks: import fence, resource fences and attributes, credentials
+    B->>B: Build the request, then check the import fence and action again
     B->>C: Spawn path invoke: empty environment plus configured variables, own process group
     B->>C: stdin: the request JSON, then close
     Note over C: Set up first, then read stdin
@@ -635,8 +644,9 @@ A command reports a failure with one of these codes:
 | `upstream_timeout` | `upstream_timeout` | 504 | error |
 | `upstream_failed` | `upstream_failed` | 424 | error |
 
-- `message` reaches the caller. It is UTF-8, at most 1,024 bytes, with no
-  control characters except tab.
+- `message` reaches the caller. It is UTF-8, at most 1,024 bytes, possibly
+  empty, with no control characters except tab, and must not echo a supplied
+  secret ([secrets in responses](#secrets-in-responses)).
 - `upstream_rate_limited` may carry `retryAfterSeconds` inside `error`, from 1
   to 86,400:
   `{"ok": false, "error": {"code": "upstream_rate_limited", "message": "Slow down.", "retryAfterSeconds": 30}}`.
@@ -668,32 +678,60 @@ optional `receipt`, which becomes the Broker's
 - `safeLocators` is a flat object of at most 16 entries, with keys of at most
   64 bytes and string (at most 256 bytes) or integer values, at most 1 KiB in
   total. Locators sit outside the sensitive pointer and may be copied into
-  compact CLI receipts, so they must hold identifiers only. The Broker rejects
-  as a contract violation any locator value containing a credential, private
-  attribute or proxy password it supplied in that request.
-- `operationDispatched` is `false` only for failures before the process
-  started.
+  compact CLI receipts, so they must hold identifiers only and never echo a
+  supplied secret ([secrets in responses](#secrets-in-responses)).
+- Write results, failed ones included, report `operationDispatched`: `false`
+  only when the process never started.
+
+### Secrets in responses
+
+Error messages, `verificationStage` and `safeLocators` keys and values leave
+the sensitive result, so none may echo a secret the request supplied. The
+Broker rejects such a response as a contract violation (`operation_failed`,
+logged as `secret_in_message`, `secret_in_receipt` for a verification stage,
+or `secret_in_locator`):
+
+- Every supplied credential's token, and the Basic `username:token` form of a
+  `username_token` credential, anywhere in the text.
+- The proxy password in every form the command receives it: raw,
+  percent-encoded, inside the credentialed proxy URL and in the Basic
+  `username:password` form, anywhere in the text.
+- A private resource attribute value of 8 bytes or more anywhere in the text.
+  A shorter value, such as `eu` or `1`, is rejected only when it is the whole
+  message, stage, key or locator value, so short values do not reject
+  legitimate identifiers.
+
+A verification response is checked against the credential it verified and
+the proxy secrets.
 
 ### verify
 
-With `verify: true` in the accepted manifest, the existing **Verify** buttons
-run `<path> verify` through the same budget, process handling, limits and
-response contract. The request carries `format`, `requestId`, `deadline`, the
-one `credential` to check and, with `network = "inherit"`, `network`; it has
-no `context`, `caller`, `inputs` or `authorization`. `credential.mode` is the
-wire mode: `service` for the import's execution credential and `user` for a
-personal credential.
+Verification checks personal credentials only. With `verify: true` in the
+accepted manifest, the **Verify** buttons of personal credentials and the
+credential verify routes run `<path> verify` through the same budget,
+process handling, limits and response contract. The request carries
+`format`, `requestId`, `deadline`, the one `credential` to check, in wire
+mode `user`, and, with `network = "inherit"`, `network`; it has no
+`context`, `caller`, `inputs` or `authorization`. The import's service
+credential has no verify route, for command imports as for other imports.
 
 ```json
 { "format": "agent-access-command/1", "requestId": "brk_01JA7Q4F7N1P",
   "deadline": "2026-10-14T15:06:00Z",
-  "credential": { "mode": "service", "kind": "username_token", "username": "svc-tickets", "token": "svc-example" },
+  "credential": { "mode": "user", "kind": "username_token", "username": "avery", "token": "pat-example" },
   "network": { "proxy": null, "noProxy": [], "trust": "system", "caCertificate": null } }
 ```
 
-`{"ok": true, ...}` shows **Verified**; an error shows **Failed** with the
-mapped reason. Without `verify`, verification is unsupported. Verification
-audit records the same process facts as invocations.
+`{"ok": true, ...}` reports `upstream_verified` (**Verified**); an error
+fails with its mapped reason (**Failed**). Without `verify`, or for a command
+without a credential, the credential is checked locally only and reports
+`local_verified`; no process starts. A verification queued for the command's
+budget is fenced like a call: the import fence is checked after the permit
+and again immediately before the process starts, and a change or reload that
+retired the import or its command entry meanwhile fails
+`service_action_denied`. The verification audit, of a failed verification
+too, records the process facts under `providerAudit.verification.command`,
+with `upstreamStatus` `null`, since a command has no upstream status.
 
 ### How the Broker reads the result
 
@@ -791,12 +829,16 @@ live, so a reused process ID is never signaled.*
 
 1. **Permit.** After admission, the call waits for a permit from the
    command's `max_concurrent` budget until its deadline.
-2. **Final checks.** Immediately before starting the process, the Broker
-   rechecks that the import is unchanged and available (quarantine, disable,
-   operator removal or a changed command entry fail with
-   `service_action_denied`), revalidates and decrypts resource attributes
-   (a replaced resource fails with `scope_unresolved`), and reads the
-   credentials.
+2. **Final checks.** After the permit, the Broker rechecks that the import
+   is unchanged and available (quarantine, disable, operator removal or a
+   changed command entry fail with `service_action_denied`), revalidates
+   every admitted exact resource against its identity and version fence and
+   decrypts its attributes (a changed, replaced or disabled entry fails with
+   `scope_unresolved`), and reads the credentials. Once the request is
+   built, it checks the import fence and the action's availability again
+   immediately before starting the process, so a change made in the meantime
+   also fails `service_action_denied`. None of these failures starts a
+   process or supplies a credential; a write reports `not_applied`.
 3. **Spawn and I/O.** One supervisor drives four branches concurrently so no
    pipe can block another: the stdin writer writes the request and closes
    stdin (a closed pipe is ignored); the stdout reader kills the group when
@@ -852,14 +894,35 @@ grants passed, with their IDs, versions, credential modes and boundaries,
 never attributes. Both are captured by the Broker, so an interrupted call keeps
 them, with facts not yet known, such as the exit status of a killed process,
 recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+Verification records the same facts under `providerAudit.verification.command`.
+
+`contractViolation` is a verdict on the response:
+
+| Value | When |
+| --- | --- |
+| `null` | No verdict: the process never started, or the Broker stopped it before reading a response (command timeout, HTTP MCP deadline, shutdown) |
+| `false` | No violation: a response was read and kept the contract, or the process failed on its own with a non-zero exit or a signal |
+| `true` | A violation: oversized output, pipes held open after the drain, or a response that breaks the contract |
 
 Each failure logs one `command_import_failed` line with the service, action,
-request ID, exit status or signal and the violation category, without the
-command's output. Stderr is not logged by default, which keeps credentials a
-command might print out of the Broker's logs. To debug a command, an operator
-may set `log_stderr = true` for it; failure lines then include up to 4 KiB of
-stderr with control characters escaped. The Broker cannot redact secrets a
-command prints, so `config validate` warns while it is on.
+request ID, operation, exit status or signal and the violation category,
+without the command's output:
+
+| Category | Failure |
+| --- | --- |
+| `spawn_failed`, `shutdown_before_start`, `deadline_before_start` | The process never started |
+| `timeout`, `shutdown` | The Broker killed the process at the command deadline or at shutdown |
+| `exit_status`, `signal`, `exit_unobserved` | The process failed on its own, or its exit could not be observed |
+| `output_limit`, `pipes_held_open` | Stdout exceeded `max_output_bytes`, or a pipe stayed open after the drain |
+| `empty_response`, `invalid_json`, `response_shape`, `unknown_code`, `invalid_message`, `invalid_retry_after`, `output_schema` | The response document breaks the contract |
+| `receipt_on_read`, `invalid_receipt`, `invalid_locator` | The receipt breaks the contract |
+| `secret_in_message`, `secret_in_receipt`, `secret_in_locator` | The response echoes a supplied secret ([secrets in responses](#secrets-in-responses)) |
+
+Stderr is not logged by default, which keeps credentials a command might
+print out of the Broker's logs. To debug a command, an operator may set
+`log_stderr = true` for it; failure lines then include up to 4 KiB of stderr
+with control characters escaped. The Broker cannot redact secrets a command
+prints, so `config validate` warns while it is on.
 
 ## Trust model
 
@@ -871,7 +934,7 @@ not isolation. See [command imports in the security model](security-model.md#com
 
 | | Broker guarantees | The command must |
 | --- | --- | --- |
-| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no command output in responses or default logs; sensitive-marked results; no supplied secret in receipts | Not log, persist or forward credentials or private attributes; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
+| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no command output in responses or default logs; sensitive-marked results; no supplied secret in messages, stages or locators | Not log, persist or forward credentials or private attributes; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
 | Broker-enforced | Every named resource is covered by a grant before the process starts; only that grant's credential is passed | Act only on the resources passed |
 | Command-enforced | Action-level authorization; one planner for invocation and discovery; only the credentials the passed grants use | Constrain queries and results to each grant, using that grant's credential, and answer `resource_forbidden` otherwise |
 
@@ -891,11 +954,13 @@ not isolation. See [command imports in the security model](security-model.md#com
 
 [`ticketing.py`](../crates/agent-access/tests/fixtures/command-imports/ticketing.py)
 is a complete command in Python's standard library: the `ticketing` manifest
-above, with output schemas, plus a `whoami` action without a resource type,
-deterministic fake data, filtering by grant for searches, a write with a
-receipt, and verification. It never contacts a network. Its header documents
-alternative manifests for credential-free and refresh testing, and inputs that
-trigger each error and contract violation. The Broker's tests import it as a
+above, with output schemas, plus `issue.close`, a write the command checks
+against the passed grants, and `whoami`, an action without a resource type.
+It has deterministic fake data, filters searches by grant, returns write
+receipts in both authorization modes and verifies personal credentials. It
+never contacts a network. Its header documents alternative manifests for
+credential-free and refresh testing, and inputs that trigger each error and
+contract violation. The CLI smoke and the portal's browser spec import it as a
 command; run its own checks with:
 
 ```bash
