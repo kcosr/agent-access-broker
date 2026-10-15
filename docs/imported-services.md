@@ -464,13 +464,18 @@ call may continue upstream. Its uncertain write outcome remains `unknown` with
 
 A command import's call takes a slot from its command's concurrency budget,
 then runs its final checks: the import's dispatch fence, the resource entries
-the request names, and the credentials. A resource entry replaced or changed
-while the call waited fails `scope_unresolved`; a rotated service slot, a
-disabled or quarantined action, or a changed or removed command entry fails
-`service_action_denied`; a removed personal credential fails
-`credential_not_provisioned`. None of these starts a process, and a write
-reports `not_applied`. A personal credential rotated during the wait is read as
-it is now; a service slot is read only at the version admitted with the call.
+the request names, and the credentials. A resource entry changed (any change
+advances its version), deleted and recreated, or disabled while the call
+waited fails `scope_unresolved`, with or without private attributes; a rotated
+service slot, a disabled or quarantined action, or a changed or removed command
+entry fails `service_action_denied`; a removed personal credential fails
+`credential_not_provisioned`. The dispatch fence is checked again once the
+request is built, immediately before the process starts, so a change made
+while the call resolved its resources, credentials and caller also fails
+`service_action_denied`. None of these starts a process or supplies a
+credential, and a write reports `not_applied`. A personal credential rotated
+during the wait is read as it is now; a service slot is read only at the
+version admitted with the call.
 
 The Broker then starts one `<path> invoke` process and writes one JSON request
 to its stdin: the manifest's action name, the execution context, the Broker
@@ -506,10 +511,21 @@ receipts follow [mutation receipts](http-api.md#mutation-receipts), with
 `operationDispatched` saying whether the process started. A response that
 breaks the command contract, such as invalid JSON, an unknown field or code, a
 message over 1,024 bytes or with control characters, a receipt on a read, an
-invalid locator, a locator containing a credential, private attribute or proxy
-password the request supplied, or a result its output schema rejects, fails
-`operation_failed` with an `unknown` write receipt and never exposes the
-output. The command timeout fails `upstream_timeout`.
+invalid locator, an echoed secret (below), or a result its output schema
+rejects, fails `operation_failed` with an `unknown` write receipt and never
+exposes the output. The command timeout fails `upstream_timeout`.
+
+Error messages, verification stages and `safeLocators` keys and values leave
+the sensitive result, so none may echo a secret the request supplied: a
+credential token or the Basic `username:token` form of a `username_token`
+credential, the proxy password, its percent-encoded form or the credentialed
+proxy URL, or a private resource attribute value. Credentials and proxy
+secrets must not appear anywhere in such a text. A private attribute value of
+8 bytes or more must not appear anywhere either; a shorter one, such as `eu`
+or `1`, is rejected only when it is the entire message, stage, key or
+locator value, so short values do not reject legitimate identifiers. A
+verification response is checked against the credential it verified and the
+proxy secrets.
 
 Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
 `exitCode`, `signal`, `durationMs`, `contractViolation` and
@@ -517,8 +533,15 @@ Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
 plan: grant IDs, versions and subjects, credential modes, and the resolved
 values or boundaries, never attributes). Both are captured from admission, so
 a call the Broker interrupts at the HTTP MCP deadline or at shutdown keeps
-them; facts not yet known are `null`. A client disconnect or MCP cancellation
-does not stop a running command.
+them; facts not yet known are `null`. `contractViolation` is `true` for
+oversized output, pipes held open or an invalid response, `false` once a
+response was read and kept the contract or the process failed on its own with
+a non-zero exit or signal, and `null` when the process never started or the
+Broker stopped it (command timeout, HTTP MCP deadline, shutdown) before reading
+a response. A client disconnect or MCP cancellation does not stop a running
+command. A command verification records the same `command` facts under
+`providerAudit.verification`, for a failed verification too, and leaves
+`upstreamStatus` `null`, since a command has no upstream status.
 
 ## Connecting one imported service
 

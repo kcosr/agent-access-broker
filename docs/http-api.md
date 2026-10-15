@@ -687,8 +687,11 @@ declares `verify` runs the command's `verify` operation with that credential
 under the command's concurrency budget: `{"ok": true}` reports
 `upstream_verified`, and a command error fails with its mapped reason. Without
 `verify`, the credential is checked locally only (`local_verified`). The
-verification audit records the command's process facts under
-`providerAudit.verification.command`.
+verification audit, of a failed verification too, records the command's
+process facts under `providerAudit.verification.command`, with `upstreamStatus`
+`null`. A verification queued for the command's concurrency slot is rejected
+with `service_action_denied`, without running the command, when a change or
+reload retired the import or its command entry in the meantime.
 
 Self-service token management:
 

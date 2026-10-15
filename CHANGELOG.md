@@ -553,11 +553,18 @@ All notable changes to this project are documented in this file.
   Responses return `result.upstreamCommand`, map command error codes to Broker
   reasons with the command's message and `retryAfterSeconds`, and report the
   command's write receipt with `operationDispatched`; a response that breaks
-  the contract, including a locator echoing a supplied secret, fails
-  `operation_failed`. Invocation audit adds `providerAudit.command` (process
-  facts) and `providerAudit.commandAuthorization` (the admitted grants), kept
-  for interrupted calls. Verifying a personal credential runs the command's
-  `verify` when its manifest declares it, and stays local otherwise.
+  the contract, including a message, verification stage or locator echoing a
+  supplied secret (credentials in every form the command receives them, proxy
+  secrets, and private attribute values, those under 8 bytes only as a whole
+  text), fails `operation_failed`. Every admitted exact resource is fenced by
+  its row version and creation time, and the import's dispatch fence is
+  checked again immediately before the process starts. Invocation audit adds
+  `providerAudit.command` (process facts, with `contractViolation` `null`
+  until a verdict) and `providerAudit.commandAuthorization` (the admitted
+  grants), kept for interrupted calls. Verifying a personal credential runs
+  the command's `verify` when its manifest declares it, fenced like a call,
+  and stays local otherwise; its audit, failed or not, keeps the process facts
+  with no upstream status.
 
 ### Changed
 
