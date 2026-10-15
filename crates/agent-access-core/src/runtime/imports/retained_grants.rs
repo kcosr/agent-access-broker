@@ -10,7 +10,7 @@ impl BrokerRuntime {
     /// credential modes and the published resource catalog. Grants of other
     /// services are unchanged by an import mutation, and every cross-grant
     /// rule compares grants of one service only.
-    pub(super) fn check_retained_import_grants(
+    pub(in crate::runtime) fn check_retained_import_grants(
         &self,
         service: &str,
     ) -> Result<(), ManagedStoreError> {

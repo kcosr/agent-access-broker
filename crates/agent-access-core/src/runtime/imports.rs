@@ -202,9 +202,12 @@ fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
         .collect()
 }
 
+/// The service descriptor of `record`, whose scopes bind the Broker types
+/// the generation's `resource_types` registers.
 pub(super) fn descriptor(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
+    resource_types: &ResourceTypeRegistry,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
     // Arbitrary upstream content may contain private data or credentials.
@@ -227,7 +230,8 @@ pub(super) fn descriptor(
         .iter()
         .map(|action_record| {
             let definition = &action_record.definition;
-            let shape = authority::action_shape(record, adapter, definition, &modes);
+            let shape =
+                authority::action_shape(record, adapter, definition, &modes, resource_types);
             let mut action = ActionDescriptor::new(
                 &definition.action,
                 &definition.description,
@@ -723,7 +727,7 @@ impl BrokerRuntime {
                     .validate()
                     .map_err(ManagedStoreError::InputInvalid)?;
             }
-            let definition = descriptor(record, &config);
+            let definition = descriptor(record, &config, resource_types.registry());
             if imported_providers.contains_key(name) {
                 definition
                     .validate()
@@ -891,6 +895,7 @@ impl BrokerRuntime {
 pub(super) fn build_providers(
     config: &BrokerConfig,
     catalog: &ImportedCatalog,
+    resource_types: &ResourceTypeRegistry,
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
@@ -907,7 +912,11 @@ pub(super) fn build_providers(
         {
             continue;
         }
-        if definition.validate().is_err() || descriptor(record, config).validate().is_err() {
+        if definition.validate().is_err()
+            || descriptor(record, config, resource_types)
+                .validate()
+                .is_err()
+        {
             continue;
         }
         let Some(adapter) = config

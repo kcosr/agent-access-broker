@@ -292,6 +292,9 @@ impl super::BrokerRuntime {
     /// changes delete attribute values or drop a type the generation also
     /// publishes the resulting managed policy, so its registry, imported
     /// catalog, resource catalog and attribute bindings change together.
+    /// Every update, in the same transaction and under the same lock, also
+    /// refuses to leave the service's retained grants invalid for the next
+    /// start, checked against the policy it publishes.
     pub fn commit_imported_service_update(
         &self,
         request: crate::ImportedServiceUpdateRequest,
@@ -309,6 +312,7 @@ impl super::BrokerRuntime {
                 "imported services require managed storage".into(),
             )
         })?;
+        let service = request.definition.service.clone();
         store.update_imported_service_with_policy(request, |catalog, transaction| {
             let next = self.with_imported_catalog(catalog.clone(), prepared)?;
             let Some(transaction) = transaction else {
@@ -316,7 +320,13 @@ impl super::BrokerRuntime {
             };
             next.check_stored_resources(transaction.catalog)?;
             match transaction.policy {
-                Some(policy) => next.with_managed_policy_state(policy),
+                Some(policy) => {
+                    // The retained grants are rechecked against the policy
+                    // this acceptance publishes.
+                    let next = next.with_managed_policy_state(policy)?;
+                    next.check_retained_import_grants(&service)?;
+                    Ok(next)
+                }
                 None => Ok(next),
             }
         })

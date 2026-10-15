@@ -120,7 +120,10 @@ impl Provider for PlannedProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        let authority = &self.actions[request.action()];
+        // Like the adapter, only enabled actions are built.
+        let authority = self.actions.get(request.action()).ok_or_else(|| {
+            ProviderError::deny(ReasonCode::InputInvalid, "unknown command import action")
+        })?;
         Ok(ScopeResolution::resources(
             authority
                 .resources
@@ -348,6 +351,21 @@ fn record(
     }
 }
 
+/// The registry a generation publishing `record` holds.
+fn published_types(record: &ImportedServiceRecord) -> ResourceTypeRegistry {
+    EffectiveResourceTypes::composition(&registry())
+        .with_imported(
+            &ImportedCatalog {
+                revision: 1,
+                services: vec![record.clone()],
+            },
+            None,
+        )
+        .unwrap()
+        .registry()
+        .clone()
+}
+
 fn import_config() -> BrokerConfig {
     let mut config = config();
     project_resources(&mut config);
@@ -410,11 +428,7 @@ fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
         )
         .unwrap();
     if per_user {
-        let mut services = (*runtime.services).clone();
-        let mut descriptor = (*services[SERVICE]).clone();
-        descriptor.credentials.execution_required = false;
-        services.insert(SERVICE.into(), Arc::new(descriptor));
-        runtime.services = Arc::new(services);
+        credentials_present(&mut runtime);
     }
     config.policy.grants = grants;
     runtime
@@ -579,7 +593,9 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         ImportedCredentialMode::Service,
         ImportedCredentialMode::PerUser,
     ];
-    let descriptor = crate::runtime::imports::descriptor(&record(&modes, declared), &config);
+    let declaring = record(&modes, declared);
+    let descriptor =
+        crate::runtime::imports::descriptor(&declaring, &config, &published_types(&declaring));
     descriptor.validate().unwrap();
     let view = descriptor.action("issue.view").unwrap();
     assert_eq!(view.resource_scope.as_deref(), Some("project"));
@@ -621,9 +637,11 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     );
     // Without the command adapter the import is unavailable, and every
     // action binds the unresolved type.
+    let unlinked_record = record(&modes, actions());
     let unlinked = crate::runtime::imports::descriptor(
-        &record(&modes, actions()),
+        &unlinked_record,
         &crate::runtime::tests::base_fake_config(),
+        &published_types(&unlinked_record),
     );
     assert!(unlinked.actions.iter().all(|action| {
         action.search_contained
@@ -631,7 +649,9 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
                 == *UNRESOLVED_RESOURCE_TYPE.id()
     }));
     // A credential-free import's actions use service mode.
-    let free = crate::runtime::imports::descriptor(&record(&[], actions()), &config);
+    let free_record = record(&[], actions());
+    let free =
+        crate::runtime::imports::descriptor(&free_record, &config, &published_types(&free_record));
     assert_eq!(
         free.action("issue.search").unwrap().credential_modes,
         ["service"]
@@ -1412,4 +1432,187 @@ async fn broker_enforced_arrays_need_one_grant_covering_every_value() {
     assert_eq!(credential_mode, "per_user");
     assert_eq!(values, &["ENG", "OPS"]);
     assert_eq!(grant.subject, "group:engineering");
+}
+
+/// Marks the import's credentials present without a managed store, as a
+/// credential-free import's are.
+fn credentials_present(runtime: &mut BrokerRuntime) {
+    let mut services = (*runtime.services).clone();
+    let mut descriptor = (*services[SERVICE]).clone();
+    descriptor.credentials.execution_required = false;
+    services.insert(SERVICE.into(), Arc::new(descriptor));
+    runtime.services = Arc::new(services);
+}
+
+/// Publishes the import, binding both modes, with `actions` while `grants`
+/// are already retained, as an acceptance publishes a refreshed import.
+fn publish_retained(
+    actions: Vec<ImportedActionRecord>,
+    grants: Vec<PolicyGrantConfig>,
+) -> Result<BrokerRuntime, ManagedStoreError> {
+    let mut base = BrokerRuntime::new(config()).unwrap().clone();
+    let mut config = import_config();
+    config.policy.grants = grants;
+    base.config = Arc::new(config.clone());
+    base.policy_snapshot
+        .store(Arc::new(PolicySnapshot::from_config(&config, 2)));
+    let mut record = record(
+        &[
+            ImportedCredentialMode::Service,
+            ImportedCredentialMode::PerUser,
+        ],
+        actions,
+    );
+    record.slot_versions.insert(
+        crate::imports::ImportedCredentialPurpose::Execution,
+        "fixture".into(),
+    );
+    let prepared = base.prepare_imported_service_change(&record, None)?;
+    base.with_imported_catalog(
+        ImportedCatalog {
+            revision: 1,
+            services: vec![record],
+        },
+        prepared,
+    )
+}
+
+#[tokio::test]
+async fn an_action_naming_a_dropped_type_fails_closed_alone() {
+    // A refresh removed `legacy` and quarantined its action; once its
+    // resources were deleted an acceptance dropped the type, but the
+    // quarantined action and its retained grants remain.
+    let mut actions = actions();
+    let mut legacy = action(
+        "issue.legacy",
+        json!({"resources": {"type": "legacy", "inputs": ["/project"]}}),
+    );
+    legacy.status = ImportedActionStatus::Quarantined;
+    actions.push(legacy);
+    let mut runtime = publish_retained(
+        actions,
+        vec![
+            grant(
+                "group:engineering",
+                "issue.legacy",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+            grant(
+                "group:engineering",
+                "issue.view",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+    )
+    .unwrap();
+    credentials_present(&mut runtime);
+    let descriptor = &runtime.services[SERVICE];
+    assert_eq!(
+        descriptor.resource_scopes["legacy"].resource_type,
+        *UNRESOLVED_RESOURCE_TYPE.id()
+    );
+    // The unresolved ID is reserved, so no registered type can answer for
+    // such a scope.
+    assert!(
+        runtime
+            .resource_types()
+            .get(UNRESOLVED_RESOURCE_TYPE.id())
+            .is_none()
+    );
+    assert_eq!(
+        descriptor.resource_scopes["project"].resource_type,
+        project_type()
+    );
+    let caller = identity(None);
+    prepare(&runtime, &caller, "issue.view", json!({"project": "OPS"}))
+        .await
+        .unwrap();
+    // The quarantined action is not built, so it is refused before policy.
+    assert_eq!(
+        prepare(&runtime, &caller, "issue.legacy", json!({"project": "OPS"}))
+            .await
+            .err()
+            .unwrap()
+            .reason_code(),
+        ReasonCode::InputInvalid
+    );
+    assert_eq!(discovered(&runtime, &caller, "issue.legacy"), None);
+}
+
+#[test]
+fn publication_refuses_changes_that_would_invalidate_retained_grants() {
+    // One subject's mixed modes on the command-enforced search load; the
+    // same pair on the Broker-enforced view, or a mode an action no longer
+    // supports, would fail the next start.
+    publish_retained(
+        actions(),
+        vec![
+            grant(
+                "group:engineering",
+                "issue.search",
+                "per_user",
+                0,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:engineering",
+                "issue.search",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+    )
+    .unwrap();
+    for grants in [
+        vec![
+            grant(
+                "group:engineering",
+                "issue.view",
+                "per_user",
+                0,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:engineering",
+                "issue.view",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+        vec![grant(
+            "group:engineering",
+            "issue.svc_search",
+            "per_user",
+            0,
+            &[],
+            &["wide"],
+        )],
+        vec![grant(
+            "group:engineering",
+            "issue.stats",
+            "service",
+            0,
+            &["p-ops"],
+            &[],
+        )],
+    ] {
+        let error = publish_retained(actions(), grants).err().unwrap();
+        assert!(
+            error.to_string().contains("retained grants invalid"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("policy.grants["), "{error}");
+    }
 }

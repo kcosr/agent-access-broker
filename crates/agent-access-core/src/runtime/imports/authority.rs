@@ -32,9 +32,16 @@ fn command_endpoint(definition: &ImportedServiceDefinition) -> bool {
         .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
 }
 
-/// The Broker type that `source_type` is accepted under, or the unresolved
-/// type when the import accepted none: such a scope authorizes nothing.
-fn broker_type(record: &ImportedServiceRecord, source_type: &str) -> ResourceType {
+/// The Broker type that `source_type` is accepted under, when the
+/// generation's `registry` holds it; otherwise the reserved unresolved type,
+/// whose scope authorizes nothing. An accepted action may still name a type
+/// its import later dropped: only that action fails closed, never the
+/// import's acceptance or startup.
+fn broker_type(
+    record: &ImportedServiceRecord,
+    source_type: &str,
+    registry: &ResourceTypeRegistry,
+) -> ResourceType {
     record
         .accepted_metadata
         .as_ref()
@@ -45,6 +52,7 @@ fn broker_type(record: &ImportedServiceRecord, source_type: &str) -> ResourceTyp
                 .find(|declared| declared.id == source_type)
         })
         .and_then(|declared| ResourceType::new(declared.broker_type.clone()).ok())
+        .filter(|id| registry.get(id).is_some())
         .unwrap_or_else(|| UNRESOLVED_RESOURCE_TYPE.id().clone())
 }
 
@@ -65,6 +73,7 @@ pub(super) fn action_shape(
     adapter: Option<&dyn ImportedAdapter>,
     definition: &ImportedActionDefinition,
     declared_modes: &[&'static str],
+    registry: &ResourceTypeRegistry,
 ) -> ImportedActionShape {
     let unresolved = || ImportedActionShape {
         scope: Some(ImportedActionScope {
@@ -100,7 +109,7 @@ pub(super) fn action_shape(
     };
     ImportedActionShape {
         scope: authority.resources.map(|resources| ImportedActionScope {
-            resource_type: broker_type(record, &resources.resource_type),
+            resource_type: broker_type(record, &resources.resource_type, registry),
             search_contained: !resources.broker_enforced(),
             name: resources.resource_type,
         }),

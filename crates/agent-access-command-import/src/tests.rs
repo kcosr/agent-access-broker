@@ -318,6 +318,13 @@ async fn built_providers_expose_the_command_hook_and_fail_closed() {
     }) {
         let resources = authority.resources.unwrap();
         assert_eq!(resources.resource_type, "project");
+        // Core's reader of the declared type, which resource type changes
+        // use, agrees with the adapter's declaration.
+        let named = actions.iter().find(|candidate| candidate.action == action);
+        assert_eq!(
+            agent_access_core::imports::command_action_resource_type(named.unwrap()),
+            Some(resources.resource_type.as_str())
+        );
         assert_eq!(resources.broker_enforced(), action == "issue.view");
         assert_eq!(
             authority.credential_modes,

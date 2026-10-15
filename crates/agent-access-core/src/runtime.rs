@@ -2103,7 +2103,7 @@ impl BrokerRuntime {
                     message: format!("retained imported service {name} collides with {owner}"),
                 });
             }
-            let descriptor = imports::descriptor(record, &config);
+            let descriptor = imports::descriptor(record, &config, resource_types.registry());
             // Retained metadata survives an adapter becoming unavailable. The
             // provider builder fails that service closed on semantic validation.
             services.insert(name.clone(), Arc::new(descriptor));
@@ -2118,6 +2118,7 @@ impl BrokerRuntime {
         let imported_providers = imports::build_providers(
             &config,
             &imported_catalog,
+            resource_types.registry(),
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
             &network,
