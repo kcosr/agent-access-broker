@@ -1,17 +1,24 @@
 # Imported services
 
-Base administrators can connect a generic upstream MCP HTTP server or import an
-[OpenAPI document](imported-openapi.md) and review operations as broker actions. Each import is an independent service with a stable ID,
-its own credentials, invocation limit, and accepted action catalog. Nothing in the
-importer depends on Grafana, Prometheus, or a particular vendor.
+Base administrators can connect a generic upstream MCP HTTP server, import an
+[OpenAPI document](imported-openapi.md), or import an operator-approved
+[local command](command-imports.md), and review operations as broker actions.
+Each import is an independent service with a stable ID, its own credentials,
+invocation limit, and accepted action catalog. Nothing in the importer depends
+on Grafana, Prometheus, or a particular vendor. This page describes the shared
+workflow and MCP imports; command imports add their own operator approval,
+process contract and resource types.
 
-MCP and OpenAPI imports grant whole actions. A grant still names subjects, execution
-contexts, actions, and a configured credential mode; their actions have no broker
-resource scopes. Use context-specific grants when the entire action is appropriate for
-that context. Command imports may also declare resource types, which the Broker
-checks before the command runs or passes to the command with the caller's grants. An upstream search or generic API tool may reach everything its backend
-credential can access. Importing it does not create folder, project, namespace, or
-query-level containment. Use a compiled provider when that containment is needed.
+MCP and OpenAPI imports grant whole actions. A grant still names subjects,
+execution contexts, actions, and a configured credential mode; their actions have
+no broker resource scopes. Use context-specific grants when the entire action is
+appropriate for that context. Command imports may also declare resource types,
+which the Broker checks before the command runs or passes to the command with the
+caller's grants; see [who checks resources](command-imports.md#who-checks-resources).
+An upstream search or generic API tool may reach everything its backend credential
+can access. Importing it does not create folder, project, namespace, or query-level
+containment. Use a compiled provider, or a command import that declares resource
+types, when that containment is needed.
 
 ## Operator setup
 
@@ -223,7 +230,9 @@ dialect ID into new bindings. A stored binding naming a dialect that is not the
 kind's current companion, or whose kind is unavailable, stays unchanged and
 unavailable; it is never rewritten to another registration. OpenAPI imports use the same lifecycle with a separate document parser,
 security-scheme picker and HTTP executor; see [OpenAPI setup](imported-openapi.md).
-Upstream stdio process hosting remains outside this release.
+Hosting upstream MCP servers over stdio remains outside this release;
+[command imports](command-imports.md) run local executables under their own
+one-request contract instead.
 
 ## CLI and HTTP management
 

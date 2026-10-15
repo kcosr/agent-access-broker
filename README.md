@@ -43,10 +43,14 @@ Native integrations pair action permissions with the following resource controls
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
 
-Administrators can import [MCP HTTP servers](docs/imported-services.md) and
-[OpenAPI definitions](docs/imported-openapi.md) as reviewed actions, using the
-same identity, execution-context, credential, and audit controls. These imports
-provide action-level authorization without resource or query containment.
+Administrators can import [MCP HTTP servers](docs/imported-services.md),
+[OpenAPI definitions](docs/imported-openapi.md), and operator-approved
+[local commands](docs/command-imports.md) as reviewed actions, using the same
+identity, execution-context, credential, and audit controls. MCP and OpenAPI
+imports provide action-level authorization without resource or query
+containment. A command can declare resource types: the Broker checks resources
+named in an action's inputs before the command runs, and hands other actions
+the caller's grants to filter by.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
 connections.
 

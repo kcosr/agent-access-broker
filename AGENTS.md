@@ -337,6 +337,10 @@ and audit checks through the real `agent-access` binary.
   `src/build_info.rs` stamps its identity, including the release commit for its
   workspace modules. Its library exports only those two functions.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
+  `tests/fixtures/command-imports/ticketing.py` is the reference import
+  command, in Python's standard library only; run
+  `python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py`
+  when changing it, and keep it in step with `docs/command-imports.md`.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.
   `apps/portal/src/workbench` is a pinned shared workbench-ui snapshot. Builds
@@ -473,6 +477,11 @@ and audit checks through the real `agent-access` binary.
   authentication, scheme selection, supported operation profile and write receipts.
 - `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
   discovery onboarding, unknown upstream identity, and optional refresh.
+- `docs/command-imports.md`: operator-approved local command imports:
+  `[command_imports]` approval, import and refresh with resource-type changes,
+  Broker- versus command-enforced resources, credentials, the describe/invoke/
+  verify stdin and stdout contract, error codes and receipts, network settings,
+  process lifecycle and limits, audit, and the trust model.
 - `docs/providers-jira.md`: Jira issue, search, comment, attachment,
   verification, URL locator, and attribution behavior.
 - `docs/providers-gmail.md`: Google connection setup, Gmail actions, MIME bounds,

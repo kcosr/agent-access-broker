@@ -586,10 +586,12 @@ the material by mistake. The host's own Git smart HTTP gateway and credential
 verification attach credentials to their requests through a host-only port that
 the crate-boundary check forbids in provider, adapter, reference and helper
 crates. OAuth companions are the exception by role: they exchange and refresh
-tokens with authorization servers through the OAuth dialect contract. They do not
-sandbox linked Rust code, and they cannot stop a module from deliberately
-bypassing them, for example with its own HTTP client or by reading process
-state directly. A module could also claim a host failure that it was never
+tokens with authorization servers through the OAuth dialect contract. Command
+imports are the other, deliberate exception: the Broker writes credential
+plaintext to the stdin of operator-approved local commands; see
+[command imports](#command-imports). These contracts do not sandbox linked
+Rust code, and they cannot stop a module from deliberately bypassing them, for
+example with its own HTTP client or by reading process state directly. A module could also claim a host failure that it was never
 given. Module metadata, provenance maps and qualification labels are
 assembler-supplied labels, not attestation.
 
@@ -909,6 +911,7 @@ so configured identity headers remain with the original Broker endpoint.
 | Prompt injection causes an allowed but inappropriate action. | Keep operations narrow, require confirmation for sensitive writes, and audit all write operations. |
 | Broker implementation defect allows an overbroad operation. | Use reviewed code, deterministic tests, config validation, staged rollout, and release gates. |
 | A linked provider, OAuth companion, or import adapter misuses the process's authority. | Link only modules you have reviewed and qualified; SDK contracts are not a sandbox. Run mutually untrusted modules in separate deployments. See [linked module trust](#linked-module-trust). |
+| An approved import command leaks the credentials or attributes it receives, ignores the grants of a command-enforced action, or is replaced by a different binary. | Approve only reviewed commands, protect their paths like the Broker executable, run discovery again after every upgrade, and prefer Broker-enforced resource inputs. Commands have the Broker's authority and no sandbox. See [command imports](#command-imports). |
 | Users bypass the broker by giving direct upstream tokens to agents. | Establish policy and network controls so approved agent access to protected services uses brokered access unless an exception is approved. |
 
 ## Outbound server authentication
@@ -1064,3 +1067,41 @@ fetched. Write-capable success means upstream acceptance, with an unverified
 mutation outcome. An error after dispatch does not establish that a write failed
 and must not trigger automatic replay. See [imported services](imported-services.md)
 for supported protocol, schema bounds and remaining limitations.
+
+## Command imports
+
+[Command imports](command-imports.md) run operator-approved local executables,
+one process per call. They are the deliberate exception to the rule that import
+adapters never receive credential plaintext. The command makes its own
+upstream calls, so the Broker writes to its stdin the credentials the call
+uses, the private attributes of the resources it passes, any egress proxy
+credentials, and the caller's identity. Upstream credentials travel only on
+stdin: never in arguments, the environment, receipts, audit or logs. With
+`network = "inherit"`, the proxy credentials also appear in the convenience
+proxy variables, where other processes of the same user can read them.
+
+The exception rests on the operator's approval: the command's path is named in
+Broker TOML, and the Broker spawns it as its own user. A command is therefore
+trusted like a [linked module](#linked-module-trust). It can read anything the
+Broker process can, including the managed store, encryption keys and other
+credentials. The Broker does not sandbox, checksum, pin or isolate commands,
+and `network = "none"` withholds egress settings without restricting network
+access. Binaries can be replaced at any time; the Broker records no versions,
+and a replacement runs under the accepted definitions until an administrator
+refreshes the import. Approve only commands you have reviewed, protect their
+paths and binaries like the Broker executable, and run mutually untrusted
+commands in separate deployments.
+
+The Broker still authenticates every call and applies context, token
+restrictions, grants, rate limits and audit; validates inputs against the
+accepted schema; rechecks the import, resource attributes and credentials just
+before starting the process; and never falls back from a personal to a service
+credential. An action that names its resources in its inputs is denied before
+any process starts unless grants cover every resource, and receives only the
+selected credential. For any other action, the Broker passes the caller's
+top-precedence grants, each with its own credential, and the command must
+filter by them: an unfiltered command reaches whatever its credentials can, as
+other imports do. Command results are marked sensitive, failures never return
+command output, and receipts cannot carry the secrets supplied with the call.
+Stderr is not logged unless the operator enables `log_stderr` for a command,
+which can expose secrets the command prints.
