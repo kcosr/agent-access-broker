@@ -221,6 +221,13 @@ self-service credential verifier requires a repository that the principal can
 fetch and uses `streaming_idle_timeout_ms` for stalled upstream discovery
 headers or body reads.
 
+The gateway sends a `basic_api_token` credential (per-user profile
+`git-basic-api-token`) as HTTP Basic and a `bearer_token` credential (profile
+`git-bearer-token`) as a Bearer token. GitLab's Git HTTP endpoint accepts only
+Basic credentials, so use a basic credential for a GitLab upstream: the access
+token with any non-empty username, such as `oauth2`. A GitLab deploy token
+requires its own username.
+
 Gateway responses are raw Git smart HTTP streams, not broker JSON envelopes.
 That protocol passthrough behavior is unchanged by the Jira, Confluence, and
 GitLab REST validation-message policy: upstream Git HTTP responses remain
