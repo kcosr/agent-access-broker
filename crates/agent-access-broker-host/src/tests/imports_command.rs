@@ -924,6 +924,22 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
         ),
         command_grant("stats-eng-low", "group:eng", "issue.stats", "service", 0),
         command_grant("mine-eng-user", "group:eng", "issue.mine", "per_user", 0),
+        // One subject may hold both modes at one priority for a
+        // command-enforced action: both grants are passed.
+        command_grant(
+            "stats-alice-user",
+            "user:alice",
+            "issue.stats",
+            "per_user",
+            0,
+        ),
+        command_grant(
+            "stats-alice-service",
+            "user:alice",
+            "issue.stats",
+            "service",
+            0,
+        ),
     ] {
         runtime.create_managed_policy_grant(grant).unwrap();
     }

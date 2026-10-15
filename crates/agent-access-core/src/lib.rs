@@ -3590,7 +3590,16 @@ fn validate_policy(
                 })
         })
         .collect::<Vec<_>>();
-    validate_normalized_policy_grants(config, catalog, resource_types, &grants, errors);
+    // TOML grants never name imported services: imports require managed
+    // policy.
+    validate_normalized_policy_grants(
+        config,
+        catalog,
+        &ImportedCatalog::default(),
+        resource_types,
+        &grants,
+        errors,
+    );
 }
 
 fn configured_static_principals(identity: &IdentityConfig) -> BTreeSet<String> {
@@ -3747,6 +3756,8 @@ struct PolicyValidationContainmentGrant {
     credential_mode: String,
     priority: i32,
     lookup_required: bool,
+    /// Overlapping modes are passed together, not ambiguous.
+    command_enforced: bool,
 }
 
 #[derive(Debug)]
@@ -3763,20 +3774,32 @@ struct PolicyValidationStaticGrant {
 pub(crate) fn validate_normalized_policy_grants(
     config: &BrokerConfig,
     catalog: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[NormalizedPolicyGrant<'_>],
     errors: &mut Vec<String>,
 ) {
     errors.extend(
-        normalized_policy_grant_validation_issues(config, catalog, resource_types, grants)
-            .into_iter()
-            .map(|issue| issue.message),
+        normalized_policy_grant_validation_issues(
+            config,
+            catalog,
+            imported,
+            resource_types,
+            grants,
+        )
+        .into_iter()
+        .map(|issue| issue.message),
     );
 }
 
+/// Validates normalized grants against the service catalog. Grants for a
+/// command-enforced action of an `imported` command import may mix
+/// credential modes in one band, since each passed grant names its own; every
+/// other action rejects that as ambiguous.
 pub(crate) fn normalized_policy_grant_validation_issues(
     config: &BrokerConfig,
     catalog: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[NormalizedPolicyGrant<'_>],
 ) -> Vec<NormalizedPolicyGrantValidationIssue> {
@@ -3906,6 +3929,8 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                     ),
                 ));
             }
+            let command_enforced =
+                crate::runtime::command_enforced_action(imported, catalog, grant.service, action);
             let Some(action_spec) = service.action(action) else {
                 issues.push(normalized_policy_issue(
                     NormalizedPolicyGrantIssueField::Actions,
@@ -3981,14 +4006,18 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                     })
             {
                 if previous.credential_mode != grant.credential_mode {
-                    issues.push(normalized_policy_subject_issue(
-                        grant.subject_field.clone(),
-                        "credential_mode_ambiguous",
-                        format!(
-                            "{} has ambiguous credential mode precedence for the same subject/action/scope/priority",
-                            grant.label
-                        ),
-                    ));
+                    // A command-enforced action passes both grants, each
+                    // with its own credential.
+                    if !command_enforced {
+                        issues.push(normalized_policy_subject_issue(
+                            grant.subject_field.clone(),
+                            "credential_mode_ambiguous",
+                            format!(
+                                "{} has ambiguous credential mode precedence for the same subject/action/scope/priority",
+                                grant.label
+                            ),
+                        ));
+                    }
                 } else {
                     issues.push(normalized_policy_subject_issue(
                         grant.subject_field.clone(),
@@ -4026,6 +4055,7 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                         credential_mode: grant.credential_mode.to_string(),
                         priority: grant.priority.unwrap_or(0),
                         lookup_required: action_spec.lookup.credential_required(),
+                        command_enforced,
                     });
                 }
             }
@@ -4159,6 +4189,7 @@ fn validate_policy_containment_overlaps(
                 || left.scope_type != right.scope_type
                 || left.priority != right.priority
                 || left.credential_mode == right.credential_mode
+                || left.command_enforced
                 || !execution_context_lists_overlap(
                     &left.execution_contexts,
                     &right.execution_contexts,

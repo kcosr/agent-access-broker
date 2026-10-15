@@ -10,6 +10,7 @@
 //! and boundary, and constrains its work to them. Unlike native search, the
 //! band may mix credential modes; no lower band is ever consulted.
 use super::*;
+use crate::ImportedCatalog;
 
 /// The authority core admitted for one call to a command import's action:
 /// what the command's request `authorization` block and the invocation
@@ -159,28 +160,45 @@ enum CommandDenial {
     Credentials,
 }
 
+/// Whether `service` is a command import of `imported`.
+fn command_import(imported: &ImportedCatalog, service: &str) -> bool {
+    imported.service(service).is_some_and(|record| {
+        record
+            .definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
+    })
+}
+
+/// Whether `action` of `service` is command-enforced: an action of a
+/// command import that does not name its resources in typed inputs. Its
+/// top band may mix credential modes, since every passed grant names its
+/// own. The planner and policy validation both classify actions here.
+pub(crate) fn command_enforced_action(
+    imported: &ImportedCatalog,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    service: &str,
+    action: &str,
+) -> bool {
+    command_import(imported, service)
+        && services
+            .get(service)
+            .and_then(|descriptor| descriptor.action(action))
+            .is_some_and(|descriptor| {
+                descriptor.search_contained || descriptor.resource_scope.is_none()
+            })
+}
+
 impl BrokerRuntime {
     /// Whether `service` is a command import.
     fn is_command_import(&self, service: &str) -> bool {
-        self.imported_catalog
-            .service(service)
-            .is_some_and(|record| {
-                record
-                    .definition
-                    .endpoint()
-                    .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
-            })
+        command_import(&self.imported_catalog, service)
     }
 
-    /// Whether `action` of `service` is command-enforced: an action of a
-    /// command import that does not name its resources in typed inputs.
+    /// Whether `action` of `service` is command-enforced; see
+    /// [`command_enforced_action`].
     pub(super) fn command_enforced(&self, service: &str, action: &str) -> bool {
-        self.is_command_import(service)
-            && self
-                .action_descriptor(service, action)
-                .is_some_and(|descriptor| {
-                    descriptor.search_contained || descriptor.resource_scope.is_none()
-                })
+        command_enforced_action(&self.imported_catalog, &self.services, service, action)
     }
 
     /// The command resource type of a scoped action of a command import.

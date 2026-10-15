@@ -1115,7 +1115,9 @@ overrides a user grant.
 "ambiguous credential mode precedence". Static config validation independently
 rejects duplicate same-subject grants and overlapping containment-scope grants
 with differing modes, except lookup-backed wildcard-vs-finite overlaps that can
-be resolved after authoritative metadata lookup.
+be resolved after authoritative metadata lookup. A command import's
+command-enforced actions are exempt from both: every grant of their top band is
+passed with its own credential mode, so mixed modes are not ambiguous.
 
 Lookup-backed actions still resolve authoritative scope before this final
 ambiguity check. For example, a same-precedence Jira band with a `per_user`

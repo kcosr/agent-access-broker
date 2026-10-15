@@ -1077,3 +1077,147 @@ async fn a_grant_matched_through_several_subjects_is_passed_once() {
         [("service".into(), finite(&["OPS"]), Some(0))]
     );
 }
+
+/// The `credential_mode_ambiguous` issues policy validation reports for one
+/// subject's two same-priority grants of `action`, in personal and service
+/// mode, whose boundaries overlap.
+fn ambiguity_issues(
+    runtime: &BrokerRuntime,
+    service: &str,
+    action: &str,
+    personal: &ResourceSelection,
+    shared: &ResourceSelection,
+) -> usize {
+    let mut config = (*runtime.config).clone();
+    config.credentials = (*runtime.effective_credentials).clone();
+    for (id, selector) in [("f-all", ResourceSelector::All), ("f-ops", exact("OPS"))] {
+        config.policy.resources.push(ResourceDefinition {
+            resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
+            ..project(id, selector, &["default"], true)
+        });
+    }
+    let actions = [action.to_owned()];
+    let grants = [("per_user", personal), ("service", shared)]
+        .into_iter()
+        .map(|(mode, resources)| crate::NormalizedPolicyGrant {
+            label: format!("{mode} grant"),
+            service_label: format!("{mode} grant service"),
+            actions_label: format!("{mode} grant actions"),
+            credential_mode_label: format!("{mode} grant credentialMode"),
+            execution_contexts_label: format!("{mode} grant executionContexts"),
+            subject_field: "subjects[0]".into(),
+            subject: "group:engineering",
+            service,
+            actions: &actions,
+            resources,
+            execution_contexts: vec!["default".into()],
+            credential_mode: mode,
+            priority: Some(10),
+        })
+        .collect::<Vec<_>>();
+    crate::normalized_policy_grant_validation_issues(
+        &config,
+        &runtime.services,
+        &runtime.imported_catalog,
+        runtime.resource_types(),
+        &grants,
+    )
+    .into_iter()
+    .filter(|issue| issue.code == "credential_mode_ambiguous")
+    .count()
+}
+
+fn selection(ids: &[&str], groups: &[&str]) -> ResourceSelection {
+    ResourceSelection {
+        resource_ids: ids.iter().map(|id| (*id).into()).collect(),
+        resource_group_ids: groups.iter().map(|id| (*id).into()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn one_subject_may_mix_modes_only_for_command_enforced_actions() {
+    let runtime = runtime(
+        vec![
+            grant(
+                "group:engineering",
+                "issue.search",
+                "per_user",
+                10,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:engineering",
+                "issue.search",
+                "service",
+                10,
+                &["p-ops"],
+                &[],
+            ),
+            grant("group:engineering", "issue.stats", "per_user", 10, &[], &[]),
+            grant("group:engineering", "issue.stats", "service", 10, &[], &[]),
+        ],
+        true,
+    );
+    let (wide, ops, none) = (
+        selection(&[], &["wide"]),
+        selection(&["p-ops"], &[]),
+        ResourceSelection::default(),
+    );
+    // Overlapping typed boundaries and identical untyped selections are
+    // accepted for command-enforced actions.
+    assert_eq!(
+        ambiguity_issues(&runtime, SERVICE, "issue.search", &wide, &ops),
+        0
+    );
+    assert_eq!(
+        ambiguity_issues(&runtime, SERVICE, "issue.stats", &none, &none),
+        0
+    );
+    // A Broker-enforced action and a native action keep the rejection.
+    assert_eq!(
+        ambiguity_issues(&runtime, SERVICE, "issue.view", &wide, &ops),
+        1
+    );
+    assert_eq!(
+        ambiguity_issues(
+            &runtime,
+            "fake",
+            "echo",
+            &selection(&["f-all"], &[]),
+            &selection(&["f-ops"], &[])
+        ),
+        1
+    );
+
+    // The planner passes both grants, each with its own credential.
+    let caller = identity(None);
+    let prepared = prepare(&runtime, &caller, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [
+            (
+                "per_user".into(),
+                all_except(&["FIN", "HR", "SEC"]),
+                Some(10)
+            ),
+            ("service".into(), finite(&["OPS"]), Some(10)),
+        ]
+    );
+    assert_eq!(
+        discovered(&runtime, &caller, "issue.search"),
+        Some(reached(&prepared))
+    );
+    let prepared = prepare(&runtime, &caller, "issue.stats", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [
+            ("per_user".into(), all_except(&[]), Some(10)),
+            ("service".into(), all_except(&[]), Some(10)),
+        ]
+    );
+}

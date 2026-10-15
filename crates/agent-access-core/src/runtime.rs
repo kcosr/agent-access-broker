@@ -10,6 +10,7 @@ mod availability;
 #[cfg(test)]
 mod client_category_tests;
 mod command_authority;
+pub(crate) use command_authority::command_enforced_action;
 pub use command_authority::{CommandAuthorization, CommandGrantAuthority, CommandResourceType};
 mod discovery;
 mod import_control;
@@ -2140,6 +2141,7 @@ impl BrokerRuntime {
             &imports::retention_config(&config, &imported_catalog),
             managed_store.as_ref(),
             &services,
+            &imported_catalog,
             resource_types.registry(),
         )?));
         let audit = AuditSink::new(
@@ -2702,6 +2704,7 @@ impl BrokerRuntime {
             &imports::retention_config(&self.config, &self.imported_catalog),
             subjects,
             &self.services,
+            &self.imported_catalog,
             self.resource_types.registry(),
             grants,
             catalog,
@@ -7062,6 +7065,7 @@ fn load_policy_snapshot(
     config: &BrokerConfig,
     store: Option<&ManagedStore>,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
 ) -> Result<PolicySnapshot, RuntimeError> {
     if config.policy.authority == "toml" {
@@ -7085,6 +7089,7 @@ fn load_policy_snapshot(
         config,
         &subjects,
         services,
+        imported,
         resource_types,
         &state.active_grants,
         &state.catalog,
@@ -7100,6 +7105,7 @@ fn validate_managed_policy_grants(
     config: &BrokerConfig,
     subjects: &ManagedPolicySubjectCatalog,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[ManagedPolicyGrantRecord],
     resources: &ManagedResourceCatalog,
@@ -7108,6 +7114,7 @@ fn validate_managed_policy_grants(
         config,
         subjects,
         services,
+        imported,
         resource_types,
         grants,
         resources,
@@ -7125,6 +7132,7 @@ fn managed_policy_validation_issues(
     config: &BrokerConfig,
     subjects: &ManagedPolicySubjectCatalog,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[ManagedPolicyGrantRecord],
     resources: &ManagedResourceCatalog,
@@ -7203,6 +7211,7 @@ fn managed_policy_validation_issues(
     let normalized_errors = normalized_policy_grant_validation_issues(
         config,
         catalog,
+        imported,
         resource_types,
         &normalized_grants,
     );
