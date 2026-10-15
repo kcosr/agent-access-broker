@@ -142,6 +142,7 @@ impl ImportedAdapter for ConformanceImportAdapter {
                 unsupported_reason: None,
                 read_only_hint: Some(true),
             }],
+            service_metadata: None,
         })
     }
 }

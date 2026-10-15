@@ -31,41 +31,13 @@ pub struct ImportedDiscovery {
     /// Bounded nonsecret source metadata; never arbitrary server instructions.
     pub metadata: Value,
     pub tools: Vec<ImportedDiscoveredTool>,
-}
-
-impl ImportedDiscovery {
-    /// The `metadata` key under which an adapter proposes the service-level
-    /// metadata that acceptance stores with the accepted actions
-    /// (`imported_services.accepted_metadata_json`).
-    pub const SERVICE_METADATA_KEY: &'static str = "serviceMetadata";
-
-    /// Proposes `service_metadata` for acceptance. `metadata` must be an
-    /// object, which every adapter's discovery metadata is.
-    pub fn propose_service_metadata(
-        &mut self,
-        service_metadata: &ImportedServiceMetadata,
-    ) -> Result<(), String> {
-        service_metadata.validate()?;
-        let value = serde_json::to_value(service_metadata)
-            .map_err(|_| "import metadata cannot be encoded")?;
-        self.metadata
-            .as_object_mut()
-            .ok_or("import discovery metadata must be an object")?
-            .insert(Self::SERVICE_METADATA_KEY.into(), value);
-        Ok(())
-    }
-
-    /// The proposed service-level metadata; `None` for adapters that record
-    /// none. A present but invalid proposal is an error, never `None`.
-    pub fn service_metadata(&self) -> Result<Option<ImportedServiceMetadata>, String> {
-        let Some(value) = self.metadata.get(Self::SERVICE_METADATA_KEY) else {
-            return Ok(None);
-        };
-        let metadata: ImportedServiceMetadata = serde_json::from_value(value.clone())
-            .map_err(|_| "proposed import metadata is invalid")?;
-        metadata.validate()?;
-        Ok(Some(metadata))
-    }
+    /// The service-level metadata acceptance stores with the accepted
+    /// actions (`imported_services.accepted_metadata_json`), as the adapter
+    /// proposes it; `None` for adapters that record none. Omitted from the
+    /// encoding when absent, so MCP and OpenAPI previews and their manifest
+    /// hashes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_metadata: Option<ImportedServiceMetadata>,
 }
 
 /// Core's inputs to [`ImportedAdapter::build`] and

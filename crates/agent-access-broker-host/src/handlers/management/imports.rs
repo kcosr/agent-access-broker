@@ -983,9 +983,7 @@ fn prepare_update(
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
             // Service-level metadata is accepted from the persisted preview,
             // never from the request.
-            let accepted_metadata = manifest
-                .service_metadata()
-                .map_err(|_| invalid("stored discovery preview is invalid"))?;
+            let accepted_metadata = manifest.service_metadata.clone();
             // Only command imports record service metadata, and they always do.
             if accepted_metadata.is_some()
                 != runtime.import_records_service_metadata(&record.definition)
@@ -1342,6 +1340,7 @@ mod tests {
                 read_only_hint: None,
             })
             .collect(),
+            service_metadata: None,
         };
         let before = serde_json::to_value(&manifest).unwrap();
         let warnings = scoped_mcp_warnings(&record, &manifest, |definition| {

@@ -338,7 +338,8 @@ fn discovery_manifest() -> Value {
     }});
     json!({"type":"object","additionalProperties":false,"required":["protocolVersion","metadata","tools"],"properties":{
         "protocolVersion":{"type":"string"},"metadata":{},
-        "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool}
+        "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool},
+        "serviceMetadata":accepted_metadata()
     }})
 }
 fn preview_record() -> Value {

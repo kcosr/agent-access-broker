@@ -618,6 +618,7 @@ async fn discover_tools(operation: &Operation) -> Result<ImportedDiscovery, Prov
                         protocol_version: version.into(),
                         metadata: json!({"adapterKind":"mcp_http", "pages":page + 1, "listings":listing_metadata, "serverInfo":server_info}),
                         tools,
+                        service_metadata: None,
                     });
                 }
                 Some(cursor)

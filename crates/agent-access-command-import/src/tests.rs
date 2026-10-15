@@ -137,7 +137,7 @@ async fn discovery_runs_describe_and_maps_the_manifest() {
             .unwrap()
             .contains("unsupported field")
     );
-    let metadata = discovery.service_metadata().unwrap().unwrap();
+    let metadata = discovery.service_metadata.clone().unwrap();
     assert_eq!(
         metadata.credential.as_ref().unwrap().kind,
         ImportedCredentialKind::UsernameToken
@@ -189,7 +189,7 @@ async fn credential_free_commands_discover_with_an_oauth_notice() {
         discovery.metadata["notices"],
         json!([mapping::OAUTH_NOTICE])
     );
-    let metadata = discovery.service_metadata().unwrap().unwrap();
+    let metadata = discovery.service_metadata.clone().unwrap();
     assert_eq!(metadata.credential, None);
     assert!(!metadata.verify);
     let error = discover(
@@ -248,7 +248,7 @@ async fn built_providers_expose_the_command_hook_and_fail_closed() {
     let command = command("ticketing.sh");
     let service = definition(&[ImportedCredentialMode::Service]);
     let discovery = discover(&service, Some(&command), None).await.unwrap();
-    let metadata = discovery.service_metadata().unwrap().unwrap();
+    let metadata = discovery.service_metadata.clone().unwrap();
     let mut actions = discovery
         .tools
         .into_iter()

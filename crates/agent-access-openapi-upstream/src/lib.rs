@@ -244,6 +244,7 @@ impl ImportedAdapter for OpenApiAdapter {
                 protocol_version: document.version.clone(),
                 metadata: document.metadata.clone(),
                 tools,
+                service_metadata: None,
             })
         };
         Ok(tokio::time::timeout(Duration::from_secs(60), operation)

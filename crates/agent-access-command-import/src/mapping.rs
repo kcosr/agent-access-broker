@@ -179,17 +179,14 @@ pub(crate) fn discovery(
     if manifest.oauth_declared {
         metadata["notices"] = json!([OAUTH_NOTICE]);
     }
-    let mut discovery = ImportedDiscovery {
+    let service_metadata = proposed_metadata(&definition.service, manifest, accepted);
+    service_metadata.validate()?;
+    Ok(ImportedDiscovery {
         protocol_version: COMMAND_FORMAT.into(),
         metadata,
         tools,
-    };
-    discovery.propose_service_metadata(&proposed_metadata(
-        &definition.service,
-        manifest,
-        accepted,
-    ))?;
-    Ok(discovery)
+        service_metadata: Some(service_metadata),
+    })
 }
 
 fn action_definition(name: &str, declaration: &ActionDeclaration) -> ImportedActionDefinition {
@@ -380,7 +377,7 @@ mod tests {
             json!({"command": {"resources": {"type": "project"},
                 "credentialModes": ["service", "per_user"]}})
         );
-        let metadata = discovery.service_metadata().unwrap().unwrap();
+        let metadata = discovery.service_metadata.clone().unwrap();
         assert_eq!(metadata.version, "1.4.0");
         assert!(metadata.verify);
         assert_eq!(
@@ -397,8 +394,7 @@ mod tests {
         accepted.resource_types[0].broker_type = "tickets".into();
         let refreshed = super::discovery(&definition, "ticketing", &manifest, Some(&accepted))
             .unwrap()
-            .service_metadata()
-            .unwrap()
+            .service_metadata
             .unwrap();
         assert_eq!(refreshed.resource_types[0].broker_type, "tickets");
     }

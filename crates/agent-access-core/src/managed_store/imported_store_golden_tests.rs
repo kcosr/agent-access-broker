@@ -222,6 +222,7 @@ fn golden_discovery() -> crate::imports::ImportedDiscovery {
                 read_only_hint: None,
             },
         ],
+        service_metadata: None,
     }
 }
 

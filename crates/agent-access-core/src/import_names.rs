@@ -159,6 +159,7 @@ mod tests {
                     read_only_hint: None,
                 })
                 .collect(),
+            service_metadata: None,
         }
     }
     #[test]

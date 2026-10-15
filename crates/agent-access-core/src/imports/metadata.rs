@@ -288,6 +288,35 @@ mod tests {
     }
 
     #[test]
+    fn discoveries_encode_service_metadata_only_when_proposed() {
+        let mut discovery = super::super::ImportedDiscovery {
+            protocol_version: "openapi-3.1".into(),
+            metadata: json!({"title": "Inventory"}),
+            tools: Vec::new(),
+            service_metadata: None,
+        };
+        // Previews of adapters that record none keep their exact encoding.
+        assert_eq!(
+            serde_json::to_string(&discovery).unwrap(),
+            r#"{"protocolVersion":"openapi-3.1","metadata":{"title":"Inventory"},"tools":[]}"#
+        );
+        assert_eq!(
+            serde_json::from_value::<super::super::ImportedDiscovery>(
+                serde_json::to_value(&discovery).unwrap()
+            )
+            .unwrap(),
+            discovery
+        );
+        discovery.service_metadata = Some(sample());
+        let encoded = serde_json::to_value(&discovery).unwrap();
+        assert_eq!(encoded["serviceMetadata"]["version"], "1.4.0");
+        assert_eq!(
+            serde_json::from_value::<super::super::ImportedDiscovery>(encoded).unwrap(),
+            discovery
+        );
+    }
+
+    #[test]
     fn credential_kinds_map_to_durable_spellings() {
         assert_eq!(
             ImportedCredentialKind::Token.credential_kind(),
