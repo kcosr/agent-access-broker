@@ -62,11 +62,14 @@ def request(action, inputs, authorization, credentials=CREDENTIALS):
 
 
 def broker(action, inputs, resources=(OPS,), credential="user", credentials=None):
-    if credentials is None:
-        credentials = {credential: CREDENTIALS[credential]}
-    return request(action, inputs, {
-        "mode": "broker", "credential": credential, "resourceType": "project",
-        "resources": list(resources)}, credentials)
+    """A Broker-checked request; `credential=None` builds a credential-free
+    one, which names no credential and carries no `credentials`."""
+    authorization = {"mode": "broker", "resourceType": "project", "resources": list(resources)}
+    if credential is not None:
+        authorization["credential"] = credential
+        if credentials is None:
+            credentials = {credential: CREDENTIALS[credential]}
+    return request(action, inputs, authorization, credentials)
 
 
 def command(action, inputs, grants=SEARCH_GRANTS, credentials=CREDENTIALS, typed=True):
@@ -307,16 +310,42 @@ class InvokeTests(unittest.TestCase):
         self.assertError(self.invoke(no_deadline), "input_invalid")
 
     def test_no_credential_profile(self):
-        view = broker("issue.view", {"project": "OPS", "issue": 42}, credential="service", credentials={})
-        del view["credentials"]
+        view = broker("issue.view", {"project": "OPS", "issue": 42}, credential=None)
+        self.assertNotIn("credentials", view)
         result = self.invoke(view, "no_credential")["result"]
-        self.assertEqual(result["access"]["account"], "anonymous")
-        search = command("issue.search", {"query": ""},
-                         [{"credential": "service", "resources": "any", "except": ["SEC"]}], None)
+        self.assertEqual(result["access"], {"account": "anonymous", "attributes": ["region", "webhookSecret"]})
+        search = command("issue.search", {"query": ""}, [{"resources": "any", "except": ["SEC"]}], None)
         result = self.invoke(search, "no_credential")["result"]
         self.assertEqual([i["key"] for i in result["issues"]], ["OPS-41", "OPS-42", "WEB-12", "WEB-13"])
+        self.assertTrue(all("via" not in issue for issue in result["issues"]))
+        self.assertEqual(result["access"], {"account": "anonymous"})
+        whoami = command("whoami", {}, [{"resources": "any"}], None, typed=False)
+        self.assertEqual(self.invoke(whoami, "no_credential")["result"]["access"], {"account": "anonymous"})
+        # Credential-free requests name no credential mode and carry no credentials.
+        named = broker("issue.view", {"project": "OPS", "issue": 42}, credential="service", credentials={})
+        del named["credentials"]
+        self.assertError(self.invoke(named, "no_credential"), "input_invalid")
         self.assertError(self.invoke(broker("issue.view", {"project": "OPS", "issue": 42}, credential="service"),
                                      "no_credential"), "input_invalid")
+        named_grant = command("issue.search", {"query": ""}, [{"credential": "service", "resources": "any"}], None)
+        self.assertError(self.invoke(named_grant, "no_credential"), "input_invalid")
+
+    def test_credential_modes_are_named_when_the_command_has_a_credential(self):
+        unnamed = broker("issue.view", {"project": "OPS", "issue": 42})
+        del unnamed["authorization"]["credential"]
+        self.assertError(self.invoke(unnamed), "input_invalid")
+        unnamed_grant = command("issue.search", {"query": ""}, [{"resources": "any"}], {"user": CREDENTIALS["user"]})
+        self.assertError(self.invoke(unnamed_grant), "input_invalid")
+
+    def test_resource_type_is_named_exactly_for_typed_actions(self):
+        untyped_search = command("issue.search", {"query": ""}, typed=False)
+        self.assertError(self.invoke(untyped_search), "input_invalid")
+        typed_whoami = command("whoami", {}, [{"credential": "user", "resources": "any"}],
+                               {"user": CREDENTIALS["user"]}, typed=True)
+        self.assertError(self.invoke(typed_whoami), "input_invalid")
+        other_type = broker("issue.view", {"project": "OPS", "issue": 42})
+        other_type["authorization"]["resourceType"] = "ticketing_project"
+        self.assertError(self.invoke(other_type), "input_invalid")
 
     def test_v2_profile_actions(self):
         comment = broker("issue.comment", {"project": "OPS", "issue": 42, "body": "Looking."})
@@ -434,6 +463,16 @@ class VerifyTests(unittest.TestCase):
         self.assertTrue(one_document(self, run("verify", readonly))["ok"])
         self.assertEqual(one_document(self, run("verify", self.REQUEST, "no_credential"))["error"]["code"],
                          "input_invalid")
+
+    def test_verify_requests_carry_only_the_credential(self):
+        for name, value in (("context", "internal"), ("caller", CALLER), ("inputs", {}),
+                            ("authorization", {"mode": "command", "grants": []})):
+            carried = dict(self.REQUEST, **{name: value})
+            response = one_document(self, run("verify", carried))
+            self.assertEqual(response["error"]["code"], "input_invalid", name)
+        unknown_mode = copy.deepcopy(self.REQUEST)
+        unknown_mode["credential"]["mode"] = "per_user"
+        self.assertEqual(one_document(self, run("verify", unknown_mode))["error"]["code"], "input_invalid")
 
 
 if __name__ == "__main__":

@@ -22,8 +22,9 @@ Profiles. TICKETING_PROFILE, set in [command_imports.<name>.env], selects
 the manifest:
 
   default        username_token credential, service and per_user modes, verify
-  no_credential  no credential: service-mode grants, no `credentials` on stdin,
-                 no verify
+  no_credential  no credential: service-mode grants; requests carry no
+                 `credentials` and no `credential` member in `authorization`
+                 or its grants; no verify
   v2             an upgrade for Refresh tests: version 1.5.0; `project` gains
                  an optional `owner` attribute; `issue.search` gains `limit`
                  (a behavioral change); `whoami` is removed; a per_user-only
@@ -46,8 +47,15 @@ Actions:
 Data: projects OPS (Operations), SEC (Security) and WEB (Web); issues OPS-41
 (closed), OPS-42, SEC-7, WEB-12 and WEB-13 (closed). Results carry an
 `access` object so tests can see what the Broker passed: the credential mode
-used, the upstream account (for searches, the account per mode used) and the
-names, never the values, of the resource attributes received.
+used, the upstream account (for searches, the account per mode used;
+`anonymous` without a credential) and the names, never the values, of the
+resource attributes received.
+
+Requests are checked as docs/command-imports.md describes them: a credential
+mode in `authorization` (Broker-checked) or in every grant (command-checked)
+exactly when the command declares a credential; `resourceType` exactly for
+typed actions, with only `"resources": "any"` grants for untyped ones; and
+verify requests with no context, caller, inputs or authorization.
 
 Search query grammar: clauses `project = KEY`, `status = open|closed` and
 `text ~ word` (or `text ~ "some words"`), joined by AND, optionally followed
@@ -373,6 +381,18 @@ class Ticketing:
 
     # Credentials -------------------------------------------------------------
 
+    def credential_mode(self, holder):
+        """The wire mode an authorization or grant names: `service` or `user`,
+        and absent exactly when the command declares no credential."""
+        if self.profile == "no_credential":
+            if "credential" in holder:
+                raise invalid("This command takes no credentials.")
+            return None
+        mode = holder.get("credential")
+        if mode not in ("service", "user"):
+            raise invalid("The authorization names no credential mode.")
+        return mode
+
     def account(self, request, mode, write):
         """Authenticate to the fake upstream with the credential for `mode`."""
         credentials = request.get("credentials")
@@ -392,28 +412,35 @@ class Ticketing:
 
     # Authorization ------------------------------------------------------------
 
-    @staticmethod
-    def broker_resource(request, value):
+    def broker_resource(self, request, value):
         """Resources checked by the Broker: act only on the resources passed."""
         authorization = request["authorization"]
-        if authorization.get("mode") != "broker":
-            raise invalid("Expected resources checked by the Broker.")
+        if authorization.get("mode") != "broker" or authorization.get("resourceType") != "project":
+            raise invalid("Expected project resources checked by the Broker.")
+        mode = self.credential_mode(authorization)
         for resource in authorization.get("resources", ()):
             if resource.get("value") == value:
-                return authorization["credential"], resource
+                return mode, resource
         raise CommandError("resource_forbidden", "Project %s was not authorized for this call." % value)
 
-    @staticmethod
-    def command_grants(request, typed):
-        """Resources checked by the command: the grants to filter by."""
+    def command_grants(self, request, typed):
+        """Resources checked by the command: the grants to filter by. A typed
+        action names its resource type; an untyped one names none and passes
+        only grants of any resource."""
         authorization = request["authorization"]
         if authorization.get("mode") != "command":
             raise invalid("Expected resources checked by the command.")
+        if typed and authorization.get("resourceType") != "project":
+            raise invalid("Expected project resources checked by the command.")
+        if not typed and "resourceType" in authorization:
+            raise invalid("An untyped action received a resource type.")
         grants = authorization.get("grants")
         if not grants:
             raise invalid("No grants were passed.")
         if not typed and any(grant.get("resources") != "any" or "except" in grant for grant in grants):
             raise invalid("An untyped action received resource boundaries.")
+        for grant in grants:
+            self.credential_mode(grant)
         return grants
 
     @staticmethod
@@ -430,7 +457,7 @@ class Ticketing:
 
     @staticmethod
     def access(mode, account, resource=None):
-        access = {"credential": mode, "account": account}
+        access = {"account": account} if mode is None else {"credential": mode, "account": account}
         if resource is not None:
             access["attributes"] = sorted(resource.get("attributes") or {})
         return access
@@ -479,7 +506,10 @@ class Ticketing:
             grant = self.covering_grant(grants, issue["project"])
             if grant is None:
                 continue
-            mode = grant["credential"]
+            mode = grant.get("credential")
+            if mode is None:
+                found.append(dict(issue))
+                continue
             if mode not in accounts:
                 accounts[mode] = self.account(request, mode, write=False)
             found.append(dict(issue, via=mode))
@@ -488,7 +518,11 @@ class Ticketing:
         total = len(found)
         if "limit" in inputs:
             found = found[:inputs["limit"]]
-        return success({"issues": found, "total": total, "access": {"accounts": accounts}})
+        if self.profile == "no_credential":
+            access = {"account": self.account(request, None, write=False)}
+        else:
+            access = {"accounts": accounts}
+        return success({"issues": found, "total": total, "access": access})
 
     def issue_create(self, request):
         inputs = request["inputs"]
@@ -523,7 +557,7 @@ class Ticketing:
 
     def whoami(self, request):
         grants = self.command_grants(request, typed=False)
-        mode = grants[0]["credential"]
+        mode = grants[0].get("credential")
         account = self.account(request, mode, write=False)
         return success({"caller": request["caller"], "context": request["context"],
                         "access": self.access(mode, account)})
@@ -532,6 +566,9 @@ class Ticketing:
 
     def verify(self, request):
         check_envelope(request, ("requestId", "deadline", "credential"))
+        carried = [name for name in ("context", "caller", "inputs", "authorization") if name in request]
+        if carried:
+            raise invalid("A verify request carries no " + ", ".join(carried) + ".")
         if self.profile == "no_credential":
             raise invalid("This command does not support verify.")
         credential = request["credential"]
