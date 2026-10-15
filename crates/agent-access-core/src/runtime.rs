@@ -9,6 +9,8 @@ mod audit_sqlite;
 mod availability;
 #[cfg(test)]
 mod client_category_tests;
+mod command_authority;
+pub use command_authority::{CommandAuthorization, CommandGrantAuthority, CommandResourceType};
 mod discovery;
 mod import_control;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
@@ -1743,6 +1745,13 @@ pub struct PreparedInvocation {
     state: Option<ProviderState>,
     response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
+    /// The admitted authority of a command import's call, for its request
+    /// `authorization` block and audit; `None` for every other service.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the command request builder consumes it")
+    )]
+    command_authorization: Option<CommandAuthorization>,
     finalize_context: FinalizeContext,
 }
 
@@ -3237,15 +3246,7 @@ impl BrokerRuntime {
                 self.token_resource_boundary(snapshot, context, c, service, action)
                     .is_none()
             }) && self
-                .select_policy(
-                    snapshot,
-                    identity,
-                    context,
-                    service,
-                    action,
-                    &ResourceScopes::new(),
-                )
-                .is_ok();
+                .scope_free_action_admitted(snapshot, identity, context, service, action);
         }
         !self
             .effective_resource_clauses(snapshot, identity, context, service, action, caveats)
@@ -3382,16 +3383,13 @@ impl BrokerRuntime {
             });
             if authored
                 && (resource_type.is_some()
-                    || self
-                        .select_policy(
-                            policy_snapshot,
-                            identity,
-                            execution_context,
-                            &service.service,
-                            &action.action,
-                            &ResourceScopes::new(),
-                        )
-                        .is_ok())
+                    || self.scope_free_action_admitted(
+                        policy_snapshot,
+                        identity,
+                        execution_context,
+                        &service.service,
+                        &action.action,
+                    ))
             {
                 let clauses = self.effective_resource_clauses(
                     policy_snapshot,
@@ -4672,8 +4670,57 @@ impl BrokerRuntime {
         };
 
         let mut audit_search_authorization = None;
+        let mut command_authorization = None;
         let (scopes, policy, provider_state, search_authorization) =
-            if action_descriptor.search_contained {
+            if self.command_enforced(&service, &action) {
+                let admission = self
+                    .admit_command_enforced(command_authority::CommandAdmissionRequest {
+                        snapshot: &policy_snapshot,
+                        identity: &identity,
+                        context: &execution_context,
+                        service: &service,
+                        action: &action,
+                        token: token_caveats.as_ref(),
+                        inputs: &request.inputs,
+                        correlation: &correlation,
+                        provider: &provider,
+                        domain_reasons,
+                    })
+                    .await;
+                match admission {
+                    Ok(admission) => {
+                        command_authorization = Some(admission.authorization);
+                        (
+                            admission.scopes,
+                            admission.policy,
+                            admission.state,
+                            admission.search,
+                        )
+                    }
+                    Err(error) => {
+                        return Err(Box::new(owned::PreparationFailure::new(
+                            FinalizeContext {
+                                search_authorization: None,
+                                agent_request_id,
+                                broker_request_id,
+                                policy_generation,
+                                identity,
+                                service,
+                                action,
+                                upstream_resource_ownership: None,
+                                resource_scopes: ResourceScopes::new(),
+                                credential_mode: None,
+                                matched_grant: None,
+                                source,
+                                execution_context: Some(execution_context.clone()),
+                                redact_error_resource_scopes: false,
+                                started,
+                            },
+                            Err(error),
+                        )));
+                    }
+                }
+            } else if action_descriptor.search_contained {
                 let mut search_authorization = match self.plan_search_authorization(
                     &policy_snapshot,
                     &identity,
@@ -4879,11 +4926,27 @@ impl BrokerRuntime {
                         )));
                     }
                 };
+                command_authorization =
+                    self.broker_command_authorization(&service, &action, &scopes, &policy);
                 (scopes, policy, provider_state, None)
             };
+        // A command-enforced call may pass several grants' credentials and
+        // reports one mode only when its grants share it.
+        let command_enforced = matches!(
+            command_authorization,
+            Some(CommandAuthorization::Command { .. })
+        );
+        let audit_credential_mode = match &command_authorization {
+            Some(plan) if command_enforced => plan.credential_mode(),
+            _ => Some(policy.credential_mode.clone()),
+        };
 
-        let credentials = match self
-            .resolve_execution_credential_after_policy(
+        // The command request builder resolves command-enforced credentials
+        // after the concurrency permit; the plan checked their availability.
+        let credentials = if command_enforced {
+            Ok(ExecutionAccess::None)
+        } else {
+            self.resolve_execution_credential_after_policy(
                 service_descriptor
                     .as_ref()
                     .map(|descriptor| &descriptor.credentials),
@@ -4895,7 +4958,8 @@ impl BrokerRuntime {
                 &pre_scope_lookup,
             )
             .await
-        {
+        };
+        let credentials = match credentials {
             Ok(credentials) => credentials,
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
@@ -4909,7 +4973,7 @@ impl BrokerRuntime {
                         action,
                         upstream_resource_ownership: None,
                         resource_scopes: scopes,
-                        credential_mode: Some(policy.credential_mode),
+                        credential_mode: audit_credential_mode,
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
@@ -4950,7 +5014,7 @@ impl BrokerRuntime {
                         action,
                         upstream_resource_ownership: None,
                         resource_scopes: scopes,
-                        credential_mode: Some(policy.credential_mode),
+                        credential_mode: audit_credential_mode,
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
@@ -5013,6 +5077,7 @@ impl BrokerRuntime {
             state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
+            command_authorization,
             finalize_context: FinalizeContext {
                 search_authorization: audit_search_authorization,
                 agent_request_id,
@@ -5023,7 +5088,7 @@ impl BrokerRuntime {
                 action,
                 upstream_resource_ownership,
                 resource_scopes: scopes,
-                credential_mode: Some(policy.credential_mode),
+                credential_mode: audit_credential_mode,
                 matched_grant: Some(policy.matched_grant),
                 source,
                 execution_context: Some(execution_context),
@@ -5112,6 +5177,7 @@ impl BrokerRuntime {
             state,
             response_options,
             body_part_specs: _,
+            command_authorization: _,
             finalize_context,
         } = prepared;
         let correlation = request.correlation().clone();

@@ -150,20 +150,17 @@ impl BrokerRuntime {
         let actions = std::mem::take(&mut descriptor.actions);
         for action in actions {
             let scoped = action.resource_scope.is_some();
-            let unscoped_mode = (!scoped)
-                .then(|| {
-                    self.select_policy(
-                        snapshot,
-                        identity,
-                        context,
-                        &descriptor.service,
-                        &action.action,
-                        &ResourceScopes::new(),
-                    )
-                    .ok()
-                    .map(|p| p.credential_mode)
-                })
-                .flatten();
+            let unscoped_modes = if scoped {
+                Vec::new()
+            } else {
+                self.scope_free_action_modes(
+                    snapshot,
+                    identity,
+                    context,
+                    &descriptor.service,
+                    &action.action,
+                )
+            };
             let mut available = false;
             for mode in ["service", "per_user"] {
                 let regions = if scoped {
@@ -180,7 +177,7 @@ impl BrokerRuntime {
                     Vec::new()
                 };
                 if (scoped && regions.is_empty())
-                    || (!scoped && unscoped_mode.as_deref() != Some(mode))
+                    || (!scoped && !unscoped_modes.iter().any(|selected| selected == mode))
                 {
                     continue;
                 }
@@ -279,6 +276,18 @@ impl BrokerRuntime {
             },
             clauses,
         }
+    }
+
+    /// Whether the caller's execution credential for `mode` is locally
+    /// usable, by the check caller discovery applies.
+    pub(super) fn execution_credential_usable(
+        &self,
+        service: &str,
+        mode: &str,
+        identity: &IdentityContext,
+    ) -> bool {
+        self.check_discovery_credential(service, mode, identity, false)
+            .is_ok()
     }
 
     fn check_discovery_credential(

@@ -37,7 +37,7 @@ pub struct EffectiveAccessClause {
 }
 
 impl EffectiveAccessClause {
-    fn from_boundary(boundary: ResourceBoundary) -> Self {
+    pub(super) fn from_boundary(boundary: ResourceBoundary) -> Self {
         Self {
             included: boundary.included,
             excluded: boundary.excluded,
@@ -411,6 +411,17 @@ impl BrokerRuntime {
     ) -> Vec<EffectiveAccessClause> {
         if token.is_some_and(|caveats| !caveats_permit_action(caveats, context, service, action)) {
             return Vec::new();
+        }
+        if self.command_enforced(service, action) {
+            return deduplicate_clauses(self.command_effective_clauses(
+                snapshot,
+                identity,
+                context,
+                service,
+                action,
+                token,
+                mode_available,
+            ));
         }
         let search_contained = self
             .action_descriptor(service, action)

@@ -751,3 +751,272 @@ async fn credential_modes_stay_within_the_accepted_declaration() {
     drop(app);
     broker.stop().await;
 }
+
+/// Initializes an HTTP MCP session for `token` and returns its tool names.
+async fn mcp_tool_names(app: &Router, token: &str) -> Vec<String> {
+    let send = |message: Value, session: Option<&str>| {
+        let request = super::mcp::request(Method::POST, Some(token), session, Some(message));
+        tower::ServiceExt::oneshot(app.clone(), request)
+    };
+    let initialized = send(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "command-authority", "version": "1"}}}),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(initialized.status(), StatusCode::OK);
+    let session = initialized.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    send(
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        Some(&session),
+    )
+    .await
+    .unwrap();
+    let listed = super::mcp::rpc_body(
+        send(
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            Some(&session),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn command_grant(
+    id: &str,
+    subject: &str,
+    action: &str,
+    mode: &str,
+    priority: i32,
+) -> ManagedPolicyGrantCreateRequest {
+    ManagedPolicyGrantCreateRequest {
+        grant_id: Some(id.into()),
+        subjects: vec![subject.into()],
+        execution_contexts: vec!["default".into()],
+        service: "tickets".into(),
+        actions: vec![action.into()],
+        resources: ResourceSelection::default(),
+        credential_mode: mode.into(),
+        priority: Some(priority),
+        status: None,
+        description: None,
+        created_by: "admin".into(),
+    }
+}
+
+/// An untyped command-enforced action passes every top-band grant with its
+/// own credential: personal and service grants of two groups together, the
+/// service grant alone while the personal credential is missing, and nothing
+/// from a lower band. Catalog and MCP discovery list exactly the callers
+/// invocation admits; admitted calls reach the dispatch step, which fails
+/// closed until processes run.
+#[cfg(unix)]
+#[tokio::test]
+async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service", "per_user"]},
+        "actions": [
+            {"name": "issue.stats", "description": "Issue statistics.", "readOnly": true,
+             "inputSchema": {"type": "object", "additionalProperties": false}},
+            {"name": "issue.mine", "description": "My issues.", "readOnly": true,
+             "credentialModes": ["per_user"],
+             "inputSchema": {"type": "object", "additionalProperties": false}}
+        ]
+    });
+    let mut fixture = CommandFixture::new("tickets", &manifest);
+    fixture.config.mcp.enabled = true;
+    fixture.config.mcp.public_url = Some("https://broker.example.test/mcp".into());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let (status, created) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(definition("tickets", "tickets", &["service", "per_user"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let accepted = discover_and_accept(&app, &token, "tickets", &created["result"]).await;
+    let mut secret = versions(&accepted);
+    secret["token"] = json!("svc-example");
+    let (status, stored) = request(
+        &app,
+        &token,
+        Method::PUT,
+        "/v1/admin/imports/tickets/credentials/execution",
+        Some(secret),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let mut enable = versions(&stored["result"]);
+    enable["status"] = json!("enabled");
+    let (status, enabled) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/tickets/status",
+        Some(enable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+
+    let runtime = broker.runtime();
+    let store = runtime.managed_store().unwrap();
+    for group in ["eng", "ops"] {
+        store
+            .create_group(agent_access_core::GroupWriteRequest {
+                group_id: group.into(),
+                display_name: None,
+                description: None,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+    }
+    for (principal, groups) in [
+        ("alice", &["eng", "ops"][..]),
+        ("charlie", &["eng", "ops"][..]),
+        ("bob", &["eng"][..]),
+    ] {
+        for group in groups {
+            store.add_group(principal, group, "admin").unwrap();
+        }
+    }
+    store
+        .upsert_user_credential(
+            runtime.credential_key_ring().unwrap(),
+            CredentialWriteRequest {
+                owner_principal_id: "alice".into(),
+                service: "tickets".into(),
+                name: "default".into(),
+                profile: "token".into(),
+                credential_kind: "bearer_token".into(),
+                secret: json!({"token": "alice-example"}),
+                metadata: json!({}),
+                actor: "admin".into(),
+            },
+            agent_access_core::CredentialManagementPurpose::Administrative,
+        )
+        .unwrap();
+    for grant in [
+        command_grant("stats-eng-user", "group:eng", "issue.stats", "per_user", 10),
+        command_grant(
+            "stats-ops-service",
+            "group:ops",
+            "issue.stats",
+            "service",
+            10,
+        ),
+        command_grant("stats-eng-low", "group:eng", "issue.stats", "service", 0),
+        command_grant("mine-eng-user", "group:eng", "issue.mine", "per_user", 0),
+    ] {
+        runtime.create_managed_policy_grant(grant).unwrap();
+    }
+    // The personal-only action accepts no service-mode grant.
+    assert!(
+        runtime
+            .create_managed_policy_grant(command_grant(
+                "mine-ops-service",
+                "group:ops",
+                "issue.mine",
+                "service",
+                0
+            ))
+            .is_err()
+    );
+    drop(runtime);
+
+    let scopes = json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]});
+    for (principal, stats, mine, availability) in [
+        // Both credentials are present: both grants are passed.
+        ("alice", "operation_failed", "operation_failed", "available"),
+        // No personal credential: the service grant alone is passed.
+        (
+            "charlie",
+            "operation_failed",
+            "credential_not_provisioned",
+            "partial",
+        ),
+        // Only the personal grant is in the top band; the lower service grant
+        // is never consulted.
+        (
+            "bob",
+            "credential_not_provisioned",
+            "credential_not_provisioned",
+            "unavailable",
+        ),
+    ] {
+        let agent = fixture.issue(principal, BrokerTokenClass::AgentInvoke, scopes.clone());
+        for (action, expected) in [("issue.stats", stats), ("issue.mine", mine)] {
+            let (_, outcome) = request(
+                &app,
+                &agent,
+                Method::POST,
+                &format!("/v1/invoke/tickets/{action}"),
+                Some(json!({"inputs": {}})),
+            )
+            .await;
+            assert_eq!(
+                outcome["reasonCode"], expected,
+                "{principal} {action}: {outcome}"
+            );
+        }
+        let (status, discovered) =
+            request(&app, &agent, Method::GET, "/v1/services/tickets", None).await;
+        let listed = if status == StatusCode::OK {
+            assert_eq!(
+                discovered["availability"]["state"], availability,
+                "{principal}: {discovered}"
+            );
+            discovered["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|action| action["action"].as_str().unwrap().to_owned())
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
+        let admitted = [("issue.stats", stats), ("issue.mine", mine)]
+            .into_iter()
+            .filter(|(_, outcome)| *outcome == "operation_failed")
+            .map(|(action, _)| action.to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(listed, admitted, "{principal}: {discovered}");
+        let tools = mcp_tool_names(&app, &agent).await;
+        for action in ["issue.stats", "issue.mine"] {
+            let tool = action.replace('.', "_");
+            assert_eq!(
+                tools.iter().any(|name| name.ends_with(&tool)),
+                admitted.contains(action),
+                "{principal} {action}: {tools:?}"
+            );
+        }
+        if principal == "alice" {
+            let mine = discovered["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|action| action["action"] == "issue.mine")
+                .unwrap();
+            assert_eq!(mine["credentialModes"], json!(["per_user"]));
+        }
+    }
+    drop(app);
+    broker.stop().await;
+}

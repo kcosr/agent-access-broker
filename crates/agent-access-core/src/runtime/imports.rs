@@ -7,6 +7,7 @@ use crate::imports::{
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
+mod authority;
 #[cfg(test)]
 mod command_tests;
 mod mcp_names;
@@ -215,24 +216,32 @@ pub(super) fn descriptor(
         .iter()
         .map(|pointer| (*pointer).to_owned())
         .collect();
-    let adapter_kind = &record.definition.adapter_kind;
+    let adapter = config
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind);
+    let mut resource_scopes = BTreeMap::new();
     let actions = record
         .actions
         .iter()
-        .map(|record| {
-            let definition = &record.definition;
+        .map(|action_record| {
+            let definition = &action_record.definition;
+            let shape = authority::action_shape(record, adapter, definition, &modes);
             let mut action = ActionDescriptor::new(
                 &definition.action,
                 &definition.description,
                 definition.input_schema.clone(),
             )
-            .credential_modes(modes.iter().copied());
+            .credential_modes(shape.credential_modes);
+            if let Some(scope) = shape.scope {
+                action = action.scope(scope.name.clone());
+                if scope.search_contained {
+                    action = action.search_contained();
+                }
+                resource_scopes.insert(scope.name.clone(), authority::scope_binding(&scope));
+            }
             action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
-                name: config
-                    .providers
-                    .registry()
-                    .imported_adapter(adapter_kind)
-                    .and_then(|adapter| adapter.scoped_mcp_name(definition).ok()),
+                name: adapter.and_then(|adapter| adapter.scoped_mcp_name(definition).ok()),
             };
             action.read_only = definition.read_only;
             action.sensitive_output_pointers = sensitive_output_pointers.clone();
@@ -243,6 +252,7 @@ pub(super) fn descriptor(
         record.definition.service.clone(),
         record.definition.display_name.clone(),
     )
+    .with_resource_scopes(resource_scopes)
     .with_actions(actions)
     .with_credentials(if credential_free(&record.definition) {
         CredentialDescriptor::without_execution_credential()
