@@ -682,6 +682,14 @@ gateway credentials list `repository` and require
 against the credential owner's `repo.fetch` policy before issuing a minimal
 read-only Git smart-HTTP discovery request upstream.
 
+Verifying a personal credential of a command import whose accepted manifest
+declares `verify` runs the command's `verify` operation with that credential
+under the command's concurrency budget: `{"ok": true}` reports
+`upstream_verified`, and a command error fails with its mapped reason. Without
+`verify`, the credential is checked locally only (`local_verified`). The
+verification audit records the command's process facts under
+`providerAudit.verification.command`.
+
 Self-service token management:
 
 | Method | Path |
@@ -2292,7 +2300,12 @@ A 4xx rejection, throttling of the write itself and a local failure before
 anything was sent carry no receipt. Any other failed write without a receipt
 makes no claim either way: treat it as possibly applied, and inspect the target
 before repeating it. Imported writes also report `toolDispatched` (MCP) or
-`operationDispatched` (OpenAPI).
+`operationDispatched` (OpenAPI and command imports). A command import's write
+reports the receipt its command gave: `applied_unverified` with the command's
+`safeLocators` on success, the command's `not_applied`, `unknown` or
+`applied_unverified` (with `verificationStage`, default `command_response`) on
+failure, and `unknown` when the command gave none or broke the command
+contract; a call whose process never started reports `not_applied`.
 
 ## Reason-code table
 

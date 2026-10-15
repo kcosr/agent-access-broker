@@ -492,8 +492,7 @@ All notable changes to this project are documented in this file.
   manifest's service metadata, and a command without a credential enables with
   service-mode grants and no credential. Import list responses include
   `commandImports` (approved names only) and command import results
-  `commandVersion`. Command invocations fail closed before any process starts
-  in this build.
+  `commandVersion`.
 - Command imports register the resource types their manifests declare under
   Broker type IDs proposed as `<service>_<id>`. Accepted types are listed by
   `GET /v1/resource-types`, stay registered while the import is disabled or
@@ -537,6 +536,28 @@ All notable changes to this project are documented in this file.
   log `command_import_failed`. Shutdown kills and reaps command processes
   after the operation drain, including those whose call already ended, and
   reports any it could not reap.
+- Command import calls run their command. After the slot and the final checks
+  (dispatch fence, the named resource entries revalidated and decrypted, and
+  credentials: a service slot at its admitted version, a personal credential
+  as it is now), the Broker writes one `agent-access-command/1` request to the
+  command's stdin with the caller, the inputs, the admitted `authorization`
+  (`broker` with the named resources' IDs, names and private attributes, or
+  `command` with the top band's grants, each with its credential and boundary),
+  the `token` or `username_token` credentials those grants use, and, with
+  `network = "inherit"`, the egress proxy route with its credentials, the
+  `NO_PROXY` entries, the trust mode and the configured `ca_certificate` path,
+  also set as environment variables per trust mode. A queued call whose
+  resource entry changed fails `scope_unresolved`, one whose service slot
+  rotated fails `service_action_denied`, and one whose personal credential was
+  removed fails `credential_not_provisioned`, all without starting a process.
+  Responses return `result.upstreamCommand`, map command error codes to Broker
+  reasons with the command's message and `retryAfterSeconds`, and report the
+  command's write receipt with `operationDispatched`; a response that breaks
+  the contract, including a locator echoing a supplied secret, fails
+  `operation_failed`. Invocation audit adds `providerAudit.command` (process
+  facts) and `providerAudit.commandAuthorization` (the admitted grants), kept
+  for interrupted calls. Verifying a personal credential runs the command's
+  `verify` when its manifest declares it, and stays local otherwise.
 
 ### Changed
 
