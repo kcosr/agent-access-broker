@@ -1905,10 +1905,20 @@ MCP and OAuth fixtures remain regression checks.
 The reference command,
 `crates/agent-access/tests/fixtures/command-imports/ticketing.py`, implements the
 [command contract](command-imports.md) in Python's standard library with
-deterministic data, alternative manifests and triggers for every error code,
-receipt shape, contract violation and process failure. Its own check runs it as
-the Broker would, as separate processes with a cleared environment, and checks
-the manifest rules and the request shapes it accepts:
+deterministic data and alternative manifests. Its triggers cover every
+contract error code (with `retryAfterSeconds` on `upstream_rate_limited`),
+each failure receipt status, some contract violations (an unknown receipt
+field, a nested locator, a locator echoing a supplied secret, an unknown
+code, a control character in a message, a wrong shape, an output schema
+mismatch, invalid, trailing or empty JSON and oversized output) and process
+failures (a non-zero exit, a signal, a process that never answers, a delay
+and a stderr flood). It has no trigger for pipes held open by a descendant,
+secrets echoed in a message or verification stage, an invalid
+`retryAfterSeconds` or a receipt on a read; the adapter's own tests in
+`crates/agent-access-command-import` cover those, with shell fixtures for the
+process cases. Its own check runs it as the Broker would, as separate
+processes with a cleared environment, and checks the manifest rules and the
+request shapes it accepts:
 
 ```bash
 python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
@@ -1917,13 +1927,28 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 Run it whenever the reference command or the contract it documents changes.
 
 `crates/agent-access/tests/command_import_smoke.rs`, part of `cargo test`,
-approves the reference command in a real broker and drives the shipped CLI:
-`describe` discovery and acceptance, the `username_token` service credential,
-resources of the imported type, grants in both credential modes, a personal
-credential verified by the command's `verify`, Broker-checked and
-command-checked reads and writes with their receipts, a denial before any
-process starts, the caller block, the absence of supplied secrets from every
-response, and the HTTP MCP tool listing. Both it and the portal's
+approves the reference command in a real broker and drives the shipped CLI
+and HTTP API: `describe` discovery and acceptance, the `username_token`
+service credential, resources of the imported type, a personal credential
+verified by the command's `verify`, and Broker-checked and command-checked
+reads and writes with their receipts. It checks that the Broker's own denial
+of an uncovered project, for a read and a write, starts no process (the
+audit's `spawned` fact) and carries no write receipt, while the command's
+refusal of a write starts one and reports `not_applied`. It maps command
+answers to statuses and reasons: an error code, `upstream_rate_limited` with
+`retryAfterSeconds` and `Retry-After`, `applied_unverified` with its stage
+and locators, and as contract violations a malformed receipt, a locator
+echoing the service credential (absent from the response) and oversized
+output. A same-subject, same-priority pair of `issue.search` grants in
+personal and service modes, with distinct boundaries and a group exclusion
+arriving as `except`, is compared with the catalog, MCP listing and resource
+discovery, also under a token restricted to one resource and after the
+personal credential is removed. Refreshes that remove one attribute and then
+the last one are accepted and the next call, without a reload, carries
+exactly the remaining attributes. It also checks the caller block (kind,
+groups and token ID), the request's `network` object under
+`network = "inherit"` without a configured proxy, and the absence of
+supplied secrets from responses and the audit log. Both it and the portal's
 real-service spec run the command through `python3`; a missing interpreter
 fails them rather than skipping them.
 
@@ -1936,9 +1961,12 @@ under a real Broker in the browser: importing it by its approved name, the
 preview's command metadata and "Resources checked by", the service credential
 with its username, the grant editor, the personal `username-token`
 credential form and its verification, HTTP invocation in both authorization
-modes with write receipts, the HTTP MCP listing, the Actions tab and audit
-records, and a refresh after the command is upgraded (reloaded with its `v2`
-manifest) with a resource type change and confirmed grants.
+modes with write receipts, the Broker's denial of an uncovered project
+(its audit record shows no process started) beside the command's refusal of
+a write (which started one and applied nothing), the HTTP MCP listing, the
+Actions tab and audit records, and a refresh after the command is upgraded
+(reloaded with its `v2` manifest) with a resource type change and confirmed
+grants.
 
 The rest of the portal's command import coverage uses explicit API fixtures
 shaped like an import of the reference command
@@ -1946,14 +1974,16 @@ shaped like an import of the reference command
 command. `unit/import-command.test.ts` covers the approved-name picker and
 credential modes, stdin bindings, "Resources checked by" in the review and the
 grant editor, the preview's command metadata and resource type decisions,
-Broker type ID choices, metadata-only acceptance, the structured lists of a
-refused acceptance (`target.affectedGrants` and `target.resources`) and removed
-types. `tests/imports-command-review.spec.ts` drives the same flows in the
-browser: draft creation with and without credentials, discovery and refresh
-review, acceptance bodies and refusals, the Actions tab, the
-username-and-token execution credential and resource creation without removed
-types. `tests/token-page.spec.ts` covers a command service's resource
-restrictions on the token page.
+Broker type ID choices (including IDs already registered), the credential
+modes the manifest declares, metadata-only acceptance, the structured lists
+of a refused acceptance (`target.affectedGrants`, with links only for
+resolvable grant references, and `target.resources`) and removed types.
+`tests/imports-command-review.spec.ts` drives the same flows in the browser:
+draft creation with and without credentials, discovery and refresh review,
+acceptance bodies and refusals, the Actions tab, the username-and-token and
+token-only execution credentials and resource creation without removed types.
+`tests/token-page.spec.ts` covers a command service's resource restrictions on
+the token page.
 
 ### Local password method transitions
 

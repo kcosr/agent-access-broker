@@ -81,7 +81,7 @@ LANG = "C.UTF-8"
 | `working_dir` | `/` | Absolute. |
 | `network` | `inherit` | `inherit` passes the Broker's egress settings; `none` passes none. See [network settings](#network-settings). |
 | `log_stderr` | `false` | Adds the command's stderr to failure log lines. See [audit and logs](#audit-and-logs). |
-| `env` | Empty | Extra environment variables. Names match `^[A-Za-z_][A-Za-z0-9_]*$`; values contain no NUL and are at most 4 KiB. The [network variables](#network-settings) are reserved: set `network = "none"` to supply your own. Not for secrets. |
+| `env` | Empty | Extra environment variables. Names match `^[A-Za-z_][A-Za-z0-9_]*$`; values contain no NUL and are at most 4 KiB; at most 64 variables. The [network variables](#network-settings) are reserved: set `network = "none"` to supply your own. Not for secrets. |
 
 `config validate`, startup and reload check these settings offline. A
 `[command_imports]` entry is usable only when the binary links the `command`
@@ -142,10 +142,10 @@ validates their attribute values against the declaration.
 
 The existing `/v1/admin/imports` routes and `agent-access admin imports`
 commands apply ([management](imported-services.md#cli-and-http-management)).
-Import responses also include `commandImports: [{"name": ...}]`, the approved
-command names (never paths), and each command import includes
-`commandVersion`, the accepted manifest version. The portal shows it as
-"Imported at version X".
+The import list response (`GET /v1/admin/imports`) also includes
+`commandImports: [{"name": ...}]`, the approved command names (never paths),
+and each command import includes `commandVersion`, the accepted manifest
+version. The portal shows it as "Imported at version X".
 
 ```mermaid
 sequenceDiagram
@@ -205,9 +205,10 @@ stored credentials and grants assume its shape. Create a new import instead.
 
 ### Resource type changes
 
-A refresh compares each declared type with the accepted type of the same
-Broker type ID. The preview lists every change, and accepting the preview
-applies it:
+A refresh matches each declared type to the accepted type with the same
+manifest type `id`, which must keep its accepted Broker type ID; a type the
+manifest renames is a new type, and the old one is removed. The preview lists
+every change, and accepting the preview applies it:
 
 | Change | Outcome |
 | --- | --- |
@@ -219,6 +220,7 @@ applies it:
 | Pattern or `maxLength` change | Applied if every stored resource value of the type still matches. Otherwise the preview lists the resources that do not; edit or delete them before accepting |
 | New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | Not applied: the actions using the type become unsupported and must declare it under a new type ID. Stored attribute values are encrypted, so checking them would mean decrypting them |
 | Type removed from the manifest | Its actions are quarantined. The type stays registered and accepts no new resources until its resources are deleted; a later acceptance then drops it |
+| Removed type declared again while still registered | Restored: compared with its retained declaration like any change, and accepts new resources again once applied |
 
 Only resources with an exact selector hold attribute values. Resources that
 select all values of a type therefore never prevent an attribute change, but
@@ -296,12 +298,13 @@ covering grant selects, which `credentials` holds. For a command without a
 credential, `authorization` has no `credential` member and the request no
 `credentials`.
 
-Each resource carries its `value`. A value held by an enabled,
-context-eligible exact catalog entry also carries the entry's `id` and its
-private `attributes`, an empty object for an entry without any, and `name`
-when the entry has a display name. A value covered only by a grant that
-selects all resources of the type carries just its `value`. `resourceType` is
-the manifest's type ID, not the Broker type ID.
+Each resource carries its `value`. When an enabled, context-eligible exact
+catalog entry holds the value, the resource also carries the entry's `id`,
+its private `attributes` (an empty object for an entry without any) and
+`name` when the entry has a display name, whichever grant covered the value,
+including one that selects all resources of the type. Only a value that no
+such entry holds carries just its `value`. `resourceType` is the manifest's
+type ID, not the Broker type ID.
 
 Every admitted exact entry carries an identity and version fence, with or
 without attributes. After the call's permit the Broker rechecks each entry and
@@ -401,8 +404,9 @@ The Broker runs the executable at `path` with one argument:
 | `verify` | One [verify request](#verify) | One response |
 
 The process runs in `working_dir` and in a new process group, with stdin,
-stdout and stderr piped. Its environment is empty apart from `env` and, with
-`network = "inherit"`, the [network variables](#network-settings). A command
+stdout and stderr piped. Its environment is empty apart from `env` and, for
+`invoke` and `verify` with `network = "inherit"`, the
+[network variables](#network-settings); `describe` gets `env` only. A command
 must:
 
 - **Set up first, then read the request from stdin**, without assuming it
@@ -469,14 +473,14 @@ must:
 | `credential` | Optional; omit it for a command without credentials |
 | `credential.kind` | `token` or `username_token` |
 | `credential.modes` | Nonempty subset of `service` and `per_user` |
-| `verify` | Boolean, default `false`; see [verify](#verify) |
+| `verify` | Boolean, default `false`; `true` requires `credential`. See [verify](#verify) |
 | `resourceTypes[]` | At most 16 |
 | `.id` | `^[a-z][a-z0-9_]{0,31}$`, unique |
 | `.label`, `.pluralLabel` | 1–64 bytes |
-| `.pattern` | A [pattern](#patterns) matched against the whole value |
+| `.pattern` | Required. A [pattern](#patterns) matched against the whole value |
 | `.maxLength` | Default 256, at most 1,024 bytes |
-| `.example` | Must match `pattern` |
-| `.attributes[]` | At most 16: `name` (`^[a-z][A-Za-z0-9_]{0,63}$`), `label`, `description`, `required` and an optional [pattern](#patterns). Values are at most 8 KiB. Every attribute is private and encrypted |
+| `.example` | Required, nonempty, and must match `pattern` and `maxLength` |
+| `.attributes[]` | At most 16: `name` (`^[a-z][A-Za-z0-9_]{0,63}$`), `label`, `description` (at most 1 KiB, without control characters), `required` and an optional [pattern](#patterns). Values are at most 8 KiB. Every attribute is private and encrypted |
 | `actions[]` | At most 2,048 |
 | `.name` | The action's source identity; proposes its action ID |
 | `.description` | At most 16 KiB |
@@ -680,8 +684,9 @@ optional `receipt`, which becomes the Broker's
   total. Locators sit outside the sensitive pointer and may be copied into
   compact CLI receipts, so they must hold identifiers only and never echo a
   supplied secret ([secrets in responses](#secrets-in-responses)).
-- Write results, failed ones included, report `operationDispatched`: `false`
-  only when the process never started.
+- A failed write's result reports `operationDispatched` beside its receipt:
+  `false` only when the process never started. A successful write's result
+  does not carry it.
 
 ### Secrets in responses
 
@@ -722,10 +727,11 @@ credential has no verify route, for command imports as for other imports.
   "network": { "proxy": null, "noProxy": [], "trust": "system", "caCertificate": null } }
 ```
 
-`{"ok": true, ...}` reports `upstream_verified` (**Verified**); an error
-fails with its mapped reason (**Failed**). Without `verify`, or for a command
-without a credential, the credential is checked locally only and reports
-`local_verified`; no process starts. A verification queued for the command's
+`{"ok": true, ...}` reports `upstream_verified` (**Upstream verified** in the
+portal); an error fails with its mapped reason (**Verification failed**).
+Without `verify`, or for a command without a credential, the credential is
+checked locally only and reports `local_verified` (**Local verified**); no
+process starts. A verification queued for the command's
 budget is fenced like a call: the import fence is checked after the permit
 and again immediately before the process starts, and a change or reload that
 retired the import or its command entry meanwhile fails
@@ -741,7 +747,9 @@ flowchart TD
     Spawned -->|"no: permit wait, fence, credential, request size or spawn failure"| Before["Failure with its own reason; write receipt not_applied"]
     Spawned -->|yes| Deadline{"Killed at the command deadline?"}
     Deadline -->|yes| Timeout["upstream_timeout: The tool did not finish in time; write receipt unknown"]
-    Deadline -->|no| Clean{"Exit status 0, stdout within max_output_bytes, pipes closed after the drain?"}
+    Deadline -->|no| Shutdown{"Killed at shutdown?"}
+    Shutdown -->|yes| Cancelled["operation_cancelled: operation stopped during broker shutdown; write receipt unknown"]
+    Shutdown -->|no| Clean{"Exit status 0, stdout within max_output_bytes, pipes closed after the drain?"}
     Clean -->|no| Failed["operation_failed: The tool failed; write receipt unknown"]
     Clean -->|yes| Parse{"Exactly one JSON document of the response shape?"}
     Parse -->|no| Failed
@@ -761,7 +769,9 @@ statuses or paths to callers.*
 | --- | --- | --- |
 | Request over 1 MiB; spawn error; fence or credential failure after the permit | `operation_failed`, or the fence's or credential's own reason | `not_applied` |
 | No permit by the deadline | `upstream_timeout` | `not_applied` |
+| Shutdown before the process started | `operation_cancelled` | `not_applied` |
 | Command timeout | `upstream_timeout` ("The tool did not finish in time.") | `unknown` |
+| Shutdown killed the running process | `operation_cancelled` ("operation stopped during broker shutdown") | `unknown` |
 | HTTP MCP operation deadline or forced shutdown | The host's interrupted outcome | Its `executionState`, `retrySafe: false` |
 | Non-zero exit, crash or signal | `operation_failed` ("The tool failed.") | `unknown` |
 | Stdout over `max_output_bytes`; pipes still open after the post-exit drain | `operation_failed` | `unknown` |
@@ -857,15 +867,17 @@ group and reports `upstream_timeout`.
 **Cancellation.** A queued or running command is not stopped by a client
 disconnect or MCP cancellation: it finishes or reaches its deadline, as other
 dispatched invocations do. Only the host abandoning the call, at the HTTP MCP
-operation deadline or a forced shutdown, kills it; the host then reports its
-interrupted outcome, conservatively `unknown`, even for a call that was still
-queued.
+operation deadline or a forced shutdown, and Broker shutdown (below) kill it;
+a call the host abandoned reports the host's interrupted outcome,
+conservatively `unknown`, even when it was still queued.
 
 **Shutdown.** After draining operations, shutdown stops new commands (a call
 that has not started fails with `operation_cancelled`), kills every running
-command and waits for their cleanup within the remaining shutdown time.
-Commands still running are logged and reported as
-`unfinished_command_processes`; see the [operator guide](operator-guide.md).
+command, whose call also fails with `operation_cancelled` and a write receipt
+`unknown` unless the host has already abandoned it, and waits for their
+cleanup within the remaining shutdown time. Commands still running are
+logged and reported as `unfinished_command_processes`; see the
+[operator guide](operator-guide.md).
 
 | Limit | Value |
 | --- | --- |
@@ -889,24 +901,30 @@ revisions. `providerAudit.command` adds the process facts, for example:
   "contractViolation": false, "operationDispatched": true }
 ```
 
-Command-enforced calls also record `providerAudit.commandAuthorization`: the
-grants passed, with their IDs, versions, credential modes and boundaries,
-never attributes. Both are captured by the Broker, so an interrupted call keeps
-them, with facts not yet known, such as the exit status of a killed process,
-recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+Calls also record `providerAudit.commandAuthorization`, the authorization
+the request carried, never attributes. A Broker-enforced call records
+`{"mode": "broker", "resourceType", "credentialMode", "values", "grant"}`:
+the resolved values and the covering grant's ID, version, subject and
+boundary. A command-enforced call records
+`{"mode": "command", "resourceType"?, "grants"}`: the grants passed, with
+their IDs, versions, credential modes and boundaries. Both are captured by the
+Broker, so an interrupted call keeps them, with facts not yet known, such as
+the exit status of a killed process, recorded as `null`. Audit never holds inputs, results, attributes or stderr.
 Verification records the same facts under `providerAudit.verification.command`.
 
 `contractViolation` is a verdict on the response:
 
 | Value | When |
 | --- | --- |
-| `null` | No verdict: the process never started, or the Broker stopped it before reading a response (command timeout, HTTP MCP deadline, shutdown) |
+| `null` | No verdict: the process never started, the Broker stopped it before reading a response (command timeout, HTTP MCP deadline, shutdown), or its exit could not be observed |
 | `false` | No violation: a response was read and kept the contract, or the process failed on its own with a non-zero exit or a signal |
 | `true` | A violation: oversized output, pipes held open after the drain, or a response that breaks the contract |
 
-Each failure logs one `command_import_failed` line with the service, action,
-request ID, operation, exit status or signal and the violation category,
-without the command's output:
+Each failure the Broker reports logs one `command_import_failed` line with
+the service, action, request ID, operation, exit status or signal and the
+violation category, without the command's output. A call the host drops, at
+the HTTP MCP operation deadline or a forced shutdown, logs none; its audit
+record keeps the process facts:
 
 | Category | Failure |
 | --- | --- |
@@ -959,9 +977,10 @@ against the passed grants, and `whoami`, an action without a resource type.
 It has deterministic fake data, filters searches by grant, returns write
 receipts in both authorization modes and verifies personal credentials. It
 never contacts a network. Its header documents alternative manifests for
-credential-free and refresh testing, and inputs that trigger each error and
-contract violation. The CLI smoke and the portal's browser spec import it as a
-command; run its own checks with:
+credential-free, refresh and attribute-removal testing, and inputs that
+trigger each error code, each failure receipt status, a set of contract
+violations and process failures. The CLI smoke and the portal's browser spec
+import it as a command; run its own checks with:
 
 ```bash
 python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py

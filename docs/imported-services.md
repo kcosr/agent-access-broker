@@ -522,23 +522,24 @@ Broker reasons with the command's message: `input_invalid`,
 `upstream_rate_limited` (with the command's `retryAfterSeconds` as the
 upstream rate-limit result), `upstream_unreachable`
 (`upstream_connection_failed`), `upstream_timeout` and `upstream_failed`. Write
-receipts follow [mutation receipts](http-api.md#mutation-receipts), with
-`operationDispatched` saying whether the process started. A response that
-breaks the command contract, such as invalid JSON, an unknown field or code, a
-message over 1,024 bytes or with control characters, a receipt on a read, an
-invalid locator, an echoed secret (below), or a result its output schema
-rejects, fails `operation_failed` with an `unknown` write receipt and never
-exposes the output. The command timeout fails `upstream_timeout`.
+receipts follow [mutation receipts](http-api.md#mutation-receipts); a failed
+write's result adds `operationDispatched`, saying whether the process started.
+A response that breaks the command contract, such as invalid JSON, an unknown
+field or code, a message over 1,024 bytes or with control characters, a
+receipt on a read, an invalid locator, a supplied secret (below), or a result
+its output schema rejects, fails `operation_failed` with an `unknown` write
+receipt and never exposes the output. The command timeout fails `upstream_timeout`.
 
 Error messages, verification stages and `safeLocators` keys and values leave
 the sensitive result, so none may contain, anywhere, a credential or proxy
 secret the request supplied: a credential token or the Basic `username:token`
 form of a `username_token` credential, the proxy password, its
-percent-encoded form or the credentialed proxy URL. Private resource attribute
-values are not checked: they are stored privately, but many, such as an issue
-key or a region, legitimately appear in replies, so a command must not repeat
-an attribute value it treats as a secret in these fields. A verification
-response is checked against the credential it verified and the proxy secrets.
+percent-encoded form, its Basic `username:password` form or the credentialed
+proxy URL. Private resource attribute values are not checked: they are stored
+privately, but many, such as an issue key or a region, legitimately appear in
+replies, so a command must not repeat an attribute value it treats as a secret
+in these fields. A verification response is checked against the credential it
+verified and the proxy secrets.
 
 Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
 `exitCode`, `signal`, `durationMs`, `contractViolation` and
@@ -549,12 +550,13 @@ a call the Broker interrupts at the HTTP MCP deadline or at shutdown keeps
 them; facts not yet known are `null`. `contractViolation` is `true` for
 oversized output, pipes held open or an invalid response, `false` once a
 response was read and kept the contract or the process failed on its own with
-a non-zero exit or signal, and `null` when the process never started or the
-Broker stopped it (command timeout, HTTP MCP deadline, shutdown) before reading
-a response. A client disconnect or MCP cancellation does not stop a running
-command. A command verification records the same `command` facts under
-`providerAudit.verification`, for a failed verification too, and leaves
-`upstreamStatus` `null`, since a command has no upstream status.
+a non-zero exit or signal, and `null` when the process never started, its
+exit could not be observed, or the Broker stopped it (command timeout, HTTP
+MCP deadline, shutdown) before reading a response. A client disconnect or MCP
+cancellation does not stop a running command. A command verification records
+the same `command` facts under `providerAudit.verification`, for a failed
+verification too, and leaves `upstreamStatus` `null`, since a command has no
+upstream status.
 
 ## Connecting one imported service
 
