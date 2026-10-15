@@ -214,6 +214,7 @@ node scripts/public-api.mjs check
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
+python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 node scripts/check-doc-links.mjs
 ```
 
@@ -1896,6 +1897,22 @@ operator removal of the document destination on offline restart.
 The portal OpenAPI fixture covers public/private definition discovery, the
 security-scheme picker, reviewed actions, refresh and invocation. The ordinary
 MCP and OAuth fixtures remain regression checks.
+
+## Command imports
+
+The reference command,
+`crates/agent-access/tests/fixtures/command-imports/ticketing.py`, implements the
+[command contract](command-imports.md) in Python's standard library with
+deterministic data, alternative manifests and triggers for every error code,
+receipt shape, contract violation and process failure. Its own check runs it as
+the Broker would, as separate processes with a cleared environment, and checks
+the manifest rules and the request shapes it accepts:
+
+```bash
+python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
+```
+
+Run it whenever the reference command or the contract it documents changes.
 
 ### Local password method transitions
 

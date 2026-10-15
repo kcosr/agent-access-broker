@@ -124,10 +124,12 @@ finish.
    discovery.
 3. Review the action IDs, Broker type IDs and the Read-only / Write-capable
    classification, accept the selection, then enable the service. Set the
-   service credential, or let users add personal credentials on the existing
-   Credentials screens; a command without credentials needs neither. Create
-   resource entries of the command's types and grants with the existing
-   policy editor.
+   service credential, with its username for a `username_token` command, or
+   let users add personal credentials on the existing Credentials screens; a
+   command without credentials needs neither. The service credential can be
+   set once the manifest is accepted, since it declares the credential kind.
+   Create resource entries of the command's types and grants with the
+   existing policy editor.
 
 **Broker type IDs.** The preview proposes `<service>_<id>` for each declared
 type, with hyphens replaced by underscores; `ticketing`'s `project` becomes
@@ -191,6 +193,13 @@ schema, output schema, and the resource declaration and credential modes the
 adapter records in its annotations. The manifest `version` and `verify` flag
 take effect on acceptance.
 
+Accepting a refresh also checks the managed policy against the new
+definitions. If a retained grant would become invalid, for example because an
+action's credential modes narrow and no longer include the grant's mode, or
+because an action gains typed resources while it has same-precedence grants
+in different modes, acceptance is rejected and names the grants. Update or
+remove them, then accept again.
+
 A refresh that adds, removes or changes `credential` fails discovery, because
 stored credentials and grants assume its shape. Create a new import instead.
 
@@ -208,18 +217,35 @@ applies it:
 | New optional attribute; required attribute made optional | Applied |
 | Removed attribute | Applied. Its stored values are deleted on acceptance, which advances each affected resource's version as an attribute edit does; the preview names the affected resources |
 | Pattern or `maxLength` change | Applied if every stored resource value of the type still matches. Otherwise the preview lists the resources that do not; edit or delete them before accepting |
-| New required attribute, optional attribute made required, or changed attribute pattern, on a type with resources | Not applied: the actions using the type become unsupported and must declare it under a new type ID. Stored attribute values are encrypted, so checking them would mean decrypting them |
+| New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | Not applied: the actions using the type become unsupported and must declare it under a new type ID. Stored attribute values are encrypted, so checking them would mean decrypting them |
 | Type removed from the manifest | Its actions are quarantined. The type stays registered and accepts no new resources until its resources are deleted; a later acceptance then drops it |
+
+Only resources with an exact selector hold attribute values. Resources that
+select all values of a type therefore never prevent an attribute change, but
+they do keep a removed type registered.
 
 Acceptance rechecks every decision that depends on stored resources inside its
 transaction. If a resource created or changed since the preview makes a change
 no longer allowed, acceptance is rejected and names the resources; fix them or
-refresh. Type changes never quarantine actions by themselves.
+refresh. Type changes never quarantine actions by themselves. The preview and
+acceptance fields are described under
+[imported resource types](imported-services.md#imported-resource-types).
+
+A command declares at most 16 resource types, and an import keeps at most 16
+removed types besides them. The declared types' metadata is limited to
+128 KiB of the 256 KiB the Broker stores per import, so a command that renames
+a type can still keep the old one for its resources.
+
+Resource type listings, `GET /v1/resource-types` and the runtime catalog's
+`resourceTypes`, name each imported type's `importedService` and mark a
+removed type with `removed: true`. The portal offers removed types for no new
+resources.
 
 Dropping an unused removed type needs an acceptance even when no action is
 left to select. For an import that already has accepted actions, an
 acceptance with no selections applies only the preview's type changes. A
-draft still needs at least one selection.
+draft still needs at least one selection. In the portal, clear every action
+in the review and accept it.
 
 ## Who checks resources
 
@@ -230,7 +256,7 @@ preview, **Actions** tab and grant editor show it per action:
 | --- | --- | --- | --- |
 | `{"type": "project", "inputs": ["/project"]}` | **Resources checked by: Broker** (Project, from `project`) | Resources of the type | `mode: "broker"` with the resolved resources |
 | `{"type": "project"}` | **Resources checked by: Command** (Projects) | Resources of the type | `mode: "command"` with the caller's grants |
-| Absent | **Resources checked by: Command** (no resource type) | Whole action | `mode: "command"` with grants whose resources are `"any"` |
+| Absent | **Resources checked by: Command** (no resource type) | Whole action | `mode: "command"` without `resourceType`, with grants whose resources are `"any"` |
 
 ```mermaid
 flowchart LR
@@ -264,8 +290,11 @@ An action that declares `resources.inputs` names one to four JSON pointers to
 required string or string-array inputs. The Broker reads those values,
 resolves them against the resource catalog and grants with the same rules as
 native actions, and denies the call without starting the process unless a
-grant covers every value. The request carries the resolved resources and the
-one credential the covering grant selects.
+grant covers every value. The request carries the resolved resources, and
+`authorization.credential` names the wire mode of the one credential the
+covering grant selects, which `credentials` holds. For a command without a
+credential, `authorization` has no `credential` member and the request no
+`credentials`.
 
 Each resource carries its `value` and, for an enabled, context-eligible exact
 catalog entry, its `id`, `name` and private `attributes`. The Broker rechecks
@@ -288,20 +317,26 @@ discovery uses the same planner:
    never consulted.
 3. Express each grant's boundary as finite values or as all values except
    some, intersected with the agent token's resource restriction.
-4. Omit grants whose credential is unavailable or whose boundary ends up
-   empty. If none remain, the call is denied: `credential_not_provisioned`
-   when credentials were the cause, otherwise `service_action_denied`.
+4. Omit grants whose boundary ends up empty, whose credential mode the
+   action no longer supports, or whose credential is unavailable. If none
+   remain, the call is denied: `credential_not_provisioned` when credentials
+   were the cause, otherwise `service_action_denied`.
 
 Unlike native searches, the grants in the band may use different credential
-modes; each entry names its own. The catalog, MCP tool lists and resource
-discovery show exactly what invocation would pass.
+modes; each entry names its own. Policy validation accordingly accepts
+same-precedence grants of a command-enforced action that differ in credential
+mode, which it rejects as ambiguous for native and Broker-enforced actions.
+The catalog, MCP tool lists and resource discovery show exactly what
+invocation would pass.
 
-Each grant becomes `{"credential", "resources", "except"?}`. `resources` is
-`"any"` or a list of resources shaped as for Broker-enforced actions.
-`except` appears only with `"any"` and lists excluded exact values: a grant of
-all resources minus a group exclusion is an all-except boundary, and plain
-`"any"` would broaden it. Actions without a resource type receive only `"any"`
-entries.
+Each grant becomes `{"credential", "resources", "except"?}`. `credential` is
+the grant's wire mode, `service` or `user`, and is omitted for a command
+without a credential. `resources` is `"any"` or a list of resources shaped as
+for Broker-enforced actions. `except` appears only with `"any"` and lists
+excluded exact values: a grant of all resources minus a group exclusion is an
+all-except boundary, and plain `"any"` would broaden it. For an action without
+a resource type, `authorization` has no `resourceType` and every entry is
+`{"resources": "any"}`, plus `credential` when the command has one.
 
 The command must use each grant's credential only for that grant's resources,
 filter its query or results accordingly, and answer a request it will not serve
@@ -337,8 +372,9 @@ value, and a removed credential fails with `credential_not_provisioned`.
 
 **Commands without credentials.** A manifest without `credential` declares
 none. Grants for its actions use service mode, which counts as available
-without a stored credential, enabling the service needs no credential, and
-requests carry no `credentials`. Verification is not offered.
+without a stored credential, and enabling the service needs no credential.
+Requests carry no `credentials`, and neither `authorization` nor any of its
+grant entries has a `credential` member. Verification is not offered.
 
 The credential kind and the `stdin` delivery are fixed once actions are
 accepted. Stored credentials of both kinds take part in key readiness,
@@ -429,10 +465,10 @@ must:
 | `resourceTypes[]` | At most 16 |
 | `.id` | `^[a-z][a-z0-9_]{0,31}$`, unique |
 | `.label`, `.pluralLabel` | 1–64 bytes |
-| `.pattern` | Regular expression matched against the whole value, within the import regex budgets |
-| `.maxLength` | Default 256, at most 1,024 |
+| `.pattern` | A [pattern](#patterns) matched against the whole value |
+| `.maxLength` | Default 256, at most 1,024 bytes |
 | `.example` | Must match `pattern` |
-| `.attributes[]` | At most 16: `name` (`^[a-z][A-Za-z0-9_]{0,63}$`), `label`, `description`, `required` and an optional `pattern`. Values are at most 8 KiB. Every attribute is private and encrypted |
+| `.attributes[]` | At most 16: `name` (`^[a-z][A-Za-z0-9_]{0,63}$`), `label`, `description`, `required` and an optional [pattern](#patterns). Values are at most 8 KiB. Every attribute is private and encrypted |
 | `actions[]` | At most 2,048 |
 | `.name` | The action's source identity; proposes its action ID |
 | `.description` | At most 16 KiB |
@@ -447,6 +483,19 @@ must:
 Other fields are rejected. The [import limits](imported-services.md#limits-and-admission)
 apply: a 16 MiB manifest and 256 KiB per action, including schemas. Resource
 types support exact and all-resources selectors.
+
+#### Patterns
+
+Resource type and attribute patterns use the syntax of the Rust
+[`regex`](https://docs.rs/regex) crate, which matches in time linear in the
+value's length; lookaround and backreferences are not supported. The Broker
+anchors a pattern to the whole value, so `[A-Z]{2,10}` accepts `OPS` but not
+`OPS-1`, and a pattern must be a complete expression on its own: `x)|(?s:.*`
+is rejected rather than escaping the anchors. In verbose mode (`(?x)`) a `#`
+comment runs to the end of its line, so a pattern that ends with a comment
+must end with a newline. `maxLength` and the 8 KiB attribute value bound count
+the bytes of the UTF-8 value, not characters. A pattern's source is at most
+8 KiB, and its compiled form must fit the 256 KiB compilation budgets.
 
 Attributes are stored encrypted with the existing credential key ring. Normal
 admin reads show only the names of configured attributes; values are returned
@@ -588,8 +637,10 @@ A command reports a failure with one of these codes:
 
 - `message` reaches the caller. It is UTF-8, at most 1,024 bytes, with no
   control characters except tab.
-- `upstream_rate_limited` may carry `retryAfterSeconds`, from 1 to 86,400; the
-  Broker builds the [upstream rate-limit result](http-api.md#provider-reported-standard-reasons).
+- `upstream_rate_limited` may carry `retryAfterSeconds` inside `error`, from 1
+  to 86,400:
+  `{"ok": false, "error": {"code": "upstream_rate_limited", "message": "Slow down.", "retryAfterSeconds": 30}}`.
+  The Broker builds the [upstream rate-limit result](http-api.md#provider-reported-standard-reasons).
 - A command that should not reveal whether a resource exists may answer
   `resource_not_found` instead of `resource_forbidden`.
 - Any other code is a contract violation; see
@@ -627,8 +678,11 @@ optional `receipt`, which becomes the Broker's
 
 With `verify: true` in the accepted manifest, the existing **Verify** buttons
 run `<path> verify` through the same budget, process handling, limits and
-response contract. The request carries the one credential to check, with its
-wire mode:
+response contract. The request carries `format`, `requestId`, `deadline`, the
+one `credential` to check and, with `network = "inherit"`, `network`; it has
+no `context`, `caller`, `inputs` or `authorization`. `credential.mode` is the
+wire mode: `service` for the import's execution credential and `user` for a
+personal credential.
 
 ```json
 { "format": "agent-access-command/1", "requestId": "brk_01JA7Q4F7N1P",
