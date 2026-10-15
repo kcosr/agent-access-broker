@@ -4407,11 +4407,10 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
     }
 }
 
-/// The execution credential kind a configured credential resolves to, as
-/// backend validation sees it: a static kind as written, a `managed_store`
-/// profile's kind, and `bearer_token` for delegated OAuth access. A
-/// `secret_store` stays `secret_store` because each stored record carries its
-/// own kind. An unsupported profile resolves to nothing; credential validation
+/// The credential kind backend validation sees for a configured credential:
+/// a `managed_store` entry resolves to its profile's kind; every other type
+/// (`basic_api_token`, `bearer_token`, `secret_store`, `oauth`) is passed as
+/// written. An unsupported profile resolves to nothing; credential validation
 /// reports it.
 fn resolved_credential_kind<'a>(
     credential: &'a CredentialConfig,
@@ -4422,7 +4421,6 @@ fn resolved_credential_kind<'a>(
             .profile
             .as_deref()
             .and_then(|profile| descriptor.credential_profile_kind(profile)),
-        "oauth" => Some("bearer_token"),
         other => Some(other),
     }
 }

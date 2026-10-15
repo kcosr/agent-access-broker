@@ -2952,6 +2952,37 @@ fn rejects_atlassian_gateway_without_valid_cloud_id() {
 }
 
 #[test]
+fn backend_validation_resolves_only_managed_store_profiles() {
+    let config = sample_broker();
+    let jira = configured_provider_descriptors(&config)
+        .into_iter()
+        .find(|descriptor| descriptor.service == "jira")
+        .unwrap();
+    let resolve = |credential: CredentialConfig| {
+        resolved_credential_kind(&credential, &jira).map(str::to_string)
+    };
+
+    assert_eq!(
+        resolve(managed_per_user_credential("jira-cloud-api-token")).as_deref(),
+        Some("basic_api_token")
+    );
+    assert_eq!(
+        resolve(managed_per_user_credential("unknown-profile")),
+        None
+    );
+    let mut oauth = managed_per_user_credential("read");
+    oauth.kind = "oauth".to_string();
+    oauth.provider = Some("google".to_string());
+    assert_eq!(resolve(oauth).as_deref(), Some("oauth"));
+    assert_eq!(
+        resolve(jira_per_user_credential("/etc/agent-access/jira.json")).as_deref(),
+        Some("secret_store")
+    );
+    let service = config.credentials.service.get("jira").unwrap().clone();
+    assert_eq!(resolve(service).as_deref(), Some("basic_api_token"));
+}
+
+#[test]
 fn accepts_atlassian_gateway_with_managed_bearer_per_user_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
