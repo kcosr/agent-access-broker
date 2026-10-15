@@ -184,9 +184,11 @@ class ManifestTests(unittest.TestCase):
         actions, types = check_manifest(self, manifest)
         self.assertEqual(manifest["credential"], {"kind": "username_token", "modes": ["service", "per_user"]})
         self.assertTrue(manifest["verify"])
-        self.assertEqual(sorted(actions), ["issue.create", "issue.search", "issue.view", "whoami"])
+        self.assertEqual(sorted(actions), ["issue.close", "issue.create", "issue.search", "issue.view", "whoami"])
         self.assertEqual(actions["issue.view"]["resources"], {"type": "project", "inputs": ["/project"]})
         self.assertEqual(actions["issue.search"]["resources"], {"type": "project"})
+        self.assertEqual(actions["issue.close"]["resources"], {"type": "project"})
+        self.assertFalse(actions["issue.close"]["readOnly"])
         self.assertNotIn("resources", actions["whoami"])
         self.assertFalse(actions["issue.create"]["readOnly"])
         self.assertEqual([a["name"] for a in types["project"]["attributes"]], ["region", "webhookSecret"])
@@ -208,6 +210,7 @@ class ManifestTests(unittest.TestCase):
         self.assertNotEqual(after["issue.search"]["inputSchema"], before["issue.search"]["inputSchema"])
         self.assertEqual(after["issue.view"], before["issue.view"])
         self.assertEqual(after["issue.comment"]["credentialModes"], ["per_user"])
+        self.assertEqual(after["issue.comment"]["resources"], {"type": "project", "inputs": ["/project"]})
         added = after_types["project"]["attributes"][len(before_types["project"]["attributes"]):]
         self.assertEqual([(a["name"], a["required"]) for a in added], [("owner", False)])
 
@@ -286,9 +289,30 @@ class InvokeTests(unittest.TestCase):
         self.assertEqual(response["receipt"], {"safeLocators": {"issue": "OPS-43"}})
         self.assertEqual(response["result"]["key"], "OPS-43")
         self.assertTrue(response["result"]["webhookSigned"])
-        bare = dict(OPS, attributes={})
+        # An entry without a display name has no `name`, and possibly no attributes.
+        bare = {"value": "OPS", "id": "ops", "attributes": {}}
         response = self.invoke(broker("issue.create", {"project": "OPS", "summary": "x"}, resources=[bare]))
         self.assertFalse(response["result"]["webhookSigned"])
+        self.assertEqual(response["result"]["access"]["attributes"], [])
+        # A value covered only by an all-resources grant carries just its value.
+        response = self.invoke(broker("issue.view", {"project": "WEB", "issue": 12}, resources=[{"value": "WEB"}]))
+        self.assertEqual(response["result"]["issue"]["key"], "WEB-12")
+
+    def test_close_is_a_write_checked_by_the_command(self):
+        response = self.invoke(command("issue.close", {"key": "OPS-42"}))
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["receipt"], {"safeLocators": {"issue": "OPS-42"}})
+        # OPS is covered by the personal grant first, so its credential is used.
+        self.assertEqual(response["result"]["access"], {"credential": "user", "account": "avery"})
+        service_only = command("issue.close", {"key": "OPS-41"}, [SEARCH_GRANTS[1]], {"service": CREDENTIALS["service"]})
+        self.assertEqual(self.invoke(service_only)["result"]["access"], {"credential": "service", "account": "svc-tickets"})
+        refused = self.invoke(command("issue.close", {"key": "SEC-7"}))
+        self.assertError(refused, "resource_forbidden")
+        self.assertEqual(refused["receipt"], {"mutationStatus": "not_applied"})
+        missing = self.invoke(command("issue.close", {"key": "OPS-99"}))
+        self.assertError(missing, "resource_not_found")
+        self.assertEqual(missing["receipt"], {"mutationStatus": "not_applied"})
+        self.assertError(self.invoke(broker("issue.close", {"key": "OPS-42"})), "input_invalid")
 
     def test_whoami_echoes_the_caller(self):
         result = self.invoke(command("whoami", {}, [{"credential": "user", "resources": "any"}],
@@ -300,6 +324,8 @@ class InvokeTests(unittest.TestCase):
 
     def test_malformed_requests(self):
         self.assertError(one_document(self, run("invoke", b"not json")), "input_invalid")
+        # The whole of stdin is read, even past the request limit.
+        self.assertError(one_document(self, run("invoke", b" " * (4 * MiB))), "input_invalid")
         self.assertError(one_document(self, run("invoke", b"")), "input_invalid")
         self.assertError(one_document(self, run("invoke", b"x" * (MiB + 1))), "input_invalid")
         wrong_format = dict(broker("issue.view", {"project": "OPS", "issue": 42}), format="other/1")
@@ -384,16 +410,23 @@ class TriggerTests(unittest.TestCase):
             "receipt_applied_unverified": {"mutationStatus": "applied_unverified",
                                            "verificationStage": "issue_readback",
                                            "safeLocators": {"issue": "OPS-43"}},
-            "receipt_retry_safe": {"mutationStatus": "not_applied", "retrySafe": True},
             "receipt_unknown_field": {"mutationStatus": "unknown", "note": "extra"},
         }
         for name, receipt in cases.items():
             response = one_document(self, self.create(name))
             self.assertIs(response["ok"], False)
             self.assertEqual(response["receipt"], receipt)
-        read = one_document(self, self.search("receipt_on_read"))
-        self.assertTrue(read["ok"])
-        self.assertIn("receipt", read)
+            self.assertNotIn("retrySafe", response["receipt"])
+            # Reads never carry a receipt.
+            read = one_document(self, self.search(name))
+            self.assertIs(read["ok"], False)
+            self.assertNotIn("receipt", read)
+        for name in ("locator_nested", "locator_secret"):
+            read = one_document(self, self.search(name))
+            self.assertTrue(read["ok"])
+            self.assertNotIn("receipt", read)
+        for name in ("receipt_on_read", "receipt_retry_safe"):
+            self.assertEqual(one_document(self, self.create(name))["error"]["code"], "input_invalid")
 
     def test_locator_violations(self):
         nested = one_document(self, self.create("locator_nested"))
@@ -448,21 +481,25 @@ class TriggerTests(unittest.TestCase):
 class VerifyTests(unittest.TestCase):
     REQUEST = {"format": "agent-access-command/1", "requestId": "brk_01JA7Q4F7N1P",
                "deadline": "2026-10-14T15:06:00Z",
-               "credential": {"mode": "service", "kind": "username_token",
-                              "username": "svc-tickets", "token": SERVICE_TOKEN},
+               "credential": {"mode": "user", "kind": "username_token",
+                              "username": "avery", "token": USER_TOKEN},
                "network": {"proxy": None, "noProxy": [], "trust": "system", "caCertificate": None}}
 
     def test_verify(self):
         self.assertEqual(one_document(self, run("verify", self.REQUEST)),
-                         {"ok": True, "result": {"account": "svc-tickets"}})
+                         {"ok": True, "result": {"account": "avery"}})
         expired = copy.deepcopy(self.REQUEST)
         expired["credential"]["token"] = "expired-1"
         self.assertEqual(one_document(self, run("verify", expired))["error"]["code"], "upstream_unauthorized")
         readonly = copy.deepcopy(self.REQUEST)
-        readonly["credential"].update(mode="user", token="readonly-1")
+        readonly["credential"]["token"] = "readonly-1"
         self.assertTrue(one_document(self, run("verify", readonly))["ok"])
         self.assertEqual(one_document(self, run("verify", self.REQUEST, "no_credential"))["error"]["code"],
                          "input_invalid")
+        # Only personal credentials are verified.
+        service = copy.deepcopy(self.REQUEST)
+        service["credential"].update(mode="service", username="svc-tickets", token=SERVICE_TOKEN)
+        self.assertEqual(one_document(self, run("verify", service))["error"]["code"], "input_invalid")
 
     def test_verify_requests_carry_only_the_credential(self):
         for name, value in (("context", "internal"), ("caller", CALLER), ("inputs", {}),
@@ -473,6 +510,9 @@ class VerifyTests(unittest.TestCase):
         unknown_mode = copy.deepcopy(self.REQUEST)
         unknown_mode["credential"]["mode"] = "per_user"
         self.assertEqual(one_document(self, run("verify", unknown_mode))["error"]["code"], "input_invalid")
+        # Secrets never come back in a verify answer.
+        answered = one_document(self, run("verify", self.REQUEST))
+        self.assertNotIn(USER_TOKEN, json.dumps(answered))
 
 
 if __name__ == "__main__":

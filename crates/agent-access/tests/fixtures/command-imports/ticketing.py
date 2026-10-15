@@ -40,6 +40,10 @@ Actions:
                  persists, so the new key is always the project's highest
                  issue number plus one (OPS-43, SEC-8, WEB-14), returned as a
                  receipt locator
+  issue.close    write; checked by the command (type `project`): closes the
+                 issue `key` with the credential of the grant covering its
+                 project, returned as a receipt locator; an uncovered project
+                 answers resource_forbidden with receipt not_applied
   whoami         read; checked by the command, no resource type: echoes the
                  caller block and execution context
   issue.comment  write (v2 only); checked by the Broker, from /project
@@ -54,8 +58,11 @@ resource attributes received.
 Requests are checked as docs/command-imports.md describes them: a credential
 mode in `authorization` (Broker-checked) or in every grant (command-checked)
 exactly when the command declares a credential; `resourceType` exactly for
-typed actions, with only `"resources": "any"` grants for untyped ones; and
-verify requests with no context, caller, inputs or authorization.
+typed actions, with only `"resources": "any"` grants for untyped ones;
+resource entries with `id` and `attributes` (possibly empty) and `name` only
+when they have a display name; and verify requests for a personal
+credential (wire mode `user`) with no context, caller, inputs or
+authorization.
 
 Search query grammar: clauses `project = KEY`, `status = open|closed` and
 `text ~ word` (or `text ~ "some words"`), joined by AND, optionally followed
@@ -70,18 +77,17 @@ Deterministic triggers.
     readonly-...   upstream_forbidden on writes; reads and verify succeed
 
   `trigger:<name>` as the whole `issue.search` query or `issue.create`
-  summary, checked after the authorization and credential checks. Receipt
-  and locator triggers are meant for `issue.create` (a write), except
-  receipt_on_read, which is meant for `issue.search` (a read). "Violation"
-  marks answers the Broker must reject as operation_failed.
+  summary, checked after the authorization and credential checks. Receipts
+  and locators are sent only on writes: on `issue.search` (a read) the
+  receipt and locator triggers answer the same without them. The command
+  never sends `retrySafe`, which the Broker derives. "Violation" marks
+  answers the Broker must reject as operation_failed.
     <code>                      that error, for each code of the contract;
                                 upstream_rate_limited adds retryAfterSeconds 30
     receipt_not_applied         upstream_unreachable; receipt not_applied
     receipt_unknown             upstream_timeout; receipt unknown
     receipt_applied_unverified  upstream_failed; receipt applied_unverified,
                                 verificationStage issue_readback, issue locator
-    receipt_on_read             success with a receipt (violation on reads)
-    receipt_retry_safe          error whose receipt has retrySafe (violation)
     receipt_unknown_field       error whose receipt has an extra field
                                 (violation)
     locator_nested              success with an object locator (violation)
@@ -291,6 +297,23 @@ def actions(profile):
             },
             "resources": {"type": "project", "inputs": ["/project"]},
         },
+        {
+            "name": "issue.close",
+            "description": "Close an issue by its key, such as `OPS-42`.",
+            "readOnly": False,
+            "inputSchema": {
+                "type": "object", "required": ["key"],
+                "properties": {"key": {"type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,8}$"}},
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object", "required": ["key", "status"],
+                "properties": {"key": {"type": "string"},
+                               "status": {"type": "string", "enum": ["closed"]},
+                               "access": {"type": "object"}},
+            },
+            "resources": {"type": "project"},
+        },
     ]
     if profile == "v2":
         listed.append({
@@ -305,6 +328,7 @@ def actions(profile):
                                "body": {"type": "string", "minLength": 1, "maxLength": 4000}},
                 "additionalProperties": False,
             },
+            "resources": {"type": "project", "inputs": ["/project"]},
         })
     else:
         listed.append({
@@ -330,7 +354,8 @@ def manifest(profile):
 
 
 def read_request():
-    data = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    # Read all of stdin, so the Broker's writer always finishes.
+    data = sys.stdin.buffer.read()
     if len(data) > MAX_REQUEST_BYTES:
         raise invalid("The request is larger than 1 MiB.")
     try:
@@ -373,6 +398,7 @@ class Ticketing:
             "issue.view": self.issue_view,
             "issue.search": self.issue_search,
             "issue.create": self.issue_create,
+            "issue.close": self.issue_close,
         }
         if profile == "v2":
             self.handlers["issue.comment"] = self.issue_comment
@@ -544,6 +570,22 @@ class Ticketing:
         }
         return success(result, receipt={"safeLocators": {"issue": key}})
 
+    def issue_close(self, request):
+        grants = self.command_grants(request, typed=True)
+        key = request["inputs"]["key"]
+        project = key.split("-")[0]
+        grant = self.covering_grant(grants, project)
+        if grant is None:
+            raise CommandError("resource_forbidden", "Project %s is outside your access." % project,
+                               receipt={"mutationStatus": "not_applied"})
+        mode = grant.get("credential")
+        account = self.account(request, mode, write=True)
+        if key not in self.issues:
+            raise CommandError("resource_not_found", "Issue %s was not found." % key,
+                               receipt={"mutationStatus": "not_applied"})
+        return success({"key": key, "status": "closed", "access": self.access(mode, account)},
+                       receipt={"safeLocators": {"issue": key}})
+
     def issue_comment(self, request):
         inputs = request["inputs"]
         mode, resource = self.broker_resource(request, inputs["project"])
@@ -572,8 +614,9 @@ class Ticketing:
         if self.profile == "no_credential":
             raise invalid("This command does not support verify.")
         credential = request["credential"]
-        if not isinstance(credential, dict) or credential.get("mode") not in ("service", "user"):
-            raise invalid("The credential to verify is malformed.")
+        # The Broker verifies personal credentials only, in wire mode `user`.
+        if not isinstance(credential, dict) or credential.get("mode") != "user":
+            raise invalid("Only a personal credential can be verified.")
         if credential.get("kind") != "username_token" or not credential.get("username"):
             raise CommandError("upstream_unauthorized", "No usable credential was supplied.")
         if credential.get("token", "").startswith("expired-"):
@@ -587,31 +630,31 @@ class Ticketing:
         if name in ERROR_CODES:
             extra = {"retryAfterSeconds": 30} if name == "upstream_rate_limited" else {}
             return failure(name, "Triggered %s." % name, **extra)
+
+        def receipt(value):
+            # Receipts belong to writes only.
+            return value if write else None
+
         responses = {
             "receipt_not_applied": lambda: failure(
                 "upstream_unreachable", "Could not connect to the ticketing service.",
-                {"mutationStatus": "not_applied"}),
+                receipt({"mutationStatus": "not_applied"})),
             "receipt_unknown": lambda: failure(
                 "upstream_timeout", "The ticketing service did not answer in time.",
-                {"mutationStatus": "unknown"}),
+                receipt({"mutationStatus": "unknown"})),
             "receipt_applied_unverified": lambda: failure(
                 "upstream_failed", "The issue was created but could not be read back.",
-                {"mutationStatus": "applied_unverified", "verificationStage": "issue_readback",
-                 "safeLocators": {"issue": locator}}),
-            "receipt_on_read": lambda: success(
-                {"issues": [], "total": 0}, {"safeLocators": {"issue": locator}}),
-            "receipt_retry_safe": lambda: failure(
-                "upstream_unreachable", "Could not connect to the ticketing service.",
-                {"mutationStatus": "not_applied", "retrySafe": True}),
+                receipt({"mutationStatus": "applied_unverified", "verificationStage": "issue_readback",
+                         "safeLocators": {"issue": locator}})),
             "receipt_unknown_field": lambda: failure(
                 "upstream_failed", "The ticketing service failed.",
-                {"mutationStatus": "unknown", "note": "extra"}),
+                receipt({"mutationStatus": "unknown", "note": "extra"})),
             "locator_nested": lambda: success(
                 {"key": locator, "status": "open"},
-                {"safeLocators": {"issue": {"key": locator}}}),
+                receipt({"safeLocators": {"issue": {"key": locator}}})),
             "locator_secret": lambda: success(
                 {"key": locator, "status": "open"},
-                {"safeLocators": {"issue": locator, "copy": supplied_secret(request, resource)}}),
+                receipt({"safeLocators": {"issue": locator, "copy": supplied_secret(request, resource)}})),
             "unknown_code": lambda: failure("teapot", "Not a contract error code."),
             "bad_message": lambda: {"ok": False, "error": {
                 "code": "upstream_failed", "message": "Bell\u0007 in the message."}},
