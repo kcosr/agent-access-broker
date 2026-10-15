@@ -30,7 +30,7 @@ pub fn validate_atlassian_gateway_credential(
                 has_bearer_execution_credential = true;
             } else if uses_gateway {
                 errors.push(format!(
-                    "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service}.type is not bearer_token"
+                    "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service} does not resolve to a bearer_token credential"
                 ));
             }
         }

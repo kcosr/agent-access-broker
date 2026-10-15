@@ -210,8 +210,13 @@ impl<'a> ValidationContext<'a> {
     }
 }
 
-/// Credential kinds configured under `credentials.service.<service>` and
-/// `credentials.per_user.<service>`.
+/// The execution credential kinds `credentials.service.<service>` and
+/// `credentials.per_user.<service>` resolve to: `basic_api_token` or
+/// `bearer_token` for a static credential or a `managed_store` profile,
+/// `bearer_token` for delegated OAuth access, and `secret_store` when each
+/// stored record carries its own kind. `None` means the mode is not
+/// configured, or its profile is unsupported (credential validation reports
+/// that separately).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceCredentialKinds<'a> {

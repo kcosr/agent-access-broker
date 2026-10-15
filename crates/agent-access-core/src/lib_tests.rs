@@ -2330,7 +2330,10 @@ fn rejects_atlassian_gateway_with_basic_service_credentials() {
         .allowed_upstream_hosts
         .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
     let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(&errors, "is not bearer_token");
+    assert_contains(
+        &errors,
+        "credentials.service.jira does not resolve to a bearer_token credential",
+    );
 }
 
 #[test]
@@ -2945,6 +2948,77 @@ fn rejects_atlassian_gateway_without_valid_cloud_id() {
     assert_contains(
         &errors,
         "providers.jira.cloud_id must be a valid Atlassian cloud UUID",
+    );
+}
+
+#[test]
+fn accepts_atlassian_gateway_with_managed_bearer_per_user_credentials() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        managed_per_user_credential("jira-bearer-token"),
+    );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+}
+
+#[test]
+fn accepts_confluence_gateway_with_managed_bearer_per_user_credentials() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    config
+        .providers
+        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+        .unwrap()
+        .allowed_upstream_hosts
+        .push(
+            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
+                .to_string(),
+        );
+    let credential = config.credentials.service.get_mut("confluence").unwrap();
+    credential.kind = "bearer_token".to_string();
+    credential.username_ref = None;
+    config.credentials.per_user.insert(
+        "confluence".to_string(),
+        managed_per_user_credential("confluence-bearer-token"),
+    );
+
+    validate_broker_config(&config).unwrap();
+}
+
+#[test]
+fn rejects_atlassian_gateway_with_managed_basic_per_user_credentials() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        managed_per_user_credential("jira-cloud-api-token"),
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.per_user.jira does not resolve to a bearer_token credential",
+    );
+}
+
+#[test]
+fn rejects_atlassian_gateway_with_secret_store_per_user_credentials() {
+    let mut config = sample_broker();
+    use_atlassian_gateway_for_jira(&mut config);
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        jira_per_user_credential("/etc/agent-access/jira-user-credentials.json"),
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.per_user.jira does not resolve to a bearer_token credential",
     );
 }
 
@@ -4816,6 +4890,45 @@ fn git_http_gateway_config() -> GatewayConfig {
             receive_pack_prefix_max_bytes: Some(64 * 1024),
         }),
     }
+}
+
+fn managed_per_user_credential(profile: &str) -> CredentialConfig {
+    CredentialConfig {
+        kind: "managed_store".to_string(),
+        username_ref: None,
+        token_ref: None,
+        provider: None,
+        path: None,
+        read_only: None,
+        credential_name: None,
+        profile: Some(profile.to_string()),
+    }
+}
+
+fn enable_test_managed_store(config: &mut BrokerConfig) {
+    config.managed_store = Some(ManagedStoreConfig {
+        kind: "sqlite".to_string(),
+        path: "/var/lib/agent-access-broker/managed-store.sqlite3".to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    });
+}
+
+/// Routes the sample Jira service through the Atlassian gateway with a static
+/// bearer service credential.
+fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
+    config
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap()
+        .allowed_upstream_hosts
+        .push(
+            "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**"
+                .to_string(),
+        );
+    let credential = config.credentials.service.get_mut("jira").unwrap();
+    credential.kind = "bearer_token".to_string();
+    credential.username_ref = None;
 }
 
 fn jira_per_user_credential(path: &str) -> CredentialConfig {

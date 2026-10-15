@@ -822,6 +822,14 @@ All notable changes to this project are documented in this file.
   configuration reference's gateway example includes its Basic service
   credential, and the Git gateway guide notes that GitLab accepts the access
   token with any non-empty username, such as `oauth2`.
+- Jira and Confluence configurations that route through the Atlassian gateway
+  (`api.atlassian.com` in `allowed_upstream_hosts`) now validate per-user
+  `managed_store` bearer profiles (`jira-bearer-token`,
+  `confluence-bearer-token`). Backend validation previously compared the raw
+  `managed_store` type with `bearer_token` and rejected every per-user entry,
+  so these documented profiles could not be used. Gateway mode still requires
+  every configured service and per-user credential to resolve to
+  `bearer_token`.
 
 ### Removed
 

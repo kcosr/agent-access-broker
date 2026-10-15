@@ -4385,6 +4385,7 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
                 "providers.{kind} is a development backend and requires deployment.enable_fake_service"
             ));
         }
+        let descriptor = backend.descriptor();
         let context = ValidationContext::new(
             &config.deployment.environment,
             &config.policy.authority,
@@ -4394,15 +4395,35 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
                     .credentials
                     .service
                     .get(kind)
-                    .map(|credential| credential.kind.as_str()),
+                    .and_then(|credential| resolved_credential_kind(credential, &descriptor)),
                 config
                     .credentials
                     .per_user
                     .get(kind)
-                    .map(|credential| credential.kind.as_str()),
+                    .and_then(|credential| resolved_credential_kind(credential, &descriptor)),
             ),
         );
         backend.validate(&context, errors);
+    }
+}
+
+/// The execution credential kind a configured credential resolves to, as
+/// backend validation sees it: a static kind as written, a `managed_store`
+/// profile's kind, and `bearer_token` for delegated OAuth access. A
+/// `secret_store` stays `secret_store` because each stored record carries its
+/// own kind. An unsupported profile resolves to nothing; credential validation
+/// reports it.
+fn resolved_credential_kind<'a>(
+    credential: &'a CredentialConfig,
+    descriptor: &ServiceDescriptor,
+) -> Option<&'a str> {
+    match credential.kind.as_str() {
+        "managed_store" => credential
+            .profile
+            .as_deref()
+            .and_then(|profile| descriptor.credential_profile_kind(profile)),
+        "oauth" => Some("bearer_token"),
+        other => Some(other),
     }
 }
 
