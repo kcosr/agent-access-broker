@@ -11,6 +11,8 @@ use principal_access::{
 #[path = "imported_store.rs"]
 mod imported_store;
 pub use imported_store::*;
+mod imported_resource_types;
+pub use imported_resource_types::{DeletedResourceAttributes, ImportedTypeEffects};
 mod local_password_failures;
 pub(crate) mod oauth;
 mod principal_service_limits;

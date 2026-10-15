@@ -160,6 +160,7 @@ mod tests {
                 })
                 .collect(),
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         }
     }
     #[test]

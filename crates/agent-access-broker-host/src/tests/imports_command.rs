@@ -17,15 +17,15 @@ echo "$1" >> "$MARKER"
 cat "$MANIFEST"
 "#;
 
-struct CommandFixture {
+pub(super) struct CommandFixture {
     imports: Fixture,
     directory: tempfile::TempDir,
-    config: BrokerConfig,
+    pub(super) config: BrokerConfig,
 }
 
 impl CommandFixture {
     /// The import fixture with `command` allowed and `name` approved.
-    fn new(name: &str, manifest: &Value) -> Self {
+    pub(super) fn new(name: &str, manifest: &Value) -> Self {
         let imports = fixture();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("command.sh");
@@ -69,7 +69,7 @@ impl CommandFixture {
         fixture
     }
 
-    fn write_manifest(&self, manifest: &Value) {
+    pub(super) fn write_manifest(&self, manifest: &Value) {
         std::fs::write(self.path("manifest.json"), manifest.to_string()).unwrap();
     }
 
@@ -82,7 +82,7 @@ impl CommandFixture {
         read_runs(&self.path("runs"))
     }
 
-    fn admin_token(&self) -> String {
+    pub(super) fn admin_token(&self) -> String {
         self.issue("admin", BrokerTokenClass::Admin, json!({}))
     }
 
@@ -113,7 +113,7 @@ fn read_runs(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn request(
+pub(super) async fn request(
     app: &Router,
     token: &str,
     method: Method,
@@ -134,11 +134,11 @@ async fn request(
     (response.status(), response_json(response).await)
 }
 
-fn versions(result: &Value) -> Value {
+pub(super) fn versions(result: &Value) -> Value {
     json!({"expectedVersion":result["service"]["version"],"expectedCatalogRevision":result["catalogRevision"]})
 }
 
-fn definition(service: &str, command: &str, modes: &[&str]) -> Value {
+pub(super) fn definition(service: &str, command: &str, modes: &[&str]) -> Value {
     json!({
         "service": service,
         "displayName": format!("{service} command"),

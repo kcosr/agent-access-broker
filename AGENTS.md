@@ -745,6 +745,13 @@ never fetch external references, follow redirects, or infer resource grants.
 Empty drafts may choose settings before accepting actions; accepted connection
 settings and delivery cannot change underneath existing action identities.
 
+Imported resource types come only from accepted import metadata and keep their
+Broker type IDs once accepted. They change in place only under the safe-change
+rules in `docs/imported-services.md`; acceptance rechecks every decision that
+depends on stored resources inside its transaction under the policy mutation
+lock, and publishes the registry, catalog and any advanced policy together.
+Never decrypt attribute values to judge a type change.
+
 Empty imported drafts may change adapter settings/delivery only before actions
 are accepted. Such changes clear execution/discovery slots transactionally and
 require removal of existing personal credentials first; never carry stored

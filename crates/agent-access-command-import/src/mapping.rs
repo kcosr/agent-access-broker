@@ -247,6 +247,7 @@ pub(crate) fn discovery(
         metadata,
         tools,
         service_metadata: Some(service_metadata),
+        resource_type_changes: Vec::new(),
     })
 }
 

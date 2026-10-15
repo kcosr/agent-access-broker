@@ -38,6 +38,12 @@ pub struct ImportedDiscovery {
     /// hashes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_metadata: Option<ImportedServiceMetadata>,
+    /// The host's decision for every resource type the source adds,
+    /// changes, restores or removes, recorded when the preview is written;
+    /// `service_metadata` then holds what acceptance stores. Adapters leave
+    /// it empty, and an empty list is omitted from the encoding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_type_changes: Vec<super::ImportedResourceTypeChange>,
 }
 
 /// Core's inputs to [`ImportedAdapter::build`] and

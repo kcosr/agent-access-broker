@@ -64,6 +64,10 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         }
     }});
     accept["properties"]["confirmAffectedGrants"] = json!({"type":"boolean","default":false});
+    accept["properties"]["resourceTypeIds"] = json!({"type":"object","maxProperties":crate::imports::IMPORT_MAX_RESOURCE_TYPES,
+        "description":"Broker type IDs chosen for the resource types this acceptance adds, by the source's type id. Accepted types keep their IDs.",
+        "propertyNames":{"pattern":"^[a-z][a-z0-9_]{0,31}$"},
+        "additionalProperties":{"type":"string","pattern":"^[a-z][a-z0-9_]{0,63}$"}});
     accept["required"]
         .as_array_mut()
         .unwrap()
@@ -270,6 +274,46 @@ fn service_record() -> Value {
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
     }})
 }
+/// The enumerations of a resource type change recorded in a preview.
+fn resource_type_change_properties() -> Value {
+    json!({
+        "id":{"type":"string"},"brokerType":{"type":"string"},
+        "change":{"enum":["added","changed","restored","removed"]},
+        "outcome":{"enum":["applied","needs_new_id","retained","dropped"]},
+        "details":{"type":"array","items":{"enum":["label","plural_label","example","attribute_added",
+            "attribute_made_optional","attribute_text","attribute_order","attribute_removed","pattern",
+            "max_length","attribute_added_required","attribute_made_required","attribute_pattern"]}}
+    })
+}
+/// A preview's decision for one resource type, as recorded with the preview.
+fn resource_type_change() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["id","brokerType","change","outcome","details"],
+        "properties":resource_type_change_properties()})
+}
+/// A preview's decision for one resource type with the stored resources it
+/// currently depends on.
+fn resource_type_change_status() -> Value {
+    let mut properties = resource_type_change_properties();
+    let ids = json!({"type":"array","maxItems":crate::imports::IMPORT_TYPE_RESOURCE_SAMPLE,"items":{"type":"string"}});
+    properties["resourceCount"] = json!({"type":"integer","minimum":0});
+    properties["blockingResources"] = ids.clone();
+    properties["affectedResources"] = ids;
+    properties["editable"] = json!({"type":"boolean"});
+    properties["blocked"] = json!({"type":"boolean"});
+    json!({"type":"array","items":{"type":"object","additionalProperties":false,
+        "required":["id","brokerType","change","outcome","details","resourceCount","blockingResources","affectedResources","editable","blocked"],
+        "properties":properties}})
+}
+/// What an acceptance's resource type changes did to stored resources.
+fn resource_type_effects() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["deletedAttributeValues","droppedTypes"],"properties":{
+        "deletedAttributeValues":{"type":"array","items":{"type":"object","additionalProperties":false,
+            "required":["resourceId","attributes"],"properties":{
+                "resourceId":{"type":"string"},"attributes":{"type":"array","items":{"type":"string"}}
+            }}},
+        "droppedTypes":{"type":"array","items":{"type":"string"}}
+    }})
+}
 /// The service-level metadata a command import accepted with its actions.
 fn accepted_metadata() -> Value {
     let attribute = json!({"type":"object","additionalProperties":false,"required":["name","label","description","required","pattern"],"properties":{
@@ -327,7 +371,8 @@ fn command_version() -> Value {
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version()
+        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
+        "resourceTypeEffects":resource_type_effects()
     }})
 }
 fn discovery_manifest() -> Value {
@@ -339,7 +384,8 @@ fn discovery_manifest() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["protocolVersion","metadata","tools"],"properties":{
         "protocolVersion":{"type":"string"},"metadata":{},
         "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool},
-        "serviceMetadata":accepted_metadata()
+        "serviceMetadata":accepted_metadata(),
+        "resourceTypeChanges":{"type":"array","items":resource_type_change()}
     }})
 }
 fn preview_record() -> Value {
@@ -352,7 +398,8 @@ fn preview_record() -> Value {
     }})
 }
 fn preview_result() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings","resourceTypeChanges"],"properties":{
+        "resourceTypeChanges":resource_type_change_status(),
         "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},

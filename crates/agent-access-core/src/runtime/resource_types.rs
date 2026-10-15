@@ -251,6 +251,86 @@ impl super::BrokerRuntime {
     pub fn imported_resource_type_taken(&self, service: &str, broker_type: &str) -> bool {
         self.resource_types.registered_outside(broker_type, service)
     }
+
+    /// Commits an imported-service update and builds the generation that
+    /// publishes it, holding the managed policy mutation lock, which resource
+    /// writes also take. An acceptance applies its resource type changes in
+    /// the same transaction; when they delete attribute values or drop a type
+    /// the generation also publishes the resulting managed policy, so its
+    /// registry, imported catalog, resource catalog and attribute bindings
+    /// change together.
+    pub fn commit_imported_service_update(
+        &self,
+        request: crate::ImportedServiceUpdateRequest,
+        prepared: super::imports::PreparedImportedProviders,
+    ) -> Result<
+        (
+            crate::ImportedMutationResult<super::BrokerRuntime>,
+            crate::ImportedTypeEffects,
+        ),
+        crate::ManagedStoreError,
+    > {
+        let _guard = self.managed_policy_mutation_guard()?;
+        let store = self.managed_store.as_ref().ok_or_else(|| {
+            crate::ManagedStoreError::InputInvalid(
+                "imported services require managed storage".into(),
+            )
+        })?;
+        store.update_imported_service_with_policy(request, |catalog, policy| {
+            let next = self.with_imported_catalog(catalog.clone(), prepared)?;
+            match policy {
+                Some(policy) => next.with_managed_policy_state(policy),
+                None => Ok(next),
+            }
+        })
+    }
+
+    /// Publishes `state`, committed in the same transaction as the catalog
+    /// this generation carries, as its managed policy snapshot after checking
+    /// it against this generation's registry.
+    fn with_managed_policy_state(
+        mut self,
+        state: &crate::ManagedPolicyState,
+    ) -> Result<Self, crate::ManagedStoreError> {
+        if self.config.policy.authority != "managed" {
+            return Ok(self);
+        }
+        let errors = crate::validate_resource_definition_types(
+            self.resource_types.registry(),
+            &state.catalog.resources,
+        );
+        if !errors.is_empty() {
+            return Err(crate::ManagedStoreError::InputInvalid(errors.join("; ")));
+        }
+        super::resource_management::validate_attribute_bindings(
+            self.resource_types.registry(),
+            &state.catalog,
+        )?;
+        if self.policy_snapshot.load().generation() > state.revision.generation {
+            return Err(crate::ManagedStoreError::VersionConflict);
+        }
+        self.policy_snapshot = Arc::new(arc_swap::ArcSwap::from_pointee(
+            super::PolicySnapshot::from_managed(
+                state.revision.generation,
+                state.active_grants.clone(),
+                state.catalog.clone(),
+            ),
+        ));
+        Ok(self)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl super::BrokerRuntime {
+    /// The private attribute bindings this generation's policy snapshot
+    /// publishes, for tests that compare them with the store.
+    pub fn published_attribute_bindings(&self) -> Vec<crate::ResourceAttributeBinding> {
+        self.policy_snapshot
+            .load()
+            .resource_catalog
+            .attribute_bindings
+            .clone()
+    }
 }
 
 #[cfg(test)]

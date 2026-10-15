@@ -501,6 +501,19 @@ All notable changes to this project are documented in this file.
   before validating stored resources, and validate their private attributes
   from the declaration without a configured backend. A type marked removed in
   the accepted metadata accepts no new resources.
+- Command import refreshes change resource types in place under the safe-change
+  rules. Previews record a decision per added, changed, restored or removed
+  type in `resourceTypeChanges`, which discovery and preview results show with
+  the stored resources each decision depends on; changes that would need
+  decrypting stored attribute values make the type's actions unsupported. The
+  accept body's `resourceTypeIds` chooses Broker type IDs for added types.
+  Acceptance rechecks every resource-dependent decision under the policy
+  mutation lock and rejects, naming the resources, when one no longer holds;
+  it deletes removed attributes' values with resource version bumps, keeps
+  removed types with resources and drops unused ones, publishing the advanced
+  policy revision and reporting `resourceTypeEffects`. An import with accepted
+  actions may accept a preview with no selections to apply only its metadata
+  and type changes.
 
 ### Changed
 

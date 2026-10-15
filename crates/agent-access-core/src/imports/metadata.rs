@@ -345,6 +345,7 @@ mod tests {
             metadata: json!({"title": "Inventory"}),
             tools: Vec::new(),
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         };
         // Previews of adapters that record none keep their exact encoding.
         assert_eq!(

@@ -13,4 +13,5 @@ pub(crate) mod identity_access;
 pub(crate) mod identity_bindings;
 pub(crate) mod identity_tokens;
 
+pub(crate) mod import_types;
 pub(crate) mod imports;

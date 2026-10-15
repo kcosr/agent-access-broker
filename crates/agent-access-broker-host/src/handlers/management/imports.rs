@@ -59,6 +59,10 @@ struct AcceptBody {
     selections: Vec<Selection>,
     #[serde(default)]
     confirm_affected_grants: bool,
+    /// Broker type IDs chosen for resource types this acceptance adds, by
+    /// the source's type id.
+    #[serde(default)]
+    resource_type_ids: BTreeMap<String, String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -224,6 +228,30 @@ fn scoped_mcp_warnings(
                 codes: codes.into_iter().collect(),
             })
         })
+        .collect()
+}
+
+/// The accepted actions a complete discovery quarantines: missing,
+/// unsupported or behaviorally changed ones.
+fn quarantined_actions(
+    record: &ImportedServiceRecord,
+    discovery: &ImportedDiscovery,
+) -> Vec<String> {
+    record
+        .actions
+        .iter()
+        .filter(|action| {
+            action.status != ImportedActionStatus::Retired
+                && discovery
+                    .tools
+                    .iter()
+                    .find(|tool| tool.definition.source == action.definition.source)
+                    .is_none_or(|tool| {
+                        tool.unsupported_reason.is_some()
+                            || source_changed(&action.definition, &tool.definition)
+                    })
+        })
+        .map(|action| action.definition.action.clone())
         .collect()
 }
 
@@ -407,7 +435,8 @@ async fn preview_response(
         let by_action = grants_by_action(&store, &service_owned)?;
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
+        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }
@@ -783,10 +812,12 @@ async fn change(
                         candidate.accepted_metadata = acceptance.accepted_metadata.clone();
                     }
                     let providers = runtime.prepare_imported_service_change(&candidate, None)?;
-                    let mutation = store.update_imported_service(request, |catalog| {
-                        runtime.with_imported_catalog(catalog.clone(), providers)
-                    })?;
-                    let response = record_result(&mutation.value, &mutation.catalog, &service);
+                    let (mutation, effects) =
+                        runtime.commit_imported_service_update(request, providers)?;
+                    let mut response = record_result(&mutation.value, &mutation.catalog, &service);
+                    if !effects.is_empty() {
+                        response["resourceTypeEffects"] = json!(effects);
+                    }
                     Ok((mutation.value, response))
                 }
             }
@@ -987,15 +1018,32 @@ fn prepare_update(
             let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
             // Service-level metadata is accepted from the persisted preview,
-            // never from the request.
-            let accepted_metadata = manifest.service_metadata.clone();
+            // never from the request; only the Broker type IDs of added
+            // resource types are chosen here.
+            let mut accepted_metadata = manifest.service_metadata.clone();
             // Only command imports record service metadata, and they always do.
             if accepted_metadata.is_some()
                 != runtime.import_records_service_metadata(&record.definition)
             {
                 return Err(invalid("stored discovery preview is invalid"));
             }
-            if body.selections.is_empty() {
+            match &mut accepted_metadata {
+                Some(metadata) => super::import_types::choose_type_ids(
+                    runtime,
+                    record,
+                    metadata,
+                    &body.resource_type_ids,
+                )?,
+                None if !body.resource_type_ids.is_empty() => {
+                    return Err(invalid("this import declares no resource types"));
+                }
+                None => {}
+            }
+            // An import with accepted actions may accept only the preview's
+            // service metadata and resource type changes.
+            if body.selections.is_empty()
+                && (record.actions.is_empty() || accepted_metadata.is_none())
+            {
                 return Err(invalid("select at least one discovered tool"));
             }
             let mut request = mutation_request(record, body.versions, actor);
@@ -1153,22 +1201,6 @@ pub(crate) async fn discover(
             return management_provider_error_response(&context, operation, target, error).await;
         }
     };
-    let quarantine = record
-        .actions
-        .iter()
-        .filter(|action| {
-            action.status != ImportedActionStatus::Retired
-                && discovery
-                    .tools
-                    .iter()
-                    .find(|tool| tool.definition.source == action.definition.source)
-                    .is_none_or(|tool| {
-                        tool.unsupported_reason.is_some()
-                            || source_changed(&action.definition, &tool.definition)
-                    })
-        })
-        .map(|action| action.definition.action.clone())
-        .collect::<Vec<_>>();
     let actor = context.identity.principal.clone();
     let config_revision = format!(
         "{}:{}",
@@ -1186,6 +1218,14 @@ pub(crate) async fn discover(
         let result = state
             .reloadable
             .imported_service_mutation(context.snapshot.clone(), move |runtime| {
+                let store = runtime
+                    .managed_store()
+                    .ok_or_else(|| invalid("import storage unavailable"))?;
+                let mut discovery = discovery;
+                // Type changes can make actions unsupported, so they are
+                // planned before the quarantine is computed.
+                super::import_types::plan_discovery(store, &record, &mut discovery)?;
+                let quarantine = quarantined_actions(&record, &discovery);
                 let mut candidate = record;
                 for action in &mut candidate.actions {
                     if quarantine.contains(&action.definition.action) {
@@ -1193,9 +1233,6 @@ pub(crate) async fn discover(
                     }
                 }
                 let providers = runtime.prepare_imported_service_change(&candidate, None)?;
-                let store = runtime
-                    .managed_store()
-                    .ok_or_else(|| invalid("import storage unavailable"))?;
                 let manifest = serde_json::to_value(discovery)
                     .map_err(|_| invalid("invalid discovery response"))?;
                 let manifest_bytes = serde_json::to_vec(&manifest)
@@ -1232,6 +1269,12 @@ pub(crate) async fn discover(
                         record,
                         preview.as_ref(),
                     )?);
+                    response["resourceTypeChanges"] = super::import_types::type_changes(
+                        store,
+                        &mutation.value,
+                        record,
+                        preview.as_ref(),
+                    )?;
                     response["preview"] = json!(preview);
                     response["affectedGrants"] = json!(affected);
                     response["affectedGrantsByAction"] = json!(by_action);
@@ -1346,6 +1389,7 @@ mod tests {
             })
             .collect(),
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         };
         let before = serde_json::to_value(&manifest).unwrap();
         let warnings = scoped_mcp_warnings(&record, &manifest, |definition| {
