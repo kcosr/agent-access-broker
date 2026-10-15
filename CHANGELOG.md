@@ -462,6 +462,17 @@ All notable changes to this project are documented in this file.
   except that Claude Code gets only a user-scope command, which adds the server
   for all of the user's projects. Client snippets name the variable, never the
   token; the chosen client is remembered in the browser.
+- `[command_imports.<name>]` approves a local executable for the `command`
+  import kind, with its path, timeout, output and concurrency caps, working
+  directory, network mode, `log_stderr` opt-in and environment. Imports name it
+  as `command:<name>`; `imports.allowed_endpoints` gates HTTP(S) endpoints only
+  and may be empty when every allowed kind uses command endpoints. Offline
+  validation warns about missing executables and enabled `log_stderr`.
+- Managed-store migration `027_command_imports` adds the nullable
+  `imported_services.accepted_metadata_json` column and lets imported execution
+  slots hold `basic_api_token` material, copying every existing slot row
+  unchanged. Import credential writes accept `username` (CLI `--username`) for a
+  command import's `username_token` credential.
 
 ### Changed
 

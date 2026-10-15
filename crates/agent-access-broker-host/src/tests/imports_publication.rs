@@ -57,6 +57,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
                     expected_version: catalog.service("transported").unwrap().version,
                     expected_catalog_revision: catalog.revision,
                     token: token.into(),
+                    username: None,
                     actor: "admin".into(),
                 },
                 ring,
@@ -137,6 +138,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
         expected_version: record.version,
         expected_catalog_revision: reloaded.import_catalog_revision(),
         token: "import-transport-rotated".into(),
+        username: None,
         actor: "admin".into(),
     };
     let stale = reloaded
@@ -204,6 +206,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
         expected_version: record.version,
         expected_catalog_revision: reloaded.import_catalog_revision(),
         token: "import-transport-rotated".into(),
+        username: None,
         actor: "admin".into(),
     };
     let worker_runtime = reloaded.clone();

@@ -75,6 +75,10 @@ struct SecretBody {
     #[serde(flatten)]
     versions: Versions,
     token: String,
+    /// Required for an execution slot whose accepted credential kind is
+    /// `username_token`, and rejected otherwise.
+    #[serde(default)]
+    username: Option<String>,
 }
 
 fn invalid(message: &str) -> ManagedStoreError {
@@ -678,6 +682,7 @@ async fn change(
                         expected_version: body.versions.expected_version,
                         expected_catalog_revision: body.versions.expected_catalog_revision,
                         token: body.token,
+                        username: body.username,
                         actor,
                     };
                     let mutation = store.write_imported_secret(
@@ -946,6 +951,11 @@ fn prepare_update(
             }
             let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
+            // Service-level metadata is accepted from the persisted preview,
+            // never from the request.
+            let accepted_metadata = manifest
+                .service_metadata()
+                .map_err(|_| invalid("stored discovery preview is invalid"))?;
             if body.selections.is_empty() {
                 return Err(invalid("select at least one discovered tool"));
             }
@@ -1039,6 +1049,7 @@ fn prepare_update(
                 manifest_hash: preview.manifest_hash,
                 config_revision: preview.config_revision,
                 credential_versions: preview.credential_versions,
+                accepted_metadata,
             });
             Ok(request)
         }

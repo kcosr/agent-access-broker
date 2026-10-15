@@ -174,6 +174,7 @@ pub(super) fn fixture() -> Fixture {
                 expected_version: draft.services[0].version,
                 expected_catalog_revision: draft.revision,
                 token: "import-service-token".into(),
+                username: None,
                 actor: "admin".into(),
             },
             ring,

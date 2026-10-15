@@ -225,6 +225,8 @@ Upstream stdio process hosting remains outside this release.
 commands. Create/update/accept take `--request-file`. Versioned commands take
 `--expected-version` and `--expected-catalog-revision`. Shared token writes read
 `--secret-file`, `--secret-env`, or `--secret-stdin`; they never return plaintext.
+The execution slot of a command import whose credential kind is `username_token`
+also takes `--username` (`username` in the request body), and other slots reject it.
 Retirement uses `--confirm`. Typed discovery allows 75 seconds for the server's
 60-second discovery deadline. If a client times out, inspect the preview before
 starting another discovery.

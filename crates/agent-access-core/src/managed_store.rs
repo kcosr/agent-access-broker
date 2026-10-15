@@ -61,7 +61,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_COMMAND_IMPORTS_VERSION;
+const MANAGED_STORE_COMMAND_IMPORTS_VERSION: &str = "027_command_imports";
 const MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION: &str = "026_trusted_user_identity";
 const MANAGED_STORE_PRINCIPAL_ACCESS_VERSION: &str = "025_principal_access";
 const MANAGED_STORE_OAUTH_DISCOVERY_REVISION_VERSION: &str = "024_oauth_discovery_revision";
@@ -205,6 +206,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/trusted_user_identity.sql"),
         seed: None,
         structural_validation: identity_access::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_COMMAND_IMPORTS_VERSION,
+        checksum: "680c67854a4a81c21660162c6215a5ef51fcf431e8d9eaff54cee0247137ac9a",
+        sql: include_str!("managed_store/command_imports.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_command_imports_structure,
     },
 ];
 
@@ -9498,7 +9506,8 @@ mod tests {
         assert_eq!(rows[9].0, MANAGED_STORE_IMPORTED_SERVICES_VERSION);
         assert_eq!(rows[10].0, MANAGED_STORE_OAUTH_DISCOVERY_REVISION_VERSION);
         assert_eq!(rows[11].0, MANAGED_STORE_PRINCIPAL_ACCESS_VERSION);
-        assert_eq!(rows[12].0, MANAGED_STORE_SCHEMA_VERSION);
+        assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
+        assert_eq!(rows[13].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

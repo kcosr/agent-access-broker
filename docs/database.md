@@ -58,7 +58,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `019_registered_resource_types`, `020_resource_attributes`,
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
-`025_principal_access`, and `026_trusted_user_identity` in order. The
+`025_principal_access`, `026_trusted_user_identity`, and
+`027_command_imports` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -736,6 +737,14 @@ previous store intact. It enrolls no usernames. Follow the
 [upgrade runbook](operator-guide.md#upgrade-and-rollback); rollback requires a
 pre-migration backup, not an older binary against the migrated schema.
 
+Migration `027_command_imports`, appended after `026_trusted_user_identity`,
+adds the nullable `imported_services.accepted_metadata_json` column and rebuilds
+`imported_secret_material` so its `credential_kind` admits `basic_api_token`
+beside `bearer_token`. Every existing slot row is copied unchanged: service,
+purpose, kind, material version, key ID, nonce and ciphertext, so stored import
+credentials decrypt under the same authenticated data without reentry. Existing
+imports keep a `NULL` metadata column. Rollback requires a pre-migration backup.
+
 ### Identity-token inventory
 
 `principal_identity_tokens` stores fingerprint identity inventory for managed
@@ -1004,7 +1013,20 @@ The store holds versioned imported-service definitions, immutable accepted actio
 mappings, one bounded pending preview per service, a monotonic catalog revision,
 and encrypted service-owned credential slots. Slots are owned
 by service and purpose (execution, discovery, transport), without a synthetic
-principal. Their ciphertext binds service, purpose and material version.
+principal. Their ciphertext binds service, purpose, credential kind and material
+version. A `bearer_token` slot encrypts the raw token. A `basic_api_token` slot,
+the execution slot of a command import whose accepted credential kind is
+`username_token`, encrypts the managed credential encoding
+`{"token","username"}`; the username is at most 256 bytes and the encoded
+plaintext at most 32,768 bytes. Discovery and transport slots are always
+`bearer_token`.
+
+`accepted_metadata_json` holds the service-level metadata a command import's
+acceptance stored with its actions: manifest format, command version, the
+credential kind and modes, `verify`, and declared resource types with their
+Broker type IDs. It is written in the acceptance transaction and is `NULL` for
+MCP and OpenAPI imports. The accepted credential declaration cannot change;
+a command whose credential changes needs a new import.
 
 Retired and disabled identities remain reserved. Retained slots participate in
 key inventory, readiness, rewrap and backup, including when imports are disabled.

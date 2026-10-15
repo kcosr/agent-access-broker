@@ -101,6 +101,8 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut secret = versioned_request();
     secret["properties"]["token"] = json!({"type":"string","minLength":1,"maxLength":32768,
         "pattern":"^[!-~]+$","writeOnly":true,"description":"Backend token; never returned by management reads."});
+    secret["properties"]["username"] = json!({"type":"string","minLength":1,"maxLength":256,
+        "description":"Username of a username_token command credential; required for that execution slot and rejected for every other slot."});
     secret["required"]
         .as_array_mut()
         .unwrap()

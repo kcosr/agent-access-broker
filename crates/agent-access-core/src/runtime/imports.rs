@@ -1,7 +1,9 @@
 //! Immutable imported catalogs are published with the enclosing runtime snapshot.
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
-use crate::imports::{ImportEndpointForm, ImportedAdapterContext, ImportedProvider};
+use crate::imports::{
+    ImportEndpointForm, ImportedAdapterContext, ImportedCredentialKind, ImportedProvider,
+};
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
@@ -159,6 +161,16 @@ fn preparation_mismatch() -> ManagedStoreError {
     )
 }
 
+/// The stored kind of an import's execution credential: its accepted
+/// declaration, or a bearer token for imports that record none.
+fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredentialKind {
+    record
+        .accepted_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.credential.as_ref())
+        .map_or(ImportedCredentialKind::Token, |credential| credential.kind)
+}
+
 pub(super) fn descriptor(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
@@ -221,7 +233,8 @@ pub(super) fn descriptor(
                     "Connect your account to authorize this imported service's reviewed actions.",
                 )
         } else {
-            CredentialDescriptor::default().profile("token", "bearer_token")
+            let kind = execution_credential_kind(record);
+            CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
         },
     )
 }
@@ -394,7 +407,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     profile: if oauth {
                         binding.profile.clone()
                     } else {
-                        Some("token".into())
+                        Some(execution_credential_kind(record).personal_profile().into())
                     },
                 },
             );
