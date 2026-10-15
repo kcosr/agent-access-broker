@@ -2,9 +2,11 @@
 // Capture an already configured, synthetic demo. Never issue tokens or save forms.
 // Guide verification outcomes are browser-only fixtures, labeled in the manifest.
 // Install portal dependencies and Playwright Chromium before running this script.
-// Required: AAB_DEMO_ADMIN_PRINCIPAL/PASSWORD and AAB_DEMO_ALICE_PRINCIPAL/PASSWORD.
+// Required: AAB_DEMO_ALICE_PRINCIPAL/PASSWORD; the full section also requires
+// AAB_DEMO_ADMIN_PRINCIPAL/PASSWORD.
 // Optional: AAB_DEMO_URL, AAB_CAPTURE_OUTPUT, AAB_CAPTURE_STREAM (all/showcase/guide),
-// AAB_CAPTURE_REQUEST_ID, AAB_CAPTURE_GRANT_ID, AAB_CAPTURE_AUDIT_SEARCH,
+// AAB_CAPTURE_SECTION (all/tokens), AAB_CAPTURE_REQUEST_ID, AAB_CAPTURE_GRANT_ID,
+// AAB_CAPTURE_AUDIT_SEARCH,
 // AAB_GUIDE_ACCOUNT_FILE (private file from demo/seed-guide-accounts.mjs),
 // AAB_CHROMIUM_EXECUTABLE_PATH. Captures default to ignored .scratch output;
 // set AAB_CAPTURE_OUTPUT to an external review directory before selecting assets.
@@ -16,15 +18,17 @@ import path from 'node:path';
 const origin = new URL(process.env.AAB_DEMO_URL ?? 'http://127.0.0.1:18787').origin;
 const output = path.resolve(process.env.AAB_CAPTURE_OUTPUT ?? '.scratch/portal-captures');
 const stream = process.env.AAB_CAPTURE_STREAM ?? 'all';
+const section = process.env.AAB_CAPTURE_SECTION ?? 'all';
+if (!['all', 'tokens'].includes(section)) throw new Error('AAB_CAPTURE_SECTION must be all or tokens');
 if (!['all', 'showcase', 'guide'].includes(stream)) throw new Error('AAB_CAPTURE_STREAM must be all, showcase, or guide');
 const grantId = process.env.AAB_CAPTURE_GRANT_ID ?? 'jira-demo-work';
 const auditSearch = process.env.AAB_CAPTURE_AUDIT_SEARCH ?? 'demo-showcase';
 const auditBase = `/ui/admin/audit?range=7d&q=${encodeURIComponent(auditSearch)}`;
 const accounts = {
-  admin: [process.env.AAB_DEMO_ADMIN_PRINCIPAL, process.env.AAB_DEMO_ADMIN_PASSWORD],
   alice: [process.env.AAB_DEMO_ALICE_PRINCIPAL, process.env.AAB_DEMO_ALICE_PASSWORD],
 };
-if (stream === 'all' || stream === 'guide') {
+if (section === 'all') accounts.admin = [process.env.AAB_DEMO_ADMIN_PRINCIPAL, process.env.AAB_DEMO_ADMIN_PASSWORD];
+if (section === 'all' && (stream === 'all' || stream === 'guide')) {
   const guideAccounts = JSON.parse(await readFile(process.env.AAB_GUIDE_ACCOUNT_FILE ?? '/tmp/agent-access-broker-demo/guide-accounts.json', 'utf8'));
   if (guideAccounts.origin !== origin) throw new Error('Guide account origin differs from the capture origin');
   for (const persona of ['auditor', 'onboarding']) accounts[persona] = [guideAccounts[persona]?.principal, guideAccounts[persona]?.password];
@@ -343,6 +347,35 @@ async function credentialGuide(page) {
   await capture(page, 'guide', 'user-credential-test-repository-light', 'light', 'Git HTTP credential verification requires a repository; populated draft without submitting verification');
 }
 
+async function tokenCreation(page, destination, theme) {
+  await visit(page, '/ui/tokens', '/v1/tokens');
+  if (destination === 'guide' && section === 'all') await capture(page, destination, 'user-tokens-light', theme, 'User invocation token inventory and lifecycle status');
+  await page.getByRole('button', { name: 'Issue token', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Issue agent token', exact: true })).toBeVisible();
+  await page.getByLabel('Name', { exact: true }).fill('demo-jira-reader');
+  await page.getByRole('group', { name: 'Access', exact: true }).getByRole('button', { name: 'Restrict to selected', exact: true }).click();
+  await capture(page, destination, `user-token-details-${theme}`, theme, 'Synthetic unsubmitted token creation page with explicit lifetime, contexts, and restricted access');
+  await page.getByRole('checkbox', { name: 'jira', exact: true }).check();
+  const jira = page.getByRole('group', { name: 'jira token access', exact: true });
+  await jira.getByRole('checkbox', { name: 'issue.view', exact: true }).check();
+  await jira.evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
+  await expect(jira.getByRole('group', { name: 'Read-only', exact: true })).toBeVisible();
+  await expect(jira.getByRole('group', { name: 'Write-capable', exact: true })).toBeVisible();
+  await capture(page, destination, `user-token-access-${theme}`, theme, 'Synthetic unsubmitted token restricted to Jira issue.view using the shared read-only and write-capable action columns');
+  if (destination === 'guide') {
+    await page.getByRole('group', { name: 'jira resources', exact: true }).getByRole('button', { name: 'Selected resources and groups', exact: true }).click();
+    await page.locator('.wb-check').filter({ hasText: 'Jira project' }).getByRole('checkbox', { name: 'DEMO', exact: true }).check();
+    await page.getByRole('group', { name: 'Resources and resource groups', exact: true }).evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await capture(page, destination, 'user-token-resources-light', theme, 'Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource');
+    await page.getByRole('heading', { name: 'Issue agent token', exact: true }).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    await capture(page, destination, 'user-token-boundary-light', theme, 'Synthetic unsubmitted token page with the live summary rail and Effective access preview; no token is issued');
+  }
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  const discard = page.getByRole('alertdialog', { name: 'Discard changes?', exact: true });
+  await discard.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(page).toHaveURL(`${origin}/ui/tokens`);
+}
+
 async function selfService(page, destination, theme) {
   await visit(page, '/ui/access', '/v1/tokens/options', result => result.services?.length >= 2);
   await expect(page.getByRole('table', { name: 'Access', exact: true }).getByRole('rowheader').first()).toBeVisible();
@@ -352,28 +385,7 @@ async function selfService(page, destination, theme) {
     await capture(page, destination, 'user-credentials-light', theme, 'User credential inventory without exposing credential values');
     await credentialGuide(page);
   }
-  await visit(page, '/ui/tokens', '/v1/tokens');
-  if (destination === 'guide') await capture(page, destination, 'user-tokens-light', theme, 'User invocation token inventory and lifecycle status');
-  await page.getByRole('button', { name: 'Issue token', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Issue agent token', exact: true });
-  await dialog.getByLabel('Name', { exact: true }).fill('documentation-assistant');
-  await dialog.getByRole('group', { name: 'Access', exact: true }).getByRole('button', { name: 'Restrict to selected', exact: true }).click();
-  await capture(page, destination, `user-token-details-${theme}`, theme, 'Draft invocation token with explicit lifetime, contexts, and restricted access');
-  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
-  await dialog.getByRole('checkbox', { name: 'jira', exact: true }).check();
-  await dialog.getByRole('checkbox', { name: 'issue.view', exact: true }).check();
-  await capture(page, destination, `user-token-access-${theme}`, theme, 'Draft token restricted to the Jira issue.view action');
-  if (destination === 'guide') {
-    await dialog.getByRole('group', { name: 'jira resources', exact: true }).getByRole('button', { name: 'Selected resources and groups', exact: true }).click();
-    await dialog.locator('.wb-check').filter({ hasText: 'Jira project' }).getByRole('checkbox', { name: 'DEMO', exact: true }).check();
-    await dialog.getByRole('group', { name: 'Resources and resource groups', exact: true }).evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
-    await capture(page, destination, 'user-token-resources-light', theme, 'Draft Jira token selecting only the exact DEMO Jira project resource');
-  }
-  if (destination === 'guide') {
-    await dialog.getByRole('button', { name: 'Review', exact: true }).click();
-    await capture(page, destination, 'user-token-review-light', theme, 'Final token review showing restrictions before issuance; no token is issued');
-  }
-  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await tokenCreation(page, destination, theme);
   if (destination === 'guide') {
     await page.getByRole('button', { name: 'Revoke demo-agent-token', exact: true }).click();
     const revoke = page.getByRole('alertdialog', { name: 'Revoke token?', exact: true });
@@ -386,7 +398,13 @@ async function selfService(page, destination, theme) {
 }
 
 try {
-  if (stream === 'all' || stream === 'showcase') {
+  if (section === 'tokens') {
+    if (stream === 'all' || stream === 'showcase') {
+      await session('alice', 'light', page => tokenCreation(page, 'showcase', 'light'));
+      await session('alice', 'dark', page => tokenCreation(page, 'showcase', 'dark'));
+    }
+    if (stream === 'all' || stream === 'guide') await session('alice', 'light', page => tokenCreation(page, 'guide', 'light'));
+  } else if (stream === 'all' || stream === 'showcase') {
     await session('admin', 'light', async page => {
       await audit(page, 'showcase', 'light');
       await grant(page, 'showcase', 'light');
@@ -398,7 +416,7 @@ try {
     await session('alice', 'light', page => selfService(page, 'showcase', 'light'));
     await session('alice', 'dark', page => selfService(page, 'showcase', 'dark'));
   }
-  if (stream === 'all' || stream === 'guide') {
+  if (section === 'all' && (stream === 'all' || stream === 'guide')) {
     await session('onboarding', 'light', firstLoginGuide);
     await session('admin', 'light', async page => {
       await visit(page, '/ui/admin/principals', '/v1/admin/principals');
@@ -413,12 +431,17 @@ try {
     await session('auditor', 'light', page => audit(page, 'guide', 'light', 'auditor'));
     await session('alice', 'light', page => selfService(page, 'guide', 'light'));
   }
-  // A guide-only refresh must retain the showcase inventory (and vice versa).
+  // A partial refresh retains unrelated captures. Token-page captures replace
+  // the obsolete review-step image as well as the corresponding current images.
   let retained = [];
-  if (stream !== 'all') {
+  if (stream !== 'all' || section !== 'all') {
     try {
       retained = JSON.parse(await readFile(path.join(output, 'manifest.json'), 'utf8')).captures
-        .filter(entry => !entry.file.startsWith(`${stream}/`));
+        .filter(entry => {
+          if (stream !== 'all' && !entry.file.startsWith(`${stream}/`)) return true;
+          if (section === 'all') return false;
+          return !/^\w+\/user-token-(?:details|access|resources|review|boundary)-(?:light|dark)\.png$/.test(entry.file);
+        });
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }

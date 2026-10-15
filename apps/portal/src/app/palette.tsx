@@ -82,7 +82,7 @@ function usePaletteSources(): PaletteSource[] {
         ? [{ id: "create-grant", label: "Create grant", icon: "plus" as const, keywords: ["policy", "new"], onSelect: go(paths.grantNew()) }]
         : []),
       ...(tokenActions.issueBlocker() === null
-        ? [{ id: "issue-token", label: "Issue agent token", icon: "key" as const, keywords: ["token", "new"], onSelect: () => tokenActions.openIssueDialog() }]
+        ? [{ id: "issue-token", label: "Issue agent token", icon: "key" as const, keywords: ["token", "new"], onSelect: () => tokenActions.openIssuePage() }]
         : []),
       ...(canWriteAdmin(session)
         ? [

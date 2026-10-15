@@ -16,7 +16,7 @@ import type {
   PolicyValidationMessage,
   Session,
 } from "../types";
-import type { AgentTokenModal, BadgeTone, ModalState, PolicyGrantDraft, PolicySubjectKind } from "../app-types";
+import type { BadgeTone, ModalState, PolicyGrantDraft, PolicySubjectKind } from "../app-types";
 
 export const GENERATED_PASSWORD_LENGTH = 24;
 export const GENERATED_PASSWORD_GROUPS = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%^&*_-+="] as const;
@@ -102,30 +102,33 @@ export function availableAgentTokenActions(options: AgentTokenOptions, service: 
     ?.actions.filter((action) => action.executionContexts.some((context) => executionContexts.includes(context))) ?? [];
 }
 
-export function agentTokenServiceHasResources(options: AgentTokenOptions, service: string) {
+/** Service IDs such as `constructor` must never resolve inherited object members. */
+export function agentTokenSelectedActions(actionsByService: Readonly<Record<string, string[]>>, service: string): string[] {
+  return Object.hasOwn(actionsByService, service) ? actionsByService[service] : [];
+}
+
+export function agentTokenResourceSelection(selections: Readonly<Record<string, ResourceSelection | undefined>>, service: string): ResourceSelection | undefined {
+  return Object.hasOwn(selections, service) ? selections[service] : undefined;
+}
+
+export function agentTokenServiceHasResources(options: AgentTokenOptions, service: string, selectedActions: readonly string[]) {
   const option = options.services.find((item) => item.service === service);
-  // Preserve stale selections when the catalog no longer contains the service.
-  return option === undefined || option.actions.some((action) => action.resourceType !== null);
+  // A stale action may use resources when its grant returns. Dropping that
+  // explicit boundary now would broaden the token's future effective access.
+  return option === undefined
+    || option.actions.some((action) => action.resourceType !== null)
+    || selectedActions.some((selected) => !option.actions.some((action) => action.action === selected));
 }
 
-export function reconcileAgentTokenModalOptions(modal: AgentTokenModal, options: AgentTokenOptions, selectedExecutionContexts = modal.selectedExecutionContexts): AgentTokenModal {
-  const resourceSelections = { ...modal.resourceSelections };
-  for (const service of Object.keys(resourceSelections)) {
-    if (!agentTokenServiceHasResources(options, service)) delete resourceSelections[service];
-  }
-  return { ...modal, options, selectedExecutionContexts, resourceSelections };
-}
-
-export function buildAgentTokenServiceRestrictions(services: string[], actionsByService: Record<string, string[]>, selections: Record<string, ResourceSelection | undefined>, options: AgentTokenOptions) {
-  const restrictions: Record<string, AgentTokenServiceRestriction> = {};
-  for (const service of [...services].sort()) {
-    const selection = agentTokenServiceHasResources(options, service) ? selections[service] : undefined;
-    restrictions[service] = {
-      actions: [...(actionsByService[service] ?? [])].sort(),
+export function buildAgentTokenServiceRestrictions(services: string[], actionsByService: Record<string, string[]>, selections: Record<string, ResourceSelection | undefined>, options: AgentTokenOptions): Record<string, AgentTokenServiceRestriction> {
+  return Object.fromEntries([...services].sort().map((service) => {
+    const actions = agentTokenSelectedActions(actionsByService, service);
+    const selection = agentTokenServiceHasResources(options, service, actions) ? agentTokenResourceSelection(selections, service) : undefined;
+    return [service, {
+      actions: [...actions].sort(),
       ...(selection === undefined ? {} : { resources: { resourceIds: [...selection.resourceIds].sort(), resourceGroupIds: [...selection.resourceGroupIds].sort() } })
-    };
-  }
-  return restrictions;
+    }];
+  }));
 }
 
 export function tokenExecutionContextsSummary(record: BrokerTokenRecord, effectiveContexts?: string[]) {

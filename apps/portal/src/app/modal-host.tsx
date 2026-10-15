@@ -1,18 +1,14 @@
 // Renders the open app-wide modal with the data and mutations it needs.
-import { useEffect } from "react";
 import type { ModalState } from "../app-types";
-import { reconcileAgentTokenModalOptions, tokenExecutionContextsSummary } from "../lib/helpers";
+import { tokenExecutionContextsSummary } from "../lib/helpers";
 import { ConfirmDialog, KeyValue, Time } from "../workbench";
 import { SecretRevealModal } from "../components/secret-reveal";
-import { useAgentTokenOptions } from "../data/queries";
-import { useAgentTokenActions, useManagementTokenActions } from "../mutations/tokens";
-import { IssueTokenModal } from "../features/tokens/issue-token-modal";
+import { useManagementTokenActions } from "../mutations/tokens";
 import { ManagementTokenModal } from "../features/tokens/management-token-modal";
 import { TokenBoundary } from "../features/tokens/token-boundary";
 import { McpSetup, tokenMcpUrl } from "../features/tokens/mcp-setup";
 import { CreateGroupModal, CreatePrincipalModal } from "../features/principals/create-modals";
 import { AssignManagerModal } from "../features/policies/assign-manager-modal";
-import { adminSubject, useSelfSubject } from "./active-route";
 import { useModal } from "./modal";
 
 export function ModalHost() {
@@ -23,8 +19,6 @@ export function ModalHost() {
 function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
   const { closeModal, setModal } = useModal();
   switch (modal.type) {
-    case "token":
-      return <AgentTokenIssue modal={modal} />;
     case "managementToken":
       return <ManagementTokenIssue modal={modal} />;
     case "createPrincipal":
@@ -101,20 +95,6 @@ function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
         </ConfirmDialog>
       );
   }
-}
-
-function AgentTokenIssue({ modal }: { modal: Extract<ModalState, { type: "token" }> }) {
-  const { setModal } = useModal();
-  const self = useSelfSubject();
-  const subject = modal.administrative ? adminSubject(modal.targetPrincipalId) : self;
-  const { options } = useAgentTokenOptions(subject);
-  const actions = useAgentTokenActions(subject, options);
-  // Keep the open dialog in step with refreshed options for the same owner.
-  useEffect(() => {
-    if (!options) return;
-    setModal((current) => (current?.type === "token" && current.options !== options ? reconcileAgentTokenModalOptions(current, options) : current));
-  }, [options, setModal]);
-  return <IssueTokenModal modal={modal} setModal={setModal} onIssue={actions.issue} />;
 }
 
 function ManagementTokenIssue({ modal }: { modal: Extract<ModalState, { type: "managementToken" }> }) {

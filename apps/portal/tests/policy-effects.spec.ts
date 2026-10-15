@@ -50,6 +50,9 @@ const grants = [
   grant("deleted-jira", { status: "deleted", actions: ["issue.update"] })
 ];
 
+// Fields the grant editor needs beyond the Policies list's effect classification.
+const editable = { description: "Fixture action", credentialModes: ["service"], lookupRequired: false, inputSchema: {} };
+
 async function fixture(page: Page, search = "", catalogUnavailable = () => false) {
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -66,8 +69,8 @@ async function fixture(page: Page, search = "", catalogUnavailable = () => false
       }
       body = envelope({
         services: [
-          { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", readOnly: true, requiredScopeTypes: [] }, { action: "issue.update", readOnly: false, requiredScopeTypes: [] }, { action: "unreviewed.read", requiredScopeTypes: [] }], resourceScopes: {} },
-          { service: "git", displayName: "Git", actions: [{ action: "repository.read", readOnly: true, requiredScopeTypes: [] }], resourceScopes: {} }
+          { service: "jira", displayName: "Jira", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "issue.view", readOnly: true, requiredScopeTypes: [], ...editable }, { action: "issue.update", readOnly: false, requiredScopeTypes: [], ...editable }, { action: "unreviewed.read", requiredScopeTypes: [], ...editable }], resourceScopes: {} },
+          { service: "git", displayName: "Git", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "repository.read", readOnly: true, requiredScopeTypes: [], ...editable }], resourceScopes: {} }
         ],
         subjects: { users: [{ principalId: "alice", displayName: "Alice" }, { principalId: "bob", displayName: "Bob" }], groups: [], anonymous: false },
         resources: [], resourceGroups: [], executionContexts: { allowedValues: ["development", "production"], contextRequired: false }
@@ -84,6 +87,18 @@ async function fixture(page: Page, search = "", catalogUnavailable = () => false
   await page.goto(`${baseUrl}/ui/admin/policies${search}`);
   await expect(page.getByRole("main", { name: "Policies", exact: true })).toBeVisible();
 }
+
+test("grant action columns fit beside the editor's section sidebar and preview", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await fixture(page);
+  await page.getByRole("main", { name: "Policies", exact: true }).getByRole("link", { name: "Create grant", exact: true }).first().click();
+  await page.getByLabel("Service", { exact: true }).selectOption("jira");
+  const columns = page.getByRole("group", { name: /^(Read-only|Write-capable)$/ });
+  await expect(columns).toHaveCount(2);
+  for (const column of await columns.all()) {
+    expect(await column.evaluate((element) => [element, ...element.querySelectorAll(".pt-action-list")].every((item) => item.scrollWidth <= item.clientWidth + 1))).toBe(true);
+  }
+});
 
 function rows(page: Page) {
   return page.getByRole("main", { name: "Policies", exact: true }).getByRole("rowheader").getByRole("link");

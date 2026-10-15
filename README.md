@@ -98,8 +98,10 @@ may finish. See the [security model](docs/security-model.md),
 
 Administrators manage accounts, resources, grants, credentials, and imported
 services in the portal. Users review their access and manage their own credentials
-and agent tokens, with copy-ready HTTP MCP client setup for a new token; auditors
-investigate recorded activity.
+and agent tokens. A dedicated token creation page reuses the grant builder’s
+read-only and write-capable action columns, with a live access preview and
+copy-ready HTTP MCP client setup after issuance. Auditors investigate recorded
+activity.
 
 <table>
   <tr>

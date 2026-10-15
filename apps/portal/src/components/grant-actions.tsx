@@ -1,40 +1,54 @@
 // Grant action selection in read-only and write-capable columns, and the
 // write-capability badge shown for a selection.
-import { useState } from "react";
+import { useId, useState } from "react";
 import { actionSelectionCounts, grantActionGroups, selectMatchingActions, type ClassifiedAction } from "../lib/grant-actions";
 import { Badge, Button, Checkbox, FilterInput } from "../workbench";
+import { ActionName } from "./action-name";
+
+export const ACTION_COLUMNS_HINT = "All / None apply to the matching actions in that column. Actions without reviewed read-only metadata are write-capable.";
+
+const actionDescription = (action: ClassifiedAction) =>
+  action.available === false ? `Unavailable · ${action.unavailableReason ?? "Not currently executable"}` : action.description;
 
 export function GrantActionSelector({
   available,
   selected,
   disabled,
+  filterLabel = "Filter actions",
+  hint = true,
   onChange
 }: {
   available: readonly ClassifiedAction[];
   selected: string[];
   disabled: boolean;
+  filterLabel?: string;
+  /** False when the page explains All / None once for several selectors. */
+  hint?: boolean;
   onChange: (selected: string[]) => void;
 }) {
+  const id = useId();
   const [search, setSearch] = useState("");
   const groups = grantActionGroups(available, selected, search);
   return (
-    <div className="flex flex-col gap-3">
-      <FilterInput value={search} onChange={setSearch} placeholder="Filter actions…" label="Filter actions" hotkey={null} />
-      <p className="pt-prose">All / None apply to the matching actions in that column. Actions without reviewed read-only metadata are write-capable.</p>
-      <div className="pt-columns">
+    <div className="pt-action-selector">
+      <FilterInput value={search} onChange={setSearch} placeholder="Filter actions…" label={filterLabel} hotkey={null} />
+      {hint ? <p className="pt-prose">{ACTION_COLUMNS_HINT}</p> : null}
+      <div className="pt-action-columns">
         {groups.map((group) => {
           const matching = group.matching.map((action) => action.action);
           const selectable = group.matching.filter((action) => action.available !== false).map((action) => action.action);
           const category = group.label.toLowerCase();
           return (
-            <fieldset className="pt-fieldset" key={group.label}>
-              <legend>{group.label}</legend>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="wb-small wb-muted mr-auto">
-                  {group.selected} of {group.total} selected
+            <div className="pt-action-column" role="group" aria-labelledby={`${id}-${category}`} key={group.label}>
+              <div className="pt-action-column-head">
+                <span className="wb-label-caps" id={`${id}-${category}`}>
+                  {group.label}
+                </span>
+                <span className="pt-action-column-count wb-small wb-muted mr-auto">
+                  {group.selected} of {group.total}
                 </span>
                 {!disabled ? (
-                  <>
+                  <span className="pt-action-column-buttons">
                     <Button
                       size="sm"
                       aria-label={`Select all matching ${category} actions`}
@@ -51,24 +65,29 @@ export function GrantActionSelector({
                     >
                       None
                     </Button>
-                  </>
+                  </span>
                 ) : null}
               </div>
-              <div className="pt-checks pt-checks--scroll">
+              <div className="pt-action-list">
                 {group.matching.length === 0 ? <span className="wb-small wb-muted">No matching actions.</span> : null}
                 {group.matching.map((action) => (
                   <Checkbox
                     key={action.action}
                     aria-label={action.action}
-                    label={<span className="wb-mono">{action.action}</span>}
-                    description={action.available === false ? `Unavailable · ${action.unavailableReason ?? "Not currently executable"}` : action.description}
+                    label={
+                      <span className="wb-mono">
+                        <ActionName action={action.action} />
+                      </span>
+                    }
+                    // Descriptions are clamped; the title shows the full text.
+                    description={<span title={actionDescription(action)}>{actionDescription(action)}</span>}
                     checked={selected.includes(action.action)}
                     disabled={disabled || (action.available === false && !selected.includes(action.action))}
                     onChange={(event) => onChange(selectMatchingActions(selected, [action.action], event.target.checked))}
                   />
                 ))}
               </div>
-            </fieldset>
+            </div>
           );
         })}
       </div>
@@ -78,6 +97,7 @@ export function GrantActionSelector({
 
 /** "Writes" badge when any selected action is write-capable; missing metadata never claims read-only. */
 export function WriteCapability({ available, selected }: { available: readonly ClassifiedAction[]; selected: readonly string[] }) {
+  if (!selected.length) return null;
   const counts = actionSelectionCounts(available, selected);
   const label = `${counts.readOnly} read-only ${counts.readOnly === 1 ? "action" : "actions"}, ${counts.writeCapable} write-capable ${counts.writeCapable === 1 ? "action" : "actions"}`;
   if (!counts.writeCapable) {

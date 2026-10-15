@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import type { ModalState } from "../src/app-types";
 import type { AgentTokenOptions, BrokerTokenRecord, PolicyCatalogResult } from "../src/types";
 import {
   availableAgentTokenActions,
@@ -20,7 +19,6 @@ import {
   policyGrantDraftForSubject,
   policyGrantKey,
   principalIdentityLabel,
-  reconcileAgentTokenModalOptions,
   selectsAllPolicyActions,
   tokenAllowedServiceItems,
   tokenAllowedServicesSummary,
@@ -94,23 +92,6 @@ const tokenOptions: AgentTokenOptions = {
   ],
   mcp: null
 };
-
-test("keeps restricted references and wizard state when access becomes empty", () => {
-  const modal: Extract<ModalState, { type: "token" }> = {
-    type: "token", administrative: false, targetPrincipalId: "alice", options: tokenOptions,
-    accessMode: "restricted", screen: "review", selectedExecutionContexts: ["external"],
-    selectedServices: ["confluence"], selectedActions: { confluence: ["page.view"] },
-    resourceSelections: { confluence: { resourceIds: [], resourceGroupIds: ["docs"] } },
-    name: "workspace", lifetime: "1h", ttlPolicy: { defaultTtl: "1h", maxTtl: "1h", options: ["1h"] }
-  };
-  const refreshed = { ...tokenOptions, services: [] };
-  const reconciled = reconcileAgentTokenModalOptions(modal, refreshed);
-  expect(reconciled.options).toBe(refreshed);
-  expect(reconciled.screen).toBe("review");
-  expect(reconciled.resourceSelections).toEqual(modal.resourceSelections);
-  expect(reconciled.selectedServices).toEqual(["confluence"]);
-  expect(reconciled.selectedActions).toEqual({ confluence: ["page.view"] });
-});
 
 describe("portal helper policy logic", () => {
   test("recognizes grants whose actions take no resources", () => {
@@ -288,6 +269,19 @@ describe("portal helper status and shell logic", () => {
     expect(restrictions.github.resources).toEqual({ resourceIds: [], resourceGroupIds: [] });
     expect(restrictions.shared).not.toHaveProperty("resources");
     expect(restrictions.confluence.resources).toEqual({ resourceIds: ["eng", "ops"], resourceGroupIds: ["docs"] });
+  });
+
+  test("serializes own service-map keys without invoking prototype setters", () => {
+    const selections = Object.fromEntries(["constructor", "__proto__"].map((service) => [service, { resourceIds: [], resourceGroupIds: ["bounded"] }]));
+    const actions = Object.fromEntries(["constructor", "__proto__"].map((service) => [service, ["read"]]));
+    const restrictions = buildAgentTokenServiceRestrictions(["constructor", "__proto__"], actions, selections, tokenOptions);
+    expect(Object.getPrototypeOf(restrictions)).toBe(Object.prototype);
+    const wire = JSON.parse(JSON.stringify(restrictions));
+    expect(Object.keys(wire).sort()).toEqual(["__proto__", "constructor"]);
+    for (const service of ["constructor", "__proto__"]) {
+      expect(Object.hasOwn(wire, service)).toBe(true);
+      expect(wire[service]).toEqual({ actions: ["read"], resources: { resourceIds: [], resourceGroupIds: ["bounded"] } });
+    }
   });
 
   test("drops meaningless resource restrictions for mailbox-wide actions", () => {

@@ -158,7 +158,12 @@ views, new grant/resource drafts, account access, and disable/revoke confirmatio
 See the [illustrated portal guide](../docs/portal-guide/index.md) for the resulting
 role-based walkthroughs.
 
-Set `AAB_CAPTURE_STREAM=showcase` or `guide` to capture one stream. Optional
+Set `AAB_CAPTURE_STREAM=showcase` or `guide` to capture one stream. Set
+`AAB_CAPTURE_SECTION=tokens` to refresh only the token creation page, including
+its shared action columns and guide resource/boundary views. This section needs
+only Alice's demo credentials and does not require guide accounts or audit
+fixtures. It leaves the form unsubmitted and confirms discarding its draft.
+Partial refreshes preserve unrelated entries in the output manifest. Optional
 `AAB_DEMO_URL`, `AAB_CAPTURE_GRANT_ID`, and `AAB_CAPTURE_REQUEST_ID` choose the
 running origin, grant drawer, and paired audit request. Refreshing one stream
 preserves the other stream's manifest entries. Honor

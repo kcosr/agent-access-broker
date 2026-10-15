@@ -27,7 +27,6 @@ import {
   Checkbox,
   Chip,
   Combobox,
-  ConfirmDialog,
   EmptyState,
   ErrorState,
   Field,
@@ -45,6 +44,7 @@ import {
   Textarea
 } from "../../workbench";
 import { FieldGroup, FormError } from "../../components/form";
+import { DiscardChangesDialog } from "../../components/discard-changes-dialog";
 import { EffectiveAccessPanel } from "../../components/effective-access";
 import { GrantActionSelector, WriteCapability } from "../../components/grant-actions";
 import { GrantResourcePicker } from "../../components/resource-picker";
@@ -229,8 +229,10 @@ function GrantEditor({
     </Sidebar>
   );
 
+  // The warning tone is kept for problems to fix.
+  const attention = !readonly && (shownMessages.length > 0 || Boolean(saveError));
   const footer = (
-    <div className="wb-draftbar" role="region" aria-label="Save grant">
+    <div className={attention ? "wb-draftbar" : "wb-draftbar wb-draftbar--neutral"} role="region" aria-label="Save grant">
       {readonly ? (
         <div className="pt-validation">
           <Icon name="lock" />
@@ -325,16 +327,9 @@ function GrantEditor({
           </aside>
         </div>
       </Main>
-      <ConfirmDialog
-        open={blocker.state === "blocked"}
-        onClose={() => blocker.reset?.()}
-        title="Discard changes?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onConfirm={() => blocker.proceed?.()}
-      >
+      <DiscardChangesDialog blocker={blocker}>
         <p>Your changes to this grant have not been saved.</p>
-      </ConfirmDialog>
+      </DiscardChangesDialog>
     </PortalPage>
   );
 }

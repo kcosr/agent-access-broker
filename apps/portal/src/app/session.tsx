@@ -19,6 +19,8 @@ export type SignInNotice = { tone: "danger" | "warning" | "info"; text: string }
 
 type SessionValue = {
   session: Session;
+  /** Reads the current viewer even after a routed component has unmounted. */
+  getSession: () => Session;
   /** The first session read has not answered yet. */
   loading: boolean;
   /** The initial session request failed; sign-in options are still unknown. */
@@ -74,6 +76,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }),
     [queryClient]
   );
+  const getSession = useCallback(() => queryClient.getQueryData<Session>(portalQueryKeys.session) ?? SIGNED_OUT, [queryClient]);
   const clearPortalData = useCallback(() => {
     queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== portalQueryKeys.root[0] || query.queryKey[1] !== "session" });
   }, [queryClient]);
@@ -85,7 +88,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const previous = previousCapabilities.current;
       previousCapabilities.current = next;
       queryClient.removeQueries({ predicate: (query) => query.queryKey.includes(previous) });
-      setModal(null);
+      // A completed agent-token response still belongs to the same signed-in
+      // viewer when only their capabilities changed during issuance.
+      setModal((current) => current?.type === "reveal" && current.viewerPrincipal && session.authenticated && !session.passwordChangeRequired && current.viewerPrincipal === session.principal ? current : null);
     }
   }, [session, queryClient, setModal]);
   const authorizationRefresh = useRef<Promise<Session> | null>(null);
@@ -165,6 +170,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SessionValue>(
     () => ({
       session,
+      getSession,
       loading: sessionQuery.isPending,
       sessionError: sessionQuery.isError && !sessionQuery.data ? sessionQuery.error : null,
       retrySession: () => { void sessionQuery.refetch(); },
@@ -179,7 +185,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       signInNotice,
       setSignInNotice
     }),
-    [session, sessionQuery.isPending, sessionQuery.isError, sessionQuery.error, sessionQuery.isFetching, sessionQuery.refetch, setSession, attempt, reportError, clearPortalData, pendingReturnTo, signInNotice]
+    [session, getSession, sessionQuery.isPending, sessionQuery.isError, sessionQuery.error, sessionQuery.isFetching, sessionQuery.refetch, setSession, attempt, reportError, clearPortalData, pendingReturnTo, signInNotice]
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

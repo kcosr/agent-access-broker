@@ -633,6 +633,22 @@ All notable changes to this project are documented in this file.
   batches in which an upload may have applied report `unknown` alongside their
   result, unless throttling already reported `applied_unverified`.
 
+- Agent token issuance uses a dedicated page for personal and administered
+  accounts, with the grant builder's shared read-only/write-capable action
+  selector, a collapsible section per restricted service, a summary of each
+  service's action and resource selection, a full-width live access preview,
+  and persistent Issue/Cancel actions that count remaining issues and link to
+  the first. Service-specific filters and column All/None preserve selections
+  outside the matching actions, and resource choices list only the resource
+  types the service's actions use. Unsaved navigation requires confirmation,
+  and successful issuance selects the new token while displaying its one-time
+  secret and MCP setup.
+- The shared action selector lists each column's actions in a grid that uses
+  the available width. Effective-access previews list action names without
+  separators, breaking long names after their dots, and collapse rows with more
+  than six actions to a count. The grant and token editors' action bars use a
+  neutral tone unless something needs fixing.
+
 ### Fixed
 
 - Management credential verification and imported-service discovery report a
@@ -651,6 +667,12 @@ All notable changes to this project are documented in this file.
 - The `broker_listening` event reports the address each listener bound rather
   than the requested one, so `serve --listen 127.0.0.1:0` names the port the
   system assigned instead of port 0. Other addresses are reported as before.
+- Restricted token drafts wait for complete context, service, and action
+  selections before requesting an effective-access preview, avoiding spurious
+  `allowedServices must not be empty` errors. Incomplete restrictions cannot
+  silently become a token that follows all current grants.
+- Confirming **Discard changes** after browser Back or Forward in the grant
+  editor now leaves the page instead of leaving the confirmation pending.
 
 ### Removed
 

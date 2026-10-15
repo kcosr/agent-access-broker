@@ -33,7 +33,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
   await page.route("**/v1/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     requests.push(pathname);
-    if (route.request().method() !== "GET" && pathname !== "/v1/admin/policy/effective-access") mutations.push(pathname);
+    if (route.request().method() !== "GET" && !pathname.endsWith("/effective-access")) mutations.push(pathname);
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = session;
     else if (pathname === "/v1/me") result = { serviceLimits: [] };
@@ -47,7 +47,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     else if (pathname === "/v1/admin/policy/status") result = { ...config, writable: true, policyGeneration: 1, counts: { active: 1, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/admin/policy/catalog") result = catalog;
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
-    else if (pathname === "/v1/admin/policy/effective-access") result = { policyGeneration: 1, access: [] };
+    else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
     else if (pathname.endsWith("/tokens/options") || pathname.endsWith("/agent-tokens/options")) result = options;
     else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: false, availableKinds: [], importAuthentication: [], services: [] };
     else if (pathname === "/v1/resource-types") result = { resourceTypes: [] };
@@ -113,7 +113,8 @@ test("Auditor inspects managed grants, principals, tokens and system without adm
   await page.goto(`${baseUrl}/ui/tokens`);
   await expect(page.getByRole("button", { name: "Issue token", exact: true }).first()).toBeEnabled();
   await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
-  await expect(page.getByRole("dialog", { name: "Issue agent token", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/ui\/tokens\/new/);
+  await expect(page.getByRole("heading", { name: "Issue agent token", exact: true })).toBeVisible();
   expect(model.mutations).toEqual([]);
   expect(errors).toEqual([]);
 });

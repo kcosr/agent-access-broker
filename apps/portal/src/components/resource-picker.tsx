@@ -1,7 +1,7 @@
 // Resource and resource-group selection for token restrictions, grants, and
 // resource-group membership.
 import { useId, useState } from "react";
-import type { PolicyServiceCatalog, ResourceCatalog, ResourceDefinition, ResourceSelection } from "../types";
+import type { PolicyServiceCatalog, ResourceCatalog, ResourceDefinition, ResourceSelection, ResourceType } from "../types";
 import { grantResourceChoices, type GrantResourceCatalog } from "../lib/grant-resources";
 import { resourceLabel } from "../lib/resource-labels";
 import { resourceTypeLabel, useResourceTypes } from "../lib/resource-types";
@@ -50,51 +50,64 @@ export function ResourceChoices({
   );
 }
 
-/** Token restriction picker: resources and groups from the caller's token options. */
+/**
+ * Token restriction picker: resources and groups from the caller's token
+ * options. `resourceTypes` limits the entries to those the service's actions
+ * use; selected entries stay listed so they remain removable.
+ */
 export function ResourcePicker({
   selection,
   catalog,
+  resourceTypes,
   onChange,
   disabled = false
 }: {
   selection: ResourceSelection;
   catalog: ResourceCatalog;
+  resourceTypes?: readonly ResourceType[];
   onChange: (selection: ResourceSelection) => void;
   disabled?: boolean;
 }) {
+  const resources = catalog.resources.filter((resource) => !resourceTypes || resourceTypes.includes(resource.resourceType) || selection.resourceIds.includes(resource.id));
   return (
     <fieldset className="pt-fieldset">
-      <legend>Resources and resource groups</legend>
-      <ResourceChoices resources={catalog.resources} selected={selection.resourceIds} onChange={(resourceIds) => onChange({ ...selection, resourceIds })} disabled={disabled} />
-      <div className="pt-checks">
-        <span className="wb-label-caps">Resource groups</span>
-        {catalog.resourceGroups.map((group) => (
-          <Checkbox
-            key={group.id}
-            label={group.name}
-            checked={selection.resourceGroupIds.includes(group.id)}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange({
-                ...selection,
-                resourceGroupIds: event.target.checked ? [...selection.resourceGroupIds, group.id] : selection.resourceGroupIds.filter((id) => id !== group.id)
-              })
-            }
-          />
-        ))}
-        {selection.resourceGroupIds
-          .filter((id) => !catalog.resourceGroups.some((group) => group.id === id))
-          .map((id) => (
+      {/* The surrounding Resources field names this section visually. */}
+      <legend className="wb-sr-only">Resources and resource groups</legend>
+      <div className="pt-columns">
+        <div className="flex flex-col gap-2">
+          <span className="wb-label-caps">Resources</span>
+          <ResourceChoices resources={resources} selected={selection.resourceIds} onChange={(resourceIds) => onChange({ ...selection, resourceIds })} disabled={disabled} />
+        </div>
+        <div className="pt-checks">
+          <span className="wb-label-caps">Resource groups</span>
+          {catalog.resourceGroups.map((group) => (
             <Checkbox
-              key={id}
-              label={id}
-              description="Not in the current catalog"
-              checked
+              key={group.id}
+              label={group.name}
+              checked={selection.resourceGroupIds.includes(group.id)}
               disabled={disabled}
-              onChange={() => onChange({ ...selection, resourceGroupIds: selection.resourceGroupIds.filter((value) => value !== id) })}
+              onChange={(event) =>
+                onChange({
+                  ...selection,
+                  resourceGroupIds: event.target.checked ? [...selection.resourceGroupIds, group.id] : selection.resourceGroupIds.filter((id) => id !== group.id)
+                })
+              }
             />
           ))}
-        {catalog.resourceGroups.length === 0 ? <span className="wb-small wb-muted">No resource groups.</span> : null}
+          {selection.resourceGroupIds
+            .filter((id) => !catalog.resourceGroups.some((group) => group.id === id))
+            .map((id) => (
+              <Checkbox
+                key={id}
+                label={id}
+                description="Not in the current catalog"
+                checked
+                disabled={disabled}
+                onChange={() => onChange({ ...selection, resourceGroupIds: selection.resourceGroupIds.filter((value) => value !== id) })}
+              />
+            ))}
+          {catalog.resourceGroups.length === 0 ? <span className="wb-small wb-muted">No resource groups.</span> : null}
+        </div>
       </div>
       <p className="pt-prose">Groups use current membership. Exclusions from any selected group apply across this selection.</p>
     </fieldset>

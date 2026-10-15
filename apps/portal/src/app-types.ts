@@ -28,22 +28,6 @@ export type PolicyGrantDraft = {
   validationMessages: PolicyValidationMessage[];
 };
 
-export type AgentTokenModal = {
-  type: "token";
-  administrative: boolean;
-  targetPrincipalId: string;
-  options: AgentTokenOptions;
-  accessMode: "policy" | "restricted";
-  screen: "edit" | "access" | "review";
-  selectedExecutionContexts: string[];
-  selectedServices: string[];
-  selectedActions: Record<string, string[]>;
-  resourceSelections: Record<string, ResourceSelection | undefined>;
-  name: string;
-  lifetime: string;
-  ttlPolicy: TokenTtlPolicy;
-};
-
 export type ConfirmModal = {
   type: "confirm";
   title: string;
@@ -56,12 +40,11 @@ export type ConfirmModal = {
 };
 
 export type ModalState =
-  | AgentTokenModal
   | { type: "managementToken"; principalId: string; tokenClass: "user_manage" | "admin"; ttlPolicy: TokenTtlPolicy }
   | { type: "createPrincipal"; kind: "user" | "service_account" }
   | { type: "createGroup" }
   | { type: "assignManager"; service?: string }
   | { type: "passwordReveal"; principalId: string; password: string; action: "created" | "reset" | "enabled"; afterClose?: () => void }
-  | { type: "reveal"; token: string; record: BrokerTokenRecord; principalId?: string; options?: AgentTokenOptions }
+  | { type: "reveal"; token: string; record: BrokerTokenRecord; principalId?: string; options?: AgentTokenOptions; viewerPrincipal?: string }
   | ConfirmModal
   | null;

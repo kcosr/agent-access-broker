@@ -208,7 +208,7 @@ export function AccessToolbar({ model, embedded = false }: { model: AccessListMo
     <Toolbar>
       <ToolbarRow
         primary={tokenActions.writable ?
-          <Button variant="primary" icon="plus" disabled={blocker !== null} title={blocker ?? undefined} onClick={() => tokenActions.openIssueDialog(list.state.service ? [list.state.service] : [])}>
+          <Button variant="primary" icon="plus" disabled={blocker !== null} title={blocker ?? undefined} onClick={() => tokenActions.openIssuePage(list.state.service ? [list.state.service] : [])}>
             Issue token
           </Button> : null
         }
@@ -409,7 +409,7 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
       }
       actions={
         tokenActions.issueBlocker() === null ? (
-          <Button variant="primary" icon="key" onClick={() => tokenActions.openIssueDialog([open.service])}>
+          <Button variant="primary" icon="key" onClick={() => tokenActions.openIssuePage([open.service])}>
             Issue token for {service?.displayName ?? open.service}
           </Button>
         ) : null
