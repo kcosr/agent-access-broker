@@ -317,8 +317,9 @@ impl CommandImportProvider {
         &self,
         completed: run::Completed,
         facts: &CommandProcessFacts,
+        secrets: &CommandSecrets,
     ) -> Result<ProviderCredentialVerification, ProviderError> {
-        match response::verify(&self.service, &completed.stdout) {
+        match response::verify(&self.service, &completed.stdout, secrets) {
             Ok(Ok(())) => Ok(ProviderCredentialVerification::new(
                 0,
                 facts.snapshot().duration_ms.unwrap_or(0),
@@ -436,22 +437,28 @@ impl CommandProvider for CommandImportProvider {
                 "this command does not verify credentials",
             ));
         }
-        let run = verification.into_run();
-        let facts = run.facts.clone();
+        let agent_access_core::imports::CommandRun {
+            request,
+            deadline,
+            permit,
+            environment,
+            facts,
+            secrets,
+        } = verification.into_run();
         let completed = run::execute(run::Run {
             service: &self.service,
             command: &self.command,
             operation: CommandOperation::Verify,
-            permit: run.permit,
-            request: Some(run.request),
-            deadline: run.deadline,
+            permit,
+            request: Some(request),
+            deadline,
             max_output_bytes: run::output_limit(&self.command),
-            environment: run.environment,
-            facts: run.facts,
+            environment,
+            facts: facts.clone(),
         })
         .await
         .map_err(RunFailure::error)?;
-        self.verify_response(completed, &facts)
+        self.verify_response(completed, &facts, &secrets)
     }
 }
 

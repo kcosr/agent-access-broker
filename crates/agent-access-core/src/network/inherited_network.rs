@@ -17,6 +17,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use super::egress_proxy::ExportedProxy;
 use super::outbound_tls::{OutboundTlsConfig, OutboundTlsTrustMode};
@@ -62,16 +63,19 @@ pub(crate) struct InheritedNetwork {
 }
 
 /// The inherited proxy: its origin, its credentialed URL for the
-/// environment, and its credentials for the request.
+/// environment, and its credentials for the request. Every string holding a
+/// credential is zeroized on drop.
 struct CommandProxy {
     url: String,
-    credentialed_url: String,
+    credentialed_url: Zeroizing<String>,
     credentials: Option<ProxyCredentials>,
 }
 
 struct ProxyCredentials {
-    username: String,
-    password: String,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+    /// The password as the credentialed URL carries it.
+    encoded_password: Zeroizing<String>,
 }
 
 impl InheritedNetwork {
@@ -82,13 +86,14 @@ impl InheritedNetwork {
     ) -> Self {
         let proxy = proxy.map(|proxy| CommandProxy {
             url: proxy.origin(),
-            credentialed_url: proxy.credentialed_url(),
-            credentials: proxy
-                .credentials()
-                .map(|(username, password)| ProxyCredentials {
-                    username: username.to_owned(),
-                    password: password.to_owned(),
-                }),
+            credentialed_url: Zeroizing::new(proxy.credentialed_url()),
+            credentials: proxy.credentials().zip(proxy.encoded_password()).map(
+                |((username, password), encoded)| ProxyCredentials {
+                    username: Zeroizing::new(username.to_owned()),
+                    password: Zeroizing::new(password.to_owned()),
+                    encoded_password: Zeroizing::new(encoded),
+                },
+            ),
         });
         Self {
             proxy,
@@ -143,7 +148,7 @@ impl InheritedNetwork {
         );
         if let Some(proxy) = &self.proxy {
             variables.extend(
-                PROXY_VARIABLES.map(|name| (name, OsString::from(&proxy.credentialed_url))),
+                PROXY_VARIABLES.map(|name| (name, OsString::from(proxy.credentialed_url.as_str()))),
             );
         }
         if !self.no_proxy.is_empty() {
@@ -154,14 +159,22 @@ impl InheritedNetwork {
         variables
     }
 
-    /// The secrets these settings supply to a command: the proxy password,
-    /// when it is not empty. Command output must not echo them.
+    /// The secrets these settings supply to a command, in every form a
+    /// command receives them: the proxy password, its percent-encoded form
+    /// when that differs, and the credentialed URL of the proxy variables,
+    /// when the password is not empty. Command output must not echo them.
     pub(crate) fn supplied_secrets(&self) -> impl Iterator<Item = &str> {
         self.proxy
             .iter()
-            .filter_map(|proxy| proxy.credentials.as_ref())
-            .map(|credentials| credentials.password.as_str())
-            .filter(|password| !password.is_empty())
+            .filter_map(|proxy| Some((proxy, proxy.credentials.as_ref()?)))
+            .filter(|(_, credentials)| !credentials.password.is_empty())
+            .flat_map(|(proxy, credentials)| {
+                let encoded = (*credentials.encoded_password != *credentials.password)
+                    .then_some(credentials.encoded_password.as_str());
+                std::iter::once(credentials.password.as_str())
+                    .chain(encoded)
+                    .chain(std::iter::once(proxy.credentialed_url.as_str()))
+            })
     }
 }
 
@@ -345,9 +358,11 @@ mod tests {
                 ("NODE_EXTRA_CA_CERTS", CA_PATH),
             ])
         );
+        // The password, its percent-encoded form and the credentialed URL
+        // the environment carries are all supplied secrets.
         assert_eq!(
             network.supplied_secrets().collect::<Vec<_>>(),
-            ["p@ss:w/rd"]
+            ["p@ss:w/rd", "p%40ss%3Aw%2Frd", proxied]
         );
         let debug = format!("{network:?}");
         assert!(debug.contains("<redacted>"), "{debug}");

@@ -177,6 +177,13 @@ impl ExportedProxy {
             .map(|credentials| (credentials.username.as_str(), credentials.password.as_str()))
     }
 
+    /// The proxy password percent-encoded as [`Self::credentialed_url`]
+    /// carries it, when the proxy needs credentials.
+    pub(super) fn encoded_password(&self) -> Option<String> {
+        self.credentials()
+            .map(|(_, password)| utf8_percent_encode(password, USERINFO_LITERAL).to_string())
+    }
+
     /// The proxy origin with its credentials, if any, percent-encoded in the
     /// userinfo: the form proxy environment variables carry.
     pub(super) fn credentialed_url(&self) -> String {

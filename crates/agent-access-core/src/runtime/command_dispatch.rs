@@ -687,7 +687,6 @@ impl BrokerRuntime {
         self.run_command_verification(
             service,
             provider,
-            "user",
             &credential,
             deadline,
             permit,
@@ -697,14 +696,12 @@ impl BrokerRuntime {
         .map(Some)
     }
 
-    /// Runs `<path> verify` for `credential`, sent in wire `mode`, under
-    /// `permit` until `deadline`, in the credential-verification hook.
-    #[allow(clippy::too_many_arguments)]
+    /// Runs `<path> verify` for the personal `credential` under `permit`
+    /// until `deadline`, in the credential-verification hook.
     async fn run_command_verification(
         &self,
         service: &str,
         provider: Arc<dyn crate::imports::CommandProvider>,
-        mode: &'static str,
         credential: &CommandCredential,
         deadline: tokio::time::Instant,
         permit: CommandPermit,
@@ -715,17 +712,17 @@ impl BrokerRuntime {
             .ok_or_else(imported_service_changed)?;
         let network =
             (entry.network == CommandNetwork::Inherit).then(|| self.inherited_network().as_ref());
-        let request = VerifyRequest {
+        let (request, secrets) = VerifyRequest {
             request_id: &correlation.broker_request_id,
             deadline: &wire_deadline(deadline),
-            mode,
             credential,
             network,
         }
         .encode()?;
         let facts = CommandProcessFacts::new();
-        let mut verification =
-            CommandVerification::new(request, deadline, permit).with_facts(facts.clone());
+        let mut verification = CommandVerification::new(request, deadline, permit)
+            .with_facts(facts.clone())
+            .with_secrets(secrets);
         if let Some(network) = network {
             verification = verification.with_environment(network.environment());
         }

@@ -22,6 +22,7 @@
 use super::{COMMAND_FORMAT, CommandRequest, ImportedCredentialKind};
 use crate::network::{InheritedNetwork, InheritedNetworkWire};
 use agent_access_provider::ProviderError;
+use base64::Engine;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 use serde_json::Value;
@@ -39,39 +40,72 @@ pub(crate) fn wire_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
-/// The secrets core supplied to one command run: credential tokens,
-/// decrypted private attribute values and the inherited proxy password.
+/// The shortest private attribute value a text must not contain anywhere.
+/// Shorter values, such as `"eu"` or `"1"`, are common words in identifiers
+/// and messages, so they match only a whole text.
+pub const ATTRIBUTE_SUBSTRING_MIN_BYTES: usize = 8;
+
+/// The secrets core supplied to one command run, in every form the command
+/// receives them: credential tokens and the Basic form of a
+/// `username_token` credential, decrypted private attribute values, and the
+/// inherited proxy password, percent-encoded password and credentialed URL.
 /// Command output must not echo them where the Broker copies it outside the
-/// sensitive result, such as a receipt's `safeLocators`.
+/// sensitive result: an error `message`, a receipt's `verificationStage` or
+/// its `safeLocators`.
 ///
-/// Values are zeroized on drop; `Debug` shows only their count. Empty
-/// values are not kept, since every text contains them.
+/// Credentials and proxy secrets match anywhere in a text. A private
+/// attribute value matches anywhere from [`ATTRIBUTE_SUBSTRING_MIN_BYTES`];
+/// a shorter one matches only a text equal to it. Values are zeroized on
+/// drop; `Debug` shows only their count. Empty values are not kept, since
+/// every text contains them.
 #[derive(Default)]
-pub struct CommandSecrets(Vec<Zeroizing<String>>);
+pub struct CommandSecrets {
+    /// Secrets no text may contain.
+    anywhere: Vec<Zeroizing<String>>,
+    /// Short attribute values no text may equal.
+    whole: Vec<Zeroizing<String>>,
+}
 
 impl CommandSecrets {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Adds `secret` unless it is empty.
+    /// Adds a credential or proxy secret, unless it is empty.
     pub fn insert(&mut self, secret: &str) {
-        if !secret.is_empty() && !self.0.iter().any(|known| known.as_str() == secret) {
-            self.0.push(Zeroizing::new(secret.to_owned()));
+        Self::push(&mut self.anywhere, secret);
+    }
+
+    /// Adds the decrypted value of a private resource attribute.
+    pub fn insert_attribute(&mut self, value: &str) {
+        if value.len() >= ATTRIBUTE_SUBSTRING_MIN_BYTES {
+            Self::push(&mut self.anywhere, value);
+        } else {
+            Self::push(&mut self.whole, value);
         }
     }
 
-    /// Whether `text` contains any supplied secret.
+    fn push(secrets: &mut Vec<Zeroizing<String>>, secret: &str) {
+        if !secret.is_empty() && !secrets.iter().any(|known| known.as_str() == secret) {
+            secrets.push(Zeroizing::new(secret.to_owned()));
+        }
+    }
+
+    /// Whether `text`, a whole message, stage, locator key or locator value,
+    /// echoes a supplied secret.
     pub fn found_in(&self, text: &str) -> bool {
-        self.0.iter().any(|secret| text.contains(secret.as_str()))
+        self.anywhere
+            .iter()
+            .any(|secret| text.contains(secret.as_str()))
+            || self.whole.iter().any(|secret| text == secret.as_str())
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.anywhere.len() + self.whole.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.len() == 0
     }
 }
 
@@ -79,7 +113,7 @@ impl fmt::Debug for CommandSecrets {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandSecrets")
-            .field("count", &self.0.len())
+            .field("count", &self.len())
             .finish()
     }
 }
@@ -116,8 +150,16 @@ impl CommandCredential {
         }
     }
 
+    /// The token and, for `username_token`, the Basic credential a command
+    /// may build from it.
     fn supply(&self, secrets: &mut CommandSecrets) {
         secrets.insert(&self.token);
+        if let Some(username) = &self.username {
+            let pair = Zeroizing::new(format!("{}:{}", username.as_str(), self.token.as_str()));
+            secrets.insert(&Zeroizing::new(
+                base64::engine::general_purpose::STANDARD.encode(pair.as_bytes()),
+            ));
+        }
     }
 
     fn wire<'a>(&'a self, mode: Option<&'static str>) -> CredentialWire<'a> {
@@ -214,7 +256,7 @@ impl RequestResource {
             .iter()
             .flat_map(|entry| entry.attributes.values())
         {
-            secrets.insert(value);
+            secrets.insert_attribute(value);
         }
     }
 }
@@ -431,12 +473,11 @@ impl InvokeRequest<'_> {
     }
 }
 
-/// Everything one `verify` request holds.
+/// Everything one `verify` request holds. Only personal credentials are
+/// verified, so the credential's wire mode is always `user`.
 pub(crate) struct VerifyRequest<'a> {
     pub request_id: &'a str,
     pub deadline: &'a str,
-    /// The wire mode of the credential: `service` or `user`.
-    pub mode: &'static str,
     pub credential: &'a CommandCredential,
     pub network: Option<&'a InheritedNetwork>,
 }
@@ -453,14 +494,25 @@ struct VerifyDocument<'a> {
 }
 
 impl VerifyRequest<'_> {
-    pub(crate) fn encode(&self) -> Result<CommandRequest, ProviderError> {
-        CommandRequest::encode(&VerifyDocument {
+    /// The encoded request and the secrets it supplies.
+    pub(crate) fn encode(&self) -> Result<(CommandRequest, CommandSecrets), ProviderError> {
+        let mut secrets = CommandSecrets::new();
+        self.credential.supply(&mut secrets);
+        for secret in self
+            .network
+            .iter()
+            .flat_map(|network| network.supplied_secrets())
+        {
+            secrets.insert(secret);
+        }
+        let request = CommandRequest::encode(&VerifyDocument {
             format: COMMAND_FORMAT,
             request_id: self.request_id,
             deadline: self.deadline,
-            credential: self.credential.wire(Some(self.mode)),
+            credential: self.credential.wire(Some("user")),
             network: self.network.map(InheritedNetwork::wire),
-        })
+        })?;
+        Ok((request, secrets))
     }
 }
 
@@ -553,13 +605,17 @@ mod tests {
                 "credentials": { "user": { "kind": "username_token", "username": "avery", "token": "pat-example" } }
             })
         );
-        // Tokens and attribute values are supplied secrets; usernames are not.
-        assert_eq!(secrets.len(), 3);
+        // Tokens, their Basic form and attribute values are supplied secrets;
+        // usernames are not. An attribute value under 8 bytes matches only a
+        // whole text.
+        let basic = base64::engine::general_purpose::STANDARD.encode("avery:pat-example");
         assert!(secrets.found_in("pat-example"));
-        assert!(secrets.found_in("x-eu-1-y"));
-        assert!(secrets.found_in("s3cr3t-example"));
+        assert!(secrets.found_in(&format!("Basic {basic}")));
+        assert!(secrets.found_in("eu-1"));
+        assert!(!secrets.found_in("x-eu-1-y"));
+        assert!(secrets.found_in("x-s3cr3t-example-y"));
         assert!(!secrets.found_in("avery"));
-        assert_eq!(format!("{secrets:?}"), "CommandSecrets { count: 3 }");
+        assert_eq!(format!("{secrets:?}"), "CommandSecrets { count: 4 }");
     }
 
     #[test]
@@ -654,30 +710,30 @@ mod tests {
     }
 
     #[test]
-    fn verify_requests_carry_only_the_credential_to_check() {
-        let credential = CommandCredential::username_token("svc".into(), "svc-example".into());
+    fn verify_requests_carry_only_the_personal_credential_to_check() {
+        let credential = CommandCredential::username_token("avery".into(), "pat-example".into());
         let request = VerifyRequest {
             request_id: "brk_3",
             deadline: "2026-10-14T15:06:00Z",
-            mode: "service",
             credential: &credential,
             network: None,
         };
+        let (encoded, secrets) = request.encode().unwrap();
         assert_eq!(
-            decode(&request.encode().unwrap()),
+            decode(&encoded),
             json!({"format": "agent-access-command/1", "requestId": "brk_3",
                 "deadline": "2026-10-14T15:06:00Z",
-                "credential": {"mode": "service", "kind": "username_token",
-                    "username": "svc", "token": "svc-example"}})
+                "credential": {"mode": "user", "kind": "username_token",
+                    "username": "avery", "token": "pat-example"}})
         );
+        assert!(secrets.found_in("pat-example"));
         let token = CommandCredential::token("personal".into());
         let request = VerifyRequest {
-            mode: "user",
             credential: &token,
             ..request
         };
         assert_eq!(
-            decode(&request.encode().unwrap())["credential"],
+            decode(&request.encode().unwrap().0)["credential"],
             json!({"mode": "user", "kind": "token", "token": "personal"})
         );
     }
@@ -696,6 +752,25 @@ mod tests {
             deadline.ends_with('Z') && !deadline.contains('.'),
             "{deadline}"
         );
+    }
+
+    #[test]
+    fn short_attribute_values_match_only_whole_texts() {
+        let mut secrets = CommandSecrets::new();
+        secrets.insert("ab");
+        secrets.insert_attribute("eu");
+        secrets.insert_attribute("1234567");
+        secrets.insert_attribute("12345678");
+        // Credentials and proxy secrets match anywhere, however short.
+        assert!(secrets.found_in("xaby"));
+        // Attribute values under 8 bytes match only an entire text.
+        assert!(secrets.found_in("eu"));
+        assert!(!secrets.found_in("eu-west"));
+        assert!(secrets.found_in("1234567"));
+        assert!(!secrets.found_in("ticket 1234567x"));
+        // From 8 bytes, anywhere.
+        assert!(secrets.found_in("ticket 12345678x"));
+        assert!(!secrets.found_in("ticket 1234"));
     }
 
     #[test]

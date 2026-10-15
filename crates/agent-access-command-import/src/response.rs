@@ -13,9 +13,11 @@
 //! `operation_failed` with an `unknown` write receipt: an empty, invalid or
 //! trailing document, an unknown field or code, a message over 1,024 bytes or
 //! with control characters other than tab, a receipt on a read or of the
-//! wrong shape, an invalid locator or one echoing a secret the request
-//! supplied, and a result the action's output schema rejects. Violations
-//! never expose the document.
+//! wrong shape, an invalid locator, a message, verification stage or locator
+//! echoing a secret the request supplied (see
+//! [`CommandSecrets`] for how short private attribute values match), and a
+//! result the action's output schema rejects. Violations never expose the
+//! document.
 use crate::mapping::CompiledAction;
 use agent_access_core::imports::CommandSecrets;
 use agent_access_provider::{
@@ -99,7 +101,7 @@ pub(crate) fn invoke(
         }
         false => {
             only(&document, &["ok", "error"], "response_shape")?;
-            let mut error = command_error(service, document.remove("error"))?;
+            let mut error = command_error(service, document.remove("error"), secrets)?;
             if !read_only {
                 let receipt = match receipt {
                     None => MutationReceipt::unknown(),
@@ -115,7 +117,11 @@ pub(crate) fn invoke(
 /// Reads the response of a `verify` run: `Ok(())` for a verified
 /// credential, the command's error for a failed one. A receipt is a
 /// violation: verification writes nothing.
-pub(crate) fn verify(service: &str, stdout: &[u8]) -> Result<Result<(), ProviderError>, Violation> {
+pub(crate) fn verify(
+    service: &str,
+    stdout: &[u8],
+    secrets: &CommandSecrets,
+) -> Result<Result<(), ProviderError>, Violation> {
     let mut document = document(stdout)?;
     match ok(&document)? {
         true => {
@@ -124,7 +130,11 @@ pub(crate) fn verify(service: &str, stdout: &[u8]) -> Result<Result<(), Provider
         }
         false => {
             only(&document, &["ok", "error"], "response_shape")?;
-            Ok(Err(command_error(service, document.remove("error"))?))
+            Ok(Err(command_error(
+                service,
+                document.remove("error"),
+                secrets,
+            )?))
         }
     }
 }
@@ -168,7 +178,11 @@ fn only(
 /// The Broker failure of a command's `error`: its code's reason and
 /// decision, its message, and for `upstream_rate_limited` the upstream
 /// rate-limit result with the wait it gave.
-fn command_error(service: &str, error: Option<Value>) -> Result<ProviderError, Violation> {
+fn command_error(
+    service: &str,
+    error: Option<Value>,
+    secrets: &CommandSecrets,
+) -> Result<ProviderError, Violation> {
     let error = object(error.ok_or(Violation("response_shape"))?, "response_shape")?;
     only(
         &error,
@@ -185,6 +199,9 @@ fn command_error(service: &str, error: Option<Value>) -> Result<ProviderError, V
         .and_then(Value::as_str)
         .filter(|message| valid_message(message))
         .ok_or(Violation("invalid_message"))?;
+    if secrets.found_in(message) {
+        return Err(Violation("secret_in_message"));
+    }
     let retry_after = error
         .get("retryAfterSeconds")
         .map(|seconds| {
@@ -269,6 +286,9 @@ fn failure_receipt(receipt: Value, secrets: &CommandSecrets) -> Result<MutationR
                     .filter(|stage| verification_stage(stage))
                     .ok_or(Violation("invalid_receipt"))?,
             };
+            if secrets.found_in(stage) {
+                return Err(Violation("secret_in_receipt"));
+            }
             let locators = match receipt.get("safeLocators") {
                 None => json!({}),
                 Some(locators) => safe_locators(locators, secrets)?,
@@ -331,6 +351,9 @@ mod tests {
         let mut secrets = CommandSecrets::new();
         secrets.insert("pat-example");
         secrets.insert("eu-1");
+        secrets.insert("stage_token_value");
+        secrets.insert_attribute("eu");
+        secrets.insert_attribute("s3cr3t-long-value");
         secrets
     }
 
@@ -459,16 +482,23 @@ mod tests {
         // Verification reads errors the same way.
         let error = verify(
             "tickets",
-            br#"{"ok": false, "error": {"code": "upstream_unauthorized", "message": "Bad token."}}"#,
-        )
+            br#"{"ok": false, "error": {"code": "upstream_unauthorized", "message": "Bad token."}}"#, &secrets())
         .unwrap()
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamUnauthorized);
-        assert!(verify("tickets", br#"{"ok": true}"#).unwrap().is_ok());
         assert!(
-            verify("tickets", br#"{"ok": true, "result": {"user": "svc"}}"#)
+            verify("tickets", br#"{"ok": true}"#, &secrets())
                 .unwrap()
                 .is_ok()
+        );
+        assert!(
+            verify(
+                "tickets",
+                br#"{"ok": true, "result": {"user": "svc"}}"#,
+                &secrets()
+            )
+            .unwrap()
+            .is_ok()
         );
     }
 
@@ -642,13 +672,14 @@ mod tests {
         assert_eq!(
             verify(
                 "tickets",
-                br#"{"ok": true, "receipt": {"mutationStatus": "unknown"}}"#
+                br#"{"ok": true, "receipt": {"mutationStatus": "unknown"}}"#,
+                &secrets()
             )
             .unwrap_err(),
             Violation("response_shape")
         );
         assert_eq!(
-            verify("tickets", b"").unwrap_err(),
+            verify("tickets", b"", &secrets()).unwrap_err(),
             Violation("empty_response")
         );
     }
@@ -770,5 +801,69 @@ mod tests {
         assert!(verification_stage("a1_b"));
         assert!(!verification_stage("1a"));
         assert!(!verification_stage(""));
+    }
+
+    #[test]
+    fn messages_stages_and_locators_never_echo_supplied_secrets() {
+        let message = |message: &str| {
+            json!({"ok": false, "error": {"code": "upstream_failed", "message": message}})
+                .to_string()
+        };
+        // A credential, a long attribute value or a whole short one in a
+        // message is a violation, for invocation and verification alike.
+        for echoed in [
+            "Token pat-example was rejected.",
+            "Signing with s3cr3t-long-value failed.",
+            "eu",
+        ] {
+            assert_eq!(
+                read(&message(echoed)).unwrap_err(),
+                Violation("secret_in_message"),
+                "{echoed}"
+            );
+            assert_eq!(
+                verify("tickets", message(echoed).as_bytes(), &secrets()).unwrap_err(),
+                Violation("secret_in_message"),
+                "{echoed}"
+            );
+        }
+        // A short attribute value inside a longer text is not.
+        let error = failure(read(&message("Region eu is busy.")));
+        assert_eq!(error.message, "Region eu is busy.");
+        assert!(
+            verify(
+                "tickets",
+                message("Region eu is busy.").as_bytes(),
+                &secrets()
+            )
+            .unwrap()
+            .is_err()
+        );
+
+        // A verification stage naming a secret is a violation.
+        for stage in ["stage_token_value", "eu"] {
+            assert_eq!(
+                write(json!({"ok": false, "error": {"code": "upstream_failed", "message": "x"},
+                    "receipt": {"mutationStatus": "applied_unverified", "verificationStage": stage}}))
+                .unwrap_err(),
+                Violation("secret_in_receipt"),
+                "{stage}"
+            );
+        }
+
+        // Locators: whole short values and long values anywhere.
+        let locator = |value: Value| {
+            write(json!({"ok": true, "result": {"key": "K"},
+                "receipt": {"safeLocators": {"note": value}}}))
+        };
+        assert_eq!(
+            locator(json!("eu")).unwrap_err(),
+            Violation("secret_in_locator")
+        );
+        assert_eq!(
+            locator(json!("x-s3cr3t-long-value")).unwrap_err(),
+            Violation("secret_in_locator")
+        );
+        assert!(locator(json!("eu-west")).unwrap().is_ok());
     }
 }

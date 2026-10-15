@@ -230,6 +230,12 @@ impl CommandVerification {
         self
     }
 
+    /// The secrets the request supplies, which the response must not echo.
+    pub fn with_secrets(mut self, secrets: CommandSecrets) -> Self {
+        self.run.secrets = secrets;
+        self
+    }
+
     /// The request for `<path> verify`.
     pub fn request(&self) -> &CommandRequest {
         &self.run.request
