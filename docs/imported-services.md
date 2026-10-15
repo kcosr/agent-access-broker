@@ -90,8 +90,11 @@ credential rewrap. See [database operations](database.md).
    restoring such actions requires acceptance; affected grants require confirmation.
    A change that would leave a retained grant invalid, for example by removing a
    credential mode it uses, is refused and names the grants to update or remove
-   first; the error's `target.affectedGrants` lists each as `{id, reasonCode,
-   reason}`, with the policy validation code and message.
+   first; the error's `target.affectedGrants` lists each grant once as `{id,
+   reasonCode, reason}`: `id` is the reference `/v1/admin/policy/grants/{grant_ref}`
+   accepts (the managed grant ID, or `toml:<index>` for a configured grant),
+   `reasonCode` the policy validation code of its first issue, and `reason` the
+   validation messages of all its subjects, joined by `; `.
 
 The service's **Actions** tab lists each saved action identifier, optional display
 label and description without another discovery request. Long descriptions have

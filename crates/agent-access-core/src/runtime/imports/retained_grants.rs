@@ -65,28 +65,39 @@ impl BrokerRuntime {
         if issues.is_empty() {
             return Ok(());
         }
-        // Every issue message starts with the label of the grant it names.
-        let affected_grants = issues
-            .iter()
-            .map(|issue| {
-                let grant = snapshot
-                    .grants
-                    .iter()
-                    .zip(&labels)
-                    .find(|(_, label)| issue.message.starts_with(&format!("{label} ")))
-                    .map(|(grant, label)| {
-                        grant
-                            .managed_id()
-                            .map_or_else(|| label.clone(), str::to_owned)
-                    })
-                    .unwrap_or_default();
-                crate::ImportBlockingGrant {
-                    id: grant,
+        // Every issue message starts with the label of the grant it names. A
+        // grant is listed once, by the reference the management API and the
+        // portal address it by, with the reasons of all its subjects.
+        let mut affected_grants: Vec<crate::ImportBlockingGrant> = Vec::new();
+        for issue in &issues {
+            let reference = snapshot
+                .grants
+                .iter()
+                .zip(&labels)
+                .find(|(_, label)| issue.message.starts_with(&format!("{label} ")))
+                .map(|(grant, _)| grant_reference(grant))
+                .unwrap_or_default();
+            match affected_grants
+                .iter_mut()
+                .find(|entry| entry.id == reference)
+            {
+                Some(entry) => {
+                    if !entry
+                        .reason
+                        .split("; ")
+                        .any(|reason| reason == issue.message)
+                    {
+                        entry.reason.push_str("; ");
+                        entry.reason.push_str(&issue.message);
+                    }
+                }
+                None => affected_grants.push(crate::ImportBlockingGrant {
+                    id: reference,
                     reason_code: issue.code.to_owned(),
                     reason: issue.message.clone(),
-                }
-            })
-            .collect();
+                }),
+            }
+        }
         Err(ManagedStoreError::ImportChangeBlocked(Box::new(
             crate::ImportChangeBlocked {
                 message: format!(
@@ -101,5 +112,16 @@ impl BrokerRuntime {
                 resources: Vec::new(),
             },
         )))
+    }
+}
+
+/// The reference a grant is addressed by: its managed grant ID, or
+/// `toml:<index>` for a configured grant, as `/v1/admin/policy/grants/{grant_ref}`
+/// accepts it. Empty for a grant with neither.
+fn grant_reference(grant: &RuntimePolicyGrant) -> String {
+    match (grant.managed_id(), grant.toml_index()) {
+        (Some(id), _) => id.to_owned(),
+        (None, Some(index)) => format!("toml:{index}"),
+        (None, None) => String::new(),
     }
 }

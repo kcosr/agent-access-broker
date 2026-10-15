@@ -147,11 +147,17 @@ export function ImportErrorAlert({ error }: { error: unknown }) {
         <>
           This change would leave retained grants invalid. Update or remove them first:
           <ul className="pt-catalog-error-list">
-            {blocked.affectedGrants.map((grant) => (
-              <li key={grant.id}>
-                <AppLink href={paths.policies({ grant: grant.id })} className="wb-link wb-mono">
-                  {grant.id}
-                </AppLink>
+            {blocked.affectedGrants.map((grant, index) => (
+              // A grant is referenced by its managed ID or `toml:<index>`; one
+              // the Broker could not attribute has no reference to open.
+              <li key={index}>
+                {grant.id ? (
+                  <AppLink href={paths.policies({ grant: grant.id })} className="wb-link wb-mono">
+                    {grant.id}
+                  </AppLink>
+                ) : (
+                  <span className="wb-muted">Unidentified grant</span>
+                )}
                 : {grant.reason}
               </li>
             ))}

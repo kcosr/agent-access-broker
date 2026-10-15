@@ -135,6 +135,7 @@ export type ImportResourceTypeChange = {
  * changes no longer fit.
  */
 export type ImportChangeBlocked = {
+  /** Each grant once: `id` is its managed grant ID or `toml:<index>` (empty when unattributed); `reason` joins its subjects' messages. */
   affectedGrants: Array<{ id: string; reasonCode: string; reason: string }>;
   resources: Array<{ type: string; id: string }>;
 };

@@ -481,7 +481,17 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     );
 
     // A refresh that makes the view untyped would leave its grants'
-    // resource selections invalid; the acceptance is refused and names them.
+    // resource selections invalid; the acceptance is refused and names them,
+    // each grant once, also one with two subjects.
+    let (status, second) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/policy/grants/view-eng-user/subjects",
+        Some(json!({"expectedVersion": 1, "subject": "user:charlie"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
     let mut untyped = view_action();
     untyped.as_object_mut().unwrap().remove("resources");
     fixture.write_manifest(&manifest(untyped));
@@ -525,9 +535,8 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
         message.contains("does not support resource selections"),
         "{refused}"
     );
-    let affected = refused["target"]["affectedGrants"]
-        .as_array()
-        .unwrap()
+    let listed = refused["target"]["affectedGrants"].as_array().unwrap();
+    let mut affected = listed
         .iter()
         .map(|grant| {
             (
@@ -535,13 +544,25 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
                 grant["reasonCode"].as_str().unwrap(),
             )
         })
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
+    affected.sort();
     assert_eq!(
         affected,
-        BTreeSet::from([
+        [
             ("view-eng-user", "resource_selection_unsupported"),
             ("view-ops-service", "resource_selection_unsupported"),
-        ]),
+        ],
+        "{refused}"
+    );
+    let two_subjects = listed
+        .iter()
+        .find(|grant| grant["id"] == "view-eng-user")
+        .unwrap()["reason"]
+        .as_str()
+        .unwrap();
+    assert!(
+        two_subjects.contains("view-eng-user subjects[0]")
+            && two_subjects.contains("view-eng-user subjects[1]"),
         "{refused}"
     );
     drop(app);

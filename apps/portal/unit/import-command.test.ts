@@ -248,7 +248,11 @@ describe("command import preview", () => {
 describe("acceptance errors", () => {
   test("refusals list the retained grants and stored resources to fix, linked to them", () => {
     const blocked = new ApiError("input is invalid: refused", 400, "input_invalid", undefined, undefined, undefined, {
-      affectedGrants: [{ id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "the action no longer supports per_user" }],
+      affectedGrants: [
+        { id: "grant-search", reasonCode: "credential_mode_unsupported", reason: "the action no longer supports per_user" },
+        { id: "toml:0", reasonCode: "credential_mode_invalid", reason: "policy.grants[0] subjects[0] ...; policy.grants[0] subjects[1] ..." },
+        { id: "", reasonCode: "credential_mode_invalid", reason: "policy grant subjects[0] unattributed" }
+      ],
       resources: [
         { type: "ticketing_project", id: "legacy" },
         { type: "ticketing_project", id: "web" },
@@ -259,10 +263,14 @@ describe("acceptance errors", () => {
     expect(html).toContain("This change would leave retained grants invalid. Update or remove them first:");
     expect(html).toContain('href="/ui/admin/policies?grant=grant-search"');
     expect(html).toContain("the action no longer supports per_user");
+    // A configured grant opens by its `toml:<index>` reference; an unattributed one is plain text.
+    expect(html).toContain('href="/ui/admin/policies?grant=toml%3A0"');
+    expect(html).toContain('<span class="wb-muted">Unidentified grant</span>: policy grant subjects[0] unattributed');
+    expect(html).not.toContain('href="/ui/admin/policies?grant="');
     expect(html).toContain("Stored resources no longer fit these resource type changes.");
     expect(html).toContain('href="/ui/admin/catalog/resources?item=legacy"');
     expect(html).toContain('href="/ui/admin/catalog/resources?item=triage"');
-    expect(html.match(/<li>/g)).toHaveLength(3);
+    expect(html.match(/<li>/g)).toHaveLength(5);
     // The message text is not parsed; other failures show it as it is.
     expect(html).not.toContain("refused");
     const plain = renderToStaticMarkup(createElement(ImportErrorAlert, { error: new ApiError("select at least one discovered tool", 400, "input_invalid") }));
