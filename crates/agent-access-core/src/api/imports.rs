@@ -304,14 +304,25 @@ fn resource_type_change_status() -> Value {
         "required":["id","brokerType","change","outcome","details","resourceCount","blockingResources","affectedResources","editable","blocked"],
         "properties":properties}})
 }
-/// What an acceptance's resource type changes did to stored resources.
+/// A managed policy revision: its generation and who advanced it, when.
+fn policy_revision() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["generation","updatedAt","updatedBy"],"properties":{
+        "generation":{"type":"integer","minimum":0},
+        "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
+    }})
+}
+/// What an acceptance's resource type changes did to stored resources, and
+/// the managed policy revisions before and after it when it deleted
+/// attribute values or dropped types.
 fn resource_type_effects() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["deletedAttributeValues","droppedTypes"],"properties":{
         "deletedAttributeValues":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["resourceId","attributes"],"properties":{
                 "resourceId":{"type":"string"},"attributes":{"type":"array","items":{"type":"string"}}
             }}},
-        "droppedTypes":{"type":"array","items":{"type":"string"}}
+        "droppedTypes":{"type":"array","items":{"type":"string"}},
+        "previousRevision":policy_revision(),
+        "revision":policy_revision()
     }})
 }
 /// The service-level metadata a command import accepted with its actions.
@@ -547,6 +558,28 @@ mod tests {
             json!(["/body/token"])
         );
         assert!(variant["properties"].get("secretSources").is_some());
+    }
+
+    #[test]
+    fn acceptance_effects_publish_both_policy_revisions() {
+        let validator = jsonschema::validator_for(&resource_type_effects()).unwrap();
+        let revision = |generation| crate::ManagedPolicyRevision {
+            generation,
+            updated_at: "2026-10-15T00:00:00Z".into(),
+            updated_by: "admin".into(),
+        };
+        let mut effects = crate::ImportedTypeEffects {
+            dropped_types: vec!["tickets_queue".into()],
+            ..Default::default()
+        };
+        assert!(validator.is_valid(&serde_json::to_value(&effects).unwrap()));
+        effects.previous_revision = Some(revision(4));
+        effects.revision = Some(revision(5));
+        let encoded = serde_json::to_value(&effects).unwrap();
+        assert!(validator.is_valid(&encoded), "{encoded}");
+        let mut extra = encoded;
+        extra["revision"]["etag"] = json!("x");
+        assert!(!validator.is_valid(&extra));
     }
 
     #[test]

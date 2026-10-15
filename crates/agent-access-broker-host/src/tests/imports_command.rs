@@ -134,6 +134,23 @@ pub(super) async fn request(
     (response.status(), response_json(response).await)
 }
 
+/// Checks a successful acceptance's result against the result schema the
+/// accept route publishes.
+pub(super) fn assert_published_accept_result(result: &Value) {
+    let routes = agent_access_core::http_route_specs(crate::backend_registry().resource_types());
+    let schema = routes
+        .iter()
+        .find(|route| route.operation == "admin.imports.accept")
+        .and_then(|route| route.result_schema.clone())
+        .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors = validator
+        .iter_errors(result)
+        .map(|error| format!("{} at {}", error, error.instance_path()))
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{errors:?}: {result}");
+}
+
 pub(super) fn versions(result: &Value) -> Value {
     json!({"expectedVersion":result["service"]["version"],"expectedCatalogRevision":result["catalogRevision"]})
 }
@@ -204,6 +221,7 @@ pub(super) async fn discover_and_accept(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_published_accept_result(&accepted["result"]);
     accepted["result"].clone()
 }
 

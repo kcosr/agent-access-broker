@@ -2,7 +2,9 @@
 //! publication and the linked `command` adapter: registration, declared
 //! attribute validation and privacy, and the safe-change rules a refresh
 //! previews and an acceptance rechecks against the stored resources.
-use super::imports_command::{CommandFixture, definition, request, versions};
+use super::imports_command::{
+    CommandFixture, assert_published_accept_result, definition, request, versions,
+};
 use super::imports_foundation::import_broker;
 use super::*;
 use agent_access_core::DeleteResourceRequest;
@@ -142,6 +144,7 @@ async fn accept(app: &Router, token: &str, discovered: &Value) -> Value {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_published_accept_result(&accepted["result"]);
     accepted["result"].clone()
 }
 
@@ -934,6 +937,7 @@ async fn incompatible_changes_need_a_new_id_and_removed_types_stay_until_unused(
     }
     let (status, accepted) = accept_with(&app, &token, &discovered, json!([]), json!({})).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_published_accept_result(&accepted["result"]);
     assert_eq!(
         accepted["result"]["service"]["acceptedMetadata"]["resourceTypes"]
             .as_array()
@@ -962,6 +966,8 @@ async fn incompatible_changes_need_a_new_id_and_removed_types_stay_until_unused(
     let generation = broker.runtime().policy_generation();
     let (status, accepted) = accept_with(&app, &token, &discovered, json!([]), json!({})).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
+    // The type-drop acceptance matches the published result schema.
+    assert_published_accept_result(&accepted["result"]);
     let effects = &accepted["result"]["resourceTypeEffects"];
     assert_eq!(effects["deletedAttributeValues"], json!([]));
     assert_eq!(
