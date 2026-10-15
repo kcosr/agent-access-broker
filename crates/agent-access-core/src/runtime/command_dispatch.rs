@@ -18,11 +18,13 @@
 use super::*;
 use crate::imports::{
     CommandAcquireError, CommandCaller, CommandCallerToken, CommandCallerUsername,
-    CommandCredential, CommandInvocation, CommandPermit, CommandProcessFacts, InvokeRequest,
-    RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant, RequestResource,
-    wire_deadline, wire_mode,
+    CommandCredential, CommandInvocation, CommandPermit, CommandProcessFacts, CommandVerification,
+    InvokeRequest, RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant,
+    RequestResource, VerifyRequest, wire_deadline, wire_mode,
 };
-use crate::{AdmittedResourceEntry, CommandImportConfig, CommandNetwork};
+use crate::{
+    AdmittedResourceEntry, CommandImportConfig, CommandNetwork, CredentialVerificationTarget,
+};
 use zeroize::Zeroizing;
 
 /// An admitted command-import call holding its budget permit.
@@ -628,6 +630,137 @@ impl BrokerRuntime {
             result.insert("operationDispatched".into(), json!(spawned));
         }
         error
+    }
+
+    /// Verifies the personal credential `target` names, which `owner` holds
+    /// as `name` for the command import `service`, by running `<path>
+    /// verify` under the command's budget. `None` when the command does not
+    /// declare `verify`, so verification is unsupported. The verification
+    /// audit, or the failure's, records the process facts.
+    pub async fn verify_command_credential(
+        &self,
+        service: &str,
+        owner: &IdentityContext,
+        name: &str,
+        target: &CredentialVerificationTarget,
+        correlation: CorrelationContext,
+    ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        let provider = self.command_provider(service).cloned().ok_or_else(|| {
+            ProviderError::deny(ReasonCode::ServiceActionDenied, "service is not supported")
+        })?;
+        let verify = self
+            .imported_catalog
+            .service(service)
+            .and_then(|record| record.accepted_metadata.as_ref())
+            .is_some_and(|metadata| metadata.verify);
+        if !verify {
+            return Ok(None);
+        }
+        let (_, profile) = self.personal_command_credential(service)?;
+        let deadline = self.command_deadline(service, Instant::now())?;
+        let permit = self.command_permit(service, deadline).await?;
+        let store = self
+            .managed_store
+            .clone()
+            .ok_or_else(credential_unavailable)?;
+        let ring = self.credential_key_ring.clone().ok_or_else(|| {
+            ProviderError::error(
+                ReasonCode::EncryptionKeyMissing,
+                "credential encryption key ring is not configured",
+            )
+        })?;
+        let credential = managed_store_blocking({
+            let (principal, service, name, target) = (
+                owner.principal.clone(),
+                service.to_owned(),
+                name.to_owned(),
+                target.clone(),
+            );
+            move || {
+                store.resolve_user_command_credential_for_verification(
+                    &ring, &principal, &service, &name, &profile, &target,
+                )
+            }
+        })
+        .await
+        .map_err(provider_error_from_managed_store)?;
+        self.run_command_verification(
+            service,
+            provider,
+            "user",
+            &credential,
+            deadline,
+            permit,
+            correlation,
+        )
+        .await
+        .map(Some)
+    }
+
+    /// Runs `<path> verify` for `credential`, sent in wire `mode`, under
+    /// `permit` until `deadline`, in the credential-verification hook.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_command_verification(
+        &self,
+        service: &str,
+        provider: Arc<dyn crate::imports::CommandProvider>,
+        mode: &'static str,
+        credential: &CommandCredential,
+        deadline: tokio::time::Instant,
+        permit: CommandPermit,
+        correlation: CorrelationContext,
+    ) -> Result<ProviderCredentialVerification, ProviderError> {
+        let (name, entry) = self
+            .command_import_entry(service)
+            .ok_or_else(imported_service_changed)?;
+        let network =
+            (entry.network == CommandNetwork::Inherit).then(|| self.inherited_network().as_ref());
+        let request = VerifyRequest {
+            request_id: &correlation.broker_request_id,
+            deadline: &wire_deadline(deadline),
+            mode,
+            credential,
+            network,
+        }
+        .encode()?;
+        let facts = CommandProcessFacts::new();
+        let mut verification =
+            CommandVerification::new(request, deadline, permit).with_facts(facts.clone());
+        if let Some(network) = network {
+            verification = verification.with_environment(network.environment());
+        }
+        let admitted = AdmittedCommand {
+            name: name.to_owned(),
+            authorization: CommandAuthorization::Command {
+                resource_type: None,
+                grants: Vec::new(),
+            },
+            resources: BTreeMap::new(),
+            facts,
+        };
+        let result = with_provider_context(
+            correlation,
+            service.to_owned(),
+            "credential.verify".to_owned(),
+            run_provider_hook(
+                agent_access_provider::host::hook_context(
+                    service,
+                    "credential.verify",
+                    HookPhase::CredentialVerification,
+                    &[],
+                ),
+                provider.verify_command(verification),
+            ),
+        )
+        .await;
+        let audit = json!({"command": admitted.audit()});
+        match result {
+            Ok(mut verification) => {
+                verification.audit = audit;
+                Ok(verification)
+            }
+            Err(error) => Err(error.with_audit(audit)),
+        }
     }
 }
 

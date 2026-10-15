@@ -639,21 +639,36 @@ pub(super) async fn verify_credential_for_principal(
             return management_store_error_response(&context, operation, target, error).await;
         }
     };
-    let verification = match context
-        .snapshot
-        .runtime
-        .verify_execution_credential(
-            &request.service,
-            &verification_candidate.credential,
-            &owner_identity,
-            input,
-            agent_access_provider::CorrelationContext::new(
-                context.request_id.clone(),
-                context.broker_request_id.clone(),
-            ),
-        )
-        .await
-    {
+    let correlation = agent_access_provider::CorrelationContext::new(
+        context.request_id.clone(),
+        context.broker_request_id.clone(),
+    );
+    let runtime = &context.snapshot.runtime;
+    // A command import receives the credential's plaintext on its stdin, so
+    // core rereads exactly the material resolved here rather than taking it
+    // from the opaque credential.
+    let verification = if runtime.command_provider(&request.service).is_some() {
+        runtime
+            .verify_command_credential(
+                &request.service,
+                &owner_identity,
+                &request.name,
+                &verification_candidate.target,
+                correlation,
+            )
+            .await
+    } else {
+        runtime
+            .verify_execution_credential(
+                &request.service,
+                &verification_candidate.credential,
+                &owner_identity,
+                input,
+                correlation,
+            )
+            .await
+    };
+    let verification = match verification {
         Ok(verification) => verification,
         Err(error) => {
             if verification_error_records_failure(&error) {

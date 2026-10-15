@@ -12,6 +12,8 @@
 //!   `requestId`, `deadline`, `caller`, `inputs`, `authorization`,
 //!   `credentials` for a command with a credential, and `network` with
 //!   `network = "inherit"`;
+//! - `verify`: `format`, `requestId`, `deadline`, the one `credential` to
+//!   check and `network` with `network = "inherit"`.
 //!
 //! Credentials and authorization grants are keyed by wire mode: `service`
 //! for the import's execution slot and `user` for a personal credential
@@ -429,6 +431,39 @@ impl InvokeRequest<'_> {
     }
 }
 
+/// Everything one `verify` request holds.
+pub(crate) struct VerifyRequest<'a> {
+    pub request_id: &'a str,
+    pub deadline: &'a str,
+    /// The wire mode of the credential: `service` or `user`.
+    pub mode: &'static str,
+    pub credential: &'a CommandCredential,
+    pub network: Option<&'a InheritedNetwork>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifyDocument<'a> {
+    format: &'static str,
+    request_id: &'a str,
+    deadline: &'a str,
+    credential: CredentialWire<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network: Option<InheritedNetworkWire<'a>>,
+}
+
+impl VerifyRequest<'_> {
+    pub(crate) fn encode(&self) -> Result<CommandRequest, ProviderError> {
+        CommandRequest::encode(&VerifyDocument {
+            format: COMMAND_FORMAT,
+            request_id: self.request_id,
+            deadline: self.deadline,
+            credential: self.credential.wire(Some(self.mode)),
+            network: self.network.map(InheritedNetwork::wire),
+        })
+    }
+}
+
 /// `deadline`, a monotonic instant, as the RFC 3339 UTC time a command
 /// reads: now plus the time remaining, in whole seconds.
 pub(crate) fn wire_deadline(deadline: tokio::time::Instant) -> String {
@@ -616,6 +651,35 @@ mod tests {
         assert!(document.get("credentials").is_none());
         assert!(document.get("network").is_none());
         assert!(secrets.is_empty());
+    }
+
+    #[test]
+    fn verify_requests_carry_only_the_credential_to_check() {
+        let credential = CommandCredential::username_token("svc".into(), "svc-example".into());
+        let request = VerifyRequest {
+            request_id: "brk_3",
+            deadline: "2026-10-14T15:06:00Z",
+            mode: "service",
+            credential: &credential,
+            network: None,
+        };
+        assert_eq!(
+            decode(&request.encode().unwrap()),
+            json!({"format": "agent-access-command/1", "requestId": "brk_3",
+                "deadline": "2026-10-14T15:06:00Z",
+                "credential": {"mode": "service", "kind": "username_token",
+                    "username": "svc", "token": "svc-example"}})
+        );
+        let token = CommandCredential::token("personal".into());
+        let request = VerifyRequest {
+            mode: "user",
+            credential: &token,
+            ..request
+        };
+        assert_eq!(
+            decode(&request.encode().unwrap())["credential"],
+            json!({"mode": "user", "kind": "token", "token": "personal"})
+        );
     }
 
     #[test]

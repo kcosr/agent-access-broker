@@ -4164,6 +4164,31 @@ impl ManagedStore {
         Ok(credential)
     }
 
+    /// The personal credential a verification resolved as `target`, as a
+    /// command import's `verify` receives it. A credential replaced or
+    /// rotated since then fails `VersionConflict`; nothing records a use.
+    pub(crate) fn resolve_user_command_credential_for_verification(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        expected_profile: &str,
+        target: &CredentialVerificationTarget,
+    ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
+        validate_principal_id(owner_principal_id)?;
+        validate_service_and_name(service, name)?;
+        validate_profile(expected_profile)?;
+        let conn = self.connection.lock().unwrap();
+        let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
+        if row.credential_id != target.credential_id
+            || row.material_version != target.material_version
+        {
+            return Err(ManagedStoreError::VersionConflict);
+        }
+        command_credential_from_encrypted_row(key_ring, &row, expected_profile)
+    }
+
     pub fn resolve_user_credential_for_verification(
         &self,
         key_ring: &CredentialKeyRing,

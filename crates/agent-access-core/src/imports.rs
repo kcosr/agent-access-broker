@@ -27,7 +27,7 @@ pub use command_request::CommandSecrets;
 pub(crate) use command_request::{
     CommandCaller, CommandCallerToken, CommandCallerUsername, CommandCredential, InvokeRequest,
     RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant, RequestResource,
-    wire_deadline, wire_mode,
+    VerifyRequest, wire_deadline, wire_mode,
 };
 pub use definition::*;
 pub use metadata::*;
