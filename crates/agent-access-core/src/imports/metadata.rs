@@ -124,6 +124,12 @@ fn bounded_text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
+/// The source bound of declared patterns: nonempty and at most 8 KiB. The
+/// grammar is the SDK resource pattern's; adapters compile it.
+fn pattern_source(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 8 * 1024
+}
+
 fn identifier(value: &str, max: usize) -> bool {
     let bytes = value.as_bytes();
     (1..=max).contains(&bytes.len())
@@ -161,8 +167,9 @@ impl ImportedServiceMetadata {
             }
             if !bounded_text(&declared.label, 64)
                 || !bounded_text(&declared.plural_label, 64)
-                || !bounded_text(&declared.pattern, 1024)
-                || !bounded_text(&declared.example, 1024)
+                || !pattern_source(&declared.pattern)
+                || declared.example.is_empty()
+                || declared.example.len() > declared.max_length as usize
                 || !(1..=1024).contains(&declared.max_length)
                 || declared.attributes.len() > IMPORT_MAX_RESOURCE_ATTRIBUTES
             {
@@ -181,7 +188,7 @@ impl ImportedServiceMetadata {
                     || attribute
                         .pattern
                         .as_ref()
-                        .is_some_and(|pattern| !bounded_text(pattern, 1024))
+                        .is_some_and(|pattern| !pattern_source(pattern))
                 {
                     return Err("import resource attribute declaration is invalid".into());
                 }

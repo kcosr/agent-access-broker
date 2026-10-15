@@ -19,8 +19,10 @@ const MAX_VERSION_BYTES: usize = 64;
 const MAX_RESOURCE_TYPES: usize = 16;
 const MAX_ATTRIBUTES: usize = 16;
 const MAX_LABEL_BYTES: usize = 64;
-const MAX_PATTERN_BYTES: usize = 1024;
+/// Pattern sources are nonempty and at most 8 KiB, as SDK resource patterns.
+const MAX_PATTERN_BYTES: usize = 8 * 1024;
 const DEFAULT_MAX_LENGTH: u32 = 256;
+/// The manifest's `maxLength` bound in bytes, within the SDK's 8,192.
 const MAX_MAX_LENGTH: u32 = 1024;
 const MAX_ATTRIBUTE_DESCRIPTION_BYTES: usize = 1024;
 const MAX_RESOURCE_INPUTS: usize = 4;
@@ -131,12 +133,17 @@ fn attribute_name(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
-/// Compiles `pattern` to match a whole value, within the import regex budget.
+/// Compiles `pattern` to match a whole value, within the import regex
+/// budgets: the `regex` crate dialect (linear time, no lookaround or
+/// backreferences), a nonempty source of at most 8 KiB, and 256 KiB program
+/// and lazy DFA budgets.
+// Replaced by `agent_access_provider::ResourcePattern::new` when the
+// resource-types lane lands; until then both accept exactly the same patterns.
 pub(crate) fn whole_value_regex(pattern: &str) -> Result<regex::Regex, String> {
     if pattern.is_empty() || pattern.len() > MAX_PATTERN_BYTES {
         return Err(format!("patterns must have 1 to {MAX_PATTERN_BYTES} bytes"));
     }
-    regex::RegexBuilder::new(&format!("^(?:{pattern})$"))
+    regex::RegexBuilder::new(&format!(r"\A(?:{pattern})\z"))
         .size_limit(MAX_COMPILED_PATTERN_BYTES)
         .dfa_size_limit(MAX_COMPILED_PATTERN_BYTES)
         .build()
@@ -199,11 +206,11 @@ fn resource_type(value: &Value, index: usize) -> Result<ResourceType, String> {
         .filter(|id| identifier(id, 32))
         .ok_or_else(|| format!("{label}.id must match ^[a-z][a-z0-9_]{{0,31}}$"))?
         .to_owned();
-    let pattern = text(
-        object.get("pattern"),
-        &format!("{label}.pattern"),
-        MAX_PATTERN_BYTES,
-    )?;
+    let pattern = object
+        .get("pattern")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{label}.pattern must be a string"))?
+        .to_owned();
     let regex =
         whole_value_regex(&pattern).map_err(|reason| format!("{label}.pattern: {reason}"))?;
     let max_length = match object.get("maxLength") {
@@ -214,11 +221,12 @@ fn resource_type(value: &Value, index: usize) -> Result<ResourceType, String> {
             .map(|length| length as u32)
             .ok_or_else(|| format!("{label}.maxLength must be 1 to {MAX_MAX_LENGTH}"))?,
     };
-    let example = text(
-        object.get("example"),
-        &format!("{label}.example"),
-        MAX_PATTERN_BYTES,
-    )?;
+    let example = object
+        .get("example")
+        .and_then(Value::as_str)
+        .filter(|example| !example.is_empty())
+        .ok_or_else(|| format!("{label}.example must be a nonempty string"))?
+        .to_owned();
     if example.len() > max_length as usize || !regex.is_match(&example) {
         return Err(format!(
             "{label}.example must match its pattern and maxLength"
@@ -296,9 +304,11 @@ fn attribute(value: &Value, label: &str) -> Result<ImportedResourceAttributeDecl
     let pattern = object
         .get("pattern")
         .map(|value| {
-            let pattern = text(Some(value), &format!("{label}.pattern"), MAX_PATTERN_BYTES)?;
-            whole_value_regex(&pattern).map_err(|reason| format!("{label}.pattern: {reason}"))?;
-            Ok::<_, String>(pattern)
+            let pattern = value
+                .as_str()
+                .ok_or_else(|| format!("{label}.pattern must be a string"))?;
+            whole_value_regex(pattern).map_err(|reason| format!("{label}.pattern: {reason}"))?;
+            Ok::<_, String>(pattern.to_owned())
         })
         .transpose()?;
     Ok(ImportedResourceAttributeDeclaration {
@@ -866,6 +876,35 @@ pub(crate) mod tests {
         ] {
             assert!(resource_input(&schema, pointer).is_err(), "{pointer}");
         }
+    }
+
+    #[test]
+    fn patterns_follow_the_resource_pattern_rules() {
+        // Whole-value matches in the `regex` dialect.
+        let regex = whole_value_regex("[A-Z]{2,10}").unwrap();
+        assert!(regex.is_match("OPS"));
+        assert!(!regex.is_match("OPS-1"));
+        assert!(!regex.is_match("OPS\n"));
+        // An 8 KiB source is accepted; one byte more, an empty source,
+        // lookaround, backreferences and oversized programs are not.
+        let padded = |bytes: usize| format!("(?x){}a", " ".repeat(bytes - 5));
+        whole_value_regex(&padded(8 * 1024)).unwrap();
+        for pattern in [
+            padded(8 * 1024 + 1),
+            String::new(),
+            "(?=a)a".into(),
+            r"(a)\1".into(),
+            "[a-z]{1000}{1000}".into(),
+            "(unclosed".into(),
+        ] {
+            assert!(whole_value_regex(&pattern).is_err(), "{pattern:.32}");
+        }
+        let mut manifest = sample();
+        manifest["resourceTypes"][0]["maxLength"] = json!(2);
+        assert!(parse_value(&manifest).unwrap_err().contains("maxLength"));
+        let mut manifest = sample();
+        manifest["resourceTypes"][0]["attributes"][0]["pattern"] = json!("(?<=x)y");
+        assert!(parse_value(&manifest).unwrap_err().contains("pattern"));
     }
 
     #[test]
