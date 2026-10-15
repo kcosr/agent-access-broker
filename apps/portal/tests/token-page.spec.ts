@@ -335,6 +335,7 @@ test("the footer counts issues in page order and its link reveals the first one"
   await editor(page).getByRole("checkbox", { name: "jira", exact: true }).check();
   const footer = editor(page).getByRole("region", { name: "Issue token", exact: true });
   await expect(footer.getByRole("status")).toHaveText("2 issues · Enter a token name.");
+  await expect(footer).not.toHaveClass(/wb-draftbar--neutral/);
   await footer.getByRole("button", { name: "Enter a token name.", exact: true }).click();
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toBeFocused();
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("named");
@@ -345,6 +346,7 @@ test("the footer counts issues in page order and its link reveals the first one"
   await expect(reads(service(page, "Jira")).getByLabel("issue.view", { exact: true })).toBeFocused();
   await reads(service(page, "Jira")).getByLabel("issue.view", { exact: true }).check();
   await expect(footer.getByRole("status")).toHaveText("Ready to issue. Restrictions cannot be edited after issuance.");
+  await expect(footer).toHaveClass(/wb-draftbar--neutral/);
   expect(model.issued).toEqual([]);
   expect(model.errors).toEqual([]);
 });

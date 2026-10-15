@@ -229,8 +229,10 @@ function GrantEditor({
     </Sidebar>
   );
 
+  // The warning tone is kept for problems to fix.
+  const attention = !readonly && (shownMessages.length > 0 || Boolean(saveError));
   const footer = (
-    <div className="wb-draftbar" role="region" aria-label="Save grant">
+    <div className={attention ? "wb-draftbar" : "wb-draftbar wb-draftbar--neutral"} role="region" aria-label="Save grant">
       {readonly ? (
         <div className="pt-validation">
           <Icon name="lock" />

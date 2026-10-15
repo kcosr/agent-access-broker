@@ -646,7 +646,8 @@ All notable changes to this project are documented in this file.
 - The shared action selector lists each column's actions in a grid that uses
   the available width. Effective-access previews list action names without
   separators, breaking long names after their dots, and collapse rows with more
-  than six actions to a count.
+  than six actions to a count. The grant and token editors' action bars use a
+  neutral tone unless something needs fixing.
 
 ### Fixed
 

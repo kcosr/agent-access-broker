@@ -193,8 +193,10 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   ) : (
     <><Icon name="circle-check" /><span>Ready to issue. Restrictions cannot be edited after issuance.</span></>
   );
+  // The warning tone is kept for problems to fix.
+  const attention = !pending && (Boolean(currentBlocker) || issues.length > 0);
   const footer = (
-    <div className="wb-draftbar pt-token-draftbar" role="region" aria-label="Issue token">
+    <div className={`wb-draftbar pt-token-draftbar${attention ? "" : " wb-draftbar--neutral"}`} role="region" aria-label="Issue token">
       <div className="pt-validation" role="status">{status}</div>
       <div className="wb-draftbar-actions">
         <Button onClick={() => navigate(returnTo)} disabled={pending}>Cancel</Button>
