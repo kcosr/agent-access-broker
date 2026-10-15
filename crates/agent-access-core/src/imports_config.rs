@@ -20,14 +20,16 @@ pub struct ImportsConfig {
 }
 
 impl ImportsConfig {
-    /// The operator gate for one destination of an import of `kind`: imports
-    /// are enabled, the kind is allowed, the service is not disabled, and the
-    /// destination is approved for its form. An HTTP(S) destination must
+    /// The operator gate for one destination of an import of `kind`, whose
+    /// adapter uses endpoint `form`: imports are enabled, the kind is
+    /// allowed, the service is not disabled, and the destination has the
+    /// adapter's form and is approved for it. An HTTP(S) destination must
     /// match `allowed_endpoints`; a `command:<name>` destination must name a
     /// `[command_imports.<name>]` entry in `command_imports`.
     pub fn permits(
         &self,
         command_imports: &CommandImportsConfig,
+        form: ImportEndpointForm,
         service: &str,
         kind: &str,
         destination: &str,
@@ -38,10 +40,13 @@ impl ImportsConfig {
                 .disabled_services
                 .iter()
                 .any(|disabled| disabled == service)
-            && match destination.strip_prefix(COMMAND_ENDPOINT_PREFIX) {
-                Some(name) => is_command_name(name) && command_imports.contains_key(name),
-                None => Url::parse(destination)
+            && match (form, destination.strip_prefix(COMMAND_ENDPOINT_PREFIX)) {
+                (ImportEndpointForm::Command, Some(name)) => {
+                    is_command_name(name) && command_imports.contains_key(name)
+                }
+                (ImportEndpointForm::Http, None) => Url::parse(destination)
                     .is_ok_and(|url| url_allowed_by_patterns(&url, &self.allowed_endpoints)),
+                _ => false,
             }
     }
 }
@@ -254,9 +259,10 @@ mod tests {
 
     #[test]
     fn command_destinations_need_an_approved_command_entry() {
+        use ImportEndpointForm::{Command, Http};
         let config = ImportsConfig {
             enabled: true,
-            allowed_kinds: vec!["command".into()],
+            allowed_kinds: vec!["command".into(), "remote_import".into()],
             allowed_endpoints: vec!["https://tools.example/**".into(), "command:*".into()],
             disabled_services: vec!["disabled".into()],
         };
@@ -265,30 +271,41 @@ mod tests {
             "ticketing".into(),
             toml::from_str("path = \"/opt/agent-commands/ticketing\"").unwrap(),
         );
-        assert!(config.permits(&commands, "tickets", "command", "command:ticketing"));
-        for (service, kind, destination) in [
-            ("tickets", "command", "command:other"),
-            ("tickets", "command", "command:Ticketing"),
-            ("tickets", "command", "command:"),
-            ("tickets", "mcp_http", "command:ticketing"),
-            ("disabled", "command", "command:ticketing"),
+        assert!(config.permits(
+            &commands,
+            Command,
+            "tickets",
+            "command",
+            "command:ticketing"
+        ));
+        for (form, service, kind, destination) in [
+            (Command, "tickets", "command", "command:other"),
+            (Command, "tickets", "command", "command:Ticketing"),
+            (Command, "tickets", "command", "command:"),
+            (Command, "tickets", "mcp_http", "command:ticketing"),
+            (Command, "disabled", "command", "command:ticketing"),
+            // The adapter's form decides: an HTTP adapter's command-shaped
+            // destination, or a command adapter's URL, is never permitted.
+            (Http, "tickets", "remote_import", "command:ticketing"),
+            (Command, "tools", "command", "https://tools.example/mcp"),
         ] {
             assert!(
-                !config.permits(&commands, service, kind, destination),
-                "{service} {kind} {destination}"
+                !config.permits(&commands, form, service, kind, destination),
+                "{form:?} {service} {kind} {destination}"
             );
         }
         // An HTTP pattern never approves a command, nor a command entry a URL.
         assert!(!config.permits(
             &CommandImportsConfig::new(),
+            Command,
             "tickets",
             "command",
             "command:ticketing"
         ));
         let mut http = config.clone();
-        http.allowed_kinds = vec!["remote_import".into()];
         assert!(http.permits(
             &commands,
+            Http,
             "tools",
             "remote_import",
             "https://tools.example/mcp"
@@ -296,6 +313,7 @@ mod tests {
         http.allowed_endpoints.clear();
         assert!(!http.permits(
             &commands,
+            Http,
             "tools",
             "remote_import",
             "https://tools.example/mcp"
@@ -339,16 +357,29 @@ mod tests {
             disabled_services: vec!["disabled".into()],
         };
         let commands = CommandImportsConfig::new();
-        assert!(config.permits(&commands, "tools", "mcp_http", "https://tools.example/mcp"));
+        let http = ImportEndpointForm::Http;
+        assert!(config.permits(
+            &commands,
+            http,
+            "tools",
+            "mcp_http",
+            "https://tools.example/mcp"
+        ));
         for (service, kind, endpoint) in [
             ("disabled", "mcp_http", "https://tools.example/mcp"),
             ("tools", "openapi_http", "https://tools.example/mcp"),
             ("tools", "mcp_http", "https://tools.example/other"),
             ("tools", "mcp_http", "https://other.example/mcp"),
         ] {
-            assert!(!config.permits(&commands, service, kind, endpoint));
+            assert!(!config.permits(&commands, http, service, kind, endpoint));
         }
         config.enabled = false;
-        assert!(!config.permits(&commands, "tools", "mcp_http", "https://tools.example/mcp"));
+        assert!(!config.permits(
+            &commands,
+            http,
+            "tools",
+            "mcp_http",
+            "https://tools.example/mcp"
+        ));
     }
 }

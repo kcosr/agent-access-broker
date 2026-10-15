@@ -283,6 +283,7 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
         && adapter.validate_definition(definition).is_ok()
         && config.imports.permits(
             &config.command_imports,
+            adapter.endpoint_form(),
             &definition.service,
             &definition.adapter_kind,
             &definition.endpoint,
@@ -293,6 +294,7 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
                 destinations.iter().all(|destination| {
                     config.imports.permits(
                         &config.command_imports,
+                        adapter.endpoint_form(),
                         &definition.service,
                         &definition.adapter_kind,
                         destination,
