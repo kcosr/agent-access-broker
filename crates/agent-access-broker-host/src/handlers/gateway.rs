@@ -5812,6 +5812,7 @@ mod tests {
     ) -> BrokerConfig {
         BrokerConfig {
             imports: Default::default(),
+            command_imports: Default::default(),
             oauth: Default::default(),
             deployment: DeploymentConfig::default(),
             network: NetworkConfig::default(),

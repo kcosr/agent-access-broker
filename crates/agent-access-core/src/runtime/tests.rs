@@ -8049,6 +8049,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         write_temp_secret(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([19_u8; 32]));
     BrokerConfig {
         imports: Default::default(),
+        command_imports: Default::default(),
         oauth: Default::default(),
         deployment,
         network: crate::NetworkConfig::default(),

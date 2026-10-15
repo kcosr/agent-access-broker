@@ -1,5 +1,8 @@
 //! Protocol-specific implementation seam for managed imported services.
-use super::{ImportedActionDefinition, ImportedDiscoveryCredential, ImportedServiceDefinition};
+use super::{
+    ImportEndpointForm, ImportedActionDefinition, ImportedDiscoveryCredential,
+    ImportedServiceDefinition,
+};
 use agent_access_provider::{
     BuildContext, DelegatedCredential, ExecutionCredential, Provider, ProviderBuildError,
     ProviderError,
@@ -43,6 +46,13 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// A development fixture: the host accepts its kind only in a non-production
     /// deployment with `deployment.enable_fake_service`.
     fn development_only(&self) -> bool;
+    /// The endpoint form this adapter's imports use. Core accepts a
+    /// definition of this kind only when its endpoint has this form, and
+    /// gates it accordingly: an HTTP(S) URL by `imports.allowed_endpoints`,
+    /// `command:<name>` by the operator's `[command_imports.<name>]` entry.
+    fn endpoint_form(&self) -> ImportEndpointForm {
+        ImportEndpointForm::Http
+    }
     /// Validate protocol-specific configuration without contacting upstream.
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()?;

@@ -61,6 +61,20 @@ allowed_kinds = ["mcp_http", "openapi_http"]
 allowed_endpoints = [] # For example ["https://tools.internal.example/mcp"].
 disabled_services = []
 
+# Operator-approved local executables for the `command` import kind, named by
+# imports as `command:<name>`. Requires "command" in imports.allowed_kinds.
+# See docs/configuration.md#command-imports.
+# [command_imports.ticketing]
+# path = "/opt/agent-commands/ticketing/bin/ticketing-command"
+# timeout = "30s"            # default 30s, max 10m
+# max_output_bytes = 1048576 # default 1 MiB
+# max_concurrent = 4         # default 4
+# working_dir = "/"          # default "/"
+# network = "inherit"        # default; or "none"
+# log_stderr = false         # default
+# [command_imports.ticketing.env]
+# PATH = "/usr/local/bin:/usr/bin:/bin"
+
 [identity]
 mode = "anonymous"
 authority = "toml"

@@ -5,9 +5,9 @@
 //! closed, so selecting it grants nothing until the command contract is
 //! implemented.
 use agent_access_core::imports::{
-    AdapterDiscoveryError, ImportedActionDefinition, ImportedAdapter, ImportedAdapterRegistration,
-    ImportedDiscovery, ImportedDiscoveryAuthentication, ImportedServiceDefinition,
-    imported_adapter_registration,
+    AdapterDiscoveryError, ImportEndpointForm, ImportedActionDefinition, ImportedAdapter,
+    ImportedAdapterRegistration, ImportedDiscovery, ImportedDiscoveryAuthentication,
+    ImportedServiceDefinition, imported_adapter_registration,
 };
 use agent_access_provider::{BuildContext, ExecutionCredential, Provider, ProviderBuildError};
 use async_trait::async_trait;
@@ -37,6 +37,9 @@ impl ImportedAdapter for CommandAdapter {
     }
     fn development_only(&self) -> bool {
         false
+    }
+    fn endpoint_form(&self) -> ImportEndpointForm {
+        ImportEndpointForm::Command
     }
     fn validate_definition(&self, _definition: &ImportedServiceDefinition) -> Result<(), String> {
         Err(UNAVAILABLE.into())

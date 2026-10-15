@@ -202,8 +202,12 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
         return false;
     }
     definition.validate().is_ok()
+        && definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == adapter.endpoint_form())
         && adapter.validate_definition(definition).is_ok()
         && config.imports.permits(
+            &config.command_imports,
             &definition.service,
             &definition.adapter_kind,
             &definition.endpoint,
@@ -213,6 +217,7 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
             .is_ok_and(|destinations| {
                 destinations.iter().all(|destination| {
                     config.imports.permits(
+                        &config.command_imports,
                         &definition.service,
                         &definition.adapter_kind,
                         destination,
@@ -772,6 +777,10 @@ pub(super) fn build_providers(
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
 ) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
+    // Each generation reports approved commands it cannot use yet.
+    for warning in crate::command_import_warnings(config) {
+        tracing::warn!(event = "command_import_config_warning", warning = %warning);
+    }
     let mut providers = BTreeMap::new();
     for record in &catalog.services {
         let definition = &record.definition;
@@ -897,6 +906,16 @@ impl BrokerRuntime {
                     "import adapter is not linked in this broker".into(),
                 )
             })?;
+        if definition
+            .endpoint()
+            .map_err(ManagedStoreError::InputInvalid)?
+            .form()
+            != adapter.endpoint_form()
+        {
+            return Err(ManagedStoreError::InputInvalid(
+                "import endpoint form does not match the import kind".into(),
+            ));
+        }
         adapter
             .validate_definition(definition)
             .map_err(ManagedStoreError::InputInvalid)?;

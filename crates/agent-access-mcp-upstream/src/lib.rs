@@ -430,6 +430,8 @@ fn static_authorization(
         ImportedCredentialDelivery::RawHeader { name } => CredentialPlacement::header(
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
         ),
+        // Stdin delivery belongs to command imports, never to HTTP.
+        ImportedCredentialDelivery::Stdin => return Err(credential_error()),
     };
     let mut authorization = vec![
         execution

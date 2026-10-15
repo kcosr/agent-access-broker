@@ -8,15 +8,15 @@ use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig}
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
     AttributionConfig, AuditConfig, AuditDurability, BrokerConfig, BrokerTokenTtlOption,
-    BrokerTokensConfig, BrowserAuthConfig, CredentialConfig, CredentialEncryptionConfig,
-    CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
-    GatewayConfig, GatewayGitConfig, IdentityConfig, IdentityGroupConfig, IdentitySourceConfig,
-    ImportsConfig, InitialAdminConfig, InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig,
-    LocalPasswordConfig, ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig,
-    NetworkConfig, OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
-    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
-    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
-    TrustedCallerConfig, TrustedCallerContextMode,
+    BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, CredentialConfig,
+    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
+    ExecutionContextConfig, GatewayConfig, GatewayGitConfig, IdentityConfig, IdentityGroupConfig,
+    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
+    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
+    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
+    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
+    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
+    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -99,6 +99,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         identity,
         credentials,
         imports,
+        command_imports,
         oauth,
         managed_store,
         credential_encryption,
@@ -124,6 +125,10 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         .put("identity", identity_value(identity))
         .put("credentials", credentials_value(credentials))
         .put("imports", imports_value(imports))
+        .put(
+            "command_imports",
+            keyed(command_imports, command_import_value),
+        )
         .put("oauth", oauth_value(oauth))
         .opt(
             "managed_store",
@@ -369,6 +374,29 @@ fn imports_value(imports: &ImportsConfig) -> Value {
         .put("allowed_kinds", strings(allowed_kinds))
         .put("allowed_endpoints", strings(allowed_endpoints))
         .put("disabled_services", strings(disabled_services))
+        .value()
+}
+
+fn command_import_value(command: &CommandImportConfig) -> Value {
+    let CommandImportConfig {
+        path,
+        timeout,
+        max_output_bytes,
+        max_concurrent,
+        working_dir,
+        network,
+        log_stderr,
+        env,
+    } = command;
+    Fields::default()
+        .put("path", path.as_str())
+        .put("timeout", timeout.as_str())
+        .int("max_output_bytes", *max_output_bytes)
+        .int("max_concurrent", *max_concurrent)
+        .put("working_dir", working_dir.as_str())
+        .put("network", network.as_str())
+        .put("log_stderr", *log_stderr)
+        .put("env", keyed(env, |value| Value::String(value.clone())))
         .value()
 }
 
