@@ -1342,6 +1342,13 @@ test("local browser login supports administration, self-service credentials, tok
     await editor.cancel.click();
     await confirmDialog(page, "Discard changes?", "Discard changes");
     await expect(page).toHaveURL(/\/ui\/admin\/policies$/);
+    // Browser Back asks too; discarding completes the replayed history navigation.
+    await page.getByRole("main").getByRole("link", { name: "Create grant", exact: true }).first().click();
+    await grantId.pressSequentially("discarded-by-back");
+    await page.goBack();
+    await confirmDialog(page, "Discard changes?", "Discard changes");
+    await expect(page).toHaveURL(/\/ui\/admin\/policies$/);
+    await expect(page.getByRole("alertdialog", { name: "Discard changes?", exact: true })).toHaveCount(0);
 
     await page.getByRole("main").getByRole("link", { name: "Create grant", exact: true }).first().click();
     await expect(editor.create).toBeDisabled();
@@ -1525,7 +1532,8 @@ test("local browser login supports administration, self-service credentials, tok
     await tabs.getByRole("link", { name: "Tokens", exact: true }).click();
     await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
     const dialog = page.getByRole("main", { name: "Issue agent token", exact: true });
-    await expect(dialog).toContainText(`Owner ${principalId}`);
+    await expect(dialog).toContainText("For ");
+    await expect(dialog).toContainText(principalId);
     const lifetime = dialog.getByLabel("Lifetime");
     await expect(lifetime).toHaveValue("37m");
     await expect.poll(() => lifetime.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["37m", "never"]);
@@ -1729,7 +1737,8 @@ test("local browser login supports administration, self-service credentials, tok
     const lifetime = dialog.getByLabel("Lifetime");
     await expect(lifetime).toHaveValue("37m");
     await expect.poll(() => lifetime.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["37m", "5h", "never"]);
-    await expect(dialog.getByText(/the longest finite lifetime is 5h/)).toBeVisible();
+    await expect(dialog.getByText(/the longest finite lifetime is 5 hours/)).toBeVisible();
+    await expect(lifetime.locator("option:checked")).toHaveText("37 minutes");
     await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(`portal-e2e-${testInfo.project.name}`);
     const contexts = dialog.getByRole("group", { name: "Execution contexts" });
     await expect(contexts.getByRole("checkbox")).toHaveCount(3);
@@ -2690,8 +2699,8 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(writes.getByLabel("issue.update", { exact: true })).toBeChecked();
   await expect(reads.getByLabel("issue.view", { exact: true })).not.toBeChecked();
   await expect(writes.getByLabel("issue.create", { exact: true })).not.toBeChecked();
-  await expect(reads.getByText(/^1 of \d+ selected$/)).toBeVisible();
-  await expect(writes.getByText(/^1 of \d+ selected$/)).toBeVisible();
+  await expect(reads.getByText(/^1 of \d+$/)).toBeVisible();
+  await expect(writes.getByText(/^1 of \d+$/)).toBeVisible();
   // The card header summarizes the selection.
   await expect(page.locator("#grant-service").getByText("Writes: 1 read-only action, 1 write-capable action")).toBeVisible();
   await reads.scrollIntoViewIfNeeded();

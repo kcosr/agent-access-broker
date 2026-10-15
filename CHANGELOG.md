@@ -635,11 +635,18 @@ All notable changes to this project are documented in this file.
 
 - Agent token issuance uses a dedicated page for personal and administered
   accounts, with the grant builder's shared read-only/write-capable action
-  selector, live access preview, boundary summary, and persistent Issue/Cancel
-  actions. Service-specific filters and column All/None preserve selections
-  outside the matching actions. Unsaved navigation requires confirmation, and
-  successful issuance selects the new token while displaying its one-time secret
-  and MCP setup.
+  selector, a collapsible section per restricted service, a summary of each
+  service's action and resource selection, a full-width live access preview,
+  and persistent Issue/Cancel actions that count remaining issues and link to
+  the first. Service-specific filters and column All/None preserve selections
+  outside the matching actions, and resource choices list only the resource
+  types the service's actions use. Unsaved navigation requires confirmation,
+  and successful issuance selects the new token while displaying its one-time
+  secret and MCP setup.
+- The shared action selector lists each column's actions in a grid that uses
+  the available width. Effective-access previews list action names without
+  separators, breaking long names after their dots, and collapse rows with more
+  than six actions to a count.
 
 ### Fixed
 
@@ -663,6 +670,8 @@ All notable changes to this project are documented in this file.
   selections before requesting an effective-access preview, avoiding spurious
   `allowedServices must not be empty` errors. Incomplete restrictions cannot
   silently become a token that follows all current grants.
+- Confirming **Discard changes** after browser Back or Forward in the grant
+  editor now leaves the page instead of leaving the confirmation pending.
 
 ### Removed
 

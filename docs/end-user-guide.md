@@ -176,10 +176,14 @@ to change only matching actions; other selections remain. Actions without
 reviewed read-only metadata are write-capable. A selected action that is no
 longer available stays visible so you can remove it.
 
-Check **Boundary** and **Effective access** on the page before choosing
-**Issue token** in the persistent action bar. An incomplete service, action, or
-context selection shows guidance until it can be previewed. An explicit empty
-resource selection is valid but allows no resources. **Cancel** returns to the
+Each restricted service has its own collapsible section. Its resource choices
+list only the resource types the service's actions use.
+
+Check **Summary** and the **Effective access** preview on the page before
+choosing **Issue token** in the persistent action bar. While a name, lifetime,
+context, service, or action is missing, the bar counts the issues and links to
+the first one, and the preview shows guidance. An explicit empty resource
+selection is valid but allows no resources. **Cancel** returns to the
 token list or the page that opened the form, after confirming discard of any
 changes. Drafts are not saved across a refresh.
 

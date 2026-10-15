@@ -162,9 +162,21 @@
   font-size: var(--wb-fs-12);
 }
 /* Lists wrap between names; a name breaks only if it is wider than the column. */
-.pt-access-actions span,
 .pt-access-contexts > span {
   display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pt-action-names {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: 2px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pt-action-names > li {
+  min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -237,13 +249,80 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.pt-action-columns .wb-check-text {
-  min-width: 0;
-  overflow-wrap: anywhere;
+@container wb-main (max-width: 760px) {
+  .pt-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
-@media (max-width: 760px) {
+
+/* Grant action selection: read-only | write-capable, split by a rule. Each
+   list fills its column, so wide pages show several actions per row. The
+   columns stack when the selector itself is narrow (the grant editor's form
+   column beside its sidebar and preview). */
+.pt-action-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  container: action-selector / inline-size;
+}
+.pt-action-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-md);
+}
+.pt-action-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+.pt-action-column + .pt-action-column {
+  border-left: 1px solid var(--wb-border);
+}
+.pt-action-column-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pt-action-column-count {
+  white-space: nowrap;
+}
+/* All and None wrap together, staying at the column's end. */
+.pt-action-column-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.pt-action-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  align-content: start;
+  gap: 8px 18px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.pt-action-list .wb-check-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+/* Descriptions stay in the accessible name; two lines keep rows scannable. */
+.pt-action-list .wb-check-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+@container action-selector (max-width: 500px) {
   .pt-action-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .pt-action-column + .pt-action-column {
+    border-top: 1px solid var(--wb-border);
+    border-left: 0;
   }
 }
 .pt-secret {
@@ -335,6 +414,144 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* ---------- agent token editor: form and preview, with a summary rail */
+.pt-token-editor {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas: "form summary" "preview summary";
+  gap: 14px 20px;
+  max-width: 1600px;
+}
+.pt-token-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  grid-area: form;
+}
+.pt-token-summary {
+  position: sticky;
+  top: 18px;
+  grid-area: summary;
+  min-width: 0;
+}
+.pt-token-preview {
+  grid-area: preview;
+  min-width: 0;
+}
+.pt-token-editor [id^="token-"] {
+  scroll-margin-top: 16px;
+}
+@container wb-main (min-width: 1440px) {
+  .pt-token-editor {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+/* One column: the footer's status replaces the summary, which would follow
+   every service section. */
+@container wb-main (max-width: 1100px) {
+  .pt-token-editor {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "form" "preview";
+  }
+  .pt-token-summary {
+    display: none;
+  }
+}
+/* The buttons end where the editor's content does. */
+.pt-token-draftbar {
+  padding-inline-end: max(var(--wb-pane-x), calc(100% - 1600px + var(--wb-pane-x)));
+}
+.pt-token-details-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr);
+  align-items: start;
+  gap: 12px 16px;
+}
+@container wb-main (max-width: 760px) {
+  .pt-token-details-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.pt-inline-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+.pt-token-services {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: 10px 16px;
+}
+.pt-fieldset--plain {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+.pt-fieldset--plain > p {
+  margin: 0;
+}
+.pt-fieldset--plain > legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font-weight: var(--wb-fw-medium);
+}
+.pt-fieldset--bare {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.pt-token-summary-services {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--wb-border);
+  list-style: none;
+}
+.pt-token-summary-services > li {
+  border-bottom: 1px solid var(--wb-border);
+}
+.pt-token-summary-service {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 2px 8px;
+  width: calc(100% + 12px);
+  margin-inline: -6px;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: var(--wb-radius-row);
+  background: none;
+  color: var(--wb-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pt-token-summary-service:hover {
+  background: var(--wb-surface-2);
+}
+.pt-token-summary-name {
+  overflow: hidden;
+  font-weight: var(--wb-fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-token-summary-service > .wb-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--wb-muted);
+}
+.pt-token-summary-detail {
+  grid-column: 1 / -1;
+  color: var(--wb-muted);
+  font-size: var(--wb-fs-12);
+}
+.pt-token-summary-detail.is-invalid {
+  color: var(--wb-danger-text);
 }
 .pt-validation {
   display: flex;

@@ -6,6 +6,7 @@ import { brokerApi } from "../api";
 import type { EffectiveAccessClause, EffectiveAccessResult, GrantEffectiveAccessBody, ResourceType, TokenEffectiveAccessBody } from "../types";
 import { ACTION_GRANT_LABEL } from "../lib/helpers";
 import { mergeEffectiveAccess } from "../lib/access";
+import { ActionName } from "./action-name";
 import { ServiceLabel } from "./service-label";
 import { clauseLabel } from "../lib/resource-labels";
 import { useResourceTypes } from "../lib/resource-types";
@@ -46,40 +47,21 @@ export function AccessClauses({ type, clauses }: { type: ResourceType | null; cl
   );
 }
 
-/** An action name that line-breaks after its dots in a narrow column. */
-function ActionName({ action }: { action: string }) {
-  const parts = action.split(".");
-  return (
-    <>
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {part}
-          {index < parts.length - 1 ? (
-            <>
-              .<wbr />
-            </>
-          ) : null}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
 /** Action names that wrap between names (and after dots within a long one). */
 function ActionList({ actions }: { actions: string[] }) {
   return (
-    <>
-      {actions.map((action, index) => (
-        <Fragment key={action}>
-          {index > 0 ? ", " : null}
-          <span>
-            <ActionName action={action} />
-          </span>
-        </Fragment>
+    <ul className="pt-action-names">
+      {actions.map((action) => (
+        <li key={action}>
+          <ActionName action={action} />
+        </li>
       ))}
-    </>
+    </ul>
   );
 }
+
+/** Rows naming more actions than this start collapsed to their count. */
+const LISTED_ACTIONS = 6;
 
 /**
  * What a grant or token allows now, as a compact table: one row per set of
@@ -87,7 +69,8 @@ function ActionList({ actions }: { actions: string[] }) {
  * grouped by service when there are several. `serviceNames` maps service IDs
  * to display names. `grantedActions` maps a service to the actions granted on
  * it (the grant's, or the principal's from the token options): a row covering
- * exactly those reads "All N granted actions", a disclosure that lists them.
+ * exactly those reads "All N granted actions", a disclosure that lists them;
+ * other rows with many actions collapse to their count the same way.
  */
 export function EffectiveAccessSummary({
   result,
@@ -132,10 +115,10 @@ export function EffectiveAccessSummary({
                 .map((row) => (
                   <tr key={`${row.actions.join(",")}|${row.contexts.join(",")}`}>
                     <th scope="row" className="pt-access-actions">
-                      {everyGrantedAction(row.service, row.actions) ? (
+                      {everyGrantedAction(row.service, row.actions) || row.actions.length > LISTED_ACTIONS ? (
                         // Collapsed, but one keyboard-operable click away.
                         <details className="pt-access-all">
-                          <summary>All {row.actions.length} granted actions</summary>
+                          <summary>{everyGrantedAction(row.service, row.actions) ? `All ${row.actions.length} granted actions` : `${row.actions.length} actions`}</summary>
                           <ActionList actions={row.actions} />
                         </details>
                       ) : (

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentTokenOptions, TokenTtlPolicy } from "../src/types";
 import { actionSelectionCounts, grantActionGroups } from "../src/lib/grant-actions";
 import { agentTokenResourceSelection, agentTokenSelectedActions } from "../src/lib/helpers";
-import { buildAgentTokenBoundary, buildAgentTokenIssuance, createAgentTokenDraft, tokenActionChoices } from "../src/lib/token-draft";
+import { buildAgentTokenBoundary, buildAgentTokenIssuance, createAgentTokenDraft, lifetimeLabel, tokenActionChoices } from "../src/lib/token-draft";
 
 const ttlPolicy: TokenTtlPolicy = { defaultTtl: "8h", maxTtl: "30d", options: ["1h", "8h", "30d", "never"] };
 const options: AgentTokenOptions = {
@@ -31,7 +31,7 @@ describe("token boundary construction", () => {
     const draft = { ...createAgentTokenDraft(namedOptions, ttlPolicy), name: "agent", accessMode: "restricted" as const, selectedServices: ["constructor"] };
     expect(agentTokenSelectedActions(draft.selectedActions, "constructor")).toEqual([]);
     expect(agentTokenResourceSelection(draft.resourceSelections, "constructor")).toBeUndefined();
-    expect(buildAgentTokenBoundary(draft, namedOptions)).toEqual({ valid: false, errors: ["Select at least one action for constructor."] });
+    expect(buildAgentTokenBoundary(draft, namedOptions)).toEqual({ valid: false, issues: [{ field: "service:constructor", message: "Select at least one action for Jira." }] });
     expect(buildAgentTokenIssuance(draft, namedOptions, ttlPolicy).valid).toBe(false);
     const selected = { ...draft, selectedActions: { ...draft.selectedActions, constructor: ["issue.view"] } };
     expect(buildAgentTokenIssuance(selected, namedOptions, ttlPolicy)).toEqual({ valid: true, body: {
@@ -61,8 +61,8 @@ describe("token boundary construction", () => {
 
   test("incomplete restricted drafts never fall back to following grants", () => {
     const draft = { ...createAgentTokenDraft(options, ttlPolicy), name: "agent", accessMode: "restricted" as const };
-    expect(buildAgentTokenBoundary(draft, options)).toEqual({ valid: false, errors: ["Select at least one service."] });
-    expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: false, errors: ["Select at least one service."] });
+    expect(buildAgentTokenBoundary(draft, options)).toEqual({ valid: false, issues: [{ field: "services", message: "Select at least one service." }] });
+    expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "services", message: "Select at least one service." }] });
     const stalePrefill = createAgentTokenDraft(options, ttlPolicy, ["retired-service"]);
     expect(stalePrefill.accessMode).toBe("restricted");
     expect(buildAgentTokenBoundary(stalePrefill, options).valid).toBe(false);
@@ -70,7 +70,7 @@ describe("token boundary construction", () => {
 
   test("requires contexts and an action in every selected service", () => {
     const draft = { ...createAgentTokenDraft(options, ttlPolicy, ["jira", "mail"]), name: "agent", selectedExecutionContexts: [], selectedActions: { jira: ["issue.view"] } };
-    const expected = { valid: false, errors: ["Select at least one execution context.", "Select at least one action for mail."] };
+    const expected = { valid: false, issues: [{ field: "contexts", message: "Select at least one execution context." }, { field: "service:mail", message: "Select at least one action for Mail." }] };
     expect(buildAgentTokenBoundary(draft, options)).toEqual(expected);
     expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual(expected);
   });
@@ -80,8 +80,8 @@ describe("token boundary construction", () => {
     const boundary = { valid: true, boundary: { allowedExecutionContexts: ["internal", "external"] } };
     expect(buildAgentTokenBoundary(draft, options)).toEqual(boundary);
     expect(buildAgentTokenBoundary({ ...draft, name: "agent", lifetime: "removed-choice" }, options)).toEqual(boundary);
-    expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: false, errors: ["Enter a token name."] });
-    expect(buildAgentTokenIssuance({ ...draft, name: "agent", lifetime: "removed-choice" }, options, ttlPolicy)).toEqual({ valid: false, errors: ["Choose an available token lifetime."] });
+    expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "name", message: "Enter a token name." }] });
+    expect(buildAgentTokenIssuance({ ...draft, name: "agent", lifetime: "removed-choice" }, options, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "lifetime", message: "Choose an available token lifetime." }] });
     expect(buildAgentTokenIssuance({ ...draft, name: "  agent  " }, options, ttlPolicy)).toEqual({ valid: true, body: { name: "agent", ttl: "8h", allowedExecutionContexts: ["internal", "external"] } });
   });
 
@@ -115,7 +115,7 @@ describe("token boundary construction", () => {
     expect(buildAgentTokenIssuance(draft, refreshed, ttlPolicy).valid).toBe(true);
     expect(draft).toEqual(initial);
     const newPolicy = { ...ttlPolicy, options: ["1h"] };
-    expect(buildAgentTokenIssuance(draft, refreshed, newPolicy)).toEqual({ valid: false, errors: ["Choose an available token lifetime."] });
+    expect(buildAgentTokenIssuance(draft, refreshed, newPolicy)).toEqual({ valid: false, issues: [{ field: "lifetime", message: "Choose an available token lifetime." }] });
   });
 
   test("retains resource restrictions for stale actions even when remaining granted actions need no resources", () => {
@@ -141,5 +141,13 @@ describe("token action choices", () => {
     expect(choices.at(-1)).toEqual({ action: "retired.action", available: false, unavailableReason: "Not currently granted" });
     expect(actionSelectionCounts(choices, ["retired.action"])).toEqual({ readOnly: 0, writeCapable: 1 });
     expect(tokenActionChoices(options, "removed-service", ["internal"], ["old.read"])).toEqual([{ action: "old.read", available: false, unavailableReason: "Not currently granted" }]);
+  });
+});
+
+describe("token lifetime labels", () => {
+  test("spell out broker durations and keep other spellings", () => {
+    expect(["1h", "8h", "30d", "1d", "15m", "90s", "never", "P1D"].map(lifetimeLabel)).toEqual([
+      "1 hour", "8 hours", "30 days", "1 day", "15 minutes", "90 seconds", "Never expires", "P1D",
+    ]);
   });
 });

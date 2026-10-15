@@ -44,8 +44,10 @@ describe("grant action classification and selection", () => {
 
   test("renders two accessible columns and a noninteractive write-capability badge", () => {
     const selector = renderToStaticMarkup(createElement(GrantActionSelector, { available: actions, selected: ["issue.view"], disabled: false, onChange: () => undefined }));
-    expect(selector).toContain(">Read-only</legend>");
-    expect(selector).toContain(">Write-capable</legend>");
+    for (const [id, label] of [["read-only", "Read-only"], ["write-capable", "Write-capable"]]) {
+      expect(selector).toMatch(new RegExp(`role="group" aria-labelledby="([^"]+-${id})".*id="\\1">${label}</span>`));
+    }
+    expect(selector).toContain("issue.<wbr/>view");
     expect(selector.match(/>All<\/button>/g)).toHaveLength(2);
     expect(selector.match(/>None<\/button>/g)).toHaveLength(2);
     for (const category of ["read-only", "write-capable"]) {
@@ -68,7 +70,10 @@ describe("grant action classification and selection", () => {
 test("action filters can be identified independently for each service", () => {
   const html = renderToStaticMarkup(createElement(GrantActionSelector, { available: actions, selected: [], disabled: false, filterLabel: "Filter jira actions", onChange: () => undefined }));
   expect(html).toContain('aria-label="Filter jira actions"');
-  expect(html).toContain('class="pt-columns pt-action-columns"');
+  expect(html).toContain('class="pt-action-columns"');
+  expect(html).toContain("All / None apply");
+  const page = renderToStaticMarkup(createElement(GrantActionSelector, { available: actions, selected: [], disabled: false, hint: false, onChange: () => undefined }));
+  expect(page).not.toContain("All / None apply");
 });
 
 test("unavailable actions remain removable but cannot be newly selected", () => {

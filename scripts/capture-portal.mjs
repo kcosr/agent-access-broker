@@ -368,7 +368,7 @@ async function tokenCreation(page, destination, theme) {
     await page.getByRole('group', { name: 'Resources and resource groups', exact: true }).evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
     await capture(page, destination, 'user-token-resources-light', theme, 'Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource');
     await page.getByRole('heading', { name: 'Issue agent token', exact: true }).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
-    await capture(page, destination, 'user-token-boundary-light', theme, 'Synthetic unsubmitted token page with the live Boundary and Effective access summaries; no token is issued');
+    await capture(page, destination, 'user-token-boundary-light', theme, 'Synthetic unsubmitted token page with the live summary rail and Effective access preview; no token is issued');
   }
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   const discard = page.getByRole('alertdialog', { name: 'Discard changes?', exact: true });

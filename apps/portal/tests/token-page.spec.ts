@@ -231,7 +231,8 @@ test("selected context-ineligible reads retain metadata and are removable; refre
   await refreshQueries(page);
   await expect.poll(() => model.optionReads).toBeGreaterThan(previous);
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("owner-draft");
-  await expect(editor(page)).toContainText("Owner target");
+  await expect(editor(page).getByRole("heading", { name: "Issue agent token", exact: true })).toBeVisible();
+  await expect(editor(page)).toContainText("For target");
   await expect(writes(jira).getByLabel("issue.view", { exact: true })).toBeChecked();
   await expect(writes(jira)).toContainText("Not currently granted");
   await reads(jira).getByLabel("issue.internal", { exact: true }).click();
@@ -305,6 +306,84 @@ test("dirty Cancel preserves the draft until discard and honors its return desti
   expect(model.errors).toEqual([]);
 });
 
+test("browser Back asks before discarding a dirty draft and completes after Discard", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens`);
+  await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
+  await expect(page).toHaveURL(/\/ui\/tokens\/new\?returnTo=%2Fui%2Ftokens$/);
+  const name = editor(page).getByRole("textbox", { name: "Name", exact: true });
+  await name.fill("unsaved");
+  const confirm = page.getByRole("alertdialog", { name: "Discard changes?", exact: true });
+  await page.goBack();
+  await confirm.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page).toHaveURL(/\/ui\/tokens\/new\?returnTo=%2Fui%2Ftokens$/);
+  await expect(name).toHaveValue("unsaved");
+  await page.goBack();
+  await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/tokens$/);
+  await expect(confirm).toHaveCount(0);
+  await expect(editor(page)).toHaveCount(0);
+  expect(model.issued).toEqual([]);
+  expect(model.errors).toEqual([]);
+});
+
+test("the footer counts issues in page order and its link reveals the first one", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "jira", exact: true }).check();
+  const footer = editor(page).getByRole("region", { name: "Issue token", exact: true });
+  await expect(footer.getByRole("status")).toHaveText("2 issues · Enter a token name.");
+  await footer.getByRole("button", { name: "Enter a token name.", exact: true }).click();
+  await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toBeFocused();
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("named");
+  await expect(footer.getByRole("status")).toHaveText("1 issue · Select at least one action for Jira.");
+  await editor(page).getByRole("button", { name: "Collapse Jira", exact: true }).click();
+  await expect(service(page, "Jira")).toHaveCount(0);
+  await footer.getByRole("button", { name: "Select at least one action for Jira.", exact: true }).click();
+  await expect(reads(service(page, "Jira")).getByLabel("issue.view", { exact: true })).toBeFocused();
+  await reads(service(page, "Jira")).getByLabel("issue.view", { exact: true }).check();
+  await expect(footer.getByRole("status")).toHaveText("Ready to issue. Restrictions cannot be edited after issuance.");
+  expect(model.issued).toEqual([]);
+  expect(model.errors).toEqual([]);
+});
+
+test("an action issue focuses the action filter when the filter hides every action", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "jira", exact: true }).check();
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("named");
+  const filter = service(page, "Jira").getByRole("searchbox", { name: "Filter jira actions", exact: true });
+  await filter.fill("no-such-action");
+  await editor(page).getByRole("group", { name: "jira resources", exact: true }).getByRole("button", { name: "Selected resources and groups", exact: true }).click();
+  await editor(page).getByRole("region", { name: "Issue token", exact: true }).getByRole("button", { name: "Select at least one action for Jira.", exact: true }).click();
+  await expect(filter).toBeFocused();
+  expect(model.errors).toEqual([]);
+});
+
+test("the summary counts each service's selection and opens a collapsed service", async ({ page }) => {
+  const model = await fixture(page);
+  model.options.resources.push({ id: "space", displayName: "Example space", resourceType: "confluence_space", selector: { kind: "exact", value: "SPACE" }, allowedExecutionContexts: ["internal", "external"], enabled: true });
+  await page.goto(`${baseUrl}/ui/tokens/new?service=jira`);
+  const summary = editor(page).getByRole("complementary", { name: "Token summary", exact: true });
+  await expect(summary).toContainText("1 service");
+  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("5 of 5 actions · all granted resources");
+  await editor(page).getByRole("group", { name: "jira resources", exact: true }).getByRole("button", { name: "Selected resources and groups", exact: true }).click();
+  // Only resource types the service's actions use are offered.
+  await expect(service(page, "Jira").getByRole("checkbox", { name: /^Example project/ })).toBeVisible();
+  await expect(service(page, "Jira").getByRole("checkbox", { name: /^Example space/ })).toHaveCount(0);
+  await service(page, "Jira").getByLabel("Empty group", { exact: true }).check();
+  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("5 of 5 actions · 1 group");
+  await editor(page).getByRole("button", { name: "Collapse Jira", exact: true }).click();
+  await expect(service(page, "Jira")).toHaveCount(0);
+  await summary.getByRole("button", { name: /^Jira/ }).click();
+  await expect(service(page, "Jira")).toBeVisible();
+  await expect(editor(page).getByRole("button", { name: "Collapse Jira", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect(model.errors).toEqual([]);
+});
+
 test("pending issuance prevents duplicate submission and navigation; success replaces the editor and retains reveal", async ({ page }) => {
   const model = await fixture(page);
   let release!: () => void;
@@ -346,7 +425,8 @@ for (const change of ["signed-out", "different-viewer", "same-viewer-capabilitie
     await expect.poll(() => model.sessionReads).toBeGreaterThan(previous);
     if (change === "signed-out") await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
     if (change === "same-viewer-capabilities") await expect(page.getByText("Page not found", { exact: true })).toBeVisible();
-    if (change === "different-viewer") await expect(editor(page)).toContainText("Owner someone-else");
+    // A different viewer replaces the previous viewer's draft with a fresh one.
+    if (change === "different-viewer") await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("");
     if (change === "same-viewer-role-change") {
       await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("");
       await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toBeDisabled();
@@ -535,7 +615,7 @@ test("a removed lifetime remains explicit and can be replaced after policy refre
   await expect(lifetime.locator('option[value="8h"]')).toContainText("no longer available");
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
   await lifetime.selectOption("1h");
-  await expect(editor(page).getByRole("region", { name: "Boundary", exact: true })).toContainText("1h");
+  await expect(editor(page).getByRole("complementary", { name: "Token summary", exact: true })).toContainText("1 hour");
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeEnabled();
   await editor(page).getByRole("button", { name: "Issue token", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();

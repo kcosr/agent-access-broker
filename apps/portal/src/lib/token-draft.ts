@@ -30,21 +30,26 @@ export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: Tok
   };
 }
 
-type InvalidDraft = { valid: false; errors: string[] };
+/** The editor section an issue belongs to; `service:<id>` is one selected service. */
+export type AgentTokenDraftField = "name" | "lifetime" | "contexts" | "services" | `service:${string}`;
+export type AgentTokenDraftIssue = { field: AgentTokenDraftField; message: string };
+type InvalidDraft = { valid: false; issues: AgentTokenDraftIssue[] };
 export type AgentTokenBoundaryResult = { valid: true; boundary: TokenEffectiveAccessBody } | InvalidDraft;
 export type AgentTokenIssuanceResult = { valid: true; body: AgentTokenIssueBody } | InvalidDraft;
 
 /** Structural validation is shared by preview and issue; empty resource restrictions are valid. */
 export function buildAgentTokenBoundary(draft: AgentTokenDraft, options: AgentTokenOptions): AgentTokenBoundaryResult {
-  const errors: string[] = [];
-  if (!draft.selectedExecutionContexts.length) errors.push("Select at least one execution context.");
+  const issues: AgentTokenDraftIssue[] = [];
+  if (!draft.selectedExecutionContexts.length) issues.push({ field: "contexts", message: "Select at least one execution context." });
   if (draft.accessMode === "restricted") {
-    if (!draft.selectedServices.length) errors.push("Select at least one service.");
+    if (!draft.selectedServices.length) issues.push({ field: "services", message: "Select at least one service." });
     for (const service of draft.selectedServices) {
-      if (!agentTokenSelectedActions(draft.selectedActions, service).length) errors.push(`Select at least one action for ${service}.`);
+      if (agentTokenSelectedActions(draft.selectedActions, service).length) continue;
+      const name = options.services.find((option) => option.service === service)?.displayName ?? service;
+      issues.push({ field: `service:${service}`, message: `Select at least one action for ${name}.` });
     }
   }
-  if (errors.length) return { valid: false, errors };
+  if (issues.length) return { valid: false, issues };
   return {
     valid: true,
     boundary: {
@@ -60,10 +65,11 @@ export function buildAgentTokenBoundary(draft: AgentTokenDraft, options: AgentTo
 /** Issuance adds form requirements without making the preview depend on name or lifetime. */
 export function buildAgentTokenIssuance(draft: AgentTokenDraft, options: AgentTokenOptions, ttlPolicy: TokenTtlPolicy): AgentTokenIssuanceResult {
   const boundary = buildAgentTokenBoundary(draft, options);
-  const errors = boundary.valid ? [] : [...boundary.errors];
-  if (!draft.name.trim()) errors.push("Enter a token name.");
-  if (!draft.lifetime || !ttlPolicy.options.includes(draft.lifetime)) errors.push("Choose an available token lifetime.");
-  if (!boundary.valid || errors.length) return { valid: false, errors };
+  const issues: AgentTokenDraftIssue[] = [];
+  if (!draft.name.trim()) issues.push({ field: "name", message: "Enter a token name." });
+  if (!draft.lifetime || !ttlPolicy.options.includes(draft.lifetime)) issues.push({ field: "lifetime", message: "Choose an available token lifetime." });
+  if (!boundary.valid) issues.push(...boundary.issues);
+  if (!boundary.valid || issues.length) return { valid: false, issues };
   return {
     valid: true,
     body: {
@@ -93,4 +99,15 @@ export function tokenActionChoices(options: AgentTokenOptions, service: string, 
     if (!known.has(action)) choices.push({ action, available: false, unavailableReason: "Not currently granted" });
   }
   return choices;
+}
+
+const LIFETIME_UNITS: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day" };
+
+/** "8h" reads "8 hours"; other configured spellings are shown as written. */
+export function lifetimeLabel(lifetime: string) {
+  if (lifetime === "never") return "Never expires";
+  const match = /^(\d+)([smhd])$/.exec(lifetime);
+  if (!match) return lifetime;
+  const count = Number(match[1]);
+  return `${count} ${LIFETIME_UNITS[match[2]]}${count === 1 ? "" : "s"}`;
 }

@@ -150,7 +150,8 @@ This example token allows only Jira `issue.view` for the selected `DEMO` project
 in `default`. It does not authorize Jira search or writes.
 
 1. Open **My access > Tokens** and choose **Issue token**. The creation page
-   keeps the details, access choices, and current boundary together.
+   keeps the details, access choices, a summary, and an effective-access
+   preview together.
 2. In **Details**, give it a descriptive **Name**, such as `demo-jira-reader`.
    Choose a finite **Lifetime** offered by your broker and select the required
    **Execution contexts**.
@@ -177,24 +178,29 @@ by this agent task. Unavailable selected actions remain visible for removal.*
 
 ![Token resource restriction selecting the exact DEMO Jira project](../images/portal/guide-annotated/user-token-resources-light.png)
 
-*Synthetic, unsubmitted resource choice. Select the Jira project entry. The
-similarly named fake project and Confluence space are different resource types.*
+*Synthetic, unsubmitted resource choice. Select the Jira project entry. Each
+service lists only the resource types its actions use; resource groups may mix
+types.*
 
-6. Check **Boundary** and **Effective access** on the same page. Confirm the
-   owner, name, lifetime, contexts, action, and resource selection. The preview
-   waits until contexts, services, and actions are complete. An explicitly empty
-   resource selection is valid and currently allows no resources.
+6. Check **Summary** beside the form and **Effective access** below it.
+   Confirm the name, lifetime, contexts, and each service's action and resource
+   selection; select a service in the summary to return to its section. The
+   preview waits until contexts, services, and actions are complete. An
+   explicitly empty resource selection is valid and currently allows no
+   resources.
 
 ![Token boundary and effective access beside the creation form](../images/portal/guide-annotated/user-token-boundary-light.png)
 
 *Synthetic, unsubmitted token draft. The summary and preview update as you edit;
 current grants remain necessary on every request.*
 
-7. Choose **Issue token** in the persistent action bar. Keep the page open until
-   issuance completes. Copy the token immediately into the agent's protected
-   secret location, or retain it only long enough to use the CLI's secure token
-   prompt below. The raw token is shown once and cannot be shown again after the
-   dialog closes. It is deliberately omitted from this guide's screenshots.
+7. Choose **Issue token** in the persistent action bar. While anything is
+   missing, the bar counts the issues and links to the first one. Keep the page
+   open until issuance completes. Copy the token immediately into the agent's
+   protected secret location, or retain it only long enough to use the CLI's
+   secure token prompt below. The raw token is shown once and cannot be shown
+   again after the dialog closes. It is deliberately omitted from this guide's
+   screenshots.
 8. Close **Token created** to inspect the selected token in the list.
 
 Use **Cancel** to return without issuing, confirming **Discard changes** when
