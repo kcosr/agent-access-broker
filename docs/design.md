@@ -1292,6 +1292,20 @@ Imports with a supported, allowed personal binding publish a single-consumer
 connection under the imported service ID that mirrors that binding. See
 [credential connections](configuration.md#credential-connections).
 
+Services sharing a connection must act on one upstream. Each backend or gateway
+declares an `UpstreamAuthority` in its service descriptor: a normalized origin
+and instance path, with an optional tenant and tenant gateway (GitLab REST the
+instance of its `api_base_url`, a Git gateway its `upstream_base_url`, Jira and
+Confluence their site with the cloud ID and Atlassian gateway, an HTTP import its
+endpoint). A token connection's consumers must all declare authorities naming
+the same instance. An OAuth connection's registration dialect checks each
+consumer's authority against the resource the registration grants through
+`OAuthDialect::check_consumer_authority`, which accepts by default. The checks
+run at offline validation, at startup and reload, and at every imported-catalog
+publication, including import creation, without contacting upstream. Stored
+tokens are not bound to an authority, so a later base-URL change sends them to
+the new instance, as a provider base-URL change always has.
+
 A **token** selection loads the authenticated principal's row
 `(principal, connection, default)`, requires the stored profile to match the
 connection's `token_profile`, decrypts the secret with the credential
@@ -1551,7 +1565,11 @@ configured by `[audit]`. The record is camelCase and carries: `auditId`,
 `configGeneration`, `policyGeneration`, `principal`, `principalSubject`,
 `groups`, `service`, `action`, `resourceScopes`, `matchedGrant`,
 `credentialMode` (`Option<Option<String>>`: `service`/`per_user` on allow, null
-for admin records), `decision`, `reasonCode`, `upstreamStatus`,
+for admin records), `credentialConnection` (the credential connection a personal
+credential came from; present when the selected mode is `per_user`, or when a
+command call passes a `per_user` grant even though mixed modes leave
+`credentialMode` null, and absent when only service credentials are used or for
+management and authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
 `executionContext`, `searchAuthorization` (search actions), and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,

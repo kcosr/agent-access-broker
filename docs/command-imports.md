@@ -928,6 +928,9 @@ boundary. A command-enforced call records
 their IDs, versions, credential modes and boundaries. Both are captured by the
 Broker, so an interrupted call keeps them, with facts not yet known, such as
 the exit status of a killed process, recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+A call that passes a personal grant also records `credentialConnection`, the
+imported service ID of the import's credential connection, even when mixed
+modes leave `credentialMode` null; a call passing only service grants omits it.
 Verification records the same facts under `providerAudit.verification.command`.
 
 `contractViolation` is a verdict on the response:

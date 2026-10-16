@@ -514,12 +514,23 @@ Validation rules:
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or
   disconnecting it affects every service using any of those connections.
-- **Upstream authority.** The consumers of a token connection must address the
-  same upstream instance, for example GitLab REST's `api_base_url` without
-  `/api/v4` and the Git gateway's `upstream_base_url`. Validation checks this
-  offline, without contacting upstream. Stored tokens are not bound to an
-  upstream: changing the consumers' base URLs sends existing tokens to the new
-  host, as changing a provider's base URL always has.
+- **Upstream authority.** Each service declares the upstream instance its
+  credentials act on: GitLab REST the instance of its `api_base_url` (without
+  `/api/v4`), a Git gateway its `upstream_base_url`, Jira and Confluence their
+  site with the configured cloud ID and Atlassian gateway, and an HTTP import its
+  endpoint. A token connection with several consumers requires each to declare
+  an authority, with one origin and instance path; otherwise validation reports
+  `credentials.connections.<id>: <service> declares no upstream authority, so it
+  cannot share a token connection` or `... <a> acts on <origin> but <b> acts on
+  <origin>; a token connection's consumers must act on one upstream`. An OAuth
+  connection requires the registration's dialect to accept each consumer, or
+  reports `credentials.connections.<id>.oauth: <service> does not act on the
+  upstream registration <registration> grants access to: <reason>`. These checks
+  run at `config validate`, at startup and reload, and whenever the imported
+  catalog is published, including import creation, without contacting
+  upstream. Stored tokens are not bound to an upstream: changing the consumers'
+  base URLs sends existing tokens to the new host, as changing a provider's base
+  URL always has.
 
 **Storage.** A connection's token rows live in the managed store with the
 connection ID as their `service` and `default` as their name. A connection with
@@ -542,6 +553,13 @@ personal binding. It mirrors that binding and never adds a second method:
 Imported connections are not configured in TOML. See
 [imported services](imported-services.md#credentials-and-identity) and
 [command imports](command-imports.md#credentials).
+
+**Provider validation.** A backend's own configuration checks see the credential
+kinds configured for its service (`ServiceCredentialKinds`). For a
+`type = "connection"` entry, `per_user` is the connection's token profile kind
+(`basic_api_token` or `bearer_token`), or `oauth` for a connection with only
+`oauth`, and a separate delegated flag reports that the connection also offers
+OAuth. Gmail therefore requires a connection with only `oauth`.
 
 ### Connection token profiles
 
@@ -1145,7 +1163,8 @@ dependency_inward = "is blocked by"
   `credentials.per_user` entry must resolve to `bearer_token`: a static
   `bearer_token`, or a credential connection whose `token_profile` is a bearer
   profile such as `jira-bearer-token`. A `basic_api_token`, a connection with a
-  basic profile and a `secret_store` (whose records carry their own kinds) are
+  basic profile, a connection that also offers OAuth (delegated per-user
+  access), and a `secret_store` (whose records carry their own kinds) are
   rejected.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each

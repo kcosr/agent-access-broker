@@ -667,6 +667,24 @@ All notable changes to this project are documented in this file.
   `host::token_as_basic`, for static and delegated tokens; the crate-boundary
   check rejects it in native, adapter, reference and helper crates.
 
+- Invocation and Git gateway audit records carry `credentialConnection`, the
+  credential connection a personal credential came from. It is present when the
+  selected credential mode is `per_user`, and when a command call passes a
+  `per_user` grant even though mixed modes leave `credentialMode` null; it is
+  absent when only service credentials are used.
+
+- The provider SDK adds `UpstreamAuthority` and
+  `ServiceDescriptor::with_upstream_authority`, through which a backend
+  declares the upstream instance its credentials act on, and the provided
+  `OAuthDialect::check_consumer_authority`, which accepts every consumer by
+  default. The host checks that a token credential connection's consumers act
+  on one instance, and that an OAuth connection's registration dialect accepts
+  each consumer, at `config validate`, startup, reload and every imported-catalog
+  publication. `ServiceCredentialKinds` adds `per_user_delegated`, set with the
+  `with_per_user_delegated` builder, which reports that a credential connection
+  also offers OAuth; `per_user` reports the token profile's kind, or `oauth`
+  for an OAuth-only connection.
+
 ### Changed
 
 - Existing Confluence `all` resources used by grants, groups, and token
