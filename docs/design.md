@@ -1274,7 +1274,9 @@ identity and matches the exact principal first, then the exact
 **`per_user` `connection`** names a **credential connection**
 (`credentials.connections.<id>`): one per-principal credential slot that
 several services can consume, such as one GitLab token for GitLab REST and the
-GitLab Git gateway. The connection decides how a principal authenticates; each
+GitLab Git gateway, or one Atlassian API token for Jira and Confluence, which
+declare the same `atlassian-api-token` and `atlassian-bearer-token` profiles.
+The connection decides how a principal authenticates; each
 consuming service's grants still decide what the principal may do. One
 configuration-only function, `select(connection, principal_kind)`, returns the
 method: a stored token of the connection's `token_profile`, the principal's

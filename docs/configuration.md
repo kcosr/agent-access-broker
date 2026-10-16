@@ -454,6 +454,19 @@ connection = "gitlab"
 type = "connection"
 connection = "gitlab"
 
+# One Atlassian account token for Jira and Confluence on one site.
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+token_profile = "atlassian-api-token"
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "atlassian"
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "atlassian"
+
 # OAuth for people; Gmail has no stored token form.
 [credentials.connections.gmail]
 display_name = "Gmail"
@@ -570,10 +583,8 @@ depend on the consumers and the surrounding config:
 
 | Consumer | Profile | Resolves to | Requires |
 | --- | --- | --- | --- |
-| `jira` | `jira-cloud-api-token` | `basic_api_token` | `[providers.jira]` present |
-| `jira` | `jira-bearer-token` | `bearer_token` | Jira gateway enabled (`cloud_id` set AND `api.atlassian.com` allowlisted) |
-| `confluence` | `confluence-cloud-api-token` | `basic_api_token` | `[providers.confluence]` present |
-| `confluence` | `confluence-bearer-token` | `bearer_token` | Confluence gateway enabled (`cloud_id` set AND `api.atlassian.com` allowlisted) |
+| `jira`, `confluence` | `atlassian-api-token` | `basic_api_token` | the provider is configured; the account email and classic API token reach the site |
+| `jira`, `confluence` | `atlassian-bearer-token` | `bearer_token` | the provider's gateway is enabled (`cloud_id` set AND `api.atlassian.com` allowlisted); a service account's scoped token reaches the gateway |
 | `gitlab` | `gitlab-access-token` | `bearer_token` | `[providers.gitlab]` present |
 | `cloudbees_ci` | `cloudbees-ci-api-token` | `basic_api_token` | `[providers.cloudbees_ci]` present |
 | any Git HTTP gateway | `git-basic-api-token` | `basic_api_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
@@ -581,11 +592,23 @@ depend on the consumers and the surrounding config:
 
 Any other profile fails validation, as does a profile that one consumer of the
 connection does not declare, with `credentials.connections.<id>.token_profile
-<profile> is unsupported for service <service>, which accepts <profiles>`;
-Jira and Confluence therefore keep separate connections. A Git gateway also accepts the profile of another consumer of its
-connection, such as `gitlab-access-token`. It presents a bearer-kind credential
-as its [`upstream_token_auth`](#gateways) selects, and a basic-kind credential
-with its own username.
+<profile> is unsupported for service <service>, which accepts <profiles>`. A
+Git gateway also accepts the profile of another consumer of its connection, such
+as `gitlab-access-token`. It presents a bearer-kind credential as its
+[`upstream_token_auth`](#gateways) selects, and a basic-kind credential with its
+own username.
+
+Jira and Confluence declare the same Atlassian profiles, so one connection can
+serve both on one site. Classic API tokens are account-wide: a shared
+`atlassian-api-token` connection lets each principal store one email and token
+for both products. A shared `atlassian-bearer-token` connection requires the
+gateway on both providers. Atlassian service-account tokens are scoped to the
+products chosen when they are created, and Atlassian does not document one
+token holding both products' scopes, so give each product its own bearer
+connection unless you have verified such a token. With the gateway enabled, a
+provider's per-user credential must resolve to `bearer_token` (see
+[`[providers.jira]`](#providersjira)), so a deployment that routes through the
+gateway uses `atlassian-bearer-token` for its connections.
 
 ### Secret-ref syntax
 
@@ -1164,11 +1187,11 @@ dependency_inward = "is blocked by"
   `bearer_token` credential requires `api.atlassian.com` in the allowlist).
   With the gateway enabled, each configured `credentials.service` and
   `credentials.per_user` entry must resolve to `bearer_token`: a static
-  `bearer_token`, or a credential connection whose `token_profile` is a bearer
-  profile such as `jira-bearer-token`. A `basic_api_token`, a connection with a
-  basic profile, a connection that also offers OAuth (delegated per-user
-  access), and a `secret_store` (whose records carry their own kinds) are
-  rejected.
+  `bearer_token`, or a credential connection whose `token_profile` is the
+  bearer profile `atlassian-bearer-token`. A `basic_api_token`, a connection
+  with a basic profile such as `atlassian-api-token`, a connection that also
+  offers OAuth (delegated per-user access), and a `secret_store` (whose records
+  carry their own kinds) are rejected.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in

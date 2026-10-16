@@ -21985,7 +21985,7 @@ upload_spool_dir = "upload-spool"
                 "connection": "jira"
             },
             "body": {
-                "profile": "jira-cloud-api-token"
+                "profile": "atlassian-api-token"
             },
             "secretSources": [
                 {
@@ -23225,7 +23225,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23256,7 +23256,7 @@ upload_spool_dir = "upload-spool"
         })
         .unwrap();
 
-        assert_eq!(body["profile"], "jira-cloud-api-token");
+        assert_eq!(body["profile"], "atlassian-api-token");
         assert_eq!(body["secret"]["username"], "alice@example.com");
         assert_eq!(body["secret"]["token"], "secret-token");
         assert_eq!(body["metadata"]["displayName"], "Alice Jira");
@@ -23269,7 +23269,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23316,7 +23316,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23351,7 +23351,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23390,7 +23390,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23431,7 +23431,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),
@@ -23478,7 +23478,7 @@ upload_spool_dir = "upload-spool"
             agent_access_core::credential_input_schema(
                 "jira",
                 "Jira",
-                "jira-cloud-api-token",
+                "atlassian-api-token",
                 "basic_api_token",
             )
             .unwrap(),

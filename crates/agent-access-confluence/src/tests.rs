@@ -136,20 +136,64 @@ fn descriptor_offers_gateway_bearer_profile_only_for_gateway_configs() {
     let direct = confluence_descriptor(&config);
     assert_eq!(
         direct.credentials,
-        CredentialDescriptor::default().profile("confluence-cloud-api-token", "basic_api_token")
+        CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
     );
     assert_eq!(direct.presentation_body_limit, Some(1024));
     config.allowed_upstream_hosts = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
     let gateway = confluence_descriptor(&config);
     assert_eq!(
-        gateway.credential_profile_kind("confluence-bearer-token"),
+        gateway.credential_profile_kind("atlassian-bearer-token"),
         Some("bearer_token")
     );
     config.cloud_id = None;
     assert_eq!(
-        confluence_descriptor(&config).credential_profile_kind("confluence-bearer-token"),
+        confluence_descriptor(&config).credential_profile_kind("atlassian-bearer-token"),
         None
     );
+}
+
+/// Confluence declares the vendor-level Atlassian profiles Jira declares:
+/// the classic API token reaches the site and the service-account bearer
+/// token the gateway.
+#[test]
+fn vendor_profiles_select_the_site_route_or_the_gateway() {
+    let mut config = confluence_config();
+    config.allowed_upstream_hosts.push(
+        "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
+            .to_string(),
+    );
+    let descriptor = confluence_descriptor(&config);
+    let backend = HttpConfluenceBackend::for_tests(config, ProviderLimits::default());
+    for (profile, credential, base) in [
+        (
+            "atlassian-api-token",
+            basic_credential("agent@example.com", "token"),
+            "https://example.atlassian.net/wiki/rest/api/",
+        ),
+        (
+            "atlassian-bearer-token",
+            agent_access_provider::test_support::bearer_credential("token"),
+            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/rest/api/",
+        ),
+    ] {
+        assert_eq!(
+            descriptor.credential_profile_kind(profile),
+            Some(credential.kind().as_str()),
+            "{profile}"
+        );
+        assert_eq!(
+            backend.api_base(&credential).unwrap().as_str(),
+            base,
+            "{profile}"
+        );
+    }
+    for retired in ["confluence-cloud-api-token", "confluence-bearer-token"] {
+        assert_eq!(
+            descriptor.credential_profile_kind(retired),
+            None,
+            "{retired}"
+        );
+    }
 }
 
 #[test]

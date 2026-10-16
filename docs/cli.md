@@ -1725,11 +1725,12 @@ agent-access --url http://127.0.0.1:8787 --token-env ADMIN_TOKEN \
   admin principals create nightly-reporter --kind service_account \
   --display-name "Nightly Reporter"
 
-# Store your token for the Jira credential connection (user_manage token)
+# Store one Atlassian account email and API token for the atlassian
+# connection that Jira and Confluence share (user_manage token)
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
-  credentials put jira \
-  --username-env JIRA_ALICE_USERNAME \
-  --field-env token=JIRA_ALICE_API_TOKEN \
+  credentials put atlassian \
+  --username-env ATLASSIAN_ALICE_USERNAME \
+  --field-env token=ATLASSIAN_ALICE_API_TOKEN \
   --verify
 
 # Store one GitLab token for the gitlab connection that GitLab REST and the
@@ -1745,9 +1746,9 @@ agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
 
 # Provision a service account's token (admin token required)
 agent-access --url http://127.0.0.1:8787 --token-env ADMIN_TOKEN \
-  admin credentials put nightly-reporter jira \
-  --username-env JIRA_REPORTER_USERNAME \
-  --field-env token=JIRA_REPORTER_API_TOKEN --verify
+  admin credentials put nightly-reporter atlassian \
+  --username-env ATLASSIAN_REPORTER_USERNAME \
+  --field-env token=ATLASSIAN_REPORTER_API_TOKEN --verify
 
 # Use normal Git against the gateway listener. Configure the native helper as
 # described below so Git obtains the agent_invoke broker token from this CLI.

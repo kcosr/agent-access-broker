@@ -479,10 +479,9 @@ add_member "gitlab-users" "alice@example.test"
 add_member "git-gateway-users" "alice@example.test"
 add_member "read-only-users" "viewer@example.test"
 
-put_credential "alice@example.test" "jira" "jira-cloud-api-token" "Alice Jira Cloud demo credential" \
-  '{"username":"alice@example.test","token":"fake-alice-jira-token"}'
-put_credential "alice@example.test" "confluence" "confluence-cloud-api-token" "Alice Confluence Cloud demo credential" \
-  '{"username":"alice@example.test","token":"fake-alice-confluence-token"}'
+# One Atlassian token serves Jira and Confluence through the shared connection.
+put_credential "alice@example.test" "atlassian" "atlassian-api-token" "Alice Atlassian demo credential" \
+  '{"username":"alice@example.test","token":"fake-alice-atlassian-token"}'
 # One GitLab token serves GitLab REST and the Git gateway through the shared connection.
 put_credential "alice@example.test" "gitlab" "gitlab-access-token" "Alice GitLab demo credential" \
   '{"token":"fake-alice-gitlab-token"}'

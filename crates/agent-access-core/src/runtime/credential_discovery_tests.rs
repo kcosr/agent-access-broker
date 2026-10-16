@@ -270,7 +270,7 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         "jira".into(),
         crate::ConnectionConfig {
             display_name: None,
-            token_profile: Some("jira-cloud-api-token".into()),
+            token_profile: Some("atlassian-api-token".into()),
             oauth: None,
         },
     );
@@ -316,7 +316,7 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         owner_principal_id: "agent-one".into(),
         service: "jira".into(),
         name: "default".into(),
-        profile: "jira-cloud-api-token".into(),
+        profile: "atlassian-api-token".into(),
         credential_kind: "basic_api_token".into(),
         secret: json!({"username": "synthetic-user", "token": "synthetic-personal-token"}),
         metadata: json!({}),

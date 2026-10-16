@@ -79,10 +79,11 @@ the upstream credential; give your agent only its Broker invocation token.
 
 1. Open **My access > Credentials** and select the credential connection. Each
    row is one connection and lists the services you are granted that use it; a
-   shared connection, such as GitLab for GitLab REST and Git, needs one token.
+   shared connection, such as Atlassian for Jira and Confluence or GitLab for
+   GitLab REST and Git, needs one token.
 2. Check its profile and the services in **Used by**. Use the fields requested
-   by the connection; for example, a Jira Cloud API-token profile asks for the
-   upstream username and token.
+   by the connection; for example, the `atlassian-api-token` profile asks for
+   your Atlassian account email and API token.
 3. Enter your upstream values and choose **Save credential** for an empty connection.
    If a credential already exists, the drawer shows **Replace secret** and the
    button is **Replace credential**. Supply the required replacement fields.
@@ -98,7 +99,8 @@ one row per service.*
 
 *This example already has a stored credential, so it shows Replace credential.
 First-time entry uses Save credential. Stored plaintext is not loaded into this
-replacement form.*
+replacement form. This capture predates the shared Atlassian connection and
+shows a Jira row.*
 
 Expected result: the broker saves its encrypted copy and the form clears the
 entered fields. Saving does not create service access or prove that the upstream

@@ -249,18 +249,24 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 #   ]
 # }
 #
-# Alternative managed-store Jira per-user credential: a credential connection.
+# Alternative managed-store per-user credential: a credential connection.
 # Each managed principal's token for it is stored in the managed store; users
 # and system principals provide their own, and administrators provision
 # service accounts'. Connections need managed_store and credential_encryption.
+# One Atlassian connection serves Jira and Confluence on this site: each
+# principal stores one account email and classic API token for both (see
+# [credentials.per_user.confluence] below), and grants stay per service.
+# Through the Atlassian gateway (cloud_id and api.atlassian.com allowed),
+# connections use token_profile = "atlassian-bearer-token" instead, usually
+# one per product for service accounts' scoped tokens.
 #
-# [credentials.connections.jira]
-# display_name = "Jira"
-# token_profile = "jira-cloud-api-token"
+# [credentials.connections.atlassian]
+# display_name = "Atlassian"
+# token_profile = "atlassian-api-token"
 #
 # [credentials.per_user.jira]
 # type = "connection"
-# connection = "jira"
+# connection = "atlassian"
 
 [credentials.lookup.jira]
 type = "basic_api_token"
@@ -281,15 +287,12 @@ read_only = true
 
 # Per-user-only lookup-backed Confluence policy can run without
 # [credentials.lookup.confluence]. Service-mode lookup-backed policy still
-# requires the separate read-only lookup credential.
-#
-# [credentials.connections.confluence]
-# display_name = "Confluence"
-# token_profile = "confluence-cloud-api-token"
+# requires the separate read-only lookup credential. Confluence uses the
+# atlassian connection above, with the same stored token as Jira.
 #
 # [credentials.per_user.confluence]
 # type = "connection"
-# connection = "confluence"
+# connection = "atlassian"
 
 [credentials.service.gitlab]
 type = "bearer_token"

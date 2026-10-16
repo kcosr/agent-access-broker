@@ -369,6 +369,19 @@ All notable changes to this project are documented in this file.
   are added. The portal's Credentials list has one row per connection and
   per OAuth registration, merging the separate Connected accounts section, and
   lists retained rows for deletion.
+- Jira and Confluence declare the vendor-level token profiles
+  `atlassian-api-token` (an Atlassian account email and classic API token, sent
+  as HTTP Basic to the site) and, when the provider routes through the
+  Atlassian gateway, `atlassian-bearer-token` (a service account's scoped
+  token, sent as a bearer token through the gateway). The product profiles
+  `jira-cloud-api-token`, `jira-bearer-token`, `confluence-cloud-api-token` and
+  `confluence-bearer-token` are removed without an alias: a connection naming
+  one fails validation and lists the profiles its services accept. Because both
+  products declare the same profiles, one `atlassian` connection can serve
+  Jira and Confluence on one site. Tokens stored under the product profiles
+  stay stored, still decrypt for rewrap, and are listed as retained rows, but
+  are never read: people store their Atlassian token once, one token where they
+  stored two, and administrators re-provision service accounts' tokens.
 
 ### Added
 

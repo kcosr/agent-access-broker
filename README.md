@@ -87,8 +87,8 @@ narrow the granted access further. A stored credential provides upstream
 authentication; storing it does not grant permission to use it. A
 [credential connection](docs/configuration.md#credential-connections) lets
 several services share one personal credential, such as one GitLab token for
-GitLab REST and Git, and people connect through OAuth where an administrator
-configures it.
+GitLab REST and Git or one Atlassian API token for Jira and Confluence, and
+people connect through OAuth where an administrator configures it.
 
 Before executing an action, the broker checks current grants and resource
 selections and applies the authorized credential mode. Agents discover their

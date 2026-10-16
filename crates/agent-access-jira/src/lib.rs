@@ -739,11 +739,6 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             )
         });
     }
-    let mut credentials =
-        CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token");
-    if config.site().uses_gateway() {
-        credentials = credentials.profile("jira-bearer-token", "bearer_token");
-    }
     let descriptor = ServiceDescriptor::new("jira", "Jira")
         .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
@@ -761,7 +756,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 })
                 .collect(),
         )
-        .with_credentials(credentials)
+        .with_credentials(config.site().credential_descriptor())
         .with_presentation_body_limit(config.content.max_body_bytes);
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),

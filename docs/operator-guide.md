@@ -1289,12 +1289,22 @@ deploying it:
 
 | Before | After | Stored data | Action |
 | --- | --- | --- | --- |
-| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profile = P`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
+| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` other than an Atlassian product profile, and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profile = P`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
+| Jira or Confluence per-user credentials with a product profile: `jira-cloud-api-token`, `confluence-cloud-api-token`, `jira-bearer-token` or `confluence-bearer-token` | `[credentials.connections.atlassian]` with `token_profile = "atlassian-api-token"`, named by `[credentials.per_user.jira]` and `[credentials.per_user.confluence]`; through the Atlassian gateway, one connection per product with `token_profile = "atlassian-bearer-token"` | Tokens under the product profiles are not read, and stay listed for deletion | People store their Atlassian token once, one token where they stored two; administrators re-provision service accounts' tokens |
 | `type = "managed_store"` with another `credential_name` | As above | Tokens under the other name are not read | People store their token again; administrators re-provision service accounts' |
 | `type = "oauth"` with `provider = R` and `profile = Q` | `[credentials.connections.<svc>]` with `oauth = { registration = "R", profile = "Q" }` | OAuth connections unchanged, because the registration is unchanged | None |
 | Separate `gitlab` and `gitlab_git` per-user credentials | One `gitlab` connection both name, with the gateway's `upstream_token_auth = { scheme = "basic", username = "oauth2" }` | `gitlab` tokens read; `gitlab_git` tokens not read | People who stored only a Git token store a GitLab token; administrators re-provision service accounts that had only Git tokens |
 | Credential rights on a service and credential name | Rights on the connection and `default` | Rights on other names, or on services that no longer name a connection, have no effect | Administrators grant them again on the connection |
 | Personal credential routes and CLI commands keyed by service and credential name | Keyed by connection; OAuth connect and disconnect keyed by registration | None | Update scripts and automation against the [HTTP API](http-api.md) and [CLI](cli.md) |
+
+Jira and Confluence declare only the vendor-level Atlassian profiles
+`atlassian-api-token` (an account email and classic API token, sent as Basic to
+the site) and `atlassian-bearer-token` (a service account's scoped token, sent
+through the Atlassian gateway). `config validate` rejects a connection naming a
+product profile and lists the profiles its services accept. Classic tokens are
+account-wide, so one `atlassian` connection serves both products. Introduce it
+under that new ID: the product rows then stay untouched until deleted, which
+keeps rollback cheap.
 
 Imported services need no configuration change. Each import with a personal
 binding publishes its own connection under its service ID and keeps reading the

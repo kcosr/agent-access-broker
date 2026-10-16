@@ -2,9 +2,9 @@
 //! validation, credential authorization and the tenant/gateway client routes.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, EgressDeclaration, EgressProxyConfig, ExecutionCredential, ProviderBuildError,
-    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority,
-    UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
+    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, ExecutionCredential,
+    ProviderBuildError, ReasonCode, ServiceCredentialKinds, StaticCredentialKind,
+    UpstreamAuthority, UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -76,6 +76,16 @@ pub fn validate_atlassian_gateway_credential(
 /// The Atlassian API gateway's origin.
 pub const ATLASSIAN_GATEWAY_ORIGIN: &str = "https://api.atlassian.com";
 
+/// The stored token profile for an Atlassian account's email address and
+/// classic API token, presented as HTTP Basic on the site route. Classic
+/// tokens are account-wide, so one credential connection with this profile
+/// can serve Jira and Confluence on one site.
+pub const ATLASSIAN_API_TOKEN_PROFILE: &str = "atlassian-api-token";
+
+/// The stored token profile for an Atlassian service account's scoped API
+/// token, presented as a bearer token through the Atlassian gateway.
+pub const ATLASSIAN_BEARER_TOKEN_PROFILE: &str = "atlassian-bearer-token";
+
 /// Whether an Atlassian provider allowlist routes through the Atlassian API
 /// gateway. Only an exact `api.atlassian.com` host counts.
 pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
@@ -129,6 +139,22 @@ impl AtlassianSite<'_> {
     /// cloud ID is configured and `api.atlassian.com` is allowed.
     pub fn uses_gateway(&self) -> bool {
         self.cloud_id.is_some() && uses_atlassian_gateway_host(self.allowed_upstream_hosts)
+    }
+
+    /// The credentials Jira and Confluence declare for this site: the
+    /// vendor-level [`ATLASSIAN_API_TOKEN_PROFILE`] (`basic_api_token`,
+    /// site route) and, when the site uses the gateway,
+    /// [`ATLASSIAN_BEARER_TOKEN_PROFILE`] (`bearer_token`, gateway route).
+    /// Both products declare the same profiles, so one credential connection
+    /// can serve both.
+    pub fn credential_descriptor(&self) -> CredentialDescriptor {
+        let credentials =
+            CredentialDescriptor::default().profile(ATLASSIAN_API_TOKEN_PROFILE, "basic_api_token");
+        if self.uses_gateway() {
+            credentials.profile(ATLASSIAN_BEARER_TOKEN_PROFILE, "bearer_token")
+        } else {
+            credentials
+        }
     }
 
     /// The site's upstream authority: the tenant host's origin, the cloud
@@ -370,6 +396,60 @@ mod tests {
             ..site(None, &site_only)
         };
         assert!(invalid.upstream_authority().is_none());
+    }
+
+    /// Every site declares the classic API token profile for the site route;
+    /// only a site that uses the gateway adds the bearer profile, whose kind
+    /// routes through it.
+    #[test]
+    fn sites_declare_vendor_profiles_whose_kinds_select_the_route() {
+        let site_only = hosts(false);
+        assert_eq!(
+            site(Some(CLOUD_ID), &site_only).credential_descriptor(),
+            CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
+        );
+        let gateway = hosts(true);
+        assert_eq!(
+            site(None, &gateway).credential_descriptor(),
+            CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
+        );
+        let routed = site(Some(CLOUD_ID), &gateway);
+        let credentials = routed.credential_descriptor();
+        assert_eq!(
+            credentials,
+            CredentialDescriptor::default()
+                .profile("atlassian-api-token", "basic_api_token")
+                .profile("atlassian-bearer-token", "bearer_token")
+        );
+        let routes = AtlassianRoutes::new(PRODUCT, &routed, &TestHost::default()).unwrap();
+        for (profile, credential, base) in [
+            (
+                ATLASSIAN_API_TOKEN_PROFILE,
+                basic_credential("agent@example.com", "token"),
+                "https://example.atlassian.net/wiki/rest/api/".to_string(),
+            ),
+            (
+                ATLASSIAN_BEARER_TOKEN_PROFILE,
+                bearer_credential("token"),
+                format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/"),
+            ),
+        ] {
+            let declared = credentials
+                .profiles
+                .iter()
+                .find(|candidate| candidate.name == profile)
+                .unwrap();
+            assert_eq!(declared.kind, credential.kind().as_str(), "{profile}");
+            assert_eq!(
+                routes
+                    .for_credential(&credential)
+                    .unwrap()
+                    .api_base
+                    .as_str(),
+                base,
+                "{profile}"
+            );
+        }
     }
 
     #[test]

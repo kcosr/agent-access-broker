@@ -371,15 +371,15 @@ material:
 export ATLASSIAN_API_TOKEN_FILE=/secure/path/atlassian-api-token
 export GITLAB_TOKEN_FILE=/secure/path/gitlab-token
 
-"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> jira \
+# One classic Atlassian API token serves Jira and Confluence when both name
+# the atlassian connection. Verify it through each product.
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> atlassian \
   --username <email-or-user> \
   --field-file token="$ATLASSIAN_API_TOKEN_FILE" \
-  --verify
+  --verify --verify-service jira
 
-"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> confluence \
-  --username <email-or-user> \
-  --field-file token="$ATLASSIAN_API_TOKEN_FILE" \
-  --verify
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials verify <principal> atlassian \
+  --service confluence
 
 "$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> gitlab \
   --field-file token="$GITLAB_TOKEN_FILE" \

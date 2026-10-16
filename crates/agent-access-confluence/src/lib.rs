@@ -346,11 +346,6 @@ pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
 /// Confluence's authoritative service descriptor, derived from its typed
 /// configuration alone.
 pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescriptor {
-    let mut credentials =
-        CredentialDescriptor::default().profile("confluence-cloud-api-token", "basic_api_token");
-    if config.site().uses_gateway() {
-        credentials = credentials.profile("confluence-bearer-token", "bearer_token");
-    }
     let mut actions = confluence_content_actions(config);
     actions.extend(confluence_draft_actions(config));
     actions.extend(confluence_comment_actions(config));
@@ -371,7 +366,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 })
                 .collect(),
         )
-        .with_credentials(credentials)
+        .with_credentials(config.site().credential_descriptor())
         .with_presentation_body_limit(config.content.max_body_bytes);
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),
