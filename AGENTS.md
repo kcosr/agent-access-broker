@@ -276,8 +276,10 @@ binary and needs `python3`, whose absence fails it.
   verification share) and credential connections (`connections.rs`: the
   `[credentials.connections]` model, its validation and authority checks,
   `PrincipalKind` and `select`, which every personal-credential consumer
-  uses; `runtime/personal_credentials.rs` reads the selected token rows);
-  contains no backend. Its internal `imports`
+  uses; `runtime/personal_credentials.rs` reads the selected token rows;
+  `runtime/lookup_access.rs` plans and selects lookup access: the shared
+  lookup credential, the caller's token, or the operation's one OAuth lease
+  shared with execution); contains no backend. Its internal `imports`
   module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import

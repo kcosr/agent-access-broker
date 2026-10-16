@@ -714,6 +714,20 @@ All notable changes to this project are documented in this file.
   also offers OAuth; `per_user` reports the token profile's kind, or `oauth`
   for an OAuth-only connection.
 
+- Delegated (OAuth) credential connections serve metadata lookups. A
+  lookup-backed action whose `per_user` grant selects an OAuth connection
+  looks up with a lease on the caller's connection, acquired only once a
+  candidate grant exists, and execution reuses that lease, so one invocation
+  has one 401 recovery across its lookups and execution. When scope
+  resolution used the shared lookup credential and final policy selects the
+  OAuth connection, execution's lookups use the lease acquired after policy.
+  An OAuth connection may serve consumers with `per_user` lookup-backed
+  actions, and caller discovery offers those actions once the caller has
+  connected. A lookup that fails because the
+  connection awaits new consent, is being refreshed or has its refresh
+  throttled reports that failure, with any retry time, instead of the
+  concealed `scope_unresolved`.
+
 ### Changed
 
 - Existing Confluence `all` resources used by grants, groups, and token

@@ -521,10 +521,10 @@ Validation rules:
   credential kind. A Git gateway consumer accepts any token- or basic-kind
   profile that it or another consumer declares, and presents it as described
   under [`upstream_token_auth`](#gateways).
-- **OAuth.** Every consumer must accept delegated credentials, and none of a
-  consumer's `per_user` actions may need a lookup credential, which an OAuth
-  credential cannot provide. Today these consumers are `gmail` and the
-  development `oauth_stub` service; see [oauth.md](oauth.md).
+- **OAuth.** Every consumer must accept delegated credentials. The OAuth
+  connection serves a consumer's metadata lookups as well as its execution.
+  Today these consumers are `gmail` and the development `oauth_stub` service;
+  see [oauth.md](oauth.md).
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or

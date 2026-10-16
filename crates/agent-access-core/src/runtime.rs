@@ -1312,10 +1312,15 @@ fn add_upstream_resource_ownership_hint(
 }
 
 /// The caller-facing form of a pre-authorization lookup failure: lookup
-/// concealment keeps only failures that reveal nothing about the resource.
+/// concealment keeps only failures that reveal nothing about the resource,
+/// including the delegated lease failures that describe the caller's OAuth
+/// connection.
 /// A concealed failure keeps its internal diagnostic code, such as a
 /// provider contract failure's, for the Broker's own records.
 fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
+    if lookup_access::is_public_lease_failure(&error) {
+        return error;
+    }
     match error.reason_code().standard() {
         Some(
             ReasonCode::InputInvalid
@@ -4774,6 +4779,7 @@ impl BrokerRuntime {
                 &execution_context,
                 &service,
                 &action,
+                &correlation,
             )
             .await
         {
@@ -5736,8 +5742,10 @@ impl BrokerRuntime {
     }
 
     /// Selects the invocation's credential once policy has admitted it. A
-    /// per-user delegated (OAuth) credential is acquired here, so a denied
-    /// invocation never obtains or refreshes upstream access.
+    /// per-user delegated (OAuth) credential is acquired here, unless scope
+    /// resolution already holds the caller's lease, which execution then
+    /// reuses. An invocation without a candidate grant never obtains or
+    /// refreshes upstream access.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_execution_credential_after_policy(
         &self,

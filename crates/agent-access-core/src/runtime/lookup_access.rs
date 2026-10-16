@@ -2,12 +2,14 @@
 //! before policy (scope resolution) and at execution.
 //!
 //! A service-mode lookup uses the service's shared static lookup credential.
-//! A personal (`per_user`) lookup uses the caller's own credential connection:
-//! its token, or the delegated OAuth lease the operation's execution then
-//! shares, with one recovery budget. A personal lookup never falls back to the
-//! shared credential, and planning drift from a personal lookup to a `service`
-//! grant is rejected. Delegated lookup access is not yet lent: every path that
-//! would need it fails closed with [`delegated_lookup_unsupported`].
+//! A personal (`per_user`) lookup uses what the caller's credential connection
+//! selects: their token, or a lease on their OAuth connection. One operation
+//! holds at most one lease: a lease acquired for scope resolution is the one
+//! execution and its lookups use, and otherwise execution's lease serves its
+//! lookups, so the operation has one 401-recovery budget. A lease is acquired
+//! only once a candidate grant exists. A personal lookup never falls back to
+//! the shared credential, and planning drift from a personal lookup to a
+//! `service` grant is rejected.
 use super::*;
 
 /// The lookup access scope resolution used, which execution must agree with.
@@ -29,14 +31,17 @@ impl PreScopeLookup {
     }
 
     /// The execution material a personal pre-scope lookup fixes for a
-    /// `per_user` operation: the same token. `None` when scope resolution
-    /// used no personal lookup.
+    /// `per_user` operation: the same token, or the same delegated lease.
+    /// `None` when scope resolution used no personal lookup.
     pub(super) fn personal_execution(&self) -> Option<Result<ExecutionAccess, ProviderError>> {
         match self {
             Self::PerUser(LookupAccess::Static(credential)) => {
                 Some(Ok(ExecutionAccess::Static(credential.clone())))
             }
-            Self::PerUser(_) => Some(Err(delegated_lookup_unsupported())),
+            Self::PerUser(LookupAccess::Delegated(credential)) => {
+                Some(Ok(ExecutionAccess::Delegated(credential.clone())))
+            }
+            Self::PerUser(_) => Some(Err(unsupported_lookup_access())),
             Self::None | Self::Shared(_) => None,
         }
     }
@@ -49,28 +54,47 @@ pub(super) enum PreScopeLookupPlan {
     NoCandidateGrant,
 }
 
-/// A path that needs delegated lookup access, which the host does not yet
-/// lend. It fails closed: never a static or shared credential instead.
-fn delegated_lookup_unsupported() -> ProviderError {
+/// Lookup access of a kind this host does not lend.
+fn unsupported_lookup_access() -> ProviderError {
     ProviderError::deny(
         ReasonCode::CredentialNotProvisioned,
-        "delegated lookup access is not supported",
+        "selected lookup access is not supported",
     )
 }
 
 /// The lookup access a `per_user` operation derives from its execution
-/// material when scope resolution used no personal lookup.
+/// material when scope resolution used no personal lookup: the same token,
+/// or the same delegated lease.
 fn personal_lookup_from_execution(
     execution: &ExecutionAccess,
 ) -> Result<LookupAccess, ProviderError> {
     match execution {
         ExecutionAccess::Static(credential) => Ok(LookupAccess::Static(credential.clone())),
-        ExecutionAccess::Delegated(_) => Err(delegated_lookup_unsupported()),
+        ExecutionAccess::Delegated(credential) => Ok(LookupAccess::Delegated(credential.clone())),
         _ => Err(ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "selected credential mode is not provisioned",
         )),
     }
+}
+
+/// Whether `error` is a delegated lease's failure that lookup concealment
+/// passes on, because it describes the caller's OAuth connection rather than
+/// the resource a lookup named: consent pending (`version_conflict`), a
+/// refresh in progress (`concurrency_limited`) or a throttled refresh
+/// (`upstream_rate_limited`, with its retry metadata). A reconnect
+/// requirement (`credential_invalid`) passes for every origin. A provider's
+/// own failure with one of these reasons stays concealed.
+pub(super) fn is_public_lease_failure(error: &ProviderError) -> bool {
+    error.reason_code().host_port() == Some(agent_access_provider::host::HostPort::DelegatedLease)
+        && matches!(
+            error.reason_code().standard(),
+            Some(
+                ReasonCode::VersionConflict
+                    | ReasonCode::ConcurrencyLimited
+                    | ReasonCode::UpstreamRateLimited
+            )
+        )
 }
 
 impl BrokerRuntime {
@@ -102,6 +126,7 @@ impl BrokerRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn resolve_pre_scope_lookup_if_required(
         &self,
         policy_snapshot: &PolicySnapshot,
@@ -110,6 +135,7 @@ impl BrokerRuntime {
         execution_context: &ExecutionContext,
         service: &str,
         action: &str,
+        correlation: &CorrelationContext,
     ) -> Result<PreScopeLookup, ProviderError> {
         if !lookup.before_policy() {
             return Ok(PreScopeLookup::None);
@@ -123,7 +149,7 @@ impl BrokerRuntime {
         ) {
             PreScopeLookupPlan::NoCandidateGrant => Err(lookup_scope_denial()),
             PreScopeLookupPlan::UsePerUserCredential => self
-                .personal_pre_scope_lookup(service, identity)
+                .personal_pre_scope_lookup(service, action, identity, correlation)
                 .await
                 .map(PreScopeLookup::PerUser),
             PreScopeLookupPlan::UseSharedLookupCredential => self
@@ -132,16 +158,32 @@ impl BrokerRuntime {
         }
     }
 
-    /// The caller's personal lookup access before policy: the token their
-    /// connection selects. An OAuth selection would need delegated lookup
-    /// access and fails closed before any acquisition.
+    /// The caller's personal lookup access before policy, planned only once
+    /// a candidate grant exists: the token their connection selects, or a
+    /// lease on their OAuth connection, which execution then reuses.
     async fn personal_pre_scope_lookup(
         &self,
         service: &str,
+        action: &str,
         identity: &IdentityContext,
+        correlation: &CorrelationContext,
     ) -> Result<LookupAccess, ProviderError> {
-        if let Some((_, crate::Selection::OAuth(_))) = self.personal_selection(service, identity) {
-            return Err(delegated_lookup_unsupported());
+        if let Some((_, crate::Selection::OAuth(oauth))) =
+            self.personal_selection(service, identity)
+        {
+            return with_provider_context(
+                correlation.clone(),
+                service.to_owned(),
+                action.to_owned(),
+                self.acquire_delegated_credential(
+                    service,
+                    self.accepts_delegated_credentials(service),
+                    oauth.binding(),
+                    identity,
+                ),
+            )
+            .await
+            .map(LookupAccess::Delegated);
         }
         self.resolve_execution_credential(service, "per_user", identity)
             .await
@@ -207,47 +249,72 @@ impl BrokerRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::host::{HostPort, delegated_credential, port_failure};
     use agent_access_provider::test_support::{bearer_credential, delegated_binding_id};
     use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// A delegated lease no path in this module may use.
-    struct UnusedLease;
+    /// A lease with the host's one recovery per operation. It must not be
+    /// revalidated by the paths under test.
+    #[derive(Default)]
+    struct BudgetLease {
+        recovered: AtomicBool,
+    }
 
     #[async_trait]
-    impl DelegatedLease for UnusedLease {
+    impl DelegatedLease for BudgetLease {
         fn access(&self) -> DelegatedAccess {
-            DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+            DelegatedAccess::new("lease-token", "target", "audience", "v1", i64::MAX)
         }
         fn binding_identity(&self) -> DelegatedBindingId {
-            delegated_binding_id("unused")
+            delegated_binding_id("lease")
         }
         async fn revalidate(&self) -> Result<(), ProviderError> {
-            panic!("an unsupported delegated lookup must not revalidate");
+            panic!("lookup selection must not revalidate the lease");
         }
         fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
-            panic!("an unsupported delegated lookup must not mark access rejected");
+            panic!("lookup selection must not mark access rejected");
         }
         async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
-            panic!("an unsupported delegated lookup must not recover");
+            if self.recovered.swap(true, Ordering::SeqCst) {
+                return Err(ProviderError::deny(
+                    ReasonCode::CredentialInvalid,
+                    "already recovered",
+                ));
+            }
+            Ok(self.access())
         }
     }
 
-    fn delegated() -> DelegatedCredential {
-        agent_access_provider::host::delegated_credential(Arc::new(UnusedLease))
+    fn lease() -> DelegatedCredential {
+        delegated_credential(Arc::new(BudgetLease::default()))
     }
 
-    fn assert_unsupported(error: ProviderError) {
-        assert_eq!(error.decision(), Decision::Deny);
-        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
-        assert_eq!(error.message, "delegated lookup access is not supported");
+    /// `first` and `second` hold one lease: the operation's single recovery,
+    /// spent through `first`, is gone for `second`.
+    async fn assert_one_lease(first: &DelegatedCredential, second: &DelegatedCredential) {
+        first.recover_after_unauthorized().await.unwrap();
+        let error = second.recover_after_unauthorized().await.unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     }
 
-    #[test]
-    fn a_personal_static_pre_scope_lookup_fixes_the_same_execution_token() {
+    #[tokio::test]
+    async fn a_personal_pre_scope_lookup_fixes_the_same_execution_material() {
         let token = bearer_credential("personal-token");
-        let lookup = PreScopeLookup::PerUser(LookupAccess::Static(token.clone()));
-        let execution = lookup.personal_execution().unwrap().unwrap();
+        let execution = PreScopeLookup::PerUser(LookupAccess::Static(token.clone()))
+            .personal_execution()
+            .unwrap()
+            .unwrap();
         assert_eq!(execution.static_credential(), Some(&token));
+
+        let lookup = PreScopeLookup::PerUser(LookupAccess::Delegated(lease()));
+        let execution = lookup.personal_execution().unwrap().unwrap();
+        assert_one_lease(
+            lookup.access().unwrap().delegated().unwrap(),
+            execution.delegated().unwrap(),
+        )
+        .await;
+
         assert!(
             PreScopeLookup::Shared(LookupAccess::Static(token))
                 .personal_execution()
@@ -256,23 +323,126 @@ mod tests {
         assert!(PreScopeLookup::None.personal_execution().is_none());
     }
 
-    /// Paths that would need delegated lookup access fail closed instead of
-    /// substituting static or shared material.
-    #[test]
-    fn delegated_lookup_paths_fail_closed() {
-        let personal = PreScopeLookup::PerUser(LookupAccess::Delegated(delegated()));
-        assert_unsupported(personal.personal_execution().unwrap().unwrap_err());
-        assert_unsupported(
-            personal_lookup_from_execution(&ExecutionAccess::Delegated(delegated())).unwrap_err(),
-        );
+    #[tokio::test]
+    async fn per_user_lookups_derive_from_the_execution_material() {
+        let token = bearer_credential("personal-token");
+        let derived = personal_lookup_from_execution(&ExecutionAccess::Static(token.clone()));
+        assert_eq!(derived.unwrap().static_credential(), Some(&token));
+
+        let execution = ExecutionAccess::Delegated(lease());
+        let derived = personal_lookup_from_execution(&execution).unwrap();
+        assert_one_lease(derived.delegated().unwrap(), execution.delegated().unwrap()).await;
+
         let missing = personal_lookup_from_execution(&ExecutionAccess::None).unwrap_err();
         assert_eq!(missing.reason_code(), ReasonCode::CredentialNotProvisioned);
         assert_eq!(
             missing.message,
             "selected credential mode is not provisioned"
         );
-        let token = bearer_credential("personal-token");
-        let derived = personal_lookup_from_execution(&ExecutionAccess::Static(token.clone()));
-        assert_eq!(derived.unwrap().static_credential(), Some(&token));
+    }
+
+    /// A personal lookup, static or delegated, never continues under a
+    /// `service` grant: both execution selection and execution-phase lookup
+    /// reject the drift without touching the lease or the shared credential.
+    #[tokio::test]
+    async fn planning_drift_from_a_personal_lookup_to_service_is_rejected() {
+        let runtime = BrokerRuntime::new(super::super::tests::base_fake_config()).unwrap();
+        let service_policy = PolicyDecision {
+            credential_mode: "service".into(),
+            matched_grant: MatchedGrantAudit {
+                config_index: None,
+                grant_id: None,
+                grant_version: None,
+                policy_generation: None,
+                subject: "user:agent-one".into(),
+                priority: None,
+                resources: ResourceSelection::default(),
+                execution_contexts: Vec::new(),
+            },
+        };
+        let identity = IdentityContext::anonymous();
+        let correlation = CorrelationContext::for_tests();
+        for personal in [
+            LookupAccess::Static(bearer_credential("personal-token")),
+            LookupAccess::Delegated(lease()),
+        ] {
+            let lookup = PreScopeLookup::PerUser(personal);
+            let execution = runtime
+                .resolve_execution_credential_after_policy(
+                    None,
+                    "fake",
+                    "echo",
+                    "service",
+                    &identity,
+                    &correlation,
+                    &lookup,
+                )
+                .await
+                .unwrap_err();
+            let execution_lookup = runtime
+                .resolve_lookup_access_if_required(
+                    LookupRequirement::ScopeResolution,
+                    "fake",
+                    &service_policy,
+                    &ExecutionAccess::Static(bearer_credential("service-token")),
+                    &lookup,
+                )
+                .await
+                .unwrap_err();
+            for error in [execution, execution_lookup] {
+                assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+                assert_eq!(
+                    error.message,
+                    "policy lookup planner drifted from final policy selection"
+                );
+            }
+        }
+    }
+
+    /// Lookup concealment passes on the caller's OAuth connection state from
+    /// the delegated lease port, with its retry metadata, but conceals the
+    /// same reasons from a provider and every other lease failure.
+    #[test]
+    fn delegated_lease_failures_pass_lookup_concealment() {
+        let throttled = || {
+            ProviderError::error(
+                ReasonCode::UpstreamRateLimited,
+                "records OAuth token refresh is rate limited",
+            )
+            .with_result(serde_json::json!({"retryAfterSeconds": 30}))
+        };
+        let lease_failures = [
+            ProviderError::deny(ReasonCode::VersionConflict, "oauth_consent_pending"),
+            ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+            throttled(),
+        ];
+        for failure in lease_failures.clone() {
+            let failure = port_failure(HostPort::DelegatedLease, failure);
+            assert!(is_public_lease_failure(&failure));
+            assert_eq!(public_lookup_scope_error(failure.clone()), failure);
+        }
+        let concealed = |error: ProviderError| {
+            let public = public_lookup_scope_error(error);
+            assert_eq!(public.reason_code(), ReasonCode::ScopeUnresolved);
+            assert_eq!(
+                public.message,
+                "resource scope is not authorized or unavailable"
+            );
+            assert!(public.result.is_none());
+        };
+        for failure in lease_failures {
+            assert!(!is_public_lease_failure(&failure));
+            concealed(failure);
+        }
+        concealed(port_failure(
+            HostPort::DelegatedLease,
+            ProviderError::error(ReasonCode::UpstreamConnectionFailed, "oauth_provider"),
+        ));
+        // A reconnect requirement passes from any origin, as before.
+        let reconnect = port_failure(
+            HostPort::DelegatedLease,
+            ProviderError::deny(ReasonCode::CredentialInvalid, "oauth_reconnect_required"),
+        );
+        assert_eq!(public_lookup_scope_error(reconnect.clone()), reconnect);
     }
 }

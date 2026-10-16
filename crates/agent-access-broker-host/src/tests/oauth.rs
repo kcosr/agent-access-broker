@@ -15,6 +15,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use wiremock::matchers::{body_string_contains, header as header_is, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "oauth/delegated_lookups.rs"]
+mod delegated_lookups;
+
 const SOURCE: &str = "127.0.0.1:43200";
 
 struct OAuthFixture {
@@ -35,6 +38,16 @@ async fn oauth_fixture() -> OAuthFixture {
 }
 
 async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
+    oauth_fixture_with(subject, |_, _| {}, Vec::new()).await
+}
+
+/// The OAuth fixture after `setup` adjusts its configuration, with
+/// `providers` serving their configured services.
+async fn oauth_fixture_with(
+    subject: Option<&str>,
+    setup: impl FnOnce(&Path, &mut BrokerConfig),
+    providers: Vec<agent_access_provider::ServiceProvider>,
+) -> OAuthFixture {
     let dir = tempfile::TempDir::new().unwrap();
     #[cfg(unix)]
     {
@@ -159,6 +172,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         allowed_values: vec!["default".into(), "setup-only".into()],
         default_context: Some("default".into()),
     });
+    setup(dir.path(), &mut config);
 
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
@@ -208,7 +222,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
             .unwrap();
         store.add_group("alice", group, "test").unwrap();
     }
-    let broker = TestBroker::start_config(&config).await;
+    let broker = TestBroker::start_with_providers(&config, providers).await;
     let runtime = broker.runtime();
     if let Some(subject) = subject {
         runtime

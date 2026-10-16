@@ -434,8 +434,8 @@ fn accepted_profiles(descriptor: &ServiceDescriptor) -> String {
 }
 
 /// The registration and permission profile exist, and every consumer
-/// accepts delegated credentials without needing a per-user lookup
-/// credential, which OAuth cannot provide.
+/// accepts delegated credentials. The OAuth connection serves a consumer's
+/// lookups as well as its execution.
 fn validate_connection_oauth(
     config: &BrokerConfig,
     label: &str,
@@ -461,19 +461,6 @@ fn validate_connection_oauth(
         if descriptor.credentials.delegated.is_none() {
             errors.push(format!(
                 "{label}.oauth requires every consumer to accept delegated credentials, which {service} does not"
-            ));
-            continue;
-        }
-        for action in descriptor.actions.iter().filter(|action| {
-            action.lookup.credential_required()
-                && action
-                    .credential_modes
-                    .iter()
-                    .any(|mode| mode == "per_user")
-        }) {
-            errors.push(format!(
-                "{label}.oauth: {service} action {} needs a per-user lookup credential, which an OAuth credential cannot provide",
-                action.action
             ));
         }
     }

@@ -744,12 +744,17 @@ at execution. `ScopeRequest::lookup_access()` and the admitted request's
   credential or the caller's own token, presented as in
   [static credentials](#static-credentials).
 - `LookupAccess::Delegated(DelegatedCredential)`: the caller's delegated
-  connection. It holds the operation's one lease, which execution shares, so
-  the operation has one `recover_after_unauthorized()` budget across its
-  lookups and its execution. Clones share the lease and never add a recovery.
-  Use it as in [delegated access](#delegated-access): call
+  connection, lent only to a service that declares delegated credentials, for
+  a `per_user` lookup when the caller's credential connection selects OAuth.
+  It holds the operation's one lease, which execution shares, so the
+  operation has one `recover_after_unauthorized()` budget across its lookups
+  and its execution. Clones share the lease and never add a recovery. Use it
+  as in [delegated access](#delegated-access): call
   `revalidated_access_for(target, audience)` immediately before each lookup
-  request.
+  request, and return lease failures unchanged. The host conceals other scope
+  resolution failures, but passes on the lease's consent-pending, refresh-busy
+  and throttled-refresh failures, which describe the connection rather than
+  the resource.
 
 Lookup access is used only for lookups and never stands in for execution
 material. `LookupAccess` is non-exhaustive: a provider that accepts only some
