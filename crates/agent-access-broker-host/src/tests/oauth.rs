@@ -19,6 +19,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod delegated_lookups;
 #[path = "oauth/gitlab_dialect.rs"]
 mod gitlab_dialect;
+#[path = "oauth/gitlab_rest.rs"]
+mod gitlab_rest;
 #[path = "oauth/token_only.rs"]
 mod token_only;
 

@@ -1864,8 +1864,22 @@ error classification. The Broker host's `tests::oauth::gitlab_dialect` drives
 browser consent and a delegated lease through the OAuth manager against a
 stubbed instance, including a token-info failure that stores nothing and a
 refresh that keeps the granted scopes, and validates full configurations in
-which GitLab REST and a Git gateway share one GitLab OAuth connection. No test
-reaches a real GitLab instance.
+which GitLab REST and a Git gateway share one GitLab OAuth connection.
+
+`cargo test -p agent-access-gitlab --lib access::` covers GitLab REST with
+delegated test leases: access pinned to the instance and `gitlab` audience
+before each request, a lookup 401 spending the operation's one recovery, a
+second 401 failing as `credential_invalid`, access refreshed between requests,
+writes and uploads repeated once after a 401, page tokens across a refresh,
+and static tokens presented as before. The Broker host's
+`tests::oauth::gitlab_rest` runs the real GitLab provider and dialect against
+one stubbed instance: a project read and a lookup-backed issue read, a request
+in flight across a refresh that revokes its access recovering once with the
+successor, a lost refresh response requiring reconnect, token-only actions
+refused for OAuth, and GitLab REST alone validating on an OAuth connection.
+Core's `oauth::tests::a_second_process_reports_refresh_busy_while_another_refreshes`
+covers a second process on the same store; the Broker fixture cannot start a
+second Broker on one store. No test reaches a real GitLab instance.
 
 
 ## Imported MCP services
