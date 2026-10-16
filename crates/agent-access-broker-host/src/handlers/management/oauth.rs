@@ -228,34 +228,18 @@ pub(crate) async fn list(
     }
     // An owned connection whose registration no credential connection
     // selects for the caller any more, because its last consumer was
-    // removed or rebound, stays listed for local disconnect.
+    // removed or rebound, stays listed for local disconnect on ownership
+    // alone. No binding names its permission profile, and the slot keeps
+    // no durable record of the consented one, so its profile fields are
+    // null.
     for connection in owned_connections.iter().filter(|connection| {
         connection.connection_id.is_some()
             && !selected_registrations.contains_key(&connection.registration)
     }) {
-        let Some(registration) = manager.config().registrations.get(&connection.registration)
-        else {
-            continue;
-        };
-        let profiles = match manager
-            .connected_profiles(&context.identity.principal, &connection.registration)
-        {
-            Ok(profiles) => profiles,
-            Err(failure) => return error(&context, operation, failure).await,
-        };
-        let Some((profile_id, profile)) = profiles.iter().find_map(|id| {
-            registration
-                .permission_profiles
-                .get(id)
-                .map(|profile| (id, profile))
-        }) else {
-            continue;
-        };
         rows.push(json!({"registration":connection.registration,
-            "permissionProfile":profile_id,
-            "displayName":connection.registration,"connectionDescription":null,
-            "scopeMode":profile.scope_mode,"requestedScopes":profile.requested_scopes(),
-            "target":profile.target,"consumers":[],"otherConsumers":0,
+            "permissionProfile":null,"displayName":connection.registration,
+            "connectionDescription":null,"scopeMode":null,"requestedScopes":[],"target":null,
+            "consumers":[],"otherConsumers":0,
             "canConnect":false,"connectUnavailableReason":"no_personal_access",
             "canDisconnect":true,"connection":connection}));
     }

@@ -149,6 +149,22 @@ describe("imported personal authentication", () => {
       expect(html).not.toContain("credential right");
     }
   });
+  test("a registration no connection selects any more renders for disconnect only, without permission text", () => {
+    const target = oauthTarget({
+      displayName: "tools", connectionDescription: null, consumers: [], otherConsumers: 0,
+      permissionProfile: null, scopeMode: null, requestedScopes: [], target: null,
+      canConnect: false, connectUnavailableReason: "no_personal_access", canDisconnect: true,
+      connection: { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "ready", reason: null, targets: [] }
+    });
+    for (const html of surfaces(target)) {
+      expect(buttons(html).find((button) => button.includes(">Disconnect<"))).not.toContain("disabled");
+      expect(buttons(html).find((button) => button.includes("Reconnect"))).toContain("disabled");
+      expect(html).not.toContain("Permissions");
+      expect(html).not.toContain("Server-default permissions");
+      expect(html).not.toContain("Scope details unavailable");
+      expect(html).toContain("Reader");
+    }
+  });
   test("an entitled unconnected account offers Connect without a rights-management step", () => {
     for (const html of surfaces(oauthTarget())) {
       const connect = buttons(html).find((button) => button.includes("Connect account"));

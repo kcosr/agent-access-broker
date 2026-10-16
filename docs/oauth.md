@@ -280,7 +280,12 @@ invocation access.
 
 A row appears when the owner may set up at least one consumer of the
 registration. An owned connection stays listed after grant loss, with no
-entitled `consumers`, so its owner can disconnect it. Disconnect affects every
+entitled `consumers`, so its owner can disconnect it. It stays listed even when
+no credential connection selects its registration any more, because its last
+consumer was removed or rebound: that row has `null` profile fields
+(`permissionProfile`, `scopeMode`, `target`), since the consented profile is not
+recorded durably, and the portal shows it with Disconnect and no permission
+text. Disconnect affects every
 service whose credential connection uses the registration; those services do
 not have independent token families. The portal's disconnect confirmation names
 the entitled services and counts the others.

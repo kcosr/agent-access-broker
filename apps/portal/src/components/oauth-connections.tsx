@@ -55,7 +55,9 @@ export function oauthScopeEvidence(target: OAuthConnectionTarget) {
   return scopes.length ? `Known scopes: ${scopes.join(", ")}` : "Scope details unavailable";
 }
 
+/** What connecting allows; none for a cleanup-only row, whose profile is unknown. */
 export function oauthConnectionPermissions(target: OAuthConnectionTarget) {
+  if (target.scopeMode === null) return null;
   if (target.scopeMode === "explicit") return target.connectionDescription ?? "Permissions are shown during connection.";
   const evidence = oauthScopeEvidence(target);
   return `Server-default permissions${evidence ? ` · ${evidence}` : ""}`;
@@ -205,12 +207,13 @@ export function OAuthConnectionRow({ target, connections }: { target: OAuthConne
 export function OAuthConnectionDetails({ target, pending }: { target: OAuthConnectionTarget; pending: boolean }) {
   const unavailable = oauthConnectUnavailableMessage(target);
   const identity = oauthIdentityNote(target);
+  const permissions = oauthConnectionPermissions(target);
   return (
     <KeyValue
       items={[
         { label: "Account", value: oauthAccountLabel(target) },
         target.connection?.reason ? { label: "Reason", value: target.connection.reason.replaceAll("_", " ") } : null,
-        { label: "Permissions", value: oauthConnectionPermissions(target) },
+        permissions ? { label: "Permissions", value: permissions } : null,
         identity ? { label: "Identity", value: identity } : null,
         unavailable ? { label: "Connect", value: unavailable } : null,
         pending ? { label: "Authorization", value: AUTHORIZATION_TAB_NOTICE } : null

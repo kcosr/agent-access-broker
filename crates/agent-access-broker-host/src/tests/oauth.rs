@@ -1219,7 +1219,11 @@ async fn owned_connections_outlive_their_last_selecting_consumer() {
             .unwrap_or_else(|| panic!("rebind={rebind}: {rows}"))
             .clone();
         assert_eq!(row["displayName"], "stub");
-        assert_eq!(row["permissionProfile"], "read");
+        // No binding names its profile any more; none is invented.
+        assert_eq!(row["permissionProfile"], Value::Null);
+        assert_eq!(row["scopeMode"], Value::Null);
+        assert_eq!(row["target"], Value::Null);
+        assert_eq!(row["requestedScopes"], json!([]));
         assert_eq!(row["consumers"], json!([]));
         assert_eq!(row["otherConsumers"], 0);
         assert_eq!(row["connectionDescription"], Value::Null);
@@ -1262,6 +1266,80 @@ async fn owned_connections_outlive_their_last_selecting_consumer() {
         );
         assert!(fixture.requests_after_consent().await.is_empty());
     }
+}
+
+/// A refresh failure clears the cached access but keeps the owned
+/// connection; once its last selecting consumer is removed it is still
+/// listed, on ownership alone, and can be disconnected.
+#[tokio::test]
+async fn owned_connections_without_cached_access_stay_listed_after_their_last_consumer() {
+    let fixture = oauth_fixture().await;
+    fixture.connect_expiring("", 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": "invalid_grant"})))
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    // The access is now due for refresh, which the server rejects.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let (status, body) = fixture
+        .invoke("account.view", "invoke-refresh-rejected", json!({}))
+        .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    let response = fixture
+        .browser(Method::GET, "/v1/oauth/connections", "rejected-list", None)
+        .await;
+    let rows = response_json(response).await["result"].clone();
+    assert_eq!(
+        rows[0]["connection"]["status"], "reconnect_required",
+        "{rows}"
+    );
+    assert!(rows[0]["connection"]["connectionId"].is_string(), "{rows}");
+
+    let mut changed = fixture.config.clone();
+    changed.credentials.service.remove("fake");
+    fixture
+        .runtime
+        .delete_managed_policy_grant(agent_access_core::ManagedPolicyGrantStatusRequest {
+            grant_id: "personal-oauth".into(),
+            expected_version: 1,
+            updated_by: "admin".into(),
+        })
+        .unwrap();
+    changed.credentials.per_user.remove("oauth_stub");
+    changed.credentials.connections.remove("oauth_stub");
+    fixture.broker.reload_config(&changed).await;
+    let response = fixture
+        .browser(Method::GET, "/v1/oauth/connections", "uncached-list", None)
+        .await;
+    let rows = response_json(response).await["result"].clone();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
+    let row = &rows[0];
+    assert_eq!(row["registration"], "stub");
+    assert_eq!(row["permissionProfile"], Value::Null);
+    assert_eq!(row["scopeMode"], Value::Null);
+    assert_eq!(row["canConnect"], false);
+    assert_eq!(row["canDisconnect"], true);
+    assert_eq!(row["connection"]["status"], "reconnect_required");
+    let response = fixture
+        .browser(
+            Method::DELETE,
+            "/v1/oauth/connections/stub",
+            "uncached-disconnect",
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["result"],
+        json!({"disconnected":true,"remoteRevocation":"not_requested"})
+    );
+    let response = fixture
+        .browser(Method::GET, "/v1/oauth/connections", "uncached-gone", None)
+        .await;
+    assert_eq!(response_json(response).await["result"], json!([]));
 }
 
 #[tokio::test]

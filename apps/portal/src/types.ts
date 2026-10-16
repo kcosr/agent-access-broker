@@ -55,10 +55,15 @@ export type OAuthConnectionTarget = {
   consumers: ConnectionConsumer[];
   /** Consuming services the connection serves too, which the user is not entitled to. */
   otherConsumers: number;
-  permissionProfile: string;
-  scopeMode: OAuthScopeMode;
+  /**
+   * Null, like `scopeMode` and `target`, on a cleanup-only row for a
+   * registration no credential connection selects any more: its consented
+   * profile is unknown.
+   */
+  permissionProfile: string | null;
+  scopeMode: OAuthScopeMode | null;
   requestedScopes: string[];
-  target: string;
+  target: string | null;
   canConnect: boolean;
   connectUnavailableReason: null | "no_personal_access" | "service_unavailable";
   canDisconnect: boolean;

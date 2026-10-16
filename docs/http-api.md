@@ -3225,8 +3225,10 @@ listed after grant loss for local disconnect, with `consumers: []`.
 its ID, and `connectionDescription` comes from an entitled consumer's backend.
 An owned connection whose registration no credential connection selects for the
 caller any more, because its last consumer was removed or rebound, is still
-listed for local disconnect: its `displayName` is the registration ID, its
-profile fields describe the permission profile it was consented for, and it has
+listed for local disconnect on ownership alone: its `displayName` is the
+registration ID, and it has `permissionProfile: null`, `scopeMode: null`,
+`target: null` and `requestedScopes: []`, since no binding names its profile and
+the Broker keeps no durable record of the consented one, as well as
 `consumers: []`, `otherConsumers: 0`, `connectionDescription: null`,
 `canConnect: false`, `connectUnavailableReason: "no_personal_access"` and
 `canDisconnect: true`.
@@ -3237,8 +3239,9 @@ imported service that cannot currently accept setup. Owners retain metadata and
 local disconnect for existing connections after grant loss. Rows and flags follow
 the [OAuth ownership rules](oauth.md#browser-management-api).
 
-Each row also includes `scopeMode` with value `explicit` or `server_default`. `requestedScopes` remains an array and is empty
-for server-default targets. `connection.targets[].scopes` contains current known
+Each row also includes `scopeMode` with value `explicit` or `server_default`,
+or `null` on a cleanup-only row whose profile is unknown. `requestedScopes`
+remains an array and is empty for server-default targets and unknown profiles. `connection.targets[].scopes` contains current known
 scope evidence from token responses or the adapter's documented rules for omitted
 `scope`; see [MCP permission modes](imported-oauth.md#permission-modes) and
 [Gmail OAuth](providers-gmail.md). An empty array in server-default mode means

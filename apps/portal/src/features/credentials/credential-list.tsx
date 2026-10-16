@@ -279,21 +279,19 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
           const target = row.oauth;
           const evidence = target.scopeMode === "server_default" ? oauthScopeEvidence(target) : null;
           const unavailable = oauthConnectUnavailableMessage(target);
+          // A cleanup-only row's profile is unknown: no permission text.
+          const permissions =
+            target.scopeMode === null ? null : target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions";
+          const notes = [evidence, unavailable].filter((note): note is string => Boolean(note));
           return (
             <span>
-              <span>{target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions"}</span>
-              {evidence ? (
-                <>
-                  <br />
-                  <span className="wb-small">{evidence}</span>
-                </>
-              ) : null}
-              {unavailable ? (
-                <>
-                  <br />
-                  <span className="wb-small">{unavailable}</span>
-                </>
-              ) : null}
+              {permissions ? <span>{permissions}</span> : null}
+              {notes.map((note, index) => (
+                <span key={note}>
+                  {permissions || index > 0 ? <br /> : null}
+                  <span className="wb-small">{note}</span>
+                </span>
+              ))}
             </span>
           );
         }
