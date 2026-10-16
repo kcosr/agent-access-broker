@@ -1427,6 +1427,76 @@ async fn mcp_sse_keepalives_preserve_long_calls_with_short_transport_idle_timeou
     assert_eq!(structured(&reading.await.unwrap())["decision"], "allow");
     assert_eq!(provider.executions.load(Ordering::SeqCst), 1);
 }
+#[tokio::test]
+async fn mcp_unread_responses_do_not_keep_the_runtime_snapshot_through_shutdown() {
+    let fixture = Fixture::new(|_| {}).await;
+    let session = fixture.initialize().await;
+    let closing = fixture.initialize().await;
+    // A native call's result, an accepted notification and a session DELETE,
+    // none of whose bodies are read before the broker stops.
+    let call = fixture
+        .send(request(
+            Method::POST,
+            Some(TOKEN_A),
+            Some(&session),
+            Some(
+                json!({"jsonrpc":"2.0","id":110,"method":"tools/call","params":{
+                    "name":agent_access_core::mcp::tool_name("fake", "echo"),
+                    "arguments":{"inputs":{"project":"TEST","message":"unread"}}
+                }}),
+            ),
+        ))
+        .await;
+    assert_eq!(call.status(), StatusCode::OK);
+    let notification = fixture
+        .send(request(
+            Method::POST,
+            Some(TOKEN_A),
+            Some(&session),
+            Some(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":111}})),
+        ))
+        .await;
+    assert_eq!(notification.status(), StatusCode::ACCEPTED);
+    let deleted = fixture
+        .send(request(Method::DELETE, Some(TOKEN_A), Some(&closing), None))
+        .await;
+    assert_eq!(deleted.status(), StatusCode::ACCEPTED);
+    // The call executes and is audited although its result is never read.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while read_audit_records(&fixture.audit_path).is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the unread call was not audited");
+    let Fixture {
+        broker,
+        app,
+        state,
+        audit_path,
+        _directory,
+        ..
+    } = fixture;
+    drop((app, state));
+    // Stopping fails while any state lock is still held.
+    let report = broker.stop().await;
+    assert!(report.is_clean(), "{report:?}");
+    let records = read_audit_records(&audit_path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["decision"], "allow");
+    drop(call);
+    // The released responses still deliver their bodies.
+    for response in [notification, deleted] {
+        let body = tokio::time::timeout(
+            Duration::from_secs(10),
+            axum::body::to_bytes(response.into_body(), 1024),
+        )
+        .await
+        .expect("an accepted MCP response body did not terminate")
+        .unwrap();
+        assert!(body.is_empty());
+    }
+}
 
 #[path = "mcp/scoped.rs"]
 pub(super) mod scoped;

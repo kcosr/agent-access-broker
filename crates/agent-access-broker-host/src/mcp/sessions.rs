@@ -89,8 +89,7 @@ impl Sessions {
         self.bindings.lock().await.len()
     }
 
-    /// Closes every open session, as process exit ends them.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Closes every open session.
     pub async fn close_all(&self) {
         let ids = self
             .inner
