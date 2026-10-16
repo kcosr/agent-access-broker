@@ -1860,12 +1860,29 @@ operator-owned Google client, browser consent and disposable test messages.
 against a stubbed GitLab instance: registration rules and target normalization,
 the consumer authority check, the authorization URL, code exchange with and
 without a response `scope` (reading token info, and failing when it fails),
-refresh with and without `scope`, identity mapping, token-response bounds and
-error classification. The Broker host's `tests::oauth::gitlab_dialect` drives
+refresh with and without `scope`, identity mapping, token-response bounds,
+error classification, and revocation through `/oauth/revoke` with its outcome
+classification. The Broker host's `tests::oauth::gitlab_dialect` drives
 browser consent and a delegated lease through the OAuth manager against a
 stubbed instance, including a token-info failure that stores nothing and a
 refresh that keeps the granted scopes, and validates full configurations in
-which GitLab REST and a Git gateway share one GitLab OAuth connection.
+which GitLab REST and a Git gateway share one GitLab OAuth connection. Its
+`revocation` tests drive remote revocation through the management API against
+a stubbed `/oauth/revoke`: `revoked`, `failed` and `pending` disconnect results
+and connection rows, the serving broker's revocation worker completing a
+pending revocation, principal disablement, and a restarted broker resuming a
+revocation the stopped one left pending.
+
+Core's `oauth::tests::revocation_lifecycle` uses a fixture dialect speaking the
+stub wire with GitLab-style revocation: the fence before the encrypted pending
+revocation, bounded retries that never restore access, already invalid and
+finally rejected tokens, restart recovery, lost and late refresh responses
+(`unconfirmed`, or a late successor that is never installed and is revoked),
+a dead process's refresh attempt, replacing consent, principal disablement,
+changed or disabled registrations, and dialects that report `not_requested`.
+`managed_store::oauth_revocation::tests` cover migration `028` from a schema-027
+store with its ledger row and structural validator, key readiness, the
+used-key inventory and rewrap, and the frozen golden revocation record.
 
 `cargo test -p agent-access-gitlab --lib access::` covers GitLab REST with
 delegated test leases: access pinned to the instance and `gitlab` audience

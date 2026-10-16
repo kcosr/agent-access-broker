@@ -103,7 +103,13 @@ registration is one row of the same list, with **Connect account**,
 connection with OAuth and a matching active `per_user` action grant on a service
 that uses it, for you or one of your current groups. An existing connection
 remains visible and disconnectable after grant removal; reconnect requires a
-matching grant. Rows marked **Not used** are stored credentials no service
+matching grant. Disconnecting a GitLab connection also revokes its tokens in
+GitLab: the row and the disconnect notice show **Revoked at provider**,
+**Revocation pending** while the Broker retries, or **Revocation failed** or
+**Revocation unconfirmed**, which ask you to revoke the Broker application in
+GitLab under **Preferences**, **Applications**, **Authorized applications**.
+**Unconfirmed** means a token renewal's answer was lost, so GitLab may hold a
+token the Broker never received. Rows marked **Not used** are stored credentials no service
 reads any more; delete them when you no longer need them. See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
 if **Connect** or **Reconnect** is unavailable.
 
@@ -308,6 +314,7 @@ does not revoke that credential with the upstream provider.
 | No services, actions, or contexts to select | Ask the administrator to review active grants, group membership, and execution contexts. |
 | Credential is missing or unverified | Select the configured service/name/profile, save the needed credential, then Verify when supported. |
 | `credential_not_found` during invocation | Check that the required personal credential exists, or reconnect the configured OAuth connection. |
+| **Revocation failed** or **Revocation unconfirmed** on an OAuth row | Access through the Broker has ended. Revoke the Broker application at the provider (GitLab: **Preferences**, **Applications**, **Authorized applications**). |
 | `service_action_denied` | Compare the requested action and resource with current grants and token restrictions. The example token cannot search. |
 | `execution_context_denied` | Use the approved ingress and a token/grant covering its context. Selecting a context does not attest it. |
 | `broker_token_class_denied` during management | Use a browser session or a separate `user_manage` setup token. |

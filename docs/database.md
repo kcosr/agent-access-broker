@@ -58,8 +58,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `019_registered_resource_types`, `020_resource_attributes`,
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
-`025_principal_access`, `026_trusted_user_identity`, and
-`027_command_imports` in order. The
+`025_principal_access`, `026_trusted_user_identity`,
+`027_command_imports`, and `028_oauth_revocations` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -543,7 +543,8 @@ Metadata-only store opening without a key ring performs structural checks and
 cannot establish cryptographic readiness.
 
 Key inventory and readiness also include all retained identity-token, OAuth,
-private-resource-attribute, and imported-service secret slots. Disabling a
+pending OAuth revocation, private-resource-attribute, and imported-service
+secret slots. Disabling a
 resource or imported service does not remove its key requirement.
 
 The admin rewrap operation decrypts active credentials and retained secret slots
@@ -609,6 +610,8 @@ The managed store is stateful rather than append-only:
 - expired tokens, paused tokens, revoked tokens, expired rights, disabled
   principals, and expired credentials are not automatically pruned;
 - credential deletion removes both metadata and encrypted material;
+- a pending OAuth revocation drops its encrypted tokens once each has a final
+  outcome, and the revocation worker prunes the finished row 30 days later;
 - OIDC flows remain replay evidence until their expiry, after which a later flow
   creation prunes them; subject watermarks and provider state remain durable;
 - each complete Microsoft group claim replaces current external membership
@@ -747,6 +750,13 @@ purpose, kind, material version, key ID, nonce and ciphertext, so stored import
 credentials decrypt under the same authenticated data without reentry. Existing
 imports keep a `NULL` metadata column. Rollback requires a pre-migration backup.
 
+Migration `028_oauth_revocations`, appended after `027_command_imports`, adds
+the `oauth_revocations` table for pending
+[remote revocations](oauth.md#remote-revocation) and changes no existing table
+or row. Its structural validator compares the whole schema with the catalog
+through `028`. Rollback requires a pre-migration backup: an older binary
+refuses the newer ledger.
+
 ### Identity-token inventory
 
 `principal_identity_tokens` stores fingerprint identity inventory for managed
@@ -852,6 +862,27 @@ fingerprint removes its slots. OAuth grant authority remains in policy state,
 separate from the encrypted connection slot.
 See [oauth.md](oauth.md#refresh-durability-and-recovery) for refresh durability,
 uncertain outcomes, activation and operational limits.
+
+`oauth_revocations` holds one row per OAuth token family the Broker ended for a
+dialect that revokes, such as GitLab: the owner, registration and registration
+fingerprint, the cause (`disconnect`, `superseded`, `principal_disabled` or
+`refresh_uncertain`), the state (`pending`, `revoked`, `failed` or
+`unconfirmed`) and the Unix time `due_at` at which the revocation worker next
+looks at it. While any token is still to be revoked, the row holds an encrypted
+payload (`payload_version`, `key_id`, `nonce`, `ciphertext`): the family's
+known tokens with each one's outcome and tries, a refresh that was in flight at
+the fence, and whether an unknown successor may exist. AES-GCM associated data
+binds the revocation ID, owner, registration, fingerprint, cause and key ID, so
+a payload cannot move to another row or into an OAuth slot. Constraints keep
+every `pending` row encrypted and every `revoked` or `failed` row without a
+payload. The fence that ends a family writes its row in the same transaction:
+disconnect, a replacing consent, an uncertain refresh's failure transition and
+principal disablement. Pending rows join key readiness, the used-key inventory
+and rewrap, which keeps their state, schedule and outcomes. Once every token
+has an outcome the payload is erased, and the row answers for 30 days before
+the worker prunes it. The rows have no foreign key to `principals`, so a
+revocation outlives its owner's removal. Disabling OAuth gives pending rows a
+final state without a request.
 
 ## Audit database
 

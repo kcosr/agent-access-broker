@@ -84,6 +84,23 @@ while self-service remains enabled and a credential connection still uses the
 registration. Connect/reconnect remains unavailable until you have a matching
 grant. Disconnecting a shared connection affects every service using that
 registration.
+
+Disconnecting ends access through the Broker at once. For GitLab, the Broker
+also revokes the connection's tokens in GitLab, and so it does when you
+reconnect or replace the account, or when an administrator disables your
+account. The row and the disconnect notice show how that went:
+
+- **Revoked at provider**: GitLab revoked every token the Broker held.
+- **Revocation pending**: GitLab could not answer yet; the Broker keeps trying.
+- **Revocation failed**: GitLab did not revoke every token. Revoke the Broker
+  application yourself in GitLab under **Preferences**, **Applications**,
+  **Authorized applications**.
+- **Revocation unconfirmed**: a token renewal's answer was lost, so GitLab may
+  hold a token the Broker never received. Revoke the Broker application in
+  GitLab the same way; reconnecting does not end that token.
+
+Other providers show none of these: disconnecting them does not remove your
+consent at the provider, which you can revoke there if you wish.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
 Do not paste an OAuth access token into a generic API-token field. OAuth consent requires a
 signed-in browser session; the CLI setup token alone cannot authorize it. See
@@ -384,6 +401,7 @@ report.
 | --- | --- |
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
+| **Revocation failed** or **Revocation unconfirmed** on an OAuth connection | Access through the Broker has ended. Revoke the Broker application in the provider's account settings (GitLab: **Preferences**, **Applications**, **Authorized applications**), or ask its administrator |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
 | `oauth_login_binding_required` or `oauth_login_binding_mismatch` | The registration accepts only an upstream account linked to your Broker account's Microsoft sign-in. Ask an administrator to link your Microsoft sign-in, or connect the upstream account you sign in to through Microsoft |
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |

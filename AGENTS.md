@@ -104,7 +104,11 @@ keep invocation authorization independent from personal self-service gates.
 Personal OAuth setup uses active direct/group `per_user` grants and an approved
 binding, not credential rights. Keep authoritative consent checks on current
 runtime policy and transactional membership; preserve owner cleanup after grant
-loss and the separate classless static credential-right path.
+loss and the separate classless static credential-right path. Every end of an
+OAuth family (disconnect, replacing consent, uncertain refresh, principal
+disable) fences locally first and keeps the family for remote revocation in the
+same transaction when the dialect revokes; a remote failure never restores
+access, and `revoked` is reported only when no unknown successor can exist.
 
 ## Build Service
 
@@ -293,7 +297,12 @@ binary and needs `python3`, whose absence fails it.
   shared with execution) and OAuth login binding (`oauth/login_binding.rs`:
   a registration's optional `login_binding`, checked against the owner's
   linked Microsoft sign-in at consent start and, after the identity request,
-  again inside the install transaction); contains no backend. Its internal
+  again inside the install transaction) and OAuth remote revocation
+  (`oauth/revocation.rs`: the family a fence ends kept in the same transaction
+  for a dialect that revokes, bounded revocation passes, late and uncertain
+  refreshes, and the `remoteRevocation` states; `managed_store/oauth_revocation.rs`
+  stores the encrypted pending revocations of migration `028`); contains no
+  backend. Its internal
   `imports` module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import
@@ -314,7 +323,8 @@ binary and needs `python3`, whose absence fails it.
   every request with one 401 recovery per operation, `config.rs`,
   `provisioning.rs`, `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`:
   one instance's target and `gitlab` audience, token-info scope evidence at
-  code exchange, and the account's linked sign-ins for `login_binding`).
+  code exchange, the account's linked sign-ins for `login_binding`, and token
+  revocation through `/oauth/revoke`).
 - `crates/agent-access-atlassian`: a `native` module crate holding the
   `atlassian` OAuth dialect (`oauth.rs`: `auth.atlassian.com` consent with
   `audience=api.atlassian.com` and `prompt=consent`, JSON token requests,
@@ -375,7 +385,8 @@ binary and needs `python3`, whose absence fails it.
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown; `src/http_server.rs` serves each listener's connections and
-  owns their tasks), HTTP routers and handlers, management, HTTP MCP serving,
+  owns their tasks; `src/oauth_revocations.rs` the OAuth revocation worker the
+  lifecycle starts and drains), HTTP routers and handlers, management, HTTP MCP serving,
   portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
   broker unit-test tree
   (`src/tests/`). Its production code depends on no backend or import adapter;

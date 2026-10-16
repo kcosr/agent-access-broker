@@ -895,6 +895,33 @@ All notable changes to this project are documented in this file.
   [Jira](docs/providers-jira.md#oauth-connections) and
   [Confluence](docs/providers-confluence.md#oauth-connections) OAuth
   connections.
+- GitLab OAuth remote revocation. When the Broker ends a GitLab OAuth family
+  (disconnect, a reconnect or account replacement, a consuming refresh whose
+  outcome was lost, or disabling the owner), it fences it locally and, in the
+  same transaction, keeps its latest tokens in an encrypted pending revocation;
+  it then revokes the refresh and access tokens through GitLab's
+  `POST /oauth/revoke`. Disconnect makes the first attempt before responding; a
+  background worker in each serving process retries throttled or unanswered
+  tokens after 30 s, 2 min, 10 min and 1 h, fails them after the fifth try, and
+  at startup resumes revocations a stopped process left pending. A refresh in
+  flight at the fence never installs its successor, which is revoked too; a
+  lost refresh outcome makes the family `unconfirmed`. A remote failure never
+  restores access. `DELETE /v1/oauth/connections/{registration}`,
+  `GET /v1/oauth/connections` rows and OAuth rows of `GET /v1/credentials`
+  report `remoteRevocation` (`not_requested`, `pending`, `revoked`, `failed` or
+  `unconfirmed`); the portal shows it in connection rows and the disconnect
+  notice. Dialects that do not revoke, including Google, imported MCP OAuth and
+  the development stub, report `not_requested`. A registration fingerprint
+  change, removed registration or disabled OAuth cannot revoke; see
+  [remote revocation](docs/oauth.md#remote-revocation) for the GitLab-side
+  action. The SDK adds the default `OAuthDialect::supports_revocation` and
+  `OAuthDialect::revoke`, with `TokenRevocation`, `OAuthTokenType` and
+  `RevocationOutcome`.
+- Managed-store migration `028_oauth_revocations` adds the `oauth_revocations`
+  table of pending remote revocations and changes no existing row. Its
+  encrypted payloads join key readiness, the used-key inventory and
+  `admin credentials rewrap`. Rolling back across it needs a pre-migration
+  backup.
 
 ### Changed
 
