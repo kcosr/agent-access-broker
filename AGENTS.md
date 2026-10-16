@@ -108,7 +108,10 @@ loss and the separate classless static credential-right path. Every end of an
 OAuth family (disconnect, replacing consent, uncertain refresh, principal
 disable) fences locally first and keeps the family for remote revocation in the
 same transaction when the dialect revokes; a remote failure never restores
-access, and `revoked` is reported only when no unknown successor can exist.
+access, and `revoked` is reported only when no unknown successor can exist. A
+late successor joins its family's revocation whenever its refresh reports,
+even after another process presumed it lost; each token keeps its own retry
+deadline.
 
 ## Build Service
 

@@ -462,10 +462,12 @@ For a departing user or suspected compromise:
 1. Disable the principal to deny its tokens immediately, then revoke affected
    tokens. Pause is temporary and preserves the disclosed token secret.
    Disabling also ends the principal's OAuth connections and, for GitLab,
-   revokes their tokens in GitLab automatically. Before removing their grants,
+   revokes their tokens in GitLab automatically.
    `agent-access admin credentials list <principal>` reports each OAuth
-   connection's `remoteRevocation`: `failed` or `unconfirmed` needs the
-   application's access revoked for that person in GitLab (see
+   connection's `remoteRevocation`, and keeps listing a connection whose
+   revocation is `pending`, `failed` or `unconfirmed` after its grants are
+   removed: `failed` or `unconfirmed` needs the application's access revoked
+   for that person in GitLab (see
    [remote revocation](oauth.md#remote-revocation)).
 2. Remove directory/JIT eligibility when it could admit the identity again.
 3. Revoke upstream credentials at the upstream service when they may be exposed;

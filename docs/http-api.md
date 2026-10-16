@@ -726,7 +726,8 @@ the owner can delete it. `credential` is the active token's metadata, keyed by
 stored. An OAuth-method row's `remoteRevocation` is its registration's
 [remote revocation](oauth.md#remote-revocation) state, as
 `GET /v1/oauth/connections` reports it; it is `null` for other methods and while
-OAuth is inactive. `retained` lists the caller's stored rows the current configuration does
+OAuth is inactive. An OAuth connection whose `remoteRevocation` is `pending`,
+`failed` or `unconfirmed` stays listed after its owner lost every grant on it. `retained` lists the caller's stored rows the current configuration does
 not select, read-only, with their stored `service` value, `name` and `profile`:
 for example a row with a non-default name, a retired profile, a row of a service
 that no longer has its own connection, or a token row of a connection that now
@@ -1010,7 +1011,8 @@ Admin management (also on the public listener):
 credential list in the shape of its own `GET /v1/credentials`, evaluated for
 the principal's kind, `per_user` grants and stored rows. An active token whose
 owner lost every grant on its connection stays listed as the connection's
-`credential`, with empty `consumers`:
+`credential`, with empty `consumers`, and so does an OAuth connection whose
+`remoteRevocation` still needs attention:
 
 ```json
 {
@@ -3257,7 +3259,12 @@ connections select:
 active `per_user` grant, or administrator discovery of an imported service);
 `otherConsumers` counts the rest, which the connection serves too. A row appears
 when the caller may set up at least one consumer, and an owned connection stays
-listed after grant loss for local disconnect, with `consumers: []`.
+listed after grant loss for local disconnect, with `consumers: []`. A
+registration whose `remoteRevocation` is `pending`, `failed` or `unconfirmed`
+also stays listed whatever the caller's entitlement or ownership, as a
+cleanup-only row with `consumers: []`, `canConnect: false` and
+`canDisconnect: false`, so provider-side cleanup stays visible after the owner
+lost the last grant and disconnected.
 `displayName` is the first selecting connection's configured `display_name`, or
 its ID, and `connectionDescription` comes from an entitled consumer's backend.
 An owned connection whose registration no credential connection selects for the
@@ -3268,10 +3275,14 @@ registration ID, and it has `permissionProfile: null`, `scopeMode: null`,
 the Broker keeps no durable record of the consented one, as well as
 `consumers: []`, `otherConsumers: 0`, `connectionDescription: null`,
 `canConnect: false`, `connectUnavailableReason: "no_personal_access"` and
-`canDisconnect: true`. Such a registration also stays listed, with
-`canDisconnect: false`, after its owner disconnected it while its
-`remoteRevocation` is `pending`, `failed` or `unconfirmed`. Every row carries
-the registration's `remoteRevocation`, as the disconnect response reports it.
+`canDisconnect: true`. Such a registration, and one no longer configured at
+all, also stays listed with `canDisconnect: false` while its `remoteRevocation`
+is `pending`, `failed` or `unconfirmed`; a registration no longer configured
+then has a disconnected `connection`. Every row carries the registration's
+`remoteRevocation`, as the disconnect response reports it: it concerns the
+owner's ended families (disconnected, superseded by a reconnect or account
+replacement, ended by an uncertain refresh or by disablement), never the
+current connection, which can be a different account.
 `canConnect`, `canDisconnect` and required nullable `connectUnavailableReason`
 are as follows: `connectUnavailableReason` is `null` when setup is available,
 `no_personal_access` for missing grant authority, `service_unavailable` for an

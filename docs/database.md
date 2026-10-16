@@ -865,24 +865,31 @@ uncertain outcomes, activation and operational limits.
 
 `oauth_revocations` holds one row per OAuth token family the Broker ended for a
 dialect that revokes, such as GitLab: the owner, registration and registration
-fingerprint, the cause (`disconnect`, `superseded`, `principal_disabled` or
-`refresh_uncertain`), the state (`pending`, `revoked`, `failed` or
-`unconfirmed`) and the Unix time `due_at` at which the revocation worker next
-looks at it. While any token is still to be revoked, the row holds an encrypted
-payload (`payload_version`, `key_id`, `nonce`, `ciphertext`): the family's
-known tokens with each one's outcome and tries, a refresh that was in flight at
-the fence, and whether an unknown successor may exist. AES-GCM associated data
-binds the revocation ID, owner, registration, fingerprint, cause and key ID, so
-a payload cannot move to another row or into an OAuth slot. Constraints keep
+fingerprint, the family ID, the cause (`disconnect`, `superseded`,
+`principal_disabled` or `refresh_uncertain`), the state (`pending`, `revoked`,
+`failed` or `unconfirmed`), `refresh_attempt_id` and the Unix time `due_at` at
+which the revocation worker next looks at it: the earliest of its pending
+tokens' next tries and the expiry of a refresh it awaits. `refresh_attempt_id`
+names a refresh that was in flight when the family ended, or whose outcome
+another process presumed lost, until the process that sent it reports what it
+did; it outlives the payload, so a late successor is still captured, and only a
+`pending` or `unconfirmed` row names one. While any token is still to be
+revoked, the row holds an encrypted payload (`payload_version`, `key_id`,
+`nonce`, `ciphertext`): the family's known tokens with each one's outcome, tries
+and next try, until when a refresh in flight at the fence is awaited, and
+whether an unknown successor may exist. AES-GCM associated data binds the
+revocation ID, owner, registration, fingerprint, family ID, cause and key ID,
+so a payload cannot move to another row or into an OAuth slot. Constraints keep
 every `pending` row encrypted and every `revoked` or `failed` row without a
 payload. The fence that ends a family writes its row in the same transaction:
 disconnect, a replacing consent, an uncertain refresh's failure transition and
 principal disablement. Pending rows join key readiness, the used-key inventory
 and rewrap, which keeps their state, schedule and outcomes. Once every token
 has an outcome the payload is erased, and the row answers for 30 days before
-the worker prunes it. The rows have no foreign key to `principals`, so a
-revocation outlives its owner's removal. Disabling OAuth gives pending rows a
-final state without a request.
+the worker prunes it; a late successor reported meanwhile gives it a new
+payload. The rows have no foreign key to `principals`, so a revocation outlives
+its owner's removal. Disabling OAuth gives pending rows a final state without a
+request and stops naming refresh attempts.
 
 ## Audit database
 

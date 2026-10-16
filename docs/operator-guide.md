@@ -1392,6 +1392,10 @@ states and service log events.
   the GitLab-side revocation.
 - Revocation needs the GitLab `oauth/revoke` endpoint reachable through the
   registration's egress route, like the token endpoint.
+- GitLab rejecting the application's client credentials (`invalid_client`,
+  `unauthorized_client`) keeps each token pending on its retry schedule, up to
+  its fifth try about 73 minutes after the first: correct the registration's
+  client secret and reload within that time to let the revocations complete.
 
 ## Common failures
 

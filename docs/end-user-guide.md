@@ -86,19 +86,28 @@ grant. Disconnecting a shared connection affects every service using that
 registration.
 
 Disconnecting ends access through the Broker at once. For GitLab, the Broker
-also revokes the connection's tokens in GitLab, and so it does when you
-reconnect or replace the account, or when an administrator disables your
-account. The row and the disconnect notice show how that went:
+also revokes the connection's tokens in GitLab, and so it does for the previous
+connection when you reconnect or replace the account, or when an administrator
+disables your account. The disconnect notice shows how revoking the
+disconnected account's tokens went. The row shows the same for the connections
+the Broker ended, for up to 30 days, beside the current connection's own
+status; it never describes the current connection, which may use another
+account:
 
-- **Revoked at provider**: GitLab revoked every token the Broker held.
+- **Revoked at provider**: GitLab revoked the ended connections' tokens.
 - **Revocation pending**: GitLab could not answer yet; the Broker keeps trying.
-- **Revocation failed**: GitLab did not revoke every token. Revoke the Broker
-  application yourself in GitLab under **Preferences**, **Applications**,
+- **Revocation failed**: GitLab did not revoke every token of an ended
+  connection. Revoke the Broker application yourself in GitLab, signed in to
+  the account that connection used, under **Preferences**, **Applications**,
   **Authorized applications**.
-- **Revocation unconfirmed**: a token renewal's answer was lost, so GitLab may
-  hold a token the Broker never received. Revoke the Broker application in
-  GitLab the same way; reconnecting does not end that token.
+- **Revocation unconfirmed**: a token renewal's answer was lost for an ended
+  connection, so GitLab may hold a token the Broker never received. Revoke the
+  Broker application in GitLab the same way; reconnecting does not end that
+  token.
 
+Revoking the application in GitLab also ends a current connection of the same
+account; reconnect afterwards. The row stays listed while revocation is
+pending, failed or unconfirmed, even after you lost the grant and disconnected.
 Other providers show none of these: disconnecting them does not remove your
 consent at the provider, which you can revoke there if you wish.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
@@ -401,7 +410,7 @@ report.
 | --- | --- |
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
-| **Revocation failed** or **Revocation unconfirmed** on an OAuth connection | Access through the Broker has ended. Revoke the Broker application in the provider's account settings (GitLab: **Preferences**, **Applications**, **Authorized applications**), or ask its administrator |
+| **Revocation failed** or **Revocation unconfirmed** on an OAuth connection | An ended connection's tokens may still be valid at the provider. Revoke the Broker application in the settings of the account that connection used (GitLab: **Preferences**, **Applications**, **Authorized applications**), or ask its administrator; this also ends a current connection of that account, so reconnect afterwards |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
 | `oauth_login_binding_required` or `oauth_login_binding_mismatch` | The registration accepts only an upstream account linked to your Broker account's Microsoft sign-in. Ask an administrator to link your Microsoft sign-in, or connect the upstream account you sign in to through Microsoft |
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |

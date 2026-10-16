@@ -540,7 +540,9 @@ signed-in browser session; `credentials list` shows their method as `oauth`,
 their `registration`, and its `remoteRevocation`: `revoked`, `pending`, `failed`
 or `unconfirmed` once the Broker ended a family it revokes at the provider
 (GitLab), otherwise `not_requested`. `failed` and `unconfirmed` mean you should
-revoke the Broker application at the provider; see
+revoke the Broker application at the provider, in the account the ended
+connection used; such a connection stays listed while its revocation is
+`pending`, `failed` or `unconfirmed`, even after you lost its grants. See
 [remote revocation](oauth.md#remote-revocation).
 
 There is no `agent-access git ...` command. Git fetch and push use the

@@ -296,7 +296,10 @@ GitLab family it ends through GitLab's `POST /oauth/revoke`, with
 holds one, the access token. See [remote revocation](#remote-revocation).
 GitLab answers 200 for a revoked token, and an `invalid_token` error means the
 token is already invalid; both count as revoked. HTTP 429, 5xx and network
-failures are retried; any other rejection fails that token.
+failures are retried, and so is an `invalid_client` or `unauthorized_client`
+rejection of the application's client credentials, because correcting the
+registration's client secret within the retry schedule lets the revocation
+complete. Any other rejection fails that token.
 
 A changed registration fingerprint (any registration field except the client
 secret), a removed registration or disabled OAuth ends its connections without
@@ -1049,39 +1052,56 @@ disconnect it once none remains. A registration fingerprint change, removing a
 registration and disabling OAuth end connections without revocation; see
 [GitLab](#gitlab) for the administrator action.
 
-A revocation pass revokes every token still pending, each with one request. A
-token the provider throttles or cannot answer for is retried after 30 seconds,
-2 minutes, 10 minutes and one hour, honoring a longer `Retry-After`, and fails
-after its fifth try. Disconnect makes the first pass before it responds. A
-background worker in each serving Broker process makes the others: once at
-startup, which resumes revocations a stopped or crashed process left pending,
-then whenever a family is kept and whenever a retry falls due. Shutdown stops
-the worker and cancels a pass in progress; its tokens stay pending and the next
-process revokes them again, which is harmless. A remote failure never restores
-local access.
+A revocation pass sends one request for each pending token whose next try is
+due. Each token keeps its own schedule: one the provider throttles, cannot
+answer for, or rejects the client authentication of (see the dialect, such as
+[GitLab](#gitlab)) is tried again after 30 seconds, 2 minutes, 10 minutes and
+one hour, or after the provider's longer `Retry-After`, and fails after its
+fifth try. A token added later, such as a late refresh's successor, is tried at
+once without trying another token before its wait ends. Disconnect makes the
+first pass before it responds. A background worker in each serving Broker
+process makes the others: once at startup, which resumes revocations a stopped
+or crashed process left pending, then whenever a family is kept and whenever a
+token or an awaited refresh falls due. Shutdown stops the worker and cancels a
+pass in progress; its tokens stay pending and the next process revokes them
+again, which is harmless. A remote failure never restores local access.
 
 A consuming refresh in flight when a fence ends its family is recorded with the
-pending revocation. Its successful response is never installed: the successor
-tokens join the revocation instead. If its outcome is lost, or the attempt
-expires without a result after a process loss, the provider may have issued a
-successor the Broker never learned. The same holds when a refresh response is
-lost while the connection stays active: the Broker keeps the predecessor before
-clearing it and the connection needs reconnect. Revoking the known tokens then
-cannot prove the family is revoked.
+pending revocation, which waits for it until the attempt expires and keeps
+naming it until the process that sent it reports what it did. Its successful
+response is never installed: the successor tokens join the revocation instead.
+That holds even when the response arrives after another process presumed the
+attempt lost or every other token of the family already has its outcome; the
+revocation then reopens for the successor and stays `unconfirmed`. If its
+outcome is lost, or the attempt expires without a result, for example after a
+process loss, the provider may have issued a successor the Broker never
+learned. The same holds when a refresh response is lost while the connection
+stays active: the Broker keeps the predecessor before clearing it and the
+connection needs reconnect; when another process presumed the refresh lost at
+its expiry, the process that sent it still reports a late successor. Revoking
+the known tokens then cannot prove the family is revoked.
 
 `remoteRevocation` reports what the Broker knows about the owner's ended families
-for the registration, the most severe state first when there are several:
+for the registration, the most severe state first when there are several. It
+concerns families a disconnect, a reconnect or account replacement, an
+uncertain refresh or disablement ended, never the current connection, which
+can be a different account:
 
 | State | Meaning |
 | --- | --- |
-| `unconfirmed` | A successor the Broker never learned may exist. The known tokens are revoked where possible, but only revoking the application at the provider ends the family: in GitLab under **Preferences**, **Applications**, **Authorized applications**, or by a GitLab administrator. |
-| `failed` | A known token could not be revoked: the provider rejected it, its tries ran out, or the registration that issued it changed or was removed. Revoke the application at the provider. |
+| `unconfirmed` | A successor the Broker never learned may exist. The known tokens are revoked where possible, but only revoking the application at the provider ends the family: in GitLab, signed in to the account the ended connection used, under **Preferences**, **Applications**, **Authorized applications**, or by a GitLab administrator. That also ends a current connection of the same account, which then needs reconnect. |
+| `failed` | A known token could not be revoked: the provider rejected it, its tries ran out, or the registration that issued it changed or was removed. Revoke the application at the provider, as for `unconfirmed`. |
 | `pending` | Revocation is in progress, or waits for a refresh that was in flight. |
 | `revoked` | Every known token was revoked, and no unknown successor can exist. |
 | `not_requested` | Nothing was kept for revocation. |
 
 Pending revocations hold their tokens only until each has a final outcome; a
 finished revocation keeps its state for 30 days and is then pruned.
+`GET /v1/oauth/connections`, the owner's `GET /v1/credentials` and an
+administrator's principal credential list keep a registration whose state is
+`pending`, `failed` or `unconfirmed` listed, as a cleanup-only row when its owner
+no longer has an entitled consumer or a connection, so the provider-side
+cleanup it may need stays visible.
 Service logs record `remote_revocation_requested`, `remote_revocation` (one per
 pass, with the revocation ID, cause, request count and resulting state) and
 `remote_revocation_refresh_settled` events under `agent_access_core::oauth`,

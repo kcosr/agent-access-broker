@@ -1869,17 +1869,24 @@ refresh that keeps the granted scopes, and validates full configurations in
 which GitLab REST and a Git gateway share one GitLab OAuth connection. Its
 `revocation` tests drive remote revocation through the management API against
 a stubbed `/oauth/revoke`: `revoked`, `failed` and `pending` disconnect results
-and connection rows, the serving broker's revocation worker completing a
-pending revocation, principal disablement, and a restarted broker resuming a
-revocation the stopped one left pending.
+and connection rows, cleanup-only rows that keep a `pending`, `failed` or
+`unconfirmed` revocation listed after grant loss and disconnect (OAuth list,
+own credentials list and an administrator's principal view), the serving
+broker's revocation worker completing a pending revocation, principal
+disablement, and a restarted broker resuming a revocation the stopped one left
+pending.
 
 Core's `oauth::tests::revocation_lifecycle` uses a fixture dialect speaking the
 stub wire with GitLab-style revocation: the fence before the encrypted pending
-revocation, bounded retries that never restore access, already invalid and
-finally rejected tokens, restart recovery, lost and late refresh responses
-(`unconfirmed`, or a late successor that is never installed and is revoked),
-a dead process's refresh attempt, replacing consent, principal disablement,
-changed or disabled registrations, and dialects that report `not_requested`.
+revocation, bounded retries that never restore access, including rejected
+client authentication, already invalid and finally rejected tokens, each
+token's own retry deadline (a throttled predecessor that a late successor or an
+awaited refresh's expiry does not retry early), restart recovery, lost and late
+refresh responses (`unconfirmed`, or a late successor that is never installed
+and is revoked), late successors that two managers on one store deliver after
+the other presumed the refresh lost or finished its revocation, a dead
+process's refresh attempt, replacing consent, principal disablement, changed or
+disabled registrations, and dialects that report `not_requested`.
 `managed_store::oauth_revocation::tests` cover migration `028` from a schema-027
 store with its ledger row and structural validator, key readiness, the
 used-key inventory and rewrap, and the frozen golden revocation record.
