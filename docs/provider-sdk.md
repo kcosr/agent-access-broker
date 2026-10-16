@@ -459,6 +459,49 @@ delegated leases. The provider then performs its own execution-side checks with
 the execution credential. Lookup authority never substitutes for execution
 authority.
 
+One invocation, with the provider's hooks and the provider state they pass on:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant H as Broker host
+    participant P as Provider
+    participant U as Upstream
+
+    C->>H: Invoke service/action with inputs
+    H->>H: Admit identity, context, action, schema and grant paths
+    alt Search-contained action
+        H->>H: Plan the search boundary from policy
+    else Any other action
+        H->>P: resolve_scopes(ScopeRequest)
+        opt LookupRequirement::ScopeResolution
+            P->>U: Metadata lookup with the host-selected lookup credential
+        end
+        P-->>H: ScopeResolution, with optional ProviderState
+    end
+    H->>H: Authorize, select the grant, credential mode and credentials
+    opt Multipart action
+        H->>P: authorize_body_parts(AdmittedRequest, state)
+        P-->>H: BodyAdmission: part specs and StateDisposition
+        H->>H: Keep, Replace or Clear the state
+        H->>H: Consume the body, check each part's size and SHA-256
+    end
+    H->>H: Revalidate bindings and leases, decrypt admitted attributes
+    H->>P: invoke(ProviderInvocation), state available through state()
+    P->>U: Governed upstream requests
+    U-->>P: Responses
+    P-->>H: ProviderResult or ProviderError
+    H->>H: Check the outcome against the hook
+    alt Raw download
+        H-->>C: Stream the body
+        H->>H: Terminal audit, with any late stream failure reason
+    else JSON result
+        H->>H: Terminal audit
+        H-->>C: Response envelope
+    end
+```
+
 ### Authority variants
 
 `InvocationAuthority` is chosen from the action's validated contract:
@@ -775,6 +818,42 @@ pending trace with `take_upstream_trace` while you read the body and call
 host checks each classification against the hook that sent the request (see
 [upstream traces](#upstream-traces)).
 
+One request with a credential, from the provider's side, including the origin
+rule from [credentials and origins](#credentials-and-origins):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Provider
+    participant K as ExecutionCredential<br/>or DelegatedAccess
+    participant C as UpstreamClient
+    participant U as Upstream
+
+    P->>K: authorization() or authorization_as(placement)
+    K-->>P: Opaque UpstreamAuthorization
+    P->>C: request(method, url)
+    C-->>P: RequestBuilder, correlation headers only on the base origin
+    P->>C: send(builder, UpstreamCall with the authorization)
+    C->>C: Add the credential as a sensitive header
+    alt URL outside allowed_upstream_hosts
+        C-->>P: UpstreamError::NotAllowed, with no trace
+    else Credentials bound for another origin
+        C-->>P: UpstreamError::NotSent, traced as upstream_connection_failed
+    else Allowed
+        C->>U: Send within the client profile, never following redirects
+        alt Response received
+            U-->>C: Response
+            C-->>P: Response with a pending trace
+            P->>P: take_upstream_trace(response)
+            P->>P: read_bounded_body(response, byte_cap, idle_timeout)
+            P->>P: Complete the trace with the outcome's reason
+        else Transport failure or timeout
+            C-->>P: UpstreamError, its trace already recorded
+        end
+    end
+    Note over P,C: One upstream_request_completed trace per request, except an allowlist rejection
+```
+
 Task-local invocation context does not follow `tokio::spawn`. Run work you move
 to another task with `InvocationScope::current().run(future)`. That keeps its
 correlation, hook, deadline and tracing span, so its traces stay attributed.
@@ -975,6 +1054,38 @@ effective grant boundary: the host authorizes every continuation under current
 policy, and the provider applies its containment and result checks again on
 every page. When a newly rewritten query is incompatible with an upstream
 cursor, reject the token or restart rather than weakening a restriction.
+
+A page token's round trip:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant H as Broker host
+    participant P as Provider
+    participant S as ContinuationSigner
+
+    C->>H: List request
+    H->>P: invoke(ProviderInvocation) after admission
+    P->>P: family.bind(request.context(), configuration) plus resources and settings
+    P->>S: seal(binding, payload)
+    S-->>P: Token: version, expiry, payload and MAC
+    P-->>H: Result with the token
+    H-->>C: Response with the token
+    C->>H: The same action with the token as an input
+    H->>H: Admit and authorize again under current policy
+    H->>P: invoke(ProviderInvocation)
+    P->>P: Bind again from the current request
+    P->>S: open(binding, token)
+    alt Same binding, family and key, not expired
+        S-->>P: Payload
+        P->>P: Apply containment and result checks again
+        P-->>H: Next page, with any next token
+    else Anything else
+        S-->>P: ContinuationError
+        P-->>H: ContinuationFailures report, such as input_invalid
+    end
+```
 
 ```rust check
 use agent_access_provider::{

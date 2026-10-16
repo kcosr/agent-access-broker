@@ -75,6 +75,28 @@ parsing, logging, the Tokio runtime, `config validate`, `audit verify` and
 readiness, reload on `SIGUSR2` or the administrative reload, and bounded
 shutdown on `SIGTERM` or `SIGINT`. Library code never exits the process itself.
 
+From module selection to the exit status `main` returns:
+
+```mermaid
+flowchart TD
+    Selections["Native, OAuth dialect and import adapter registrations"] --> Composition["composition(): BrokerComposition::builder() selections, then .build()"]
+    Composition --> Application["BrokerApplication::new(composition, identity)"]
+    Identity["build_identity(): AssemblyIdentity"] --> Application
+    Application --> Run["run_from_env() or run_from(args)"]
+    Run --> Validate["config validate"]
+    Run --> Verify["audit verify"]
+    Run --> Serve["serve: validate the configuration, acquire state locks"]
+    Serve --> Generation["Build a runtime generation: BackendConfig::build for each configured provider"]
+    Generation --> Bind["Bind the listeners once"]
+    Bind --> Listen["Serve on the bound listeners"]
+    Listen -->|SIGUSR2 or administrative reload| Reload["Validate the candidate, build and publish a new generation"]
+    Reload --> Listen
+    Listen -->|SIGTERM or SIGINT| Shutdown["Bounded shutdown"]
+    Validate --> Exit["BrokerExit, returned from main"]
+    Verify --> Exit
+    Shutdown --> Exit
+```
+
 | Exit status | Meaning |
 | --- | --- |
 | `0` | Success, including `--help`. |
