@@ -28,6 +28,11 @@ fn credential() -> ExecutionCredential {
     basic_credential("agent@example.com", "token")
 }
 
+/// The static execution material [`invocation`] carries.
+fn access() -> ExecutionAccess {
+    ExecutionAccess::Static(credential())
+}
+
 fn identity(principal: &str) -> InvocationIdentity {
     InvocationIdentity::new(principal.to_string(), true)
 }
@@ -143,33 +148,30 @@ impl List {
         self,
         continuations: &ConfluenceContinuations,
         request: &ProviderInvocation,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
     ) -> Result<String, ProviderError> {
         let context = request.context();
         match self {
             Self::Attachment => continuations.seal_attachment_page(
                 context,
-                credential,
+                access,
                 &page(),
                 PAGE_SIZE,
                 self.position(),
             ),
             Self::BlogAttachment => continuations.seal_blog_attachment_page(
                 context,
-                credential,
+                access,
                 &blog(),
                 PAGE_SIZE,
                 self.position(),
             ),
-            Self::Comment => continuations.seal_comment_page(
-                context,
-                credential,
-                &comment_list(),
-                self.position(),
-            ),
+            Self::Comment => {
+                continuations.seal_comment_page(context, access, &comment_list(), self.position())
+            }
             Self::DraftAttachment => continuations.seal_draft_attachment_page(
                 context,
-                credential,
+                access,
                 &draft_handle(ConfluenceDraftContentType::Page),
                 PAGE_SIZE,
                 self.position(),
@@ -181,10 +183,10 @@ impl List {
         self,
         continuations: &ConfluenceContinuations,
         request: &ProviderInvocation,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         token: &str,
     ) -> Result<String, ProviderError> {
-        self.open_with_page_size(continuations, request, credential, PAGE_SIZE, token)
+        self.open_with_page_size(continuations, request, access, PAGE_SIZE, token)
     }
 
     /// Opens with another effective `maxResults`; comment lists take theirs
@@ -193,18 +195,18 @@ impl List {
         self,
         continuations: &ConfluenceContinuations,
         request: &ProviderInvocation,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
         let context = request.context();
         match self {
             Self::Attachment => {
-                continuations.open_attachment_page(context, credential, &page(), max_results, token)
+                continuations.open_attachment_page(context, access, &page(), max_results, token)
             }
             Self::BlogAttachment => continuations.open_blog_attachment_page(
                 context,
-                credential,
+                access,
                 &blog(),
                 max_results,
                 token,
@@ -212,11 +214,11 @@ impl List {
             Self::Comment => {
                 let mut list = comment_list();
                 list.max_results = max_results;
-                continuations.open_comment_page(context, credential, &list, token)
+                continuations.open_comment_page(context, access, &list, token)
             }
             Self::DraftAttachment => continuations.open_draft_attachment_page(
                 context,
-                credential,
+                access,
                 &draft_handle(ConfluenceDraftContentType::Page),
                 max_results,
                 token,
@@ -232,7 +234,9 @@ impl List {
         family: &ContinuationFamily,
         request: &ProviderInvocation,
     ) -> ContinuationBinding {
-        let binding = continuations.route_binding(family, request.context(), &credential());
+        let binding = continuations
+            .route_binding(family, request.context(), &access())
+            .unwrap();
         match self {
             Self::Attachment => binding
                 .text("pageId", "123456")
@@ -256,13 +260,13 @@ fn assert_list_rejection(result: Result<String, ProviderError>, list: List) {
 #[test]
 fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
     let continuations = signers(None);
-    let credential = credential();
+    let access = access();
     for list in LISTS {
         let request = invocation(list.action());
-        let token = list.seal(&continuations, &request, &credential).unwrap();
+        let token = list.seal(&continuations, &request, &access).unwrap();
         assert!(!token.contains(list.position()), "{list:?}");
         assert_eq!(
-            list.open(&continuations, &request, &credential, &token)
+            list.open(&continuations, &request, &access, &token)
                 .unwrap(),
             list.position(),
             "{list:?}"
@@ -294,17 +298,14 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
             );
         }
         for changed in changed_requests {
-            assert_list_rejection(
-                list.open(&continuations, &changed, &credential, &token),
-                list,
-            );
+            assert_list_rejection(list.open(&continuations, &changed, &access, &token), list);
         }
         // The credential kind selects the tenant or gateway route.
         assert_list_rejection(
             list.open(
                 &continuations,
                 &request,
-                &bearer_credential("token"),
+                &ExecutionAccess::Static(bearer_credential("token")),
                 &token,
             ),
             list,
@@ -327,7 +328,7 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
                 route: tenant.site().route_fingerprint(),
                 ..continuations.clone()
             };
-            assert_list_rejection(list.open(&other, &request, &credential, &token), list);
+            assert_list_rejection(list.open(&other, &request, &access, &token), list);
         }
         // No list family opens another's tokens.
         for other_list in LISTS {
@@ -339,7 +340,7 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
                     | (List::DraftAttachment, List::DraftAttachment)
             ) {
                 assert_list_rejection(
-                    other_list.open(&continuations, &request, &credential, &token),
+                    other_list.open(&continuations, &request, &access, &token),
                     other_list,
                 );
             }
@@ -350,24 +351,24 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
 #[test]
 fn draft_attachment_listings_are_shared_in_service_mode_and_owned_per_user() {
     let continuations = signers(Some(test_signing_key(5)));
-    let credential = credential();
+    let access = access();
     let list = List::DraftAttachment;
     let request = invocation(list.action());
-    let token = list.seal(&continuations, &request, &credential).unwrap();
+    let token = list.seal(&continuations, &request, &access).unwrap();
     let other_service = InvocationBuilder::from(request.clone())
         .identity(identity("agent-two"))
         .build();
     assert_eq!(
-        list.open(&continuations, &other_service, &credential, &token)
+        list.open(&continuations, &other_service, &access, &token)
             .unwrap(),
         list.position()
     );
     let per_user = InvocationBuilder::from(request.clone())
         .credential_mode(CredentialMode::PerUser)
         .build();
-    let owned = list.seal(&continuations, &per_user, &credential).unwrap();
+    let owned = list.seal(&continuations, &per_user, &access).unwrap();
     assert_eq!(
-        list.open(&continuations, &per_user, &credential, &owned)
+        list.open(&continuations, &per_user, &access, &owned)
             .unwrap(),
         list.position()
     );
@@ -377,25 +378,25 @@ fn draft_attachment_listings_are_shared_in_service_mode_and_owned_per_user() {
             .build(),
         request,
     ] {
-        assert_list_rejection(list.open(&continuations, &other, &credential, &owned), list);
+        assert_list_rejection(list.open(&continuations, &other, &access, &owned), list);
     }
 }
 
 #[test]
 fn list_tokens_bind_the_effective_page_size() {
     let continuations = signers(None);
-    let credential = credential();
+    let access = access();
     for list in LISTS {
         let request = invocation(list.action());
-        let token = list.seal(&continuations, &request, &credential).unwrap();
+        let token = list.seal(&continuations, &request, &access).unwrap();
         assert_eq!(
-            list.open_with_page_size(&continuations, &request, &credential, PAGE_SIZE, &token)
+            list.open_with_page_size(&continuations, &request, &access, PAGE_SIZE, &token)
                 .unwrap(),
             list.position()
         );
         for other in [1, 3] {
             assert_list_rejection(
-                list.open_with_page_size(&continuations, &request, &credential, other, &token),
+                list.open_with_page_size(&continuations, &request, &access, other, &token),
                 list,
             );
         }
@@ -429,7 +430,7 @@ fn list_tokens_reject_obsolete_versions_and_formats() {
         )
         .unwrap();
     assert_list_rejection(
-        list.open(&continuations, &request, &credential(), &forged),
+        list.open(&continuations, &request, &access(), &forged),
         list,
     );
     // The previous `base64url(json).hmac` format never decodes.
@@ -438,7 +439,7 @@ fn list_tokens_reject_obsolete_versions_and_formats() {
         "eyJ2IjoxLCJzZXJ2aWNlIjoiY29uZmx1ZW5jZSJ9", "c2lnbmF0dXJl"
     );
     assert_list_rejection(
-        list.open(&continuations, &request, &credential(), &previous),
+        list.open(&continuations, &request, &access(), &previous),
         list,
     );
 }
@@ -456,7 +457,7 @@ fn list_tokens_expire_after_fifteen_minutes_with_a_minute_of_skew() {
             .seal_relayed_at(&binding, None, "start=1", at)
             .unwrap()
     };
-    let open = |token: &str| list.open(&continuations, &request, &credential(), token);
+    let open = |token: &str| list.open(&continuations, &request, &access(), token);
     assert_eq!(
         open(&seal_at(now - Duration::from_secs(14 * 60))).unwrap(),
         "start=1"
@@ -480,35 +481,32 @@ fn list_tokens_follow_the_stable_key_and_search_tokens_the_generation() {
     let key = test_signing_key(5);
     let first = signers(Some(key.clone()));
     let second = signers(Some(key));
-    let credential = credential();
+    let access = access();
     for list in LISTS {
         let request = invocation(list.action());
-        let token = list.seal(&first, &request, &credential).unwrap();
+        let token = list.seal(&first, &request, &access).unwrap();
         assert_eq!(
-            list.open(&second, &request, &credential, &token).unwrap(),
+            list.open(&second, &request, &access, &token).unwrap(),
             list.position(),
             "{list:?}"
         );
         let local = signers(None);
-        let token = list.seal(&local, &request, &credential).unwrap();
-        assert_list_rejection(
-            list.open(&signers(None), &request, &credential, &token),
-            list,
-        );
+        let token = list.seal(&local, &request, &access).unwrap();
+        assert_list_rejection(list.open(&signers(None), &request, &access, &token), list);
     }
     let fixture = SearchFixture::new(&["ENG"]);
     let request = invocation("search");
     let token = first
-        .seal_search_page(&fixture.pages(&request, &credential), "cursor-2")
+        .seal_search_page(&fixture.pages(&request, &access), "cursor-2")
         .unwrap();
     assert_eq!(
         first
-            .open_search_page(&fixture.pages(&request, &credential), &token)
+            .open_search_page(&fixture.pages(&request, &access), &token)
             .unwrap(),
         "cursor-2"
     );
     let error = second
-        .open_search_page(&fixture.pages(&request, &credential), &token)
+        .open_search_page(&fixture.pages(&request, &access), &token)
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 }
@@ -517,15 +515,15 @@ fn list_tokens_follow_the_stable_key_and_search_tokens_the_generation() {
 fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
     // The default response limit admits cursors far beyond any former cap.
     let generous = signers(None);
-    let credential = credential();
+    let access = access();
     let request = invocation("attachment.list");
     let long = format!("cursor={}", "c".repeat(100 * 1024));
     let token = generous
-        .seal_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &long)
+        .seal_attachment_page(request.context(), &access, &page(), PAGE_SIZE, &long)
         .unwrap();
     assert_eq!(
         generous
-            .open_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &token)
+            .open_attachment_page(request.context(), &access, &page(), PAGE_SIZE, &token)
             .unwrap(),
         long
     );
@@ -538,13 +536,13 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
         "c".repeat(bounded.attachment_pages.max_payload_bytes() - "cursor=".len())
     );
     let token = bounded
-        .seal_attachment_page(request.context(), &credential, &page(), PAGE_SIZE, &fits)
+        .seal_attachment_page(request.context(), &access, &page(), PAGE_SIZE, &fits)
         .unwrap();
     assert_eq!(token.len(), bounded.attachment_pages.max_token_bytes());
     let error = bounded
         .seal_attachment_page(
             request.context(),
-            &credential,
+            &access,
             &page(),
             PAGE_SIZE,
             &format!("{fits}c"),
@@ -556,7 +554,7 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
     let error = bounded
         .open_attachment_page(
             request.context(),
-            &credential,
+            &access,
             &page(),
             PAGE_SIZE,
             &format!("{token}A"),
@@ -568,7 +566,7 @@ fn relayed_cursors_are_bounded_by_the_response_limit_and_never_truncated() {
     let fixture = SearchFixture::new(&["ENG"]);
     let search = invocation("search");
     let error = bounded
-        .seal_search_page(&fixture.pages(&search, &credential), &"c".repeat(512))
+        .seal_search_page(&fixture.pages(&search, &access), &"c".repeat(512))
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(bounded.search_pages.max_token_bytes() <= 512);
@@ -604,11 +602,11 @@ impl SearchFixture {
     fn pages<'a>(
         &'a self,
         request: &'a ProviderInvocation,
-        credential: &'a ExecutionCredential,
+        access: &'a ExecutionAccess,
     ) -> SearchPageRequest<'a> {
         SearchPageRequest {
             context: request.context(),
-            credential,
+            access,
             query: &self.query,
             requested_spaces: &self.requested,
             max_results: self.max_results,
@@ -619,16 +617,16 @@ impl SearchFixture {
 #[test]
 fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries() {
     let continuations = signers(Some(test_signing_key(5)));
-    let credential = credential();
+    let access = access();
     let request = invocation("search");
     let issued = SearchFixture::new(&["ENG"]);
     let token = continuations
-        .seal_search_page(&issued.pages(&request, &credential), "cursor-2")
+        .seal_search_page(&issued.pages(&request, &access), "cursor-2")
         .unwrap();
     assert_ne!(token, "cursor-2");
     assert_eq!(
         continuations
-            .open_search_page(&issued.pages(&request, &credential), &token)
+            .open_search_page(&issued.pages(&request, &access), &token)
             .unwrap(),
         "cursor-2"
     );
@@ -646,16 +644,16 @@ fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries
     };
     // Another caller query, query type, requested spaces or page size.
     let other_query = SearchFixture::with_query("title ~ \"other\"", &["ENG"]);
-    invalid(continuations.open_search_page(&other_query.pages(&request, &credential), &token));
+    invalid(continuations.open_search_page(&other_query.pages(&request, &access), &token));
     let mut text = SearchFixture::new(&["ENG"]);
     text.query.kind = "text";
-    invalid(continuations.open_search_page(&text.pages(&request, &credential), &token));
+    invalid(continuations.open_search_page(&text.pages(&request, &access), &token));
     let mut narrowed = SearchFixture::new(&["ENG"]);
     narrowed.requested = BTreeSet::from(["ENG".to_string()]);
-    invalid(continuations.open_search_page(&narrowed.pages(&request, &credential), &token));
+    invalid(continuations.open_search_page(&narrowed.pages(&request, &access), &token));
     let mut smaller = SearchFixture::new(&["ENG"]);
     smaller.max_results = 1;
-    invalid(continuations.open_search_page(&smaller.pages(&request, &credential), &token));
+    invalid(continuations.open_search_page(&smaller.pages(&request, &access), &token));
     // Another context, caller, mode, action or route.
     for changed in [
         InvocationBuilder::from(request.clone())
@@ -671,19 +669,22 @@ fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries
             .action("blog.search")
             .build(),
     ] {
-        invalid(continuations.open_search_page(&issued.pages(&changed, &credential), &token));
+        invalid(continuations.open_search_page(&issued.pages(&changed, &access), &token));
     }
-    invalid(
-        continuations
-            .open_search_page(&issued.pages(&request, &bearer_credential("token")), &token),
-    );
+    invalid(continuations.open_search_page(
+        &issued.pages(
+            &request,
+            &ExecutionAccess::Static(bearer_credential("token")),
+        ),
+        &token,
+    ));
     let mut other_tenant = config();
     other_tenant.tenant_host = "other.atlassian.net".to_string();
     let other_tenant = ConfluenceContinuations {
         route: other_tenant.site().route_fingerprint(),
         ..continuations.clone()
     };
-    invalid(other_tenant.open_search_page(&issued.pages(&request, &credential), &token));
+    invalid(other_tenant.open_search_page(&issued.pages(&request, &access), &token));
 
     // The same caller search under another boundary binds the same
     // continuation, but Confluence's cursor belongs to the old composed CQL.
@@ -694,7 +695,7 @@ fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries
     );
     assert_ne!(issued.query.cql, recomposed.query.cql);
     let error = continuations
-        .open_search_page(&recomposed.pages(&request, &credential), &token)
+        .open_search_page(&recomposed.pages(&request, &access), &token)
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     assert!(
@@ -707,11 +708,11 @@ fn search_continuations_bind_the_normalized_search_and_reject_recomposed_queries
 #[test]
 fn search_continuations_expire_after_fifteen_minutes_without_skew() {
     let continuations = signers(None);
-    let credential = credential();
+    let access = access();
     let request = invocation("search");
     let fixture = SearchFixture::new(&["ENG"]);
-    let pages = fixture.pages(&request, &credential);
-    let binding = continuations.search_binding(&pages);
+    let pages = fixture.pages(&request, &access);
+    let binding = continuations.search_binding(&pages).unwrap();
     let cql = fixture.query.cql.as_bytes();
     let issued = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
     let token = continuations
@@ -760,10 +761,10 @@ fn draft_handles_resolve_scope_only_for_possible_owners() {
         .credential_mode(CredentialMode::PerUser)
         .build();
     let service_token = continuations
-        .seal_draft_handle(service.context(), &handle)
+        .seal_draft_handle(service.context(), service.execution(), &handle)
         .unwrap();
     let per_user_token = continuations
-        .seal_draft_handle(per_user.context(), &handle)
+        .seal_draft_handle(per_user.context(), per_user.execution(), &handle)
         .unwrap();
     let open = |continuations: &ConfluenceContinuations,
                 principal: &str,
@@ -877,12 +878,13 @@ fn draft_handles_bind_content_type_and_validate_their_facts() {
     let request = invocation("blog.draft.create");
     let blog = draft_handle(ConfluenceDraftContentType::Blog);
     let token = continuations
-        .seal_draft_handle(request.context(), &blog)
+        .seal_draft_handle(request.context(), request.execution(), &blog)
         .unwrap();
     assert_eq!(
         continuations
             .open_draft_handle(
                 request.context(),
+                request.execution(),
                 ConfluenceDraftContentType::Blog,
                 "7777",
                 &token
@@ -892,6 +894,7 @@ fn draft_handles_bind_content_type_and_validate_their_facts() {
     );
     assert_invalid_handle(continuations.open_draft_handle(
         request.context(),
+        request.execution(),
         ConfluenceDraftContentType::Page,
         "7777",
         &token,
@@ -905,10 +908,11 @@ fn draft_handles_bind_content_type_and_validate_their_facts() {
     new_with_version.base_version = Some(3);
     for invalid in [staged_without_version, blog_with_parent, new_with_version] {
         let token = continuations
-            .seal_draft_handle(request.context(), &invalid)
+            .seal_draft_handle(request.context(), request.execution(), &invalid)
             .unwrap();
         assert_invalid_handle(continuations.open_draft_handle(
             request.context(),
+            request.execution(),
             invalid.content_type,
             &invalid.content_id,
             &token,
@@ -918,12 +922,13 @@ fn draft_handles_bind_content_type_and_validate_their_facts() {
     staged.origin = ConfluenceDraftOrigin::Staged;
     staged.base_version = Some(4);
     let token = continuations
-        .seal_draft_handle(request.context(), &staged)
+        .seal_draft_handle(request.context(), request.execution(), &staged)
         .unwrap();
     assert_eq!(
         continuations
             .open_draft_handle(
                 request.context(),
+                request.execution(),
                 ConfluenceDraftContentType::Page,
                 "123456",
                 &token
@@ -947,7 +952,7 @@ async fn provider_resolves_draft_scopes_from_handles_for_possible_owners() {
         .build();
     let token = provider
         .continuations
-        .seal_draft_handle(per_user.context(), &handle)
+        .seal_draft_handle(per_user.context(), per_user.execution(), &handle)
         .unwrap();
     let inputs = json!({ "pageId": "123456", "draftHandle": token, "bodyFormat": "storage" });
     let owner = scope_fixture("page.draft.view", "agent-one", "internal", inputs.clone());
@@ -1250,4 +1255,278 @@ fn continuation_failures_pass_the_hook_contracts() {
             );
         }
     }
+}
+
+/// The configured gateway site of [`config`].
+const CLOUD_ID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// A lease on the OAuth connection `binding` (the connection and its
+/// generation) holding access `version` for [`CLOUD_ID`].
+struct Lease {
+    binding: &'static str,
+    version: &'static str,
+}
+
+#[async_trait]
+impl DelegatedLease for Lease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new(
+            format!("token-{}", self.version),
+            CLOUD_ID,
+            "api.atlassian.com",
+            self.version,
+            i64::MAX,
+        )
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id(self.binding)
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(ProviderError::deny(
+            ReasonCode::CredentialInvalid,
+            "not recoverable",
+        ))
+    }
+}
+
+fn delegated(binding: &'static str, version: &'static str) -> ExecutionAccess {
+    ExecutionAccess::Delegated(agent_access_provider::host::delegated_credential(Arc::new(
+        Lease { binding, version },
+    )))
+}
+
+fn bearer() -> ExecutionAccess {
+    ExecutionAccess::Static(bearer_credential("token"))
+}
+
+/// `action` in per-user mode for `principal`, executing with `access`.
+fn per_user(action: &str, principal: &str, access: ExecutionAccess) -> ProviderInvocation {
+    InvocationBuilder::from(invocation(action))
+        .credential_mode(CredentialMode::PerUser)
+        .identity(identity(principal))
+        .execution(access)
+        .build()
+}
+
+/// The provider for [`config`] on another gateway site, signing with `key`.
+fn other_site(key: Arc<dyn StableSigningKey>) -> ConfluenceContinuations {
+    let mut other = config();
+    other.cloud_id = Some("11111111-1111-1111-1111-111111111111".to_string());
+    ConfluenceContinuations::new(&other, &ProviderLimits::default(), Some(key))
+}
+
+/// List and search continuations bind the credential method and, for
+/// OAuth, the connection binding: cross-account, reconnected, other-principal,
+/// other-method and other-site replays are rejected, while a routine refresh
+/// keeps them, and list tokens survive a restart with the stable key.
+/// Confluence does not yet execute with delegated access, so the bindings are
+/// checked directly.
+#[test]
+fn list_and_search_tokens_bind_the_credential_method_and_oauth_connection() {
+    let key = test_signing_key(5);
+    let continuations = signers(Some(key.clone()));
+    let restarted = signers(Some(key.clone()));
+    let other_site = other_site(key);
+    for list in LISTS {
+        let action = list.action();
+        let issued = per_user(action, "agent-one", delegated("agent-one-oauth-1", "v1"));
+        let token = list
+            .seal(&continuations, &issued, issued.execution())
+            .unwrap();
+        let refreshed = delegated("agent-one-oauth-1", "v2");
+        for signer in [&continuations, &restarted] {
+            assert_eq!(
+                list.open(signer, &issued, &refreshed, &token).unwrap(),
+                list.position(),
+                "{list:?}"
+            );
+        }
+        for (signer, request, access) in [
+            // Disconnect and reconnect (a new generation), or another
+            // upstream account.
+            (
+                &continuations,
+                issued.clone(),
+                delegated("agent-one-oauth-2", "v1"),
+            ),
+            (
+                &continuations,
+                issued.clone(),
+                delegated("mallory-oauth-1", "v1"),
+            ),
+            // Another principal, with its own connection or replaying this one.
+            (
+                &continuations,
+                per_user(action, "agent-two", delegated("agent-two-oauth-1", "v1")),
+                delegated("agent-two-oauth-1", "v1"),
+            ),
+            (
+                &continuations,
+                per_user(action, "agent-two", delegated("agent-one-oauth-1", "v1")),
+                delegated("agent-one-oauth-1", "v1"),
+            ),
+            // A switch to a stored token of either kind.
+            (&continuations, issued.clone(), access()),
+            (&continuations, issued.clone(), bearer()),
+            // Another gateway site.
+            (&other_site, issued.clone(), refreshed.clone()),
+        ] {
+            assert_list_rejection(list.open(signer, &request, &access, &token), list);
+        }
+        // A stored token's continuation does not open under OAuth either.
+        let stored = per_user(action, "agent-one", bearer());
+        let token = list.seal(&continuations, &stored, &bearer()).unwrap();
+        assert_list_rejection(list.open(&continuations, &stored, &refreshed, &token), list);
+    }
+
+    let fixture = SearchFixture::new(&["ENG"]);
+    let issued = per_user("search", "agent-one", delegated("agent-one-oauth-1", "v1"));
+    let token = continuations
+        .seal_search_page(&fixture.pages(&issued, issued.execution()), "cursor-2")
+        .unwrap();
+    let refreshed = delegated("agent-one-oauth-1", "v2");
+    assert_eq!(
+        continuations
+            .open_search_page(&fixture.pages(&issued, &refreshed), &token)
+            .unwrap(),
+        "cursor-2"
+    );
+    let other = per_user("search", "agent-two", delegated("agent-one-oauth-1", "v1"));
+    for (signer, request, access) in [
+        (
+            &continuations,
+            &issued,
+            delegated("agent-one-oauth-2", "v1"),
+        ),
+        (&continuations, &other, delegated("agent-one-oauth-1", "v1")),
+        (&continuations, &issued, access()),
+        (&continuations, &issued, bearer()),
+        (&other_site, &issued, refreshed.clone()),
+        // Search continuations use the generation key: a restart ends them.
+        (&restarted, &issued, refreshed.clone()),
+    ] {
+        let error = signer
+            .open_search_page(&fixture.pages(request, &access), &token)
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    }
+}
+
+/// A draft handle commits to the execution material it was minted with.
+/// Scope resolution reads its space for a possible owner before that
+/// material is selected; after admission the handle opens only under the
+/// same method, OAuth connection and gateway site, across refreshes and
+/// restarts.
+#[test]
+fn draft_handles_commit_to_the_execution_material_they_were_minted_with() {
+    let key = test_signing_key(7);
+    let continuations = signers(Some(key.clone()));
+    let restarted = signers(Some(key.clone()));
+    let other_site = other_site(key);
+    let handle = draft_handle(ConfluenceDraftContentType::Page);
+    let open = |signer: &ConfluenceContinuations,
+                request: &ProviderInvocation,
+                access: &ExecutionAccess,
+                token: &str| {
+        signer.open_draft_handle(
+            request.context(),
+            access,
+            ConfluenceDraftContentType::Page,
+            "123456",
+            token,
+        )
+    };
+
+    let minted = per_user(
+        "page.draft.create",
+        "agent-one",
+        delegated("agent-one-oauth-1", "v1"),
+    );
+    let token = continuations
+        .seal_draft_handle(minted.context(), minted.execution(), &handle)
+        .unwrap();
+    assert!(token.starts_with("aab_confluence_draft_v4_"));
+    let owner = scope_fixture("page.draft.view", "agent-one", "internal", json!({}));
+    assert_eq!(
+        continuations
+            .open_draft_handle_for_scope(
+                &owner.request(),
+                ConfluenceDraftContentType::Page,
+                "123456",
+                &token
+            )
+            .unwrap(),
+        handle
+    );
+    let viewing = per_user(
+        "page.draft.view",
+        "agent-one",
+        delegated("agent-one-oauth-1", "v2"),
+    );
+    for signer in [&continuations, &restarted] {
+        assert_eq!(
+            open(signer, &viewing, viewing.execution(), &token).unwrap(),
+            handle
+        );
+    }
+    let other_principal = per_user(
+        "page.draft.view",
+        "agent-two",
+        delegated("agent-one-oauth-1", "v1"),
+    );
+    for (signer, request, access) in [
+        (
+            &continuations,
+            &viewing,
+            delegated("agent-one-oauth-2", "v1"),
+        ),
+        (&continuations, &viewing, delegated("mallory-oauth-1", "v1")),
+        (
+            &continuations,
+            &other_principal,
+            delegated("agent-one-oauth-1", "v1"),
+        ),
+        (&continuations, &viewing, access()),
+        (&continuations, &viewing, bearer()),
+        (&other_site, &viewing, delegated("agent-one-oauth-1", "v1")),
+    ] {
+        assert_invalid_handle(open(signer, request, &access, &token));
+    }
+
+    // A handle minted with a stored token keeps working after the token's
+    // value is replaced (the principal owns the token), and survives a site
+    // configuration change on the tenant route; another kind or OAuth
+    // rejects it.
+    let service = invocation("page.draft.create");
+    let token = continuations
+        .seal_draft_handle(service.context(), service.execution(), &handle)
+        .unwrap();
+    let rotated = ExecutionAccess::Static(basic_credential("agent@example.com", "rotated"));
+    for signer in [&continuations, &restarted, &other_site] {
+        assert_eq!(open(signer, &service, &rotated, &token).unwrap(), handle);
+    }
+    for access in [bearer(), delegated("agent-one-oauth-1", "v1")] {
+        assert_invalid_handle(open(&continuations, &service, &access, &token));
+    }
+    // A bearer token reaches the tenant through the gateway, so its handle
+    // belongs to the configured gateway site.
+    let token = continuations
+        .seal_draft_handle(service.context(), &bearer(), &handle)
+        .unwrap();
+    assert_eq!(
+        open(&restarted, &service, &bearer(), &token).unwrap(),
+        handle
+    );
+    assert_invalid_handle(open(&other_site, &service, &bearer(), &token));
+    assert_invalid_handle(open(&continuations, &service, &access(), &token));
+
+    // Execution material Confluence does not accept fails closed.
+    let error = open(&continuations, &service, &ExecutionAccess::None, &token).unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
 }

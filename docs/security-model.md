@@ -654,7 +654,10 @@ Agent Access Broker applies these controls in the request path:
   the provider SDK's continuation envelope are HMAC-signed and bound to the
   service, purpose and version, the host-selected execution context, the
   credential mode, the caller, the provider configuration and the request's
-  resources and normalized settings. The binding enters only the MAC, never the
+  resources and normalized settings. GitLab, Jira and Confluence tokens also
+  bind the credential method and, for OAuth, the connection and its
+  generation, so a token cannot be replayed under another account, a
+  reconnected connection or another method. The binding enters only the MAC, never the
   token, so a token reveals no bound value and fails under any other binding.
   Tokens carry no authority: each continuation is authorized again under
   current policy and the provider re-applies its containment checks, so a grant

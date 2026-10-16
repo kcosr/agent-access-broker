@@ -2003,7 +2003,7 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .as_str()
         .unwrap()
         .to_string();
-    assert!(page_draft_handle.starts_with("aab_confluence_draft_v3_"));
+    assert!(page_draft_handle.starts_with("aab_confluence_draft_v4_"));
     assert_eq!(page_draft_create_json["result"]["status"], "draft");
     assert_eq!(page_draft_create_json["result"]["parentPageId"], "654321");
 
@@ -2588,7 +2588,7 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(!audit.contains("blog inline reply"));
     assert!(!audit.contains("blog secret body"));
     assert!(!audit.contains("diagram secret bytes"));
-    assert!(!audit.contains("aab_confluence_draft_v3_"));
+    assert!(!audit.contains("aab_confluence_draft_v4_"));
     for sentinel in [
         "normalized markdown sentinel 6f74d1",
         "native atlas sentinel 29ca81",

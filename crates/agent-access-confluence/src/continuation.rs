@@ -1,15 +1,20 @@
 //! Confluence continuations: list and search page tokens and durable draft
 //! handles, sealed in SDK continuation envelopes.
 //!
-//! Every family binds the admitted service and execution context and the
-//! Confluence configuration it depends on: list and search tokens bind the
-//! Atlassian route fingerprint (tenant host, gateway cloud ID and whether the
-//! gateway is enabled) plus the credential kind that selects the tenant or
-//! gateway route, because they relay Confluence's own route-relative
-//! cursors; draft handles bind the tenant host, because a draft's content ID
-//! names content on that tenant whichever route reaches it. No family binds
-//! the effective grant boundary: the host authorizes every page and handle
-//! use again and the provider re-applies its containment checks.
+//! Every family binds the admitted service and execution context, the
+//! Confluence configuration it depends on and the execution material that
+//! reaches Confluence ([`bind_atlassian_access`]: the credential method, a
+//! static credential's kind or a delegated lease's binding, and the gateway
+//! cloud ID on gateway routes). List and search tokens bind the Atlassian
+//! route fingerprint (tenant host, gateway cloud ID and whether the gateway
+//! is enabled), because they relay Confluence's own route-relative cursors;
+//! draft handles bind the tenant host, because a draft's content ID names
+//! content on that tenant whichever route of the same method reaches it.
+//! Draft handles are read during scope resolution, before the host selects
+//! execution material, so they carry a keyed commitment to it that is
+//! checked once the handle is opened after admission. No family binds the
+//! effective grant boundary: the host authorizes every page and handle use
+//! again and the provider re-applies its containment checks.
 //!
 //! List and search tokens relay Confluence's own cursor, so their size is
 //! bounded by the provider's upstream response limit, which bounds both the
@@ -93,19 +98,25 @@ const SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
 .expires_after(PAGE_TOKEN_TTL);
 
 /// The visible prefix of a draft handle.
-pub(crate) const DRAFT_HANDLE_PREFIX: &str = "aab_confluence_draft_v3_";
-/// A handle's facts: a space key of at most 255 bytes, numeric IDs and a
-/// version, as compact JSON. Far beyond any real draft.
+pub(crate) const DRAFT_HANDLE_PREFIX: &str = "aab_confluence_draft_v4_";
+/// A handle's payload: the commitment to the execution material it was
+/// minted under, then its facts (a space key of at most 255 bytes, numeric
+/// IDs and a version) as compact JSON. Far beyond any real draft.
 const DRAFT_HANDLE_PAYLOAD_MAX_BYTES: usize = 4096;
+/// The size of a draft handle's execution-material commitment.
+const DRAFT_HANDLE_ACCESS_COMMITMENT_BYTES: usize = 32;
+/// The label of a draft handle's execution-material commitment.
+const DRAFT_HANDLE_ACCESS_COMMITMENT: &str = "executionAccess";
 
 /// Durable draft handles: no expiry, signed only with the stable key, shared
 /// across the draft actions, read during scope resolution for the space they
 /// name, and owned by the per-user principal that created them (service-mode
-/// handles are shared among authorized service-mode principals).
+/// handles are shared among authorized service-mode principals) under the
+/// execution material they were minted with.
 const DRAFT_HANDLES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "draft-handle",
-    3,
+    4,
     ContinuationLifetime::Durable,
     DRAFT_HANDLE_PAYLOAD_MAX_BYTES,
 )
@@ -134,6 +145,7 @@ pub(crate) struct ConfluenceContinuations {
     signer: ContinuationSigner,
     route: [u8; 32],
     tenant_host: String,
+    cloud_id: Option<String>,
     attachment_pages: ContinuationFamily,
     blog_attachment_pages: ContinuationFamily,
     comment_pages: ContinuationFamily,
@@ -171,6 +183,7 @@ impl ConfluenceContinuations {
             signer: ContinuationSigner::new(stable),
             route: config.site().route_fingerprint(),
             tenant_host: config.tenant_host.clone(),
+            cloud_id: config.cloud_id.clone(),
             attachment_pages: within_response_limit(ATTACHMENT_LIST_PAGES, limits),
             blog_attachment_pages: within_response_limit(BLOG_ATTACHMENT_LIST_PAGES, limits),
             comment_pages: within_response_limit(COMMENT_LIST_PAGES, limits),
@@ -180,52 +193,55 @@ impl ConfluenceContinuations {
     }
 
     /// A list or search binding: the admitted context, the route
-    /// fingerprint and the credential kind that selects the route.
+    /// fingerprint and the execution material that selects the route.
     fn route_binding(
         &self,
         family: &ContinuationFamily,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
-    ) -> ContinuationBinding {
-        family
-            .bind(context, self.route)
-            .text("credentialKind", credential.kind().as_str())
+        access: &ExecutionAccess,
+    ) -> Result<ContinuationBinding, ProviderError> {
+        bind_atlassian_access(
+            family.bind(context, self.route),
+            access,
+            self.cloud_id.as_deref(),
+        )
     }
 
     fn attachment_binding(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         page: &ConfluencePage,
         max_results: u32,
-    ) -> ContinuationBinding {
-        self.route_binding(&self.attachment_pages, context, credential)
+    ) -> Result<ContinuationBinding, ProviderError> {
+        Ok(self
+            .route_binding(&self.attachment_pages, context, access)?
             .text("pageId", &page.id)
             .text("space", &page.space)
-            .number("maxResults", u64::from(max_results))
+            .number("maxResults", u64::from(max_results)))
     }
 
     pub(crate) fn seal_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         page: &ConfluencePage,
         max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.attachment_binding(context, credential, page, max_results);
+        let binding = self.attachment_binding(context, access, page, max_results)?;
         self.seal_list(ListPages::Attachment, &binding, position)
     }
 
     pub(crate) fn open_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         page: &ConfluencePage,
         max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.attachment_binding(context, credential, page, max_results);
+        let binding = self.attachment_binding(context, access, page, max_results)?;
         let position = self.open_list(ListPages::Attachment, &binding, token)?;
         checked_position(ListPages::Attachment, position)
     }
@@ -233,38 +249,39 @@ impl ConfluenceContinuations {
     fn blog_attachment_binding(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         blog: &ConfluenceBlog,
         max_results: u32,
-    ) -> ContinuationBinding {
-        self.route_binding(&self.blog_attachment_pages, context, credential)
+    ) -> Result<ContinuationBinding, ProviderError> {
+        Ok(self
+            .route_binding(&self.blog_attachment_pages, context, access)?
             .text("blogId", &blog.id)
             .text("space", &blog.space)
             .text("spaceId", &blog.space_id)
-            .number("maxResults", u64::from(max_results))
+            .number("maxResults", u64::from(max_results)))
     }
 
     pub(crate) fn seal_blog_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         blog: &ConfluenceBlog,
         max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.blog_attachment_binding(context, credential, blog, max_results);
+        let binding = self.blog_attachment_binding(context, access, blog, max_results)?;
         self.seal_list(ListPages::BlogAttachment, &binding, position)
     }
 
     pub(crate) fn open_blog_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         blog: &ConfluenceBlog,
         max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.blog_attachment_binding(context, credential, blog, max_results);
+        let binding = self.blog_attachment_binding(context, access, blog, max_results)?;
         let position = self.open_list(ListPages::BlogAttachment, &binding, token)?;
         checked_position(ListPages::BlogAttachment, position)
     }
@@ -272,10 +289,11 @@ impl ConfluenceContinuations {
     fn comment_binding(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         list: &ConfluenceCommentListBinding,
-    ) -> ContinuationBinding {
-        self.route_binding(&self.comment_pages, context, credential)
+    ) -> Result<ContinuationBinding, ProviderError> {
+        Ok(self
+            .route_binding(&self.comment_pages, context, access)?
             .text("commentKind", list.kind.as_str())
             .text("containerType", list.container_type.as_str())
             .text("containerId", &list.container_id)
@@ -284,28 +302,28 @@ impl ConfluenceContinuations {
             .optional_text("bodyFormat", list.body_format.as_deref())
             .optional_text("resolutionStatus", list.resolution_status.as_deref())
             .optional_text("sort", list.sort.as_deref())
-            .number("maxResults", u64::from(list.max_results))
+            .number("maxResults", u64::from(list.max_results)))
     }
 
     pub(crate) fn seal_comment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         list: &ConfluenceCommentListBinding,
         cursor: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.comment_binding(context, credential, list);
+        let binding = self.comment_binding(context, access, list)?;
         self.seal_list(ListPages::Comment, &binding, cursor)
     }
 
     pub(crate) fn open_comment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         list: &ConfluenceCommentListBinding,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.comment_binding(context, credential, list);
+        let binding = self.comment_binding(context, access, list)?;
         let cursor = self.open_list(ListPages::Comment, &binding, token)?;
         checked_cursor(ListPages::Comment, cursor)
     }
@@ -313,11 +331,12 @@ impl ConfluenceContinuations {
     fn draft_attachment_binding(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         handle: &ConfluenceDraftHandle,
         max_results: u32,
-    ) -> ContinuationBinding {
-        self.route_binding(&self.draft_attachment_pages, context, credential)
+    ) -> Result<ContinuationBinding, ProviderError> {
+        Ok(self
+            .route_binding(&self.draft_attachment_pages, context, access)?
             .text("contentType", handle.content_type.as_str())
             .text("contentId", &handle.content_id)
             .text("space", &handle.space)
@@ -325,30 +344,30 @@ impl ConfluenceContinuations {
             .text("origin", handle.origin.as_str())
             .optional_text("parentPageId", handle.parent_page_id.as_deref())
             .optional_number("baseVersion", handle.base_version)
-            .number("maxResults", u64::from(max_results))
+            .number("maxResults", u64::from(max_results)))
     }
 
     pub(crate) fn seal_draft_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         handle: &ConfluenceDraftHandle,
         max_results: u32,
         position: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.draft_attachment_binding(context, credential, handle, max_results);
+        let binding = self.draft_attachment_binding(context, access, handle, max_results)?;
         self.seal_list(ListPages::DraftAttachment, &binding, position)
     }
 
     pub(crate) fn open_draft_attachment_page(
         &self,
         context: &AdmittedContext,
-        credential: &ExecutionCredential,
+        access: &ExecutionAccess,
         handle: &ConfluenceDraftHandle,
         max_results: u32,
         token: &str,
     ) -> Result<String, ProviderError> {
-        let binding = self.draft_attachment_binding(context, credential, handle, max_results);
+        let binding = self.draft_attachment_binding(context, access, handle, max_results)?;
         let position = self.open_list(ListPages::DraftAttachment, &binding, token)?;
         checked_position(ListPages::DraftAttachment, position)
     }
@@ -375,12 +394,16 @@ impl ConfluenceContinuations {
             .map_err(|error| list_token_failure(pages, error))
     }
 
-    fn search_binding(&self, search: &SearchPageRequest<'_>) -> ContinuationBinding {
-        self.route_binding(&self.search_pages, search.context, search.credential)
+    fn search_binding(
+        &self,
+        search: &SearchPageRequest<'_>,
+    ) -> Result<ContinuationBinding, ProviderError> {
+        Ok(self
+            .route_binding(&self.search_pages, search.context, search.access)?
             .text("queryType", search.query.kind)
             .text("query", &search.query.canonical_caller_cql)
             .texts("spaces", search.requested_spaces.iter().map(String::as_str))
-            .number("maxResults", u64::from(search.max_results))
+            .number("maxResults", u64::from(search.max_results)))
     }
 
     /// Seals Confluence's `upstream` search cursor for this search, with a
@@ -392,7 +415,7 @@ impl ConfluenceContinuations {
     ) -> Result<String, ProviderError> {
         self.signer
             .seal_relayed(
-                &self.search_binding(search),
+                &self.search_binding(search)?,
                 Some(search.query.cql.as_bytes()),
                 upstream,
             )
@@ -410,7 +433,7 @@ impl ConfluenceContinuations {
     ) -> Result<String, ProviderError> {
         self.signer
             .open_relayed(
-                &self.search_binding(search),
+                &self.search_binding(search)?,
                 Some(search.query.cql.as_bytes()),
                 token,
             )
@@ -418,10 +441,12 @@ impl ConfluenceContinuations {
     }
 
     /// Mints the durable handle for `handle`'s draft, owned as the admitted
-    /// credential mode and principal decide.
+    /// credential mode and principal decide and committed to `access`, the
+    /// execution material it is minted with.
     pub(crate) fn seal_draft_handle(
         &self,
         context: &AdmittedContext,
+        access: &ExecutionAccess,
         handle: &ConfluenceDraftHandle,
     ) -> Result<String, ProviderError> {
         let facts =
@@ -436,15 +461,38 @@ impl ConfluenceContinuations {
             handle.content_type,
             &handle.content_id,
         );
+        let mut payload = self
+            .signer
+            .commit(
+                &self.draft_handle_access_binding(&binding, access)?,
+                DRAFT_HANDLE_ACCESS_COMMITMENT,
+                &[],
+            )
+            .map_err(draft_handle_failure)?
+            .to_vec();
+        payload.extend_from_slice(&facts);
         self.signer
-            .seal(&binding, &facts)
+            .seal(&binding, &payload)
             .map_err(draft_handle_failure)
+    }
+
+    /// The binding a handle's keyed commitment to its execution material
+    /// ([`bind_atlassian_access`]) is made under. Scope resolution runs
+    /// before the host selects that material, so the handle's own binding
+    /// cannot cover it; the commitment is checked when the handle is opened
+    /// after admission.
+    fn draft_handle_access_binding(
+        &self,
+        binding: &ContinuationBinding,
+        access: &ExecutionAccess,
+    ) -> Result<ContinuationBinding, ProviderError> {
+        bind_atlassian_access(binding.clone(), access, self.cloud_id.as_deref())
     }
 
     /// Reads the draft a handle names during scope resolution, for the
     /// content the inputs name. The owner is checked against the current
-    /// principal here and against the admitted credential mode by
-    /// [`Self::open_draft_handle`].
+    /// principal here, and against the admitted credential mode and the
+    /// execution material by [`Self::open_draft_handle`].
     pub(crate) fn open_draft_handle_for_scope(
         &self,
         request: &ScopeRequest<'_>,
@@ -457,18 +505,24 @@ impl ConfluenceContinuations {
             content_type,
             content_id,
         );
-        let facts = self
+        let payload = self
             .signer
             .open_during_scope_resolution(&binding, token)
             .map_err(draft_handle_failure)?;
-        ConfluenceDraftHandle::from_facts(content_type, content_id, &facts)
+        let (_, facts) = split_draft_handle_payload(&payload)?;
+        ConfluenceDraftHandle::from_facts(content_type, content_id, facts)
     }
 
     /// Opens a handle after admission: owned by the admitted principal in
-    /// per-user mode, or a service-mode handle for a service-mode request.
+    /// per-user mode, or a service-mode handle for a service-mode request,
+    /// minted with the same execution material as `access`. Another
+    /// credential method, OAuth connection (another account, or a
+    /// reconnection) or gateway site rejects the handle; a routine OAuth
+    /// refresh keeps it.
     pub(crate) fn open_draft_handle(
         &self,
         context: &AdmittedContext,
+        access: &ExecutionAccess,
         content_type: ConfluenceDraftContentType,
         content_id: &str,
         token: &str,
@@ -478,12 +532,29 @@ impl ConfluenceContinuations {
             content_type,
             content_id,
         );
-        let facts = self
+        let payload = self
             .signer
             .open(&binding, token)
             .map_err(draft_handle_failure)?;
-        ConfluenceDraftHandle::from_facts(content_type, content_id, &facts)
+        let (commitment, facts) = split_draft_handle_payload(&payload)?;
+        self.signer
+            .verify_commitment(
+                &self.draft_handle_access_binding(&binding, access)?,
+                DRAFT_HANDLE_ACCESS_COMMITMENT,
+                &[],
+                commitment,
+            )
+            .map_err(draft_handle_failure)?;
+        ConfluenceDraftHandle::from_facts(content_type, content_id, facts)
     }
+}
+
+/// A handle's payload: its execution-material commitment, then its facts.
+fn split_draft_handle_payload(payload: &[u8]) -> Result<(&[u8], &[u8]), ProviderError> {
+    if payload.len() < DRAFT_HANDLE_ACCESS_COMMITMENT_BYTES {
+        return Err(invalid_draft_handle_error());
+    }
+    Ok(payload.split_at(DRAFT_HANDLE_ACCESS_COMMITMENT_BYTES))
 }
 
 /// The content a draft handle names, from the action's inputs: it is bound,
@@ -501,7 +572,7 @@ fn draft_handle_binding<Stage: ContinuationStage>(
 /// The normalized search a continuation belongs to.
 pub(crate) struct SearchPageRequest<'a> {
     pub(crate) context: &'a AdmittedContext,
-    pub(crate) credential: &'a ExecutionCredential,
+    pub(crate) access: &'a ExecutionAccess,
     pub(crate) query: &'a BuiltConfluenceSearchQuery,
     pub(crate) requested_spaces: &'a BTreeSet<String>,
     pub(crate) max_results: u32,

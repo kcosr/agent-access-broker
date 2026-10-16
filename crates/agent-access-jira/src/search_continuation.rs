@@ -4,7 +4,10 @@
 //! The binding covers the admitted context (service, action, execution
 //! context, credential mode, principal and whether it authenticated), the
 //! Atlassian route fingerprint of the Jira configuration the upstream token
-//! depends on, the credential kind that selects the upstream route, and the normalized caller inputs: query type,
+//! depends on, the execution material that reaches Jira
+//! ([`bind_atlassian_access`]: the credential method,
+//! a static credential's kind or a delegated lease's binding, and the gateway
+//! cloud ID on gateway routes), and the normalized caller inputs: query type,
 //! canonical caller JQL, requested projects and effective `maxResults`. The
 //! effective project boundary is deliberately not bound: every page is
 //! authorized again and composed under the current boundary. Jira's token is
@@ -77,24 +80,28 @@ impl SearchPages {
 pub(crate) struct SearchPageRequest<'a> {
     pub(crate) request: &'a ProviderInvocation,
     pub(crate) configuration: &'a [u8; 32],
-    pub(crate) credential: &'a ExecutionCredential,
+    /// The configured gateway cloud ID, bound for gateway routes.
+    pub(crate) cloud_id: Option<&'a str>,
     pub(crate) query: &'a BuiltJiraSearchQuery,
     pub(crate) requested_projects: &'a BTreeSet<String>,
     pub(crate) max_results: u32,
 }
 
 impl SearchPageRequest<'_> {
-    fn bind(&self, family: &ContinuationFamily) -> ContinuationBinding {
-        family
-            .bind(self.request.context(), self.configuration)
-            .text("credentialKind", self.credential.kind().as_str())
+    fn bind(&self, family: &ContinuationFamily) -> Result<ContinuationBinding, ProviderError> {
+        let binding = bind_atlassian_access(
+            family.bind(self.request.context(), self.configuration),
+            self.request.execution(),
+            self.cloud_id,
+        )?;
+        Ok(binding
             .text("queryType", self.query.kind)
             .text("query", &self.query.canonical_caller_jql)
             .texts(
                 "projects",
                 self.requested_projects.iter().map(String::as_str),
             )
-            .number("maxResults", u64::from(self.max_results))
+            .number("maxResults", u64::from(self.max_results)))
     }
 
     /// Seals Jira's `upstream` token for this search, issued at `now`,
@@ -108,7 +115,7 @@ impl SearchPageRequest<'_> {
         pages
             .signer
             .seal_relayed_at(
-                &self.bind(&pages.family),
+                &self.bind(&pages.family)?,
                 Some(self.query.jql.as_bytes()),
                 upstream,
                 now,
@@ -128,7 +135,7 @@ impl SearchPageRequest<'_> {
         pages
             .signer
             .open_relayed_at(
-                &self.bind(&pages.family),
+                &self.bind(&pages.family)?,
                 Some(self.query.jql.as_bytes()),
                 token,
                 now,
@@ -168,7 +175,9 @@ fn search_page_token_failure(error: ContinuationError) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{InvocationBuilder, basic_credential};
+    use agent_access_provider::test_support::{
+        InvocationBuilder, basic_credential, bearer_credential,
+    };
     use std::time::UNIX_EPOCH;
 
     fn now() -> SystemTime {
@@ -197,7 +206,6 @@ mod tests {
     struct Fixture {
         request: ProviderInvocation,
         configuration: [u8; 32],
-        credential: ExecutionCredential,
         query: BuiltJiraSearchQuery,
         requested: BTreeSet<String>,
     }
@@ -219,9 +227,9 @@ mod tests {
                 request: InvocationBuilder::new("jira", "search")
                     .principal("agent-one")
                     .credential_mode(CredentialMode::PerUser)
+                    .credential(basic_credential("agent@example.com", "token"))
                     .build(),
                 configuration: config.site().route_fingerprint(),
-                credential: basic_credential("agent@example.com", "token"),
                 query: query(scope),
                 requested: BTreeSet::new(),
             }
@@ -231,7 +239,7 @@ mod tests {
             SearchPageRequest {
                 request: &self.request,
                 configuration: &self.configuration,
-                credential: &self.credential,
+                cloud_id: None,
                 query: &self.query,
                 requested_projects: &self.requested,
                 max_results: 50,
@@ -413,7 +421,7 @@ mod tests {
             let foreign = pages
                 .signer
                 .seal_relayed(
-                    &search.bind(&family),
+                    &search.bind(&family).unwrap(),
                     Some(fixture.query.jql.as_bytes()),
                     "upstream",
                 )
@@ -468,6 +476,143 @@ mod tests {
             issued.search().open(&pages, &token, now()).unwrap(),
             "upstream"
         );
+    }
+
+    /// A lease on the OAuth connection `binding` (the connection and its
+    /// generation) holding access `version` for the gateway site.
+    struct Lease {
+        binding: &'static str,
+        version: &'static str,
+    }
+
+    const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
+
+    #[async_trait]
+    impl DelegatedLease for Lease {
+        fn access(&self) -> DelegatedAccess {
+            DelegatedAccess::new(
+                format!("token-{}", self.version),
+                CLOUD_ID,
+                "api.atlassian.com",
+                self.version,
+                i64::MAX,
+            )
+        }
+        fn binding_identity(&self) -> DelegatedBindingId {
+            agent_access_provider::test_support::delegated_binding_id(self.binding)
+        }
+        async fn revalidate(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+            Err(ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "not recoverable",
+            ))
+        }
+    }
+
+    fn delegated(binding: &'static str, version: &'static str) -> ExecutionAccess {
+        ExecutionAccess::Delegated(agent_access_provider::host::delegated_credential(
+            std::sync::Arc::new(Lease { binding, version }),
+        ))
+    }
+
+    /// Search continuations bind the credential method and, for OAuth, the
+    /// connection binding: replaying one under another account, connection
+    /// generation, principal, method or gateway site is rejected, while a
+    /// routine refresh keeps it. Jira does not yet execute with delegated
+    /// access, so the binding is checked directly.
+    #[test]
+    fn search_tokens_bind_the_credential_method_account_and_gateway_site() {
+        let pages = limited(4096);
+        let fixture = Fixture::new(&["PROJ"]);
+        let with = |principal: &str, execution: ExecutionAccess| {
+            InvocationBuilder::from(fixture.request.clone())
+                .principal(principal)
+                .execution(execution)
+                .build()
+        };
+        fn under<'a>(
+            fixture: &'a Fixture,
+            request: &'a ProviderInvocation,
+            cloud_id: Option<&'a str>,
+        ) -> SearchPageRequest<'a> {
+            SearchPageRequest {
+                request,
+                configuration: &fixture.configuration,
+                cloud_id,
+                query: &fixture.query,
+                requested_projects: &fixture.requested,
+                max_results: 50,
+            }
+        }
+        let search = |request, cloud_id| under(&fixture, request, cloud_id);
+        let assert_rejected = |request: &ProviderInvocation, cloud_id, token: &str| {
+            assert_eq!(
+                under(&fixture, request, cloud_id)
+                    .open(&pages, token, now())
+                    .unwrap_err()
+                    .message,
+                search_page_token_invalid().message
+            );
+        };
+
+        let issued = with("agent-one", delegated("agent-one-oauth-1", "v1"));
+        let token = search(&issued, Some(CLOUD_ID))
+            .seal(&pages, "upstream", now())
+            .unwrap();
+        let refreshed = with("agent-one", delegated("agent-one-oauth-1", "v2"));
+        assert_eq!(
+            search(&refreshed, Some(CLOUD_ID))
+                .open(&pages, &token, now())
+                .unwrap(),
+            "upstream"
+        );
+        let bearer = || ExecutionAccess::Static(bearer_credential("token"));
+        for (request, cloud_id) in [
+            // Disconnect and reconnect, or another upstream account.
+            (
+                with("agent-one", delegated("agent-one-oauth-2", "v1")),
+                Some(CLOUD_ID),
+            ),
+            // Another principal, with its own connection or replaying this one.
+            (
+                with("agent-two", delegated("agent-two-oauth-1", "v1")),
+                Some(CLOUD_ID),
+            ),
+            (
+                with("agent-two", delegated("agent-one-oauth-1", "v1")),
+                Some(CLOUD_ID),
+            ),
+            // A switch to a stored token.
+            (with("agent-one", bearer()), Some(CLOUD_ID)),
+            (fixture.request.clone(), Some(CLOUD_ID)),
+            // Another gateway site.
+            (
+                refreshed.clone(),
+                Some("22222222-2222-4333-8444-555555555555"),
+            ),
+            (refreshed.clone(), None),
+        ] {
+            assert_rejected(&request, cloud_id, &token);
+        }
+
+        // A stored token's continuation does not open under OAuth either.
+        let stored = with("agent-one", bearer());
+        let token = search(&stored, Some(CLOUD_ID))
+            .seal(&pages, "upstream", now())
+            .unwrap();
+        assert_eq!(
+            search(&stored, Some(CLOUD_ID))
+                .open(&pages, &token, now())
+                .unwrap(),
+            "upstream"
+        );
+        assert_rejected(&issued, Some(CLOUD_ID), &token);
     }
 
     /// Every search continuation failure stays within the

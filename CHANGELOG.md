@@ -385,6 +385,19 @@ All notable changes to this project are documented in this file.
   stay stored, still decrypt for rewrap, and are listed as retained rows, but
   are never read: people store their Atlassian token once, one token where they
   stored two, and administrators re-provision service accounts' tokens.
+- GitLab page tokens, Jira search continuations, and Confluence search
+  continuations, list tokens and draft handles are bound to the credential
+  method that reaches the upstream: for a stored or service token, its type
+  (not its value); for delegated (OAuth) access, the OAuth connection and its
+  generation, never the access version; and the configured `cloud_id` on
+  Atlassian gateway routes. A switch between a token and OAuth, another token
+  type, another account, a reconnected connection or another gateway site
+  rejects them with the existing `input_invalid` or `invalid_draft_handle`,
+  while a routine OAuth refresh keeps them. Confluence draft handles carry a
+  keyed commitment to that binding, checked after admission, and use the
+  prefix `aab_confluence_draft_v4_`. Tokens and draft handles issued before
+  the upgrade are rejected: repeat the search or listing without the token,
+  and create or stage the draft again.
 
 ### Added
 

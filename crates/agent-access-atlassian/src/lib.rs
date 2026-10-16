@@ -1,10 +1,12 @@
 //! Helpers shared by the Jira and Confluence backends: configuration
-//! validation, credential authorization and the tenant/gateway client routes.
+//! validation, credential authorization, the tenant/gateway client routes and
+//! the credential binding of their continuations.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, ExecutionCredential,
-    ProviderBuildError, ReasonCode, ServiceCredentialKinds, StaticCredentialKind,
-    UpstreamAuthority, UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
+    ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, EgressDeclaration,
+    EgressProxyConfig, ExecutionAccess, ExecutionCredential, ProviderBuildError, ProviderError,
+    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority,
+    UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -113,6 +115,63 @@ pub fn atlassian_credential_authorization(
     }
 }
 
+/// Binds a continuation or handle to the execution material that reaches an
+/// Atlassian site, after the configuration and resource fields the provider
+/// binds:
+///
+/// - the credential method: a static credential (a stored or service token)
+///   or delegated (OAuth) access;
+/// - for a static credential, its kind, which selects the route: a Basic API
+///   token reaches the tenant host and a bearer token the gateway;
+/// - for delegated access, the lease's delegated binding (the OAuth
+///   connection and its generation, never the access version), target and
+///   audience. Routine refresh keeps them; reconnecting, replacing the
+///   account or new consent changes the binding;
+/// - for a route through the Atlassian gateway (a bearer token or delegated
+///   access), the configured `cloud_id`, the site the gateway reaches.
+///
+/// A token sealed under one method, account, connection generation or
+/// gateway site therefore never opens under another. Every input is fixed by
+/// configuration or the host's selection, so a token survives a restart
+/// whenever its family's key does. Execution material Atlassian providers do
+/// not accept, including none, fails closed.
+pub fn bind_atlassian_access<Stage: ContinuationStage>(
+    binding: ContinuationBinding<Stage>,
+    access: &ExecutionAccess,
+    cloud_id: Option<&str>,
+) -> Result<ContinuationBinding<Stage>, ProviderError> {
+    let (binding, through_gateway) = match access {
+        ExecutionAccess::Static(credential) => {
+            let through_gateway = match credential.kind() {
+                StaticCredentialKind::BasicApiToken => false,
+                StaticCredentialKind::BearerToken => true,
+                _ => return Err(atlassian_access_unavailable()),
+            };
+            (
+                binding
+                    .text("credentialMethod", "static")
+                    .text("credentialKind", credential.kind().as_str()),
+                through_gateway,
+            )
+        }
+        ExecutionAccess::Delegated(credential) => (
+            binding
+                .text("credentialMethod", "delegated")
+                .delegated(credential),
+            true,
+        ),
+        _ => return Err(atlassian_access_unavailable()),
+    };
+    Ok(binding.optional_text("gatewayCloudId", cloud_id.filter(|_| through_gateway)))
+}
+
+fn atlassian_access_unavailable() -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::CredentialNotProvisioned,
+        "selected credential material is unavailable",
+    )
+}
+
 /// One Atlassian product's REST API: its provider name, which also names its
 /// configuration section and gateway product, its display name, the API path
 /// below the tenant host and the gateway site, and statuses with
@@ -178,7 +237,8 @@ impl AtlassianSite<'_> {
     /// A digest of the configuration an upstream cursor's route depends on:
     /// the tenant host, the gateway cloud ID and whether `api.atlassian.com`
     /// is allowed. Continuations relaying a cursor bind it, beside the
-    /// credential kind that selects the route.
+    /// execution material [`bind_atlassian_access`] binds, whose method and
+    /// kind select the route.
     pub fn route_fingerprint(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"agent-access/atlassian-route/v1\0");
@@ -587,6 +647,293 @@ mod tests {
         let mut proxied = site(Some(CLOUD_ID), &gateway);
         proxied.egress_proxy = Some(&proxy);
         assert_eq!(proxied.route_fingerprint(), base);
+    }
+
+    mod access_binding {
+        use super::*;
+        use agent_access_provider::deps::async_trait;
+        use agent_access_provider::test_support::{
+            InvocationBuilder, delegated_binding_id, test_signing_key,
+        };
+        use agent_access_provider::{
+            ContinuationError, ContinuationFamily, ContinuationLifetime, ContinuationSigner,
+            CredentialMode, DelegatedAccess, DelegatedBindingId, DelegatedCredential,
+            DelegatedLease, ProviderInvocation,
+        };
+        use std::sync::Arc;
+
+        const PAGES: ContinuationFamily = ContinuationFamily::new(
+            "confluence",
+            "list-page",
+            1,
+            ContinuationLifetime::StableWhenConfigured,
+            16,
+        );
+        const OTHER_CLOUD_ID: &str = "00000000-0000-0000-0000-000000000002";
+
+        /// A lease on the OAuth connection `binding` (the connection and its
+        /// generation) holding access `version` for the gateway site
+        /// `target`.
+        struct Lease {
+            binding: &'static str,
+            version: &'static str,
+            target: &'static str,
+        }
+
+        #[async_trait]
+        impl DelegatedLease for Lease {
+            fn access(&self) -> DelegatedAccess {
+                DelegatedAccess::new(
+                    format!("token-{}", self.version),
+                    self.target,
+                    "api.atlassian.com",
+                    self.version,
+                    i64::MAX,
+                )
+            }
+            fn binding_identity(&self) -> DelegatedBindingId {
+                delegated_binding_id(self.binding)
+            }
+            async fn revalidate(&self) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+                Err(ProviderError::deny(
+                    ReasonCode::CredentialInvalid,
+                    "not recoverable",
+                ))
+            }
+        }
+
+        fn delegated(binding: &'static str, version: &'static str) -> ExecutionAccess {
+            ExecutionAccess::Delegated(lease(binding, version, CLOUD_ID))
+        }
+
+        fn lease(
+            binding: &'static str,
+            version: &'static str,
+            target: &'static str,
+        ) -> DelegatedCredential {
+            agent_access_provider::host::delegated_credential(Arc::new(Lease {
+                binding,
+                version,
+                target,
+            }))
+        }
+
+        fn request(principal: &str) -> ProviderInvocation {
+            InvocationBuilder::new("confluence", "attachment.list")
+                .principal(principal)
+                .credential_mode(CredentialMode::PerUser)
+                .build()
+        }
+
+        fn seal(
+            signer: &ContinuationSigner,
+            request: &ProviderInvocation,
+            access: &ExecutionAccess,
+            cloud_id: Option<&str>,
+        ) -> String {
+            let binding =
+                bind_atlassian_access(PAGES.bind(request.context(), "route"), access, cloud_id)
+                    .unwrap();
+            signer.seal(&binding, b"next").unwrap()
+        }
+
+        fn open(
+            signer: &ContinuationSigner,
+            request: &ProviderInvocation,
+            access: &ExecutionAccess,
+            cloud_id: Option<&str>,
+            token: &str,
+        ) -> Result<Vec<u8>, ContinuationError> {
+            let binding =
+                bind_atlassian_access(PAGES.bind(request.context(), "route"), access, cloud_id)
+                    .unwrap();
+            signer.open(&binding, token)
+        }
+
+        /// A token opens only under the method, account, connection
+        /// generation and gateway site it was sealed under; routine refresh
+        /// keeps it.
+        #[test]
+        fn delegated_tokens_survive_refresh_and_reject_other_bindings() {
+            let signer = ContinuationSigner::new(None);
+            let alice = request("alice");
+            let token = seal(
+                &signer,
+                &alice,
+                &delegated("alice-oauth-1", "v1"),
+                Some(CLOUD_ID),
+            );
+            // Routine refresh advances only the access version.
+            for refreshed in [
+                delegated("alice-oauth-1", "v1"),
+                delegated("alice-oauth-1", "v2"),
+            ] {
+                assert_eq!(
+                    open(&signer, &alice, &refreshed, Some(CLOUD_ID), &token).unwrap(),
+                    b"next"
+                );
+            }
+            let rejected = [
+                // Disconnect and reconnect (a new generation), or another
+                // upstream account on the same principal.
+                (
+                    alice.clone(),
+                    delegated("alice-oauth-2", "v1"),
+                    Some(CLOUD_ID),
+                ),
+                (
+                    alice.clone(),
+                    delegated("mallory-oauth-1", "v1"),
+                    Some(CLOUD_ID),
+                ),
+                // Another principal holding its own connection.
+                (
+                    request("bob"),
+                    delegated("bob-oauth-1", "v1"),
+                    Some(CLOUD_ID),
+                ),
+                // Another principal replaying under the same binding.
+                (
+                    request("bob"),
+                    delegated("alice-oauth-1", "v1"),
+                    Some(CLOUD_ID),
+                ),
+                // A switch to a stored token of either kind.
+                (
+                    alice.clone(),
+                    ExecutionAccess::Static(bearer_credential("token")),
+                    Some(CLOUD_ID),
+                ),
+                (
+                    alice.clone(),
+                    ExecutionAccess::Static(basic_credential("alice@example.com", "token")),
+                    Some(CLOUD_ID),
+                ),
+                // Another gateway site, configured or granted.
+                (
+                    alice.clone(),
+                    delegated("alice-oauth-1", "v1"),
+                    Some(OTHER_CLOUD_ID),
+                ),
+                (
+                    alice.clone(),
+                    ExecutionAccess::Delegated(lease("alice-oauth-1", "v1", OTHER_CLOUD_ID)),
+                    Some(CLOUD_ID),
+                ),
+                // Credential mode.
+                (
+                    InvocationBuilder::from(alice.clone())
+                        .credential_mode(CredentialMode::Service)
+                        .build(),
+                    delegated("alice-oauth-1", "v1"),
+                    Some(CLOUD_ID),
+                ),
+            ];
+            for (index, (request, access, cloud_id)) in rejected.into_iter().enumerate() {
+                assert_eq!(
+                    open(&signer, &request, &access, cloud_id, &token),
+                    Err(ContinuationError::Invalid),
+                    "case {index}"
+                );
+            }
+        }
+
+        #[test]
+        fn static_tokens_bind_their_kind_and_only_gateway_routes_bind_the_cloud_id() {
+            let signer = ContinuationSigner::new(None);
+            let alice = request("alice");
+            let basic = ExecutionAccess::Static(basic_credential("alice@example.com", "token"));
+            let bearer = ExecutionAccess::Static(bearer_credential("token"));
+            let token = seal(&signer, &alice, &basic, Some(CLOUD_ID));
+            // The site route does not depend on the gateway's site, and the
+            // stored token is not bound: the principal owns the token.
+            for (cloud_id, access) in [
+                (Some(CLOUD_ID), basic.clone()),
+                (Some(OTHER_CLOUD_ID), basic.clone()),
+                (None, basic.clone()),
+                (
+                    Some(CLOUD_ID),
+                    ExecutionAccess::Static(basic_credential("alice@example.com", "rotated")),
+                ),
+            ] {
+                assert_eq!(
+                    open(&signer, &alice, &access, cloud_id, &token).unwrap(),
+                    b"next"
+                );
+            }
+            for (request, access) in [
+                (alice.clone(), bearer.clone()),
+                (alice.clone(), delegated("alice-oauth-1", "v1")),
+                (request("bob"), basic.clone()),
+            ] {
+                assert_eq!(
+                    open(&signer, &request, &access, Some(CLOUD_ID), &token),
+                    Err(ContinuationError::Invalid)
+                );
+            }
+            // A bearer token routes through the gateway, so its site is bound.
+            let token = seal(&signer, &alice, &bearer, Some(CLOUD_ID));
+            assert_eq!(
+                open(&signer, &alice, &bearer, Some(CLOUD_ID), &token).unwrap(),
+                b"next"
+            );
+            for (access, cloud_id) in [
+                (bearer.clone(), Some(OTHER_CLOUD_ID)),
+                (bearer.clone(), None),
+                (basic, Some(CLOUD_ID)),
+                (delegated("alice-oauth-1", "v1"), Some(CLOUD_ID)),
+            ] {
+                assert_eq!(
+                    open(&signer, &alice, &access, cloud_id, &token),
+                    Err(ContinuationError::Invalid)
+                );
+            }
+        }
+
+        /// A restart builds a new signer over the same stable key; the
+        /// binding comes only from configuration and the host's selection,
+        /// so a token sealed before it opens after it, including after a
+        /// refresh.
+        #[test]
+        fn tokens_survive_a_restart_with_the_stable_key() {
+            let before = ContinuationSigner::new(Some(test_signing_key(9)));
+            let after = ContinuationSigner::new(Some(test_signing_key(9)));
+            let alice = request("alice");
+            for (sealed, opened) in [
+                (
+                    delegated("alice-oauth-1", "v1"),
+                    delegated("alice-oauth-1", "v2"),
+                ),
+                (
+                    ExecutionAccess::Static(bearer_credential("token")),
+                    ExecutionAccess::Static(bearer_credential("token")),
+                ),
+            ] {
+                let token = seal(&before, &alice, &sealed, Some(CLOUD_ID));
+                assert_eq!(
+                    open(&after, &alice, &opened, Some(CLOUD_ID), &token).unwrap(),
+                    b"next"
+                );
+            }
+        }
+
+        #[test]
+        fn access_without_atlassian_material_fails_closed() {
+            let error = bind_atlassian_access(
+                PAGES.bind(request("alice").context(), "route"),
+                &ExecutionAccess::None,
+                Some(CLOUD_ID),
+            )
+            .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+            assert_eq!(error.message, "selected credential material is unavailable");
+        }
     }
 
     /// Basic credentials authorize tenant requests and bearer credentials

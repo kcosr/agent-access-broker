@@ -17,7 +17,8 @@ use cql::*;
 use validation::*;
 
 use agent_access_atlassian::{
-    atlassian_credential_authorization, validate_atlassian_gateway_credential,
+    atlassian_credential_authorization, bind_atlassian_access,
+    validate_atlassian_gateway_credential,
 };
 use agent_access_content::{
     ContentWriteError, markdown_to_confluence_storage_bounded,
@@ -2386,8 +2387,12 @@ impl ConfluenceProvider {
             .next_page_token
             .as_deref()
             .map(|token| {
-                self.continuations
-                    .open_comment_page(request.context(), credential, &binding, token)
+                self.continuations.open_comment_page(
+                    request.context(),
+                    request.execution(),
+                    &binding,
+                    token,
+                )
             })
             .transpose()?;
         let response = self
@@ -2422,7 +2427,7 @@ impl ConfluenceProvider {
             .map(|cursor| {
                 self.continuations.seal_comment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &binding,
                     &cursor,
                 )
@@ -2811,8 +2816,12 @@ impl ConfluenceProvider {
             .next_page_token
             .as_deref()
             .map(|token| {
-                self.continuations
-                    .open_comment_page(request.context(), credential, &binding, token)
+                self.continuations.open_comment_page(
+                    request.context(),
+                    request.execution(),
+                    &binding,
+                    token,
+                )
             })
             .transpose()?;
         let response = self
@@ -2842,7 +2851,7 @@ impl ConfluenceProvider {
             .map(|cursor| {
                 self.continuations.seal_comment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &binding,
                     &cursor,
                 )
@@ -3048,7 +3057,7 @@ impl ConfluenceProvider {
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let pages = SearchPageRequest {
             context: request.context(),
-            credential,
+            access: request.execution(),
             query: &query,
             requested_spaces: &requested,
             max_results,
@@ -4978,7 +4987,7 @@ impl ConfluenceProvider {
             .map(|token| {
                 self.continuations.open_draft_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &handle,
                     max_results,
                     token,
@@ -5004,7 +5013,7 @@ impl ConfluenceProvider {
             .map(|position| {
                 self.continuations.seal_draft_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &handle,
                     max_results,
                     &position,
@@ -5410,7 +5419,7 @@ impl ConfluenceProvider {
             .map(|token| {
                 self.continuations.open_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &page,
                     max_results,
                     token,
@@ -5460,7 +5469,7 @@ impl ConfluenceProvider {
             .map(|position| {
                 self.continuations.seal_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &page,
                     max_results,
                     &position,
@@ -5675,7 +5684,7 @@ impl ConfluenceProvider {
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let pages = SearchPageRequest {
             context: request.context(),
-            credential,
+            access: request.execution(),
             query: &query,
             requested_spaces: &requested,
             max_results,
@@ -6926,7 +6935,7 @@ impl ConfluenceProvider {
             .map(|token| {
                 self.continuations.open_draft_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &handle,
                     max_results,
                     token,
@@ -6952,7 +6961,7 @@ impl ConfluenceProvider {
             .map(|position| {
                 self.continuations.seal_draft_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &handle,
                     max_results,
                     &position,
@@ -7367,7 +7376,7 @@ impl ConfluenceProvider {
             .map(|token| {
                 self.continuations.open_blog_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &blog,
                     max_results,
                     token,
@@ -7417,7 +7426,7 @@ impl ConfluenceProvider {
             .map(|position| {
                 self.continuations.seal_blog_attachment_page(
                     request.context(),
-                    credential,
+                    request.execution(),
                     &blog,
                     max_results,
                     &position,
@@ -7585,6 +7594,7 @@ impl ConfluenceProvider {
     ) -> Result<ConfluenceDraftHandle, ProviderError> {
         let handle = self.continuations.open_draft_handle(
             request.context(),
+            request.execution(),
             content_type,
             content_id,
             draft_handle,
@@ -7603,7 +7613,7 @@ impl ConfluenceProvider {
     ) -> Result<String, ProviderError> {
         let handle = ConfluenceDraftHandle::new(content_type, content, origin, base_version);
         self.continuations
-            .seal_draft_handle(request.context(), &handle)
+            .seal_draft_handle(request.context(), request.execution(), &handle)
     }
 
     async fn draft_page_response_with_space(

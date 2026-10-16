@@ -18,7 +18,8 @@ use search_continuation::*;
 use validation::*;
 
 use agent_access_atlassian::{
-    atlassian_credential_authorization, validate_atlassian_gateway_credential,
+    atlassian_credential_authorization, bind_atlassian_access,
+    validate_atlassian_gateway_credential,
 };
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
@@ -2126,7 +2127,7 @@ impl JiraProvider {
         let pages = SearchPageRequest {
             request: &request,
             configuration: &self.search_configuration,
-            credential,
+            cloud_id: self.config.cloud_id.as_deref(),
             query: &query,
             requested_projects: &requested,
             max_results,

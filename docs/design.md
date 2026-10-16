@@ -175,8 +175,9 @@ also includes a same-origin browser portal frontend:
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules, request authorization, the
-  tenant/gateway client routes selected by credential type, and the route
-  fingerprint their relayed continuations bind.
+  tenant/gateway client routes selected by credential type, the route
+  fingerprint their relayed continuations bind, and the credential binding
+  (`bind_atlassian_access`) of every continuation and draft handle.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the
@@ -424,7 +425,14 @@ mode, the principal (a family that deliberately shares service-mode tokens
 binds it only in per-user mode), the provider's configuration fingerprint, and
 the resource identifiers and normalized query, filter and output settings the
 provider adds. Delegated families also bind the lease's `DelegatedBindingId`,
-target and audience, which routine token refresh keeps. The binding is a
+target and audience, which routine token refresh keeps. Providers of services
+whose credential connections can select either a token or OAuth (GitLab, Jira
+and Confluence) bind the execution material's method in every family: a static
+credential's kind, or the lease's binding, target and audience, plus the
+gateway cloud ID for Atlassian gateway routes. A method switch, account
+replacement, disconnect and reconnect, or tenant change therefore invalidates
+their tokens, while routine refresh and, for stable-key families, a restart
+keep them; static token values are not bound. The binding is a
 canonical, length-delimited encoding whose digest enters the HMAC context with
 the service, purpose and version; the token itself carries only the version,
 the expiry, the provider payload and the MAC. Any other binding, purpose, key
@@ -450,7 +458,10 @@ knows: service, action or handle scope, execution context, configuration and
 the provider's fields. Its owner travels in the token as a keyed ownership
 commitment: scope resolution accepts the token only when the current principal
 could own it, and the provider opens it again after admission, when the
-commitment must match the admitted credential mode and principal.
+commitment must match the admitted credential mode and principal. Confluence
+draft handles also carry a keyed commitment (`ContinuationSigner::commit`) to
+the execution material they were minted with, which scope resolution cannot
+know; it is checked when the handle is opened after admission.
 
 ### Assembly identity
 

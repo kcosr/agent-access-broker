@@ -911,13 +911,26 @@ Jira's own token. To fetch the next page, pass it back unchanged as
   default, and values above `providers.jira.search.max_results` equal the cap.
 
 The continuation is also bound to the execution context, the principal and
-whether it authenticated, the credential mode, the selected credential's type
-(which chooses the tenant or gateway route), and the Jira configuration Jira's
-token depends on: `tenant_host`, `cloud_id`, and whether `api.atlassian.com` is
-allowed. Any change rejects the token with `input_invalid`. Continuations
-expire 15 minutes after they are issued. They are signed with a key generated
-for each broker runtime generation, so a configuration reload or restart also
-invalidates them. Jira may also expire its own token.
+whether it authenticated, the credential mode, the credential that reaches
+Jira, and the Jira configuration Jira's token depends on: `tenant_host`,
+`cloud_id`, and whether `api.atlassian.com` is allowed. The credential binding
+is the credential method and:
+
+- for a stored or service token, its type, which chooses the tenant or gateway
+  route. The token value is not bound, so replacing a stored token with another
+  of the same type keeps the continuation;
+- for delegated (OAuth) access, which Jira does not yet accept, the OAuth
+  connection and its generation, never the current access token: a routine
+  refresh keeps the continuation, while disconnecting and reconnecting or
+  connecting another Atlassian account invalidates it;
+- for a route through the Atlassian gateway (a bearer token or OAuth), the
+  site's `cloud_id`.
+
+Any change, including a switch between a token and OAuth, rejects the token
+with `input_invalid`. Continuations expire 15 minutes after they are issued.
+They are signed with a key generated for each broker runtime generation, so a
+configuration reload or restart also invalidates them. Jira may also expire its
+own token.
 
 A continuation carries no authority and does not bind the effective project
 boundary. Every page is authorized again under current policy, its JQL is

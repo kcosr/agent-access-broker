@@ -66,8 +66,9 @@ actions and exposes typed wrappers for supported services.
   independent so missing credentials cannot prevent onboarding.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
-  envelope, bound to that context and current principal/resource/query settings;
-  reauthorize every continuation.
+  envelope, bound to that context and current principal/resource/query settings
+  and to the execution material's method (a static kind, or the delegated
+  binding, never the access version); reauthorize every continuation.
 - Backend actions default to `read_only = false`; explicitly opt reviewed reads
   in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
   classifies upstream effects for grant selection; it does not gate local output.
@@ -296,7 +297,8 @@ binary and needs `python3`, whose absence fails it.
   `present.rs`).
 - `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
   (gateway credential rules, request authorization, tenant/gateway client
-  routes and their route fingerprint, and the vendor-level token profiles
+  routes and their route fingerprint, the credential binding of their
+  continuations and draft handles, and the vendor-level token profiles
   `atlassian-api-token` and `atlassian-bearer-token` that Jira and Confluence
   both declare, so one credential connection can serve both).
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.

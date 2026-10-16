@@ -1124,7 +1124,11 @@ credentials). Add the resource identifiers and the normalized query, filter and
 output settings with `.text`, `.number`, `.flag`, `.optional_text`,
 `.optional_number`, `.texts` and `.bytes`, including defaulted values. For
 delegated access, `.delegated(&credential)` binds the lease's
-`DelegatedBindingId`, target and audience; routine refresh keeps all three.
+`DelegatedBindingId`, target and audience; routine refresh keeps all three. A
+provider that accepts both static credentials and delegated access binds the
+method it executes with, too: the static credential's `kind()`, or
+`.delegated(&credential)`, so a token does not open after a switch between
+them.
 
 The binding is a canonical, length-delimited encoding whose digest enters the
 MAC context. The token carries only its version, expiry, payload and MAC, so a
@@ -1304,7 +1308,12 @@ execution context, the configuration and the provider's fields. The token's owne
 travels inside it as a keyed ownership commitment. Scope resolution accepts the
 token only when the current principal could own it, and after admission the
 provider opens it again with `open`, which checks the admitted credential mode
-and principal.
+and principal. The host selects execution material only after scope
+resolution, so such a binding cannot cover it. To bind it, carry a keyed
+commitment in the payload, from `ContinuationSigner::commit` under the
+admitted binding extended with the material, and check it with
+`verify_commitment` when the token is opened after admission. Confluence draft
+handles do this.
 
 ## Reasons and outcomes
 
