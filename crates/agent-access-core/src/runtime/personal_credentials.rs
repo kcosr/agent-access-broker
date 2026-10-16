@@ -24,11 +24,23 @@ impl BrokerRuntime {
     /// profile another consumer of its connection declares.
     pub fn personal_token_profile(&self, service: &str) -> Option<(&str, &'static str)> {
         let connection = self.effective_credentials.personal_connection(service)?;
-        let profile = connection.config.token_profile.as_deref()?;
+        self.connection_token_profile(connection.id)
+    }
+
+    /// The token profile of the effective credential connection
+    /// `connection` and the credential kind its consumers declare for it;
+    /// `None` for an unknown connection or one without a token profile.
+    pub fn connection_token_profile(&self, connection: &str) -> Option<(&str, &'static str)> {
+        let profile = self
+            .effective_credentials
+            .connections
+            .get(connection)?
+            .token_profile
+            .as_deref()?;
         let kind = crate::connections::connection_token_kind(
             &self.effective_credentials,
             &self.services,
-            connection.id,
+            connection,
         )?;
         Some((profile, kind))
     }

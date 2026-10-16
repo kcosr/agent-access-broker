@@ -209,4 +209,16 @@ async fn readiness_checks_connection_configuration_without_principals() {
     let (config, _store) = connection_config("tracker");
     let runtime = BrokerRuntime::new(config).unwrap();
     runtime.readiness().await.unwrap();
+    // Management resolves a service's or a connection's token form.
+    assert_eq!(runtime.personal_credential_key("jira"), Some("tracker"));
+    assert_eq!(
+        runtime.personal_token_profile("jira"),
+        Some((PROFILE, "basic_api_token"))
+    );
+    assert_eq!(
+        runtime.connection_token_profile("tracker"),
+        Some((PROFILE, "basic_api_token"))
+    );
+    assert_eq!(runtime.connection_token_profile("jira"), None);
+    assert_eq!(runtime.personal_credential_key("fake"), None);
 }
