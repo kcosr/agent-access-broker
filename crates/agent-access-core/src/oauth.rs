@@ -3671,6 +3671,44 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn consent_is_stale_once_no_connection_selects_its_registration() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        let published = Arc::new(arc_swap::ArcSwap::from(runtime(&manager)()));
+        let current = Arc::clone(&published);
+        let resolver: OAuthRuntimeResolver = Arc::new(move || current.load_full());
+        let state = start(&manager, OAuthConnectIntent::Connect).await;
+        // The connection is rebound to another registration.
+        let mut changed = published.load().config().clone();
+        let mut registration = changed.oauth.registrations["stub"].clone();
+        registration.redirect_uri = registration.redirect_uri.replace("/stub", "/stub_two");
+        changed
+            .oauth
+            .registrations
+            .insert("stub_two".into(), registration);
+        changed
+            .credentials
+            .connections
+            .get_mut("oauth_stub")
+            .unwrap()
+            .oauth
+            .as_mut()
+            .unwrap()
+            .registration = "stub_two".into();
+        published.store(Arc::new(
+            crate::BrokerRuntime::new_for_reload(changed, &published.load()).unwrap(),
+        ));
+        assert_eq!(
+            manager
+                .complete("user", "session", "stub", &state, "code", resolver)
+                .await
+                .unwrap_err(),
+            OAuthError::Stale
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(manager.read("user", "stub").unwrap().flows.is_empty());
+    }
+
+    #[tokio::test]
     async fn runtime_publication_does_not_preserve_a_withdrawn_setup_grant() {
         let (_dir, store, _ring, manager, server) = fixture().await;
         let published = Arc::new(arc_swap::ArcSwap::from(runtime(&manager)()));
