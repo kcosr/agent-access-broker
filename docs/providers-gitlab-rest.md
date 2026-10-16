@@ -479,7 +479,9 @@ truncated with `responseBodyTruncated = true`.
 GitLab retains this endpoint's recent history for seven days and caps pages at
 20. `status` accepts an exact three-digit response status or `successful`,
 `client_failure`, or `server_failure`. The signed continuation binds the
-execution context, project, hook ID, status, page size, and upstream page state.
+execution context, principal, credential mode and credential binding (see
+[`pageToken`](#locators-and-inputs)), project, hook ID, status, page size, and
+upstream page state.
 
 Create, update, delete, and custom-header mutations use readback where GitLab
 exposes observable state. Test and resend cause outbound delivery and are
@@ -568,9 +570,16 @@ lists accept only `created_at` or `updated_at`.
 
 `pageToken` is a broker-signed 15-minute continuation bound to the action,
 execution context, resolved project path and numeric ID, principal, credential
-mode, effective page size, validated filters and sort order, and GitLab provider
-endpoint fingerprint. Changing any bound input or the execution context rejects
-the token. With
+mode, credential binding, effective page size, validated filters and sort
+order, and GitLab provider endpoint fingerprint. The credential binding is the
+credential method and, for a stored or service token, its type; the token
+value is not bound, so replacing a stored token keeps the continuation. For
+delegated (OAuth) access, which GitLab does not yet accept, it is the OAuth
+connection and its generation and the instance the access is for, never the
+current access token: a routine refresh keeps the continuation, while
+disconnecting and reconnecting or connecting another GitLab account
+invalidates it. Changing any bound input or the execution context, including a
+switch between a token and OAuth, rejects the token. With
 `broker_tokens.hash_key_ref`, tokens remain valid across reloads and broker
 instances sharing that key; otherwise they use a process-local key and expire
 on restart. Validation permits at most 60 seconds of inter-instance clock skew.
@@ -621,8 +630,8 @@ projection, locators, state, timestamps, positions, and pagination without
 body or suggestion content.
 
 Continuation tokens bind projection in addition to the existing action,
-locator, pagination, sort, execution context, principal, credential-mode, and
-endpoint context.
+locator, pagination, sort, execution context, principal, credential-mode,
+credential-binding, and endpoint context.
 Draft tokens also bind the proven upstream actor ID. Repeat the same projection
 with `pageToken`; a `full` token is invalid for `summary` and credential
 rotation to a different GitLab actor invalidates a draft continuation.

@@ -346,19 +346,50 @@ struct GitlabPageTokenContext<'a> {
     max_results: u32,
 }
 
-/// Binds a page token to the admitted context and provider configuration, the
-/// confirmed project path and numeric ID, the hash of the action's normalized
-/// filters, sort and projection, and the page size.
+/// Binds a page token to the admitted context and provider configuration,
+/// the execution material ([`bind_gitlab_access`]), the confirmed project
+/// path and numeric ID, the hash of the action's normalized filters, sort and
+/// projection, and the page size.
 fn gitlab_page_token_binding(
     family: &ContinuationFamily,
     context: &GitlabPageTokenContext<'_>,
-) -> ContinuationBinding {
-    family
-        .bind(context.request.context(), context.provider_fingerprint)
+) -> Result<ContinuationBinding, ProviderError> {
+    let binding = bind_gitlab_access(
+        family.bind(context.request.context(), context.provider_fingerprint),
+        context.request.execution(),
+    )?;
+    Ok(binding
         .text("project", &context.project.path_with_namespace)
         .number("projectId", context.project.id)
         .text("request", context.request_hash)
-        .number("maxResults", u64::from(context.max_results))
+        .number("maxResults", u64::from(context.max_results)))
+}
+
+/// Binds a page token to the execution material that reaches GitLab: the
+/// credential method, a static credential (a stored or service token) with
+/// its kind, or delegated (OAuth) access with the lease's delegated binding
+/// (the OAuth connection and its generation, never the access version),
+/// target and audience. A token sealed under one method, account or
+/// connection generation never opens under another; a routine refresh keeps
+/// the binding, and every input is fixed by configuration or the host's
+/// selection, so a token survives a restart whenever the stable key does.
+/// Execution material GitLab does not accept, including none, fails closed.
+fn bind_gitlab_access(
+    binding: ContinuationBinding,
+    access: &ExecutionAccess,
+) -> Result<ContinuationBinding, ProviderError> {
+    match access {
+        ExecutionAccess::Static(credential) => Ok(binding
+            .text("credentialMethod", "static")
+            .text("credentialKind", credential.kind().as_str())),
+        ExecutionAccess::Delegated(credential) => Ok(binding
+            .text("credentialMethod", "delegated")
+            .delegated(credential)),
+        _ => Err(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "selected credential material is unavailable",
+        )),
+    }
 }
 
 fn encode_gitlab_page_token(
@@ -372,7 +403,7 @@ fn encode_gitlab_page_token(
     }
     signer
         .seal_at(
-            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context),
+            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context)?,
             &next_page.to_be_bytes(),
             now.into(),
         )
@@ -387,7 +418,7 @@ fn decode_gitlab_page_token(
 ) -> Result<u32, ProviderError> {
     let payload = signer
         .open_at(
-            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context),
+            &gitlab_page_token_binding(&GITLAB_PAGE_TOKENS, context)?,
             token,
             now.into(),
         )
