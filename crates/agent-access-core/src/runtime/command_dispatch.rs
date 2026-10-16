@@ -605,8 +605,13 @@ impl BrokerRuntime {
         .map_err(provider_error_from_managed_store)?;
         // The kind that selected the call's credentials is the kind the
         // command is told; a principal whose stored kind no longer matches
-        // the admitted identity's is refused.
-        if identity.principal_kind != crate::PrincipalKind::from_stored(&record.kind) {
+        // the admitted identity's is refused. An identity without a managed
+        // kind, such as a configured static principal, selected no personal
+        // credential.
+        if identity
+            .principal_kind
+            .is_some_and(|kind| crate::PrincipalKind::from_stored(&record.kind) != Some(kind))
+        {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
                 "the caller's principal kind changed after admission",

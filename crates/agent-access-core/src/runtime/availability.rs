@@ -321,6 +321,16 @@ impl BrokerRuntime {
                 .map(drop)
                 .map_err(UnavailableCredential::from_provider);
         }
+        // A connection that selects no method for the caller makes the
+        // personal mode unavailable, whatever material the service needs.
+        if mode == "per_user"
+            && matches!(
+                self.personal_selection(service, identity),
+                Some((_, crate::Selection::Unavailable))
+            )
+        {
+            return Err(UnavailableCredential::unselected());
+        }
         if !static_lookup
             && self
                 .services
