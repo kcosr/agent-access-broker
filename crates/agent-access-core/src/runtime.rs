@@ -4,6 +4,7 @@ pub use trusted_callers::{
     USER_HEADER, parse_assertion_bearer,
 };
 use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
+mod action_eligibility;
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
@@ -5549,6 +5550,7 @@ impl BrokerRuntime {
                 "selected credential mode is not supported by this action",
             ));
         }
+        self.check_action_credential_eligibility(service, action, &credential_mode, identity)?;
         if !credential_mode_available(
             &self.effective_credentials,
             service,
@@ -5603,6 +5605,7 @@ impl BrokerRuntime {
         }
         let top_band = top_policy_band(candidates);
         let credential_mode = single_policy_credential_mode(&top_band)?;
+        self.check_action_credential_eligibility(service, action, &credential_mode, identity)?;
         if !credential_mode_available(
             &self.effective_credentials,
             service,

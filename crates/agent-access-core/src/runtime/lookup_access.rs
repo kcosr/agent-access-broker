@@ -148,10 +148,15 @@ impl BrokerRuntime {
             action,
         ) {
             PreScopeLookupPlan::NoCandidateGrant => Err(lookup_scope_denial()),
-            PreScopeLookupPlan::UsePerUserCredential => self
-                .personal_pre_scope_lookup(service, action, identity, correlation)
-                .await
-                .map(PreScopeLookup::PerUser),
+            PreScopeLookupPlan::UsePerUserCredential => {
+                // Final policy can only select `per_user` under this plan,
+                // so an ineligible action is denied before the lease below
+                // is acquired.
+                self.check_action_credential_eligibility(service, action, "per_user", identity)?;
+                self.personal_pre_scope_lookup(service, action, identity, correlation)
+                    .await
+                    .map(PreScopeLookup::PerUser)
+            }
             PreScopeLookupPlan::UseSharedLookupCredential => self
                 .resolve_lookup_credential(service)
                 .map(|credential| PreScopeLookup::Shared(LookupAccess::Static(credential))),

@@ -264,13 +264,14 @@ impl BrokerRuntime {
     /// Plans a command-enforced action from its top band: each grant's
     /// boundary as finite values or all-except, intersected with the agent
     /// token's resource restriction; grants that end up empty, then grants
-    /// whose credential mode the action does not support or `mode_available`
-    /// rejects, are omitted. The same grant matched through several subjects
-    /// is passed once.
+    /// whose credential mode the action does not support or cannot use for
+    /// `identity`, or that `mode_available` rejects, are omitted. The same
+    /// grant matched through several subjects is passed once.
     #[allow(clippy::too_many_arguments)]
     fn plan_command_grants(
         &self,
         snapshot: &PolicySnapshot,
+        identity: &IdentityContext,
         context: &ExecutionContext,
         service: &str,
         action: &str,
@@ -308,6 +309,12 @@ impl BrokerRuntime {
                 continue;
             }
             if !self.action_supports_mode(service, action, &candidate.credential_mode)
+                || !self.action_credential_eligible(
+                    service,
+                    action,
+                    &candidate.credential_mode,
+                    identity,
+                )
                 || !mode_available(&candidate.credential_mode)
             {
                 omitted_modes.insert(candidate.credential_mode.as_str());
@@ -369,9 +376,16 @@ impl BrokerRuntime {
         mode_available: impl Fn(&str) -> bool,
     ) -> Option<CommandAuthorization> {
         let band = self.command_band(snapshot, identity, context, service, action);
-        self.plan_command_grants(snapshot, context, service, action, &band, token, |mode| {
-            mode_available(mode) && self.command_mode_configured(service, mode)
-        })
+        self.plan_command_grants(
+            snapshot,
+            identity,
+            context,
+            service,
+            action,
+            &band,
+            token,
+            |mode| mode_available(mode) && self.command_mode_configured(service, mode),
+        )
         .ok()
     }
 
@@ -526,6 +540,7 @@ impl BrokerRuntime {
         }
         self.plan_command_grants(
             snapshot,
+            identity,
             context,
             service,
             action,

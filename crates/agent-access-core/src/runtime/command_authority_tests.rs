@@ -1005,6 +1005,147 @@ async fn a_mixed_band_omits_only_the_mode_whose_credential_is_unavailable() {
     assert_eq!(discovered(&personal_only, &unselected, "issue.stats"), None);
 }
 
+/// Gives the import's connection an OAuth method and, with `token_only`,
+/// marks every action token-only. Neither is reachable through an import:
+/// imported descriptors never carry the marker and command imports never
+/// offer OAuth. They show the planner applies the rule anyway.
+fn select_oauth(runtime: &mut BrokerRuntime, token_only: bool) {
+    let mut credentials = (*runtime.effective_credentials).clone();
+    credentials.connections.get_mut(SERVICE).unwrap().oauth = Some(crate::ConnectionOAuthConfig {
+        registration: "stub".into(),
+        profile: "read".into(),
+    });
+    runtime.effective_credentials = Arc::new(credentials);
+    let mut services = (*runtime.services).clone();
+    let mut descriptor = (*services[SERVICE]).clone();
+    for action in &mut descriptor.actions {
+        action.token_only = token_only;
+    }
+    services.insert(SERVICE.into(), Arc::new(descriptor));
+    runtime.services = Arc::new(services);
+}
+
+/// A token-only command-enforced action drops only the per-user grants
+/// whose connection selects OAuth, through the same mode check that drops a
+/// mode the action does not support; the band's service grants still pass,
+/// and nothing falls back to a lower band.
+#[tokio::test]
+async fn token_only_command_actions_omit_only_personal_oauth_grants() {
+    let grants = vec![
+        grant(
+            "group:engineering",
+            "issue.search",
+            "per_user",
+            10,
+            &[],
+            &["wide"],
+        ),
+        grant(
+            "group:support",
+            "issue.search",
+            "service",
+            10,
+            &["p-ops"],
+            &[],
+        ),
+        grant(
+            "group:engineering",
+            "issue.search",
+            "service",
+            0,
+            &["p-all"],
+            &[],
+        ),
+        grant("group:engineering", "issue.stats", "per_user", 10, &[], &[]),
+        grant("group:support", "issue.stats", "service", 10, &[], &[]),
+    ];
+    let user = identity(None);
+    let mut oauth = runtime(grants.clone(), true);
+    assert!(
+        oauth.services[SERVICE]
+            .actions
+            .iter()
+            .all(|action| !action.token_only),
+        "imported descriptors never carry the token-only marker"
+    );
+    // An OAuth selection alone omits nothing.
+    select_oauth(&mut oauth, false);
+    let prepared = prepare(&oauth, &user, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed_modes(&prepared),
+        BTreeSet::from(["per_user".to_owned(), "service".to_owned()])
+    );
+
+    let mut token_only = runtime(grants.clone(), true);
+    select_oauth(&mut token_only, true);
+    let prepared = prepare(&token_only, &user, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [("service".into(), finite(&["OPS"]), Some(10))]
+    );
+    assert_eq!(
+        discovered(&token_only, &user, "issue.search"),
+        Some(reached(&prepared))
+    );
+    let prepared = prepare(&token_only, &user, "issue.stats", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed_modes(&prepared),
+        BTreeSet::from(["service".to_owned()])
+    );
+    assert!(discovered(&token_only, &user, "issue.stats").is_some());
+
+    // A principal whose connection selects the stored token keeps the
+    // per-user grants.
+    let service_account = IdentityContext {
+        principal_kind: Some(crate::PrincipalKind::ServiceAccount),
+        ..identity(None)
+    };
+    let prepared = prepare(&token_only, &service_account, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed_modes(&prepared),
+        BTreeSet::from(["per_user".to_owned(), "service".to_owned()])
+    );
+
+    // With only per-user grants in the top band, nothing passes; the lower
+    // service grant is never consulted.
+    let mut personal_only = runtime(
+        vec![
+            grant(
+                "group:engineering",
+                "issue.search",
+                "per_user",
+                10,
+                &[],
+                &["wide"],
+            ),
+            grant(
+                "group:engineering",
+                "issue.search",
+                "service",
+                0,
+                &["p-all"],
+                &[],
+            ),
+        ],
+        true,
+    );
+    select_oauth(&mut personal_only, true);
+    let denied = prepare(&personal_only, &user, "issue.search", json!({}))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(denied.reason_code(), ReasonCode::CredentialNotProvisioned);
+    assert_eq!(discovered(&personal_only, &user, "issue.search"), None);
+}
+
 #[tokio::test]
 async fn agent_token_restrictions_intersect_every_passed_grant() {
     let runtime = runtime(

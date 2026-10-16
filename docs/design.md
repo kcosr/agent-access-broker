@@ -1207,6 +1207,10 @@ resource region. Missing or locally unusable execution or lookup material hides
 that authority from service details, action/resource lists, runtime catalog,
 OpenAPI/send schemas, and native MCP tools. An unavailable winning grant still
 suppresses lower-ranked grants: discovery never falls back to shared authority.
+A [token-only action](#credential-model-service-per_user-lookup) is hidden in
+each region whose winning `per_user` grant would use the caller's OAuth
+connection, without a requirement, and stays listed for regions a `service`
+grant wins.
 Search actions retain their action-wide credential selection. Providers that do
 not require a separate execution credential need no dummy secret.
 
@@ -1359,6 +1363,26 @@ dispatch the runtime revalidates the lease: access revoked, disconnected, or
 awaiting new consent since preparation stops the invocation, and access
 superseded by another invocation's refresh moves to the current version.
 Providers never hold the OAuth manager or refresh material.
+
+**Token-only actions.** A native backend marks an action whose upstream
+accepts only a token, never delegated access, with
+`ActionDescriptor::token_only`; imported descriptors never carry it. The check
+uses the credential mode each grant region selects, after grant precedence:
+the action is ineligible only where the winning grant is `per_user` and the
+caller's connection selects OAuth. A `service` region with its static
+credential, and a `per_user` region whose connection selects a stored token,
+keep it usable. Every selection applies the check beside the action's
+supported modes: native selection, search planning, the command-enforced
+planner (which omits an ineligible grant as it omits an unsupported mode) and
+the discovery clauses. An ineligible winning grant still suppresses lower
+grants, so there is no fallback to another region or credential. When the
+pre-scope lookup plan is to use the caller's own credential, final policy can
+select only `per_user`, so an ineligible action is denied before any
+acquisition, refresh or lookup; without a pre-scope lookup it is denied after
+policy selection and before acquisition. After a shared pre-scope lookup, a
+winning ineligible `per_user` grant is denied by final policy, concealed as
+`scope_unresolved` like every final-policy denial of a lookup-resolved action.
+The other denials report `credential_not_provisioned`.
 
 **Lookup credentials** (`credentials.lookup.<service>`, `read_only = true`) are
 separate read-only credentials used before authorization solely to resolve

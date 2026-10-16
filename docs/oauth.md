@@ -38,6 +38,14 @@ connection's `token_profile` when it sets one, and otherwise have no personal
 credential for its services. Nobody chooses between a token and OAuth, and the
 Broker never falls back from one to the other.
 
+Some upstream operations accept only a token, and their providers mark those
+actions token-only. Where a person's winning grant is `per_user` and their
+connection selects OAuth, a token-only action is hidden from discovery and
+denied before the Broker acquires, refreshes or looks anything up through the
+connection; a lower-priority grant never stands in. A `service` grant with its
+static credential keeps the action usable for the same person. See
+[token-only actions](provider-sdk.md#token-only-actions).
+
 Several credential connections, and therefore several services, may reference
 one registration. They must use the same permission profile, and they share
 each person's OAuth connection: one consent and one refresh family per owner

@@ -741,6 +741,21 @@ All notable changes to this project are documented in this file.
   throttled reports that failure, with any retry time, instead of the
   concealed `scope_unresolved`.
 
+- Native backends can mark an action token-only with
+  `ActionDescriptor::token_only()` (the `token_only` field) when the upstream
+  accepts only a token for it, never delegated access. Eligibility uses the
+  credential mode each grant region selects: where the winning grant is
+  `per_user` and the caller's credential connection selects OAuth, discovery
+  hides the action and invocation denies it, never falling back to a lower
+  grant; `service` regions and stored-token selections keep it usable. A
+  pre-scope plan that uses the caller's own credential is denied before any
+  acquisition, refresh or lookup, and actions without a pre-scope lookup are
+  denied after policy and before acquisition, with `credential_not_provisioned`;
+  a winning `per_user` grant after a shared pre-scope lookup is denied by final
+  policy as `scope_unresolved`. The command-enforced planner omits such grants
+  like any unsupported mode. Imported descriptors never carry the marker. The
+  conformance backend's `item.upload` uses it.
+
 ### Changed
 
 - Existing Confluence `all` resources used by grants, groups, and token

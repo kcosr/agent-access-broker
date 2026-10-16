@@ -64,6 +64,11 @@ actions and exposes typed wrappers for supported services.
   unknown availability too. Discovery must not contact upstream, refresh OAuth,
   or record credential use/verification. Keep management and setup previews
   independent so missing credentials cannot prevent onboarding.
+- Token-only actions (`ActionDescriptor::token_only`, native only) are checked
+  with the mode each grant region's winning grant selects, beside the action's
+  supported modes: refuse them only where `per_user` selects OAuth, with no
+  fallback to lower grants, and before acquiring or looking up with the
+  caller's OAuth access.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
   envelope, bound to that context and current principal/resource/query settings

@@ -255,6 +255,7 @@ its builder methods:
 | --- | --- |
 | `.scope(name)` | The resource scope the action is authorized against. Without one the action is action-only. |
 | `.credential_modes(["service", "per_user"])` | The grant modes that may select its credentials. |
+| `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
 | `.search_contained()` | That the host computes a search boundary and the provider constrains its query to it. |
@@ -284,6 +285,41 @@ with a token profile must declare authorities naming the same instance, and an
 OAuth connection's dialect checks each consumer's authority (see
 [delegated access](#delegated-access)). A service that declares none cannot
 share a token connection with another service.
+
+### Token-only actions
+
+Mark an action `.token_only()` when the upstream documents the operation as
+needing a token, such as one that accepts only a personal access token. The
+host applies the marker with the credential mode that wins each grant region,
+after grant precedence, never with the caller's personal method alone:
+
+- Where a `per_user` grant wins and the caller's credential connection selects
+  OAuth, discovery hides the action, and invocation denies it with
+  `credential_not_provisioned` before acquiring, refreshing or looking anything
+  up. It never falls back to a lower grant or to another credential.
+- A `service` region with its static credential, and a `per_user` region whose
+  connection selects a stored token, keep the action usable, so the provider
+  receives only static execution material for it.
+
+The marker matters only for a service that also declares `.delegated(..)`; it
+is part of the native descriptor contract, and imported services' descriptors
+never carry it.
+
+```rust check
+use agent_access_provider::ActionDescriptor;
+use agent_access_provider::deps::serde_json::{Map, Value};
+
+/// Issuing a notebook API key needs a personal token upstream, so delegated
+/// access never reaches it.
+fn key_create() -> ActionDescriptor {
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::String("object".to_owned()));
+    ActionDescriptor::new("key.create", "Issue an API key", schema.into())
+        .scope("notebook")
+        .credential_modes(["service", "per_user"])
+        .token_only()
+}
+```
 
 ### Typed resources
 
@@ -1557,8 +1593,8 @@ behavior:
 `agent-access-conformance` is a test-only provider that uses every extension
 point: a namespace-capable resource type with an action-input projection and
 configured roots, typed configuration, a managed credential profile, JSON,
-raw-download and multipart-upload actions, embedded and whole-result
-presentation, and an endpoint type whose private key a single-attempt action
+raw-download and multipart-upload actions (the upload token-only), embedded
+and whole-result presentation, and an endpoint type whose private key a single-attempt action
 consumes. It depends only on the SDK. Its unit tests show how to drive each
 shape with `TestHost`, `InvocationBuilder` and a mock upstream, and the host's
 `tests::conformance` suite registers it beside the shipped providers to prove

@@ -17,6 +17,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[path = "oauth/delegated_lookups.rs"]
 mod delegated_lookups;
+#[path = "oauth/token_only.rs"]
+mod token_only;
 
 const SOURCE: &str = "127.0.0.1:43200";
 
