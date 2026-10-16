@@ -7,6 +7,7 @@ import type {
   AgentTokenOptions,
   BrokerTokenRecord,
   ConfigStatusResult,
+  CredentialList,
   CredentialMetadata,
   CredentialTarget,
   ExternalGroupBinding,
@@ -32,14 +33,17 @@ import type {
 } from "../types";
 import type { ImportListResult, ImportPreviewResult } from "../import-types";
 import { portalQueryKeys, viewerKey } from "../lib/portal-queries";
+import { administeredCredentialList, EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
 import { indexResourceTypes, NO_RESOURCE_TYPES, type ResourceTypes } from "../lib/resource-types";
 import { canViewAdmin, canUseSelfService, hasPolicyScope } from "../lib/capabilities";
 import { useSession } from "../app/session";
 import type { AccountSubject } from "../app/active-route";
 
 export type ConsoleData = {
+  /** Connections whose token can be stored now, with their input form. */
   targets: CredentialTarget[];
-  credentials: CredentialMetadata[];
+  /** The principal's credential connections and retained stored rows. */
+  credentials: CredentialList;
   tokens: BrokerTokenRecord[];
 };
 
@@ -81,7 +85,7 @@ export function useResourceTypesQuery(): ResourceTypes {
 }
 
 /**
- * Credential targets, credentials, and tokens (including revoked and expired
+ * Credential targets, credential connections, and tokens (including revoked and expired
  * ones; views filter by status) for the signed-in user or an administered
  * principal. Service names and action classifications come from the targets
  * and the token options, never from agent discovery (`/v1/services`), which
@@ -111,14 +115,14 @@ export function useConsoleData(subject: AccountSubject, enabled = true) {
           brokerApi.adminPrincipalCredentialTargets(current, principalId),
           brokerApi.adminCredentials(current, principalId),
           brokerApi.adminPrincipalAgentTokens(current, principalId, true, true)
-        ]).then(([targets, credentials, tokens]) => ({ targets, credentials, tokens }))
+        ]).then(([targets, stored, tokens]) => ({ targets, credentials: administeredCredentialList(targets, stored), tokens }))
       )
   });
   const query = subject.administered ? managed : self;
   return {
     query,
     targets: query.data?.targets ?? [],
-    credentials: query.data?.credentials ?? [],
+    credentials: query.data?.credentials ?? EMPTY_CREDENTIAL_LIST,
     tokens: query.data?.tokens ?? [],
     loading: query.isPending && query.fetchStatus !== "idle"
   };
@@ -391,7 +395,7 @@ export function useImportPreview(service: string, enabled = true) {
   });
 }
 
-/** The signed-in user's delegated OAuth connection targets. */
+/** The signed-in user's OAuth registrations, one row each. */
 export function useOAuthConnections(enabled = true) {
   const { viewer, selfService, runQuery } = useQueryAccess();
   return useQuery<OAuthConnectionTarget[]>({

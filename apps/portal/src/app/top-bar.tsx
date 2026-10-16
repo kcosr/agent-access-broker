@@ -104,8 +104,9 @@ export function PortalTopBar() {
 function useCredentialAttention(enabled: boolean) {
   const data = useConsoleData(useSelfSubject(), enabled);
   if (!enabled) return 0;
-  return data.credentials.filter((credential) => {
-    const status = credentialStatus(credential);
+  return data.credentials.connections.filter((connection) => {
+    if (!connection.credential) return false;
+    const status = credentialStatus(connection.credential);
     return status === "Not verified" || status === "Verification failed";
   }).length;
 }

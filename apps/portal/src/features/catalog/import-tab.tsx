@@ -400,7 +400,7 @@ export function ImportTab({
         ) : null}
       </SettingsSection>
 
-      {canWriteAdmin(session) && canUseSelfService(session) && ownDiscovery(data, session.principal, "oauth") ? <DiscoveryConnection service={service.service} /> : null}
+      {canWriteAdmin(session) && canUseSelfService(session) && ownDiscovery(data, session.principal, "oauth") ? <DiscoveryConnection service={service.service} registration={definition.executionBindings.find((binding) => binding.ownerMode === "per_user")?.registrationId ?? null} /> : null}
 
       <SettingsSection title="Related">
         <div className="pt-catalog-links">
@@ -419,19 +419,19 @@ export function ImportTab({
   );
 }
 
-/** The signed-in administrator's OAuth connection used for per-user discovery. */
-function DiscoveryConnection({ service }: { service: string }) {
+/** The signed-in administrator's OAuth connection used for per-user discovery: the import's registration. */
+function DiscoveryConnection({ service, registration }: { service: string; registration: string | null }) {
   const query = useOAuthConnections();
-  const actions = useOAuthConnectionActions("/ui/admin/catalog");
-  const target = query.data?.find((entry) => entry.service === service);
+  const actions = useOAuthConnectionActions("/ui/admin/catalog", service);
+  const target = query.data?.find((entry) => entry.registration === registration);
   let content: ReactNode;
   if (query.isPending && query.fetchStatus !== "idle") content = <SkeletonBlock lines={2} />;
-  else if (query.isError) content = <ErrorState compact error={query.error} title="Connected accounts could not be loaded." onRetry={() => void query.refetch()} retrying={query.isFetching} />;
+  else if (query.isError) content = <ErrorState compact error={query.error} title="OAuth connections could not be loaded." onRetry={() => void query.refetch()} retrying={query.isFetching} />;
   else if (!target) content = <EmptyState compact icon="link" title="No connection target">The broker does not offer an OAuth connection for this service yet.</EmptyState>;
   else
     content = (
       <Rows label="Connected account">
-        <OAuthConnectionRow target={target} pending={actions.pending === target.service} onConnect={() => actions.connect(target)} onDisconnect={() => actions.disconnect(target)} />
+        <OAuthConnectionRow target={target} connections={actions} />
       </Rows>
     );
   return (

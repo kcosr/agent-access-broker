@@ -1,6 +1,6 @@
 // Search only explicitly selected, already authorized management metadata.
 import type { PaletteItem, PaletteSource } from "../workbench";
-import type { AgentTokenOptions, BrokerTokenRecord, CredentialMetadata, CredentialTarget, GroupRecord, PolicyCatalogResult, PolicyGrantRecord, PrincipalRecord, ResourceGroupRecord, ResourceRecord, Session } from "../types";
+import type { AgentTokenOptions, BrokerTokenRecord, CredentialList, GroupRecord, PolicyCatalogResult, PolicyGrantRecord, PrincipalRecord, ResourceGroupRecord, ResourceRecord, Session } from "../types";
 import type { ImportedServiceRecord } from "../import-types";
 import { canUseSelfService, canViewAdmin, hasPolicyScope } from "../lib/capabilities";
 import { canViewAudit, credentialStatus, identityDisplayName, policySubjectShortLabel, tokenStatus } from "../lib/helpers";
@@ -42,8 +42,7 @@ export type PaletteEntities = {
   imports: ImportedServiceRecord[];
   tokenOptions: AgentTokenOptions | null;
   tokens: BrokerTokenRecord[];
-  credentials: CredentialMetadata[];
-  credentialTargets: CredentialTarget[];
+  credentials: CredentialList;
 };
 
 export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSource[] {
@@ -124,16 +123,14 @@ export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSour
     add("tokens", "Your tokens", data.tokens.map((token) => ({
       id: `token-${token.tokenId}`, label: token.name, icon: "key", hint: `${token.tokenId.slice(0, 8)} · ${tokenStatus(token)}`, keywords: [token.tokenId, "token", tokenStatus(token)], onSelect: go(paths.tokens(token.tokenId))
     })));
-    const targets = new Map(data.credentialTargets.map((target) => [`${target.service}/${target.credentialName}`, target]));
-    add("credentials", "Your credentials", data.credentials.filter((credential) => targets.has(`${credential.service}/${credential.name}`)).map((credential) => {
-      const key = `${credential.service}/${credential.name}`;
-      const target = targets.get(key)!;
+    add("credentials", "Your credentials", data.credentials.connections.filter((connection) => connection.credential).map((connection) => {
+      const credential = connection.credential!;
       return {
-        id: `credential-${credential.credentialId}`, label: `${target.displayName} · ${credential.name}`, icon: "lock",
-        hint: `${credential.profile} · ${credentialStatus(credential)}`,
+        id: `credential-${credential.credentialId}`, label: connection.displayName, icon: "lock",
+        hint: `${connection.profile ?? credential.profile} · ${credentialStatus(credential)}`,
         // Never index opaque metadata, credential values, or verification error details.
-        keywords: [credential.credentialId, credential.service, credential.name, credential.profile, credential.credentialKind, credential.status, credentialStatus(credential), "credential"],
-        onSelect: go(paths.credentials(key))
+        keywords: [credential.credentialId, connection.connection, ...connection.consumers.flatMap((consumer) => [consumer.service, consumer.displayName]), credential.profile, credential.credentialKind, credential.status, credentialStatus(credential), "credential"],
+        onSelect: go(paths.credentials(connection.connection))
       };
     }));
   }

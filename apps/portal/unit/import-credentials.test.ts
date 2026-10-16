@@ -8,7 +8,7 @@ import type { OAuthConnectionTarget } from "../src/types";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportCredentialDraft } from "../src/lib/import-credentials";
 import { ImportEditor } from "../src/features/catalog/import-editor";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
-import { OAuthConnectionRow, OAuthConnectionsTable } from "../src/components/oauth-connections";
+import { OAuthConnectionButtons, OAuthConnectionDetails, OAuthConnectionRow, type OAuthConnectionActions } from "../src/components/oauth-connections";
 
 const endpoint = "https://tools.example.test/mcp";
 const registration: ImportOAuthRegistration = { id: "tools", issuer: "https://login.example.test", resource: endpoint, permissionProfiles: [{ id: "read", scopeMode: "explicit", scopes: ["metrics.read"] }, { id: "write", scopeMode: "explicit", scopes: ["metrics.read", "metrics.write"] }] };
@@ -91,66 +91,67 @@ describe("imported personal authentication", () => {
     expect(unselected).not.toContain("OAuth registration");
     expect(unselected).not.toContain("existing grant(s)");
   });
+  const consumer = { service: "metrics", displayName: "Metrics", credentialVerificationInputs: [] };
+  const oauthTarget = (overrides: Partial<OAuthConnectionTarget> = {}): OAuthConnectionTarget => ({
+    registration: "tools", displayName: "Metrics", connectionDescription: "Read metrics", consumers: [consumer], otherConsumers: 0,
+    permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint,
+    canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null, ...overrides
+  });
+  const idle: OAuthConnectionActions = { pending: null, connect: () => {}, disconnect: () => {} };
+  // The Import tab's row, and the Credentials drawer's details with its buttons.
+  const surfaces = (target: OAuthConnectionTarget, connections: OAuthConnectionActions = idle) => [
+    renderToStaticMarkup(createElement(OAuthConnectionRow, { target, connections })),
+    renderToStaticMarkup(
+      createElement("div", null, createElement(OAuthConnectionDetails, { target, pending: connections.pending === target.registration }), createElement(OAuthConnectionButtons, { target, connections }))
+    )
+  ];
+  const buttons = (html: string) => html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+
   test("server-default permissions show unknown or known evidence on both connection surfaces", () => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Connect your account to authorize this imported service.", registration: "tools", permissionProfile: "access", scopeMode: "server_default", requestedScopes: [], target: endpoint, canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null };
-    const render = () => [
-      renderToStaticMarkup(createElement(OAuthConnectionRow, { target, pending: false, onConnect: () => {}, onDisconnect: () => {} })),
-      renderToStaticMarkup(createElement(OAuthConnectionsTable, { targets: [target], connections: { pending: null, connect: () => {}, disconnect: () => {} } }))
-    ];
-    for (const html of render()) {
+    const target = oauthTarget({ connectionDescription: "Connect your account to authorize this imported service.", permissionProfile: "access", scopeMode: "server_default", requestedScopes: [] });
+    for (const html of surfaces(target)) {
       expect(html).toContain("Server-default permissions");
       expect(html).not.toContain("Connect your account to authorize this imported service.");
       expect(html).not.toContain("Scope details unavailable");
     }
     target.connection = { connectionId: "connection", subjectId: null, displayName: null, status: "ready", reason: null, targets: [{ id: "other-resource", name: "Other", audience: "other-resource", scopes: ["unrelated.read"] }] };
-    for (const html of render()) {
+    for (const html of surfaces(target)) {
       expect(html).toContain("Server-default permissions");
       expect(html).toContain("Scope details unavailable");
       expect(html).not.toContain("unrelated.read");
     }
     target.connection.targets.push({ id: endpoint, name: "MCP resource", audience: endpoint, scopes: ["metrics.read"] });
-    for (const html of render()) {
+    for (const html of surfaces(target)) {
       expect(html).toContain("Server-default permissions");
       expect(html).toContain("Known scopes: metrics.read");
       expect(html).not.toContain("Scope details unavailable");
       expect(html).not.toContain("Reported scopes");
     }
-    const table = render()[1];
-    expect(table).toContain('class="wb-cell-flow"');
-    expect(table).toContain('Server-default permissions</span><br/><span class="wb-small">Known scopes: metrics.read');
   });
   test("a connected issuer without identity evidence is not displayed as a known account", () => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Read metrics", registration: "tools", permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint, canConnect: true, connectUnavailableReason: null, canDisconnect: true, connection: { connectionId: "connection", subjectId: null, displayName: null, status: "ready", reason: null, targets: [] } };
-    const html = renderToStaticMarkup(createElement(OAuthConnectionRow, { target, pending: false, onConnect: () => {}, onDisconnect: () => {} }));
-    expect(html).toContain("Connection authorized");
-    expect(html).toContain("Upstream account identity unavailable");
-    expect(html).toContain("Reconnect");
-    expect(html).not.toContain("No account connected");
+    const target = oauthTarget({ canDisconnect: true, connection: { connectionId: "connection", subjectId: null, displayName: null, status: "ready", reason: null, targets: [] } });
+    for (const html of surfaces(target)) {
+      expect(html).toContain("Connection authorized");
+      expect(html).toContain("Upstream account identity unavailable");
+      expect(html).toContain("Reconnect");
+      expect(html).not.toContain("No account connected");
+    }
   });
   test.each([
     ["no_personal_access", "Reconnect requires an active grant for your personal account. You can still disconnect this account."],
     ["service_unavailable", "This service is unavailable for connection. You can still disconnect an existing account."]
   ] as const)("cleanup rows explain %s and allow local disconnect on both surfaces", (reason, explanation) => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Read metrics", registration: "tools", permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint, canConnect: false, connectUnavailableReason: reason, canDisconnect: true, connection: { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "ready", reason: null, targets: [] } };
-    const views = [
-      renderToStaticMarkup(createElement(OAuthConnectionRow, { target, pending: false, onConnect: () => {}, onDisconnect: () => {} })),
-      renderToStaticMarkup(createElement(OAuthConnectionsTable, { targets: [target], connections: { pending: null, connect: () => {}, disconnect: () => {} } }))
-    ];
-    for (const html of views) {
+    const target = oauthTarget({ consumers: [], otherConsumers: 1, canConnect: false, connectUnavailableReason: reason, canDisconnect: true, connection: { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "ready", reason: null, targets: [] } });
+    for (const html of surfaces(target)) {
       expect(html).toContain(explanation);
-      const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-      expect(buttons.find((button) => button.includes("Reconnect"))).toContain("disabled");
-      expect(buttons.find((button) => button.includes(">Disconnect<"))).not.toContain("disabled");
+      expect(buttons(html).find((button) => button.includes("Reconnect"))).toContain("disabled");
+      expect(buttons(html).find((button) => button.includes(">Disconnect<"))).not.toContain("disabled");
       expect(html).not.toContain("credential right");
     }
   });
   test("an entitled unconnected account offers Connect without a rights-management step", () => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Read metrics", registration: "tools", permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint, canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null };
-    for (const html of [
-      renderToStaticMarkup(createElement(OAuthConnectionRow, { target, pending: false, onConnect: () => {}, onDisconnect: () => {} })),
-      renderToStaticMarkup(createElement(OAuthConnectionsTable, { targets: [target], connections: { pending: null, connect: () => {}, disconnect: () => {} } }))
-    ]) {
-      const connect = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("Connect account"));
+    for (const html of surfaces(oauthTarget())) {
+      const connect = buttons(html).find((button) => button.includes("Connect account"));
       expect(connect).toBeDefined();
       expect(connect).not.toContain("disabled");
       expect(html).not.toContain(">Disconnect<");
@@ -158,26 +159,20 @@ describe("imported personal authentication", () => {
     }
   });
   test("an active connection keeps its return action enabled despite a broker eligibility change", () => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Read metrics", registration: "tools", permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint, canConnect: false, connectUnavailableReason: "no_personal_access", canDisconnect: false, connection: null };
-    const views = [
-      renderToStaticMarkup(createElement(OAuthConnectionRow, { target, pending: true, onConnect: () => {}, onDisconnect: () => {} })),
-      renderToStaticMarkup(createElement(OAuthConnectionsTable, { targets: [target], connections: { pending: target.service, connect: () => {}, disconnect: () => {} } }))
-    ];
-    for (const html of views) {
-      const action = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("Return to authorization tab"));
+    const target = oauthTarget({ canConnect: false, connectUnavailableReason: "no_personal_access" });
+    for (const html of surfaces(target, { ...idle, pending: target.registration })) {
+      const action = buttons(html).find((button) => button.includes("Return to authorization tab"));
       expect(action).toBeDefined();
       expect(action).not.toContain("disabled");
       expect(action).not.toContain("aria-busy");
       expect(html).toContain("consent pending for up to five minutes");
     }
   });
-  test("another service explains why Connect is unavailable while an authorization tab is open", () => {
-    const target: OAuthConnectionTarget = { service: "metrics", serviceDisplayName: "Metrics", connectionDescription: "Read metrics", registration: "tools", permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint, canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null };
-    const html = renderToStaticMarkup(createElement(OAuthConnectionsTable, { targets: [target], connections: { pending: "other-service", connect: () => {}, disconnect: () => {} } }));
-    const action = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.find((button) => button.includes("Connect account"));
+  test("another registration explains why Connect is unavailable while an authorization tab is open", () => {
+    const html = renderToStaticMarkup(createElement(OAuthConnectionButtons, { target: oauthTarget(), connections: { ...idle, pending: "other-registration" } }));
+    const action = buttons(html).find((button) => button.includes("Connect account"));
     expect(action).toContain("disabled");
-    expect(action).toContain("Finish or close the other authorization tab before connecting this service.");
-    expect(html).toContain("Finish or close the open authorization tab before connecting another service.");
+    expect(action).toContain("Finish or close the other authorization tab before connecting this account.");
     expect(html).not.toContain("Return to authorization tab");
   });
 });

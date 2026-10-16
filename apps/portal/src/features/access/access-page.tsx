@@ -10,7 +10,8 @@ import { AccessDrawer, AccessRows, AccessSidebar, AccessToolbar, useAccessList }
 export function AccessPage() {
   const model = useAccessList(useSelfSubject());
   const attention = useMemo(
-    () => model.data.credentials.filter((credential) => ["Not verified", "Verification failed"].includes(credentialStatus(credential))).length,
+    () =>
+      model.data.credentials.connections.filter((connection) => connection.credential && ["Not verified", "Verification failed"].includes(credentialStatus(connection.credential))).length,
     [model.data.credentials]
   );
   return (

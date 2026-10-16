@@ -15,7 +15,8 @@ import type {
   BrokerTokenRecord,
   ConfigReloadResult,
   ConfigStatusResult,
-  CredentialInputSchema,
+  ConnectionCredential,
+  CredentialList,
   CredentialMetadata,
   CredentialTarget,
   CredentialVerificationInput,
@@ -223,11 +224,23 @@ function enc(value: string) {
 }
 
 function verifyInit(input: CredentialVerificationInput = {}): RequestInit {
-  const init: RequestInit = { method: "POST" };
-  if (input.repository) {
-    init.body = JSON.stringify(input);
-  }
-  return init;
+  const body: CredentialVerificationInput = {};
+  if (input.service) body.service = input.service;
+  if (input.repository) body.repository = input.repository;
+  return { method: "POST", body: JSON.stringify(body) };
+}
+
+function connectionPath(connection: string) {
+  return `/v1/credentials/connections/${enc(connection)}`;
+}
+
+function adminConnectionPath(principalId: string, connection: string) {
+  return `/v1/admin/principals/${enc(principalId)}/credentials/connections/${enc(connection)}`;
+}
+
+/** The token-storing body: the schema's fields under `secret`, with the connection's profile. */
+function credentialPutInit(profile: string, secret: JsonBody): RequestInit {
+  return { method: "PUT", body: JSON.stringify({ profile, secret, metadata: {} }) };
 }
 
 export const brokerApi = {
@@ -245,13 +258,14 @@ export const brokerApi = {
   oauthConnections(session: Session) {
     return managementRequest<import("./types").OAuthConnectionTarget[]>("/v1/oauth/connections", {}, session);
   },
-  oauthConnect(session: Session, service: string, intent: "connect" | "reconnect" | "replace_account", returnPath?: OAuthReturnPath) {
+  /** Starts consent for a registration; `importedService` names the import an administrator discovers through. */
+  oauthConnect(session: Session, registration: string, intent: "connect" | "reconnect" | "replace_account", returnPath?: OAuthReturnPath, importedService?: string) {
     return managementRequest<{ authorizationUrl: string; expiresAt: number }>("/v1/oauth/connect", {
-      method: "POST", body: JSON.stringify({ service, intent, returnPath })
+      method: "POST", body: JSON.stringify({ registration, intent, returnPath, importedService })
     }, session);
   },
-  oauthDisconnect(session: Session, service: string) {
-    return managementRequest<{ disconnected: boolean }>(`/v1/oauth/connections/${encodeURIComponent(service)}`, { method: "DELETE" }, session);
+  oauthDisconnect(session: Session, registration: string) {
+    return managementRequest<{ disconnected: boolean }>(`/v1/oauth/connections/${enc(registration)}`, { method: "DELETE" }, session);
   },
   resources: (session: Session) => managementRequest<ResourceRecord[]>("/v1/admin/policy/resources", {}, session),
   resourceGroups: (session: Session) => managementRequest<ResourceGroupRecord[]>("/v1/admin/policy/resource-groups", {}, session),
@@ -284,40 +298,15 @@ export const brokerApi = {
   resourceTypes: () =>
     discoveryRequest<{ resourceTypes: ResourceTypeMetadata[] }>("/v1/resource-types").then((result) => result.resourceTypes),
   credentialTargets: (session: Session) => managementRequest<CredentialTarget[]>("/v1/credentials/targets", {}, session),
-  credentials: (session: Session) => managementRequest<CredentialMetadata[]>("/v1/credentials", {}, session),
-  credentialSchema: (session: Session, service: string, name: string, profile: string) =>
-    managementRequest<CredentialInputSchema>(
-      `/v1/credentials/${enc(service)}/${enc(name)}/input-schema?profile=${enc(profile)}`,
-      {},
-      session
-    ),
-  saveCredential: (
-    session: Session,
-    service: string,
-    name: string,
-    profile: string,
-    secret: JsonBody
-  ) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/credentials/${enc(service)}/${enc(name)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ profile, secret, metadata: {} })
-      },
-      session
-    ),
-  verifyCredential: (session: Session, service: string, name: string, input?: CredentialVerificationInput) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/credentials/${enc(service)}/${enc(name)}/verify`,
-      verifyInit(input),
-      session
-    ),
-  deleteCredential: (session: Session, service: string, name: string) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/credentials/${enc(service)}/${enc(name)}`,
-      { method: "DELETE" },
-      session
-    ),
+  credentials: (session: Session) => managementRequest<CredentialList>("/v1/credentials", {}, session),
+  saveCredential: (session: Session, connection: string, profile: string, secret: JsonBody) =>
+    managementRequest<ConnectionCredential>(connectionPath(connection), credentialPutInit(profile, secret), session),
+  verifyCredential: (session: Session, connection: string, input?: CredentialVerificationInput) =>
+    managementRequest<ConnectionCredential>(`${connectionPath(connection)}/verify`, verifyInit(input), session),
+  deleteCredential: (session: Session, connection: string) =>
+    managementRequest<ConnectionCredential>(connectionPath(connection), { method: "DELETE" }, session),
+  deleteRetainedCredential: (session: Session, credentialId: string) =>
+    managementRequest<CredentialMetadata>(`/v1/credentials/retained/${enc(credentialId)}`, { method: "DELETE" }, session),
   tokens: (session: Session, includeRevoked: boolean, includeExpired: boolean) => {
     const params = new URLSearchParams();
     if (includeRevoked) params.set("includeRevoked", "true");
@@ -577,40 +566,12 @@ export const brokerApi = {
       {},
       session
     ),
-  adminPrincipalSaveCredential: (
-    session: Session,
-    principalId: string,
-    service: string,
-    name: string,
-    profile: string,
-    secret: JsonBody
-  ) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/admin/principals/${enc(principalId)}/credentials/${enc(service)}/${enc(name)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ profile, secret, metadata: {} })
-      },
-      session
-    ),
-  adminPrincipalVerifyCredential: (
-    session: Session,
-    principalId: string,
-    service: string,
-    name: string,
-    input?: CredentialVerificationInput
-  ) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/admin/principals/${enc(principalId)}/credentials/${enc(service)}/${enc(name)}/verify`,
-      verifyInit(input),
-      session
-    ),
-  adminPrincipalDeleteCredential: (session: Session, principalId: string, service: string, name: string) =>
-    managementRequest<CredentialMetadata>(
-      `/v1/admin/principals/${enc(principalId)}/credentials/${enc(service)}/${enc(name)}`,
-      { method: "DELETE" },
-      session
-    ),
+  adminPrincipalSaveCredential: (session: Session, principalId: string, connection: string, profile: string, secret: JsonBody) =>
+    managementRequest<ConnectionCredential>(adminConnectionPath(principalId, connection), credentialPutInit(profile, secret), session),
+  adminPrincipalVerifyCredential: (session: Session, principalId: string, connection: string, input?: CredentialVerificationInput) =>
+    managementRequest<ConnectionCredential>(`${adminConnectionPath(principalId, connection)}/verify`, verifyInit(input), session),
+  adminPrincipalDeleteCredential: (session: Session, principalId: string, connection: string) =>
+    managementRequest<ConnectionCredential>(adminConnectionPath(principalId, connection), { method: "DELETE" }, session),
   adminPrincipalAgentTokens: (session: Session, principalId: string, includeRevoked: boolean, includeExpired: boolean) => {
     const params = new URLSearchParams();
     if (includeRevoked) params.set("includeRevoked", "true");
@@ -669,6 +630,8 @@ export const brokerApi = {
     const query = principalId ? `?principal=${enc(principalId)}` : "";
     return managementRequest<CredentialMetadata[]>(`/v1/admin/credentials${query}`, {}, session);
   },
+  adminDeleteCredential: (session: Session, credentialId: string) =>
+    managementRequest<CredentialMetadata>(`/v1/admin/credentials/${enc(credentialId)}`, { method: "DELETE" }, session),
   adminPolicyStatus: (session: Session) =>
     managementRequest<PolicyStatusResult>("/v1/admin/policy/status", {}, session),
   adminPolicyCatalog: (session: Session) =>

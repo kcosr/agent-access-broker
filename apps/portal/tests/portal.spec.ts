@@ -16,8 +16,8 @@ let broker: ChildProcessWithoutNullStreams | undefined;
 let baseUrl = "";
 let tempDir = "";
 let requestCounter = 0;
-// A credential connection stores one row per principal, named `default`.
-const credentialName = "default";
+/** The empty personal credentials list, `GET /v1/credentials`. */
+const EMPTY_CREDENTIALS = { connections: [], retained: [] };
 const initialAdminPassword = "admin-password";
 const updatedAdminPassword = "admin-password-updated";
 
@@ -380,23 +380,29 @@ async function exerciseGrantResourcePicker(page: Page) {
 async function stubCredentialVerification(page: Page) {
   const records = new Map<string, Record<string, unknown>>();
   const verified = new Set<string>();
+  const remember = (record: Record<string, unknown> | null) => {
+    if (!record?.credentialId) return record;
+    records.set(String(record.credentialId), record);
+    return verified.has(String(record.credentialId)) ? { ...record, verificationStatus: "upstream_verified", lastVerifiedAt: new Date().toISOString() } : record;
+  };
   await page.route(/\/v1\/(?:admin\/.*)?credentials(?:\/|\?|$)/, async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
-    if (request.method() === "POST" && pathname.endsWith("/verify")) {
-      const record = [...records.values()].reverse().find((entry) => pathname.endsWith(`/credentials/${entry.service}/${entry.name}/verify`));
+    const verify = /\/credentials\/connections\/([^/]+)\/verify$/.exec(pathname);
+    if (request.method() === "POST" && verify) {
+      // Self-service lists key the active token by connection; administrator lists by stored service.
+      const record = [...records.values()].reverse().find((entry) => (entry.connection ?? entry.service) === decodeURIComponent(verify[1]!));
       if (!record) throw new Error("Verification fixture requires a stored credential");
       verified.add(String(record.credentialId));
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, result: { ...record, verificationStatus: "upstream_verified", lastVerifiedAt: new Date().toISOString() } }) });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, result: { ...record, verificationStatus: "upstream_verified", lastVerifiedAt: new Date().toISOString(), probeService: verify[1] } }) });
       return;
     }
     const response = await route.fetch();
     const body = await response.json();
-    if (Array.isArray(body.result)) body.result = body.result.map((record: Record<string, unknown>) => {
-      if (!record.credentialId) return record;
-      records.set(String(record.credentialId), record);
-      return verified.has(String(record.credentialId)) ? { ...record, verificationStatus: "upstream_verified", lastVerifiedAt: new Date().toISOString() } : record;
-    });
+    if (Array.isArray(body.result)) body.result = body.result.map((record: Record<string, unknown>) => remember(record));
+    else if (Array.isArray(body.result?.connections)) {
+      body.result.connections = body.result.connections.map((connection: Record<string, unknown>) => ({ ...connection, credential: remember(connection.credential as Record<string, unknown> | null) }));
+    }
     await route.fulfill({ response, json: body });
   });
 }
@@ -493,7 +499,7 @@ test("token boundaries use live resource references and allow empty effective ac
     const result = request.method() === "POST" ? { token: "aab_mock_boundary_secret_value", record: { tokenId: "tok_new", principalId: "boundary-user", name: request.postDataJSON().name, tokenClass: "agent_invoke", scopes: request.postDataJSON(), createdAt: "2026-08-15T00:00:00Z", createdBy: "boundary-user" } } : [];
     await route.fulfill({ contentType: "application/json", body: envelope(result) });
   });
-  for (const path of ["/v1/credentials/targets", "/v1/credentials"]) await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope([]) }));
+  for (const path of ["/v1/credentials/targets", "/v1/credentials"]) await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   await page.goto(`${baseUrl}/ui/access`);
   await expect(page.getByRole("main", { name: "Access", exact: true })).toBeVisible();
   const row = tableRow(page, "page.view");
@@ -612,7 +618,7 @@ test("scoped policy managers retain self-service navigation and only receive the
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens", "/v1/tokens/options"]) {
     await page.route(`**${path}`, (route) => route.fulfill({
       contentType: "application/json",
-      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] } : [])
+      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] } : path === "/v1/credentials" ? EMPTY_CREDENTIALS : [])
     }));
   }
 
@@ -693,7 +699,7 @@ test("audit navigation and pages stay hidden when the audit store cannot be quer
     })
   }));
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens"]) {
-    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope([]) }));
+    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   }
   await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] }) }));
   const auditRequests: string[] = [];
@@ -1651,7 +1657,9 @@ test("local browser login supports administration, self-service credentials, tok
     const tabs = page.getByRole("navigation", { name: "User sections", exact: true });
     await tabs.getByRole("link", { name: "Credentials", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/ui/admin/principals/${principalId}/credentials$`));
-    const row = page.getByRole("row").filter({ hasText: `jira/${credentialName}` });
+    // The jira connection, shown under its consumer's display name.
+    const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Jira", exact: true }) });
+    await expect(row).toContainText("jira-cloud-api-token");
     await row.getByRole("link").click();
     const details = page.getByRole("complementary", { name: / credential$/ });
     await details.getByLabel(/username/i).fill("alice@example.test");
@@ -1872,10 +1880,10 @@ test("local browser login supports administration, self-service credentials, tok
   await test.step("a user saves, verifies, and deletes a credential", async () => {
     await selfNav.getByRole("link", { name: "Credentials", exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/credentials$/);
-    const row = page.getByRole("row").filter({ hasText: `jira/${credentialName}` });
+    const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Jira", exact: true }) });
     await expect(row.getByText("Not saved", { exact: true })).toBeVisible();
     await row.getByRole("link").click();
-    await expect(page).toHaveURL(new RegExp(`/ui/credentials\\?credential=jira%2F${credentialName}$`));
+    await expect(page).toHaveURL(/\/ui\/credentials\?credential=jira$/);
     const details = page.getByRole("complementary", { name: / credential$/ });
     const tokenInput = details.getByLabel(/token/i).first();
     const hiddenSecretState = await tokenInput.evaluate((element) => {
@@ -2434,7 +2442,7 @@ async function mockPolicyGrants(page: Page) {
     }),
   }));
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens"]) {
-    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: managementResult([]) }));
+    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: managementResult(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   }
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
@@ -2678,7 +2686,7 @@ test("access resource details disclose exclusions with their own alternative", a
     })
   }));
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens"]) {
-    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope([]) }));
+    await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   }
   await page.goto(`${baseUrl}/ui/access`);
   // The row shows the first alternative and how many more there are.

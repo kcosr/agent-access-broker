@@ -110,7 +110,7 @@ function usePaletteSources(): PaletteSource[] {
       principals: principals.data ?? [], groups: groups.data ?? [], catalog: catalog.data ?? null,
       grants: grants.data ?? [], resources: resources.data?.resources ?? [], resourceGroups: resources.data?.resourceGroups ?? [],
       imports: imports.data?.services ?? [], tokenOptions: tokenOptions.options,
-      tokens: console.tokens, credentials: console.credentials, credentialTargets: console.targets
+      tokens: console.tokens, credentials: console.credentials
     }, go);
     const serviceQueries = policy ? [catalog, ...(admin ? [imports] : [])] : [tokenOptions.query];
     const feedback: Record<string, ReturnType<typeof paletteQueryFeedback>> = {

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { entityPaletteSources, navigationPaletteItems, paletteQueryFeedback, type PaletteEntities } from "../src/app/palette-sources";
 import type { PaletteItem } from "../src/workbench";
-import type { CredentialMetadata, CredentialTarget, PolicyServiceCatalog, Session } from "../src/types";
+import type { ConnectionCredential, CredentialConnection, PolicyServiceCatalog, Session } from "../src/types";
 import type { ImportedServiceRecord } from "../src/import-types";
 import { indexResourceTypes } from "../src/lib/resource-types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
@@ -15,13 +15,13 @@ const imported = (id: string, status: ImportedServiceRecord["status"]): Imported
   definition: { service: id, displayName: `Imported ${id}`, adapterKind: "mcp_http", endpoint: "https://example.test/mcp", connectionSettings: {}, executionBindings: [], discovery: { kind: "anonymous" }, transportAuth: false },
   status, version: 1, actions: [], slotVersions: {}, createdAt: "", createdBy: "", updatedAt: "", updatedBy: ""
 });
-const target: CredentialTarget = {
-  service: "jira", displayName: "Issue Tracker", credentialName: "personal", profile: "standard", credentialKind: "token", credentialVerificationInputs: [],
-  inputSchema: { service: "jira", profile: "standard", credentialKind: "token", fields: [] }
-};
-const credential: CredentialMetadata = {
-  credentialId: "cred-123", ownerPrincipal: "alice", ownerKind: "user", service: "jira", name: "personal", profile: "standard", credentialKind: "token",
+const credential: ConnectionCredential = {
+  credentialId: "cred-123", ownerPrincipal: "alice", ownerKind: "user", connection: "tracker", profile: "standard", credentialKind: "token",
   metadata: { confidential: "DO_NOT_INDEX_THIS" }, status: "active", createdAt: "", createdBy: "", updatedAt: "", updatedBy: "", verificationStatus: "upstream_verified", lastVerificationErrorCode: "DO_NOT_INDEX_ERROR"
+};
+const connection: CredentialConnection = {
+  connection: "tracker", displayName: "Issue Tracker", method: "token", consumers: [{ service: "jira", displayName: "Issue Tracker", credentialVerificationInputs: [] }],
+  otherConsumers: 0, profile: "standard", credentialKind: "token", registration: null, credential
 };
 function fixture(session = admin): PaletteEntities {
   return {
@@ -36,7 +36,7 @@ function fixture(session = admin): PaletteEntities {
     resourceGroups: [{ id: "project-group", name: "Delivery projects", includedResourceIds: ["main-project"], excludedResourceIds: ["secret-project", "missing-id"], version: 1 }],
     imports: [imported("jira", "enabled"), imported("metrics", "draft")],
     tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }], mcp: null },
-    tokens: [{ tokenId: "token-123", principalId: "alice", name: "My Agent", tokenClass: "agent", scopes: {}, createdAt: "", createdBy: "" }], credentials: [credential], credentialTargets: [target]
+    tokens: [{ tokenId: "token-123", principalId: "alice", name: "My Agent", tokenClass: "agent", scopes: {}, createdAt: "", createdBy: "" }], credentials: { connections: [connection], retained: [] }
   };
 }
 function model(data = fixture()) {
@@ -90,16 +90,18 @@ describe("palette metadata coverage", () => {
     expect(follow(actions[1]!)).toBe("/ui/admin/catalog/services/reports?action=east-inspect");
   });
 
-  test("credentials use safe fields and only link to available self-service targets", () => {
+  test("credentials use safe fields and only link to stored connection tokens", () => {
     const data = fixture();
-    data.credentials.push({ ...credential, credentialId: "orphan", name: "removed-target" });
+    data.credentials.connections.push({ ...connection, connection: "unstored", credential: null });
+    const { connection: _connection, ...stored } = credential;
+    data.credentials.retained.push({ ...stored, credentialId: "retained-row", service: "old", name: "default" });
     const { items, follow } = model(data);
     expect(items("credentials")).toHaveLength(1);
     const result = items("credentials")[0]!;
-    expect(result.label).toBe("Issue Tracker · personal");
-    expect(result.keywords).toEqual(expect.arrayContaining(["cred-123", "jira", "standard", "Upstream verified"]));
+    expect(result.label).toBe("Issue Tracker");
+    expect(result.keywords).toEqual(expect.arrayContaining(["cred-123", "tracker", "jira", "Issue Tracker", "standard", "Upstream verified"]));
     expect(JSON.stringify(result)).not.toContain("DO_NOT_INDEX");
-    expect(follow(result)).toBe("/ui/credentials?credential=jira%2Fpersonal");
+    expect(follow(result)).toBe("/ui/credentials?credential=tracker");
   });
 
   test("audit search carries the query as URL data without fetching audit results", () => {

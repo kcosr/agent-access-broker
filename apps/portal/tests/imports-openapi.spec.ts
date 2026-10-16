@@ -246,7 +246,7 @@ test("administrator imports public and private OpenAPI definitions with separate
   const callsBeforeMissing = apiRequests.length;
   expect((await invoke(reader.token, "inventory", "get_item", { path: { id: "one" } })).ok).toBe(false);
   expect(apiRequests).toHaveLength(callsBeforeMissing);
-  await browserManagementRequest(page, "/v1/admin/principals/reader/credentials/inventory/default", { method: "PUT", body: { profile: "token", secret: { token: "synthetic-personal-token" }, metadata: {} } });
+  await browserManagementRequest(page, "/v1/admin/principals/reader/credentials/connections/inventory", { method: "PUT", body: { profile: "token", secret: { token: "synthetic-personal-token" }, metadata: {} } });
   const personalRead = await invoke(reader.token, "inventory", "get_item", { path: { id: "one" } });
   expect(personalRead.ok, await personalRead.text()).toBe(true);
   expect(apiRequests.at(-1)?.headers["x-api-key"]).toBe("synthetic-personal-token");

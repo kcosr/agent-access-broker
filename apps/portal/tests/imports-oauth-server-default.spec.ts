@@ -235,7 +235,7 @@ async function refreshThroughRead(token: string, account: string) {
 }
 
 async function expectUnclippedPermission(page: Page, text: string) {
-  const label = page.getByRole("table", { name: "Connected accounts" }).getByText(text, { exact: true });
+  const label = page.getByRole("table", { name: "Credentials" }).getByText(text, { exact: true });
   await expect(label).toBeVisible();
   // Playwright visibility alone accepts ellipsized text. Check actual text
   // rectangles against the cell, viewport, and every clipping ancestor.
@@ -377,9 +377,10 @@ test("server-default discovery and group-granted personal connections need no cr
     expect(calls).toHaveLength(beforeRevokedRead);
     await reader.getByRole("button", { name: "Disconnect", exact: true }).click();
     const disconnect = reader.getByRole("alertdialog", { name: "Disconnect account?", exact: true });
-    await expect(disconnect.getByText(/Every service that uses this connection stops working/)).toBeVisible();
+    // The reader no longer holds a grant on the import, which is counted rather than named.
+    await expect(disconnect.getByText(/1 other service stops using this account/)).toBeVisible();
     await disconnect.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await expect(reader.getByRole("table", { name: "Connected accounts" })).not.toBeVisible();
+    await expect(reader.getByRole("table", { name: "Credentials" }).getByRole("link", { name: "Default metrics", exact: true })).toHaveCount(0);
     expect(await managementRequest(reader, "/v1/oauth/connections")).toEqual([]);
   } finally {
     await readerContext.close();
