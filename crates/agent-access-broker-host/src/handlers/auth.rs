@@ -1008,8 +1008,10 @@ fn cookie_identity_from_session(
     token_id: String,
     scopes: Value,
 ) -> IdentityContext {
+    // The store resolves browser sessions only for user principals.
     runtime.identity_from_principal_groups(
         principal,
+        Some(agent_access_core::PrincipalKind::User),
         None,
         groups,
         Some(policy_groups),
@@ -1588,6 +1590,7 @@ async fn auth_error_response_with(
         .as_ref()
         .map(|principal| IdentityContext {
             principal: principal.clone(),
+            principal_kind: None,
             principal_subject: None,
             groups: vec![],
             policy_groups: vec![],

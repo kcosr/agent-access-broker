@@ -2546,6 +2546,7 @@ upload_spool_dir = "upload-spool"
         .unwrap();
         let identity = IdentityContext {
             principal: "admin".to_string(),
+            principal_kind: None,
             principal_subject: None,
             groups: vec!["broker-admins".to_string()],
             policy_groups: vec![],

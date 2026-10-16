@@ -4112,6 +4112,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -4216,6 +4217,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -4940,6 +4942,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5077,6 +5080,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5157,6 +5161,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5244,6 +5249,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5335,6 +5341,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5443,6 +5450,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5600,6 +5608,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5759,6 +5768,7 @@ mod tests {
         });
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            Some(agent_access_core::PrincipalKind::User),
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,

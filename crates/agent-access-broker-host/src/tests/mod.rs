@@ -2405,6 +2405,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "gateway-user".to_string(),
+        None,
         Some("gateway-user".to_string()),
         vec![],
         None,
@@ -2547,6 +2548,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "gateway-user".to_string(),
+        None,
         Some("gateway-user".to_string()),
         vec![],
         None,

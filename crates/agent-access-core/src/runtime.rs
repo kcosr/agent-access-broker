@@ -190,6 +190,11 @@ pub struct IdentitySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdentityContext {
     pub principal: String,
+    /// The managed principal's kind, which selects its credential
+    /// connections' methods: set wherever a managed principal is resolved,
+    /// `None` for configured static principals and anonymous callers. Never
+    /// defaulted; an unknown kind fails deserialization.
+    pub principal_kind: Option<crate::PrincipalKind>,
     pub principal_subject: Option<String>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
@@ -203,6 +208,7 @@ impl IdentityContext {
     pub fn anonymous() -> Self {
         Self {
             principal: "anonymous".to_string(),
+            principal_kind: None,
             principal_subject: None,
             groups: vec!["anonymous".to_string()],
             policy_groups: vec!["anonymous".to_string()],
@@ -2976,6 +2982,7 @@ impl BrokerRuntime {
             return Ok(AdmittedIdentity {
                 identity: self.identity_from_principal_groups(
                     resolved.principal,
+                    resolved.principal_kind,
                     resolved.subject,
                     resolved.groups,
                     Some(resolved.policy_groups),
@@ -3002,6 +3009,7 @@ impl BrokerRuntime {
     pub fn identity_from_principal_groups(
         &self,
         principal: String,
+        principal_kind: Option<crate::PrincipalKind>,
         principal_subject: Option<String>,
         raw_groups: Vec<String>,
         managed_policy_groups: Option<Vec<String>>,
@@ -3019,6 +3027,7 @@ impl BrokerRuntime {
 
         IdentityContext {
             principal,
+            principal_kind,
             principal_subject,
             groups,
             policy_groups,
@@ -3631,8 +3640,10 @@ impl BrokerRuntime {
         } else {
             None
         };
+        let principal_kind = crate::managed_store::principal_kind_at_conn(conn, owner)?;
         let identity = self.identity_from_principal_groups(
             owner.to_string(),
+            principal_kind,
             Some(owner.to_string()),
             Vec::new(),
             managed_policy_groups,
@@ -3696,6 +3707,7 @@ impl BrokerRuntime {
             let source_audit = source.audit(&resolved);
             return Ok(self.identity_from_principal_groups(
                 resolved.principal,
+                resolved.principal_kind,
                 resolved.subject,
                 resolved.groups,
                 Some(resolved.policy_groups),
@@ -7638,6 +7650,7 @@ fn process_is_live(pid: u32) -> bool {
 #[derive(Debug)]
 struct ResolvedTokenIdentity {
     principal: String,
+    principal_kind: Option<crate::PrincipalKind>,
     subject: Option<String>,
     groups: Vec<String>,
     policy_groups: Vec<String>,
@@ -7720,6 +7733,7 @@ impl StaticPrincipalsSource {
         };
         SourceResolution::Resolved(ResolvedTokenIdentity {
             principal: identity.principal.clone(),
+            principal_kind: None,
             subject: Some(identity.principal.clone()),
             groups: Vec::new(),
             policy_groups: Vec::new(),
@@ -7771,6 +7785,7 @@ impl BrokerTokensSource {
         };
         Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
             principal: identity.principal_id,
+            principal_kind: identity.principal_kind,
             subject: None,
             groups: identity.groups,
             policy_groups: identity.policy_groups,

@@ -463,6 +463,7 @@ fn identity(token_scopes: Option<Value>) -> IdentityContext {
     IdentityContext {
         caller_id: None,
         principal: "avery".into(),
+        principal_kind: None,
         principal_subject: Some("avery".into()),
         groups: vec!["engineering".into(), "support".into()],
         policy_groups: vec!["engineering".into(), "support".into()],

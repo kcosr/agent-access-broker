@@ -2218,6 +2218,7 @@ impl ManagedStore {
         .map_err(sql_unavailable)?;
         Ok(BrokerTokenIdentity {
             principal_id: record.principal_id.clone(),
+            principal_kind: principal.principal_kind(),
             policy_groups: principal_policy_groups(&conn, &record.principal_id)?,
             groups: principal.groups,
             role: principal.role,
@@ -5424,6 +5425,14 @@ pub struct PrincipalRecord {
     pub created_by: String,
 }
 
+impl PrincipalRecord {
+    /// The principal's kind, which selects its credential connections'
+    /// methods; `None` for a stored value no kind names.
+    pub fn principal_kind(&self) -> Option<crate::PrincipalKind> {
+        crate::PrincipalKind::from_stored(&self.kind)
+    }
+}
+
 /// Enrollment state, independent of provider health, principal status or lockout.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -5574,6 +5583,7 @@ pub struct BrokerTokenRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerTokenIdentity {
     pub principal_id: String,
+    pub principal_kind: Option<crate::PrincipalKind>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
     pub role: PrincipalRole,
@@ -7707,6 +7717,23 @@ pub(crate) fn principal_policy_groups(
     Ok(effective_membership_at_conn(conn, principal_id, &normalized_now_string())?.policy_groups)
 }
 
+/// The stored kind of `principal_id` on `conn`; `None` for a principal the
+/// store does not hold, such as a configured static principal.
+pub(crate) fn principal_kind_at_conn(
+    conn: &Connection,
+    principal_id: &str,
+) -> Result<Option<crate::PrincipalKind>, ManagedStoreError> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM principals WHERE principal_id = ?1",
+            params![principal_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    Ok(kind.as_deref().and_then(crate::PrincipalKind::from_stored))
+}
+
 fn effective_membership_at_conn(
     conn: &Connection,
     principal_id: &str,
@@ -9303,6 +9330,7 @@ mod tests {
             )
             .unwrap();
         let resolved = store.resolve_broker_token(&hasher, &issued.token).unwrap();
+        assert_eq!(resolved.principal_kind, Some(crate::PrincipalKind::User));
         assert_eq!(resolved.groups, vec!["users".to_string()]);
         assert_eq!(resolved.policy_groups, vec!["users".to_string()]);
 
@@ -11888,13 +11916,21 @@ PRAGMA foreign_keys = ON;
                 },
             )
             .unwrap();
+        let resolved = store
+            .resolve_broker_token(&token_hasher, &agent.token)
+            .unwrap();
+        assert_eq!(resolved.principal_id, "svc-reporter");
         assert_eq!(
-            store
-                .resolve_broker_token(&token_hasher, &agent.token)
-                .unwrap()
-                .principal_id,
-            "svc-reporter"
+            resolved.principal_kind,
+            Some(crate::PrincipalKind::ServiceAccount)
         );
+        let conn = store.connection.lock().unwrap();
+        assert_eq!(
+            principal_kind_at_conn(&conn, "svc-reporter").unwrap(),
+            Some(crate::PrincipalKind::ServiceAccount)
+        );
+        assert_eq!(principal_kind_at_conn(&conn, "not-stored").unwrap(), None);
+        drop(conn);
 
         store
             .create_principal(PrincipalWriteRequest {

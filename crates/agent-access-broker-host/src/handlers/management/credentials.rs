@@ -218,8 +218,10 @@ async fn credential_owner_identity(
                 }
             };
         if let Some((record, policy_groups)) = owner {
+            let principal_kind = record.principal_kind();
             return Ok(context.snapshot.runtime.identity_from_principal_groups(
                 record.principal_id,
+                principal_kind,
                 record.external_subject,
                 record.groups,
                 Some(policy_groups),
@@ -232,6 +234,7 @@ async fn credential_owner_identity(
     }
     Ok(context.snapshot.runtime.identity_from_principal_groups(
         principal.to_string(),
+        None,
         None,
         Vec::new(),
         None,

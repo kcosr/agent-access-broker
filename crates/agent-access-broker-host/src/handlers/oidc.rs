@@ -1061,6 +1061,7 @@ pub(crate) async fn microsoft_oidc_callback(
         .collect::<BTreeSet<_>>();
     let audit_identity = IdentityContext {
         principal: result.principal.principal_id.clone(),
+        principal_kind: result.principal.principal_kind(),
         principal_subject: None,
         groups: result.membership.groups.clone(),
         policy_groups: result.membership.policy_groups.clone(),

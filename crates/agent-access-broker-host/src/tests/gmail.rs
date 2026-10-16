@@ -320,6 +320,7 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
     let identity = agent_access_core::IdentityContext {
         caller_id: None,
         principal: "alice".into(),
+        principal_kind: None,
         principal_subject: Some("alice".into()),
         policy_groups: vec![],
         authenticated: true,

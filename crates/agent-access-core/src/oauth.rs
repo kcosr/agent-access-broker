@@ -3541,6 +3541,7 @@ pub(crate) mod tests {
         test_sql(&store, "UPDATE policy_grants SET status='disabled'");
         let identity = next.identity_from_principal_groups(
             "user".into(),
+            None,
             Some("user".into()),
             Vec::new(),
             None,

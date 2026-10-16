@@ -278,8 +278,10 @@ pub(super) fn managed_principal_identity(
     principal: PrincipalRecord,
     policy_groups: Vec<String>,
 ) -> IdentityContext {
+    let principal_kind = principal.principal_kind();
     runtime.identity_from_principal_groups(
         principal.principal_id,
+        principal_kind,
         principal.external_subject,
         principal.groups,
         Some(policy_groups),
