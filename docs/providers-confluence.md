@@ -93,6 +93,96 @@ search action and verify its scope and audit record. The explicit content settin
 above enable the write formats used in this document; inspect the running catalog
 before using a mutation. Confluence page create/update require an enabled native page format.
 
+### OAuth connections
+
+People can connect their Atlassian account instead of storing a token. Give the
+connection an `oauth` registration of the [`atlassian` dialect](oauth.md#atlassian)
+for the site, beside `token_profile = "atlassian-bearer-token"` for service
+accounts or alone; Jira can use the same connection:
+
+```toml
+[providers.confluence]
+tenant_host = "example.atlassian.net"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://api.atlassian.com/ex/confluence/**",
+  "https://api.media.atlassian.com/**",
+]
+
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "atlassian"
+```
+
+- **Route.** OAuth always goes through the Atlassian gateway,
+  `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and its
+  `wiki/api/v2/` sibling, so `cloud_id` and `api.atlassian.com` are required;
+  a classic API token keeps the site route and a bearer token the gateway. A
+  connection with `oauth` cannot use `atlassian-api-token` (see the
+  [validation table](oauth.md#atlassian-registration)).
+- **Access per request.** Before every request, including the page, blog,
+  space and comment lookups before policy and at execution, list pages and
+  read-backs, Confluence revalidates the invocation's lease and pins its
+  access to the gateway route's cloud ID and the `api.atlassian.com`
+  audience. Access for another site fails as `credential_invalid` before
+  anything is sent.
+- **401.** The lookups and the execution share one recovery: when Confluence
+  answers the connection's access with 401, the Broker marks it rejected,
+  renews it once and repeats the request, writes and uploads included,
+  because the 401 applied nothing. A second 401 fails as `credential_invalid`,
+  asking the person to reconnect Atlassian. A connection that cannot be
+  refreshed fails with its own reason, such as `concurrency_limited` while
+  another refresh runs.
+- **Writes.** A connection failure before a write keeps its own reason and
+  carries no receipt; in an attachment batch, before any upload applied, the
+  batch fails with it. One that stops a read-back after Confluence accepted
+  the write, including a draft attachment's verification, reports
+  `mutation_verification_failed` with an `applied_unverified` receipt.
+- **Personal spaces.** `~key` spaces read, search and write through the
+  gateway like team spaces.
+- **Verification.** Credential verification (`user/current`) applies to
+  stored and service tokens; OAuth connections are checked by connecting them.
+
+Each action needs these Atlassian OAuth scopes. Confluence's REST API v1 calls
+use classic scopes and its v2 calls granular ones:
+
+| Actions | Scopes |
+| --- | --- |
+| `page.view`, `attachment.list`, `verify` | `read:confluence-content.all` |
+| `search`, `blog.search` | `search:confluence` |
+| `page.update` | `read:confluence-content.all`, `write:confluence-content` |
+| `page.move` | `read:confluence-content.all`, `write:confluence-content`, `read:page:confluence`, `read:space:confluence`, `read:content.metadata:confluence`, `read:hierarchical-content:confluence` |
+| `page.create`, `page.draft.create`, `page.draft.stage` | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence`, `write:page:confluence` |
+| `page.draft.view`, `blog.view`, `blog.draft.view` | `read:page:confluence`, `read:space:confluence` |
+| `page.draft.update`, `blog.update`, `blog.draft.stage`, `blog.draft.update` | `read:page:confluence`, `read:space:confluence`, `write:page:confluence` |
+| `blog.create`, `blog.draft.create` | `read:space:confluence`, `write:page:confluence` |
+| `page.draft.publish`, `blog.draft.publish` | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence`, `read:attachment:confluence`, `write:page:confluence` |
+| `page.draft.discard` | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence`, `delete:page:confluence` |
+| `blog.draft.discard` | `read:page:confluence`, `read:space:confluence`, `delete:page:confluence` |
+| `page.draft.verify`, `page.draft.attachment.list`, `blog.draft.verify`, `blog.draft.attachment.list`, `blog.attachment.list` | `read:page:confluence`, `read:space:confluence`, `read:attachment:confluence` |
+| `page.draft.attachment.add`, `blog.draft.attachment.add` | `read:page:confluence`, `read:space:confluence`, `read:attachment:confluence`, `write:confluence-file` |
+| `page.draft.attachment.download`, `blog.draft.attachment.download` | `read:page:confluence`, `read:space:confluence`, `read:attachment:confluence`, `readonly:content.attachment:confluence` |
+| `attachment.add` | `read:confluence-content.all`, `write:confluence-file` |
+| `attachment.download` | `read:confluence-content.all`, `readonly:content.attachment:confluence` |
+| `blog.attachment.add` | `read:page:confluence`, `read:space:confluence`, `write:confluence-file` |
+| `blog.attachment.download` | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence`, `readonly:content.attachment:confluence` |
+| `blog.verify` | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence` |
+| `page.*_comment.list`, `.view` and `.reply.list`, and the `blog.*` equivalents | `read:comment:confluence` and the container's reads |
+| `page.footer_comment.add`, `blog.footer_comment.add` | `write:comment:confluence` and the container's reads |
+| `*_comment.reply.add`, `*_comment.update` on pages and blogs | `read:comment:confluence`, `write:comment:confluence` and the container's reads |
+| `*_comment.delete` on pages and blogs | `read:comment:confluence`, `delete:comment:confluence` and the container's reads |
+
+A comment's container reads are `read:confluence-content.all` for a page and
+`read:page:confluence` with `read:space:confluence` for a blog post.
+`read:confluence-user` serves only token verification and is not needed. The
+registration also requests `read:me` and `offline_access`; see
+[Atlassian scopes](oauth.md#atlassian-scopes).
+
 ### Personal spaces
 
 A personal space uses the same `confluence_space` resource type as a team space.
@@ -653,8 +743,7 @@ are bound to the credential method that reaches Confluence and:
 - for a stored or service token, its type, which chooses the tenant or gateway
   route. The token value is not bound, so replacing a stored token with another
   of the same type keeps them;
-- for delegated (OAuth) access, which Confluence does not yet accept, the OAuth
-  connection and its generation, never the current access token: a routine
+- for delegated (OAuth) access, the OAuth connection and its generation, never the current access token: a routine
   refresh keeps them, while disconnecting and reconnecting or connecting
   another Atlassian account invalidates them;
 - for a route through the Atlassian gateway (a bearer token or OAuth), the

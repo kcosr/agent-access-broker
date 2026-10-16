@@ -2243,8 +2243,8 @@ pub(crate) mod tests {
     /// The sample registration of each dialect the Broker binary selects,
     /// as `agent-access-broker.sample.toml` documents it, keeps its pinned
     /// fingerprint: the one it had before registrations could set
-    /// `login_binding`, or, for the later `atlassian` dialect, the one it
-    /// had when added. A changed digest would discard every stored
+    /// `login_binding`, or, for the later `atlassian` dialect, the one of
+    /// its scopes from the Jira and Confluence action inventory. A changed digest would discard every stored
     /// connection at activation.
     #[test]
     fn sample_registration_fingerprints_survive_added_registration_keys() {
@@ -2276,13 +2276,18 @@ pub(crate) mod tests {
                 encoding = "json"
                 rotation = "rotate_refresh"
                 [permission_profiles.default]
-                scopes = ["read:me", "offline_access", "read:jira-work", "write:jira-work", "read:jira-user",
-                          "search:confluence", "read:confluence-content.all", "read:confluence-space.summary",
-                          "write:confluence-content"]
+                scopes = ["read:me", "offline_access",
+                          "read:jira-work", "write:jira-work",
+                          "read:confluence-content.all", "write:confluence-content", "search:confluence",
+                          "write:confluence-file", "readonly:content.attachment:confluence",
+                          "read:page:confluence", "write:page:confluence", "delete:page:confluence",
+                          "read:space:confluence", "read:content.metadata:confluence",
+                          "read:hierarchical-content:confluence", "read:attachment:confluence",
+                          "read:comment:confluence", "write:comment:confluence", "delete:comment:confluence"]
                 audience = "api.atlassian.com"
                 target = "00000000-0000-0000-0000-000000000000"
                 "#,
-                "9d6de326c68a10c087953147cf69bebd0f43a51b3b8cc03d82e1ffba23aaf049",
+                "6f3b20126b489c8341cb8caee507747b1eaca856dbc189b38858e490184557a6",
             ),
             (
                 r#"

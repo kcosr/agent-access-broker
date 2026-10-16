@@ -1003,7 +1003,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn page_metadata(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1011,7 +1011,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn page(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1019,7 +1019,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn search(
         &self,
         request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: self.page(request),
@@ -1031,7 +1031,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn search_blogs(
         &self,
         request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchBlog>, ConfluenceBackendError> {
         let page = self.page(request);
         let blog = blog();
@@ -1061,7 +1061,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1069,7 +1069,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1078,7 +1078,7 @@ impl ConfluenceBackend for SearchBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1086,7 +1086,7 @@ impl ConfluenceBackend for SearchBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::NotFound)
     }
@@ -1095,7 +1095,7 @@ impl ConfluenceBackend for SearchBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::NotFound)

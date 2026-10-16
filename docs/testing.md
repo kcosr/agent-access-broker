@@ -1905,7 +1905,21 @@ granted scopes); identity mapping; token-response bounds and error
 classification, including Atlassian's 403 `invalid_grant`; and site discovery,
 which merges a site's product entries, adds `read:me` only when granted, keeps
 extra scopes and reports grants for other sites. It also checks every row of
-the Atlassian gateway validation table with and without service credentials.
+the Atlassian gateway validation table with and without service credentials,
+and the credential Jira and Confluence present: static tokens as before,
+delegated access pinned to the gateway route's cloud ID and audience, one
+recovery per operation, a second 401 as `credential_invalid`, and
+`mutation_verification_failed` receipts for read-backs the connection stopped.
+
+`cargo test -p agent-access-jira --lib access_tests` and
+`cargo test -p agent-access-confluence --lib access_tests` run each provider
+with delegated doubles against a stub serving both routes: OAuth through the
+gateway on the configured site and refused for another site, static tokens
+routed by kind, one recovery across the lookups and execution, a second 401 as
+`credential_invalid` with reconnect, read-back failures after an accepted write
+reported applied but unverified and failures before it passed through
+unchanged, and, for Jira, uploads and downloads repeated once after a 401; for
+Confluence, a personal-space (`~key`) page read and search through the gateway.
 
 The Broker host's `tests::oauth::atlassian_dialect` drives browser consent and
 a delegated lease through the OAuth manager with a test consumer that acts

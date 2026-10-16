@@ -3,8 +3,8 @@ use agent_access_provider::test_support::{basic_credential, bearer_credential};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn credential() -> ExecutionCredential {
-    basic_credential("service@example.com", "token")
+fn credential() -> AtlassianCredential {
+    AtlassianCredential::from_static(basic_credential("service@example.com", "token"))
 }
 
 fn backend(api: &MockServer, limits: ProviderLimits) -> HttpJiraBackend {
@@ -61,7 +61,10 @@ async fn issue_types_uses_selected_auth_and_gateway_and_requests_one_page() {
             .mount(&api)
             .await;
     }
-    for credential in [credential(), bearer_credential("selected-token")] {
+    for credential in [
+        credential(),
+        AtlassianCredential::from_static(bearer_credential("selected-token")),
+    ] {
         let result = backend
             .issue_types("PROJ", request(2, 2), &credential)
             .await

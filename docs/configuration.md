@@ -524,9 +524,11 @@ Validation rules:
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
   Today these consumers are `gmail`, GitLab REST (`gitlab`), Git gateways
-  whose `credential_modes` include `per_user`, and the development
-  `oauth_stub` service; see [oauth.md](oauth.md) and
-  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections).
+  whose `credential_modes` include `per_user`, `jira`, `confluence`, and the
+  development `oauth_stub` service; see [oauth.md](oauth.md),
+  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections) and
+  [Jira](providers-jira.md#oauth-connections) and
+  [Confluence](providers-confluence.md#oauth-connections) OAuth connections.
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or

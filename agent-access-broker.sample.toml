@@ -391,9 +391,14 @@ read_only = true
 # rotation = "rotate_refresh"
 #
 # [oauth.registrations.atlassian.permission_profiles.default]
-# scopes = ["read:me", "offline_access", "read:jira-work", "write:jira-work", "read:jira-user",
-#           "search:confluence", "read:confluence-content.all", "read:confluence-space.summary",
-#           "write:confluence-content"]
+# scopes = ["read:me", "offline_access",
+#           "read:jira-work", "write:jira-work",
+#           "read:confluence-content.all", "write:confluence-content", "search:confluence",
+#           "write:confluence-file", "readonly:content.attachment:confluence",
+#           "read:page:confluence", "write:page:confluence", "delete:page:confluence",
+#           "read:space:confluence", "read:content.metadata:confluence",
+#           "read:hierarchical-content:confluence", "read:attachment:confluence",
+#           "read:comment:confluence", "write:comment:confluence", "delete:comment:confluence"]
 # audience = "api.atlassian.com"
 # target = "00000000-0000-0000-0000-000000000000"
 #

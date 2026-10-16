@@ -17,7 +17,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "search is not used by normalized read tests".to_string(),
@@ -27,7 +27,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page creation is not used by normalized read tests".to_string(),
@@ -37,7 +37,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page updates are not used by normalized read tests".to_string(),
@@ -48,7 +48,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attachment upload is not used by normalized read tests".to_string(),
@@ -58,7 +58,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attachment listing is not used by normalized read tests".to_string(),
@@ -69,7 +69,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -80,7 +80,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("page_metadata");
         if page_id != self.page.id {
@@ -96,7 +96,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn page(
         &self,
         page_id: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("page");
         if page_id != self.page.id {
@@ -114,7 +114,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         kind: ConfluenceCommentKind,
         comment_id: &str,
         _body_format: Option<&str>,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comment");
         let comment = self
@@ -133,7 +133,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
     async fn comments_page(
         &self,
         request: ConfluenceCommentListRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comments_page");
         let comments = self
@@ -171,7 +171,7 @@ impl ConfluenceBackend for NormalizedReadBackend {
         _body_format: Option<&str>,
         max_results: u32,
         _cursor: Option<&str>,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_confluence::AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.calls.lock().unwrap().push("comment_replies_page");
         let comments = self

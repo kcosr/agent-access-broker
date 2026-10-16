@@ -716,15 +716,6 @@ fn sorted(errors: impl IntoIterator<Item = String>) -> Vec<String> {
     errors
 }
 
-/// The core rejection of an OAuth connection whose consumer does not yet
-/// declare delegated credentials. Jira and Confluence declare them in the
-/// `atlassian-providers` lane, which removes these expectations.
-fn not_yet_delegated(connection: &str, service: &str) -> String {
-    format!(
-        "credentials.connections.{connection}.oauth requires every consumer to accept delegated credentials, which {service} does not"
-    )
-}
-
 /// A per-product connection consumed by its own product.
 fn product_connections(
     token_profile: Option<&str>,
@@ -760,9 +751,8 @@ fn shared_connection(token_profile: Option<&str>, oauth: bool) -> String {
 
 /// Every row of the Atlassian connection table, including simultaneous
 /// bearer service credentials, through offline validation of full
-/// configurations. Until Jira and Confluence declare delegated credentials,
-/// the OAuth rows also report that they do not (see [`not_yet_delegated`]);
-/// no other error remains for a supported row.
+/// configurations: supported rows validate, and rejected rows report only
+/// their own errors.
 #[test]
 fn atlassian_oauth_connections_follow_the_validation_table() {
     let none: Vec<String> = Vec::new();
@@ -780,18 +770,6 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
         format!(
             "credentials.connections.{connection}.oauth: {service} does not act on the upstream registration atlassian grants access to: it acts on https://example.atlassian.net (tenant {CLOUD_ID}) without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
         )
-    };
-    let shared_pending = || {
-        [
-            not_yet_delegated("atlassian", "jira"),
-            not_yet_delegated("atlassian", "confluence"),
-        ]
-    };
-    let product_pending = || {
-        [
-            not_yet_delegated("jira", "jira"),
-            not_yet_delegated("confluence", "confluence"),
-        ]
     };
 
     // Token only, atlassian-api-token, gateway off: the site route.
@@ -828,7 +806,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
                 connections: &shared_connection(None, true),
                 ..Deployment::default()
             })),
-            sorted(shared_pending()),
+            none,
             "{service:?}"
         );
     }
@@ -839,16 +817,12 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             connections: &shared_connection(None, true),
             ..Deployment::default()
         })),
-        sorted(
-            [
-                oauth_needs_gateway("jira"),
-                oauth_needs_gateway("confluence"),
-                site_route("atlassian", "jira"),
-                site_route("atlassian", "confluence"),
-            ]
-            .into_iter()
-            .chain(shared_pending())
-        )
+        sorted([
+            oauth_needs_gateway("jira"),
+            oauth_needs_gateway("confluence"),
+            site_route("atlassian", "jira"),
+            site_route("atlassian", "confluence"),
+        ])
     );
     // atlassian-bearer-token and OAuth on per-product connections sharing
     // one registration, with simultaneous bearer service credentials:
@@ -862,7 +836,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             }),
             ..Deployment::default()
         })),
-        sorted(product_pending())
+        none
     );
     // atlassian-api-token and OAuth is rejected, with the gateway on or off.
     assert_eq!(
@@ -871,11 +845,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             connections: &shared_connection(Some("atlassian-api-token"), true),
             ..Deployment::default()
         })),
-        sorted(
-            [basic_with_oauth("jira"), basic_with_oauth("confluence")]
-                .into_iter()
-                .chain(shared_pending())
-        )
+        sorted([basic_with_oauth("jira"), basic_with_oauth("confluence")])
     );
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
@@ -884,18 +854,14 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             connections: &shared_connection(Some("atlassian-api-token"), true),
             ..Deployment::default()
         })),
-        sorted(
-            [
-                basic_with_oauth("jira"),
-                basic_with_oauth("confluence"),
-                oauth_needs_gateway("jira"),
-                oauth_needs_gateway("confluence"),
-                site_route("atlassian", "jira"),
-                site_route("atlassian", "confluence"),
-            ]
-            .into_iter()
-            .chain(shared_pending())
-        )
+        sorted([
+            basic_with_oauth("jira"),
+            basic_with_oauth("confluence"),
+            oauth_needs_gateway("jira"),
+            oauth_needs_gateway("confluence"),
+            site_route("atlassian", "jira"),
+            site_route("atlassian", "confluence"),
+        ])
     );
 }
 
@@ -933,13 +899,7 @@ fn per_product_registrations_validate_for_single_product_deployments() {
             &scopes(&CONFLUENCE_SCOPES)
         ),
     );
-    assert_eq!(
-        validation_errors(&raw),
-        sorted([
-            not_yet_delegated("jira", "jira"),
-            not_yet_delegated("confluence", "confluence"),
-        ])
-    );
+    assert_eq!(validation_errors(&raw), Vec::<String>::new());
 }
 
 #[test]
@@ -949,10 +909,6 @@ fn atlassian_registration_and_site_mismatches_fail_offline_validation() {
             "credentials.connections.atlassian.oauth: {service} does not act on the upstream registration atlassian grants access to: it acts through the Atlassian gateway on cloud ID {CLOUD_ID}, not cloud ID {OTHER_CLOUD_ID}"
         )
     };
-    let pending = [
-        not_yet_delegated("atlassian", "jira"),
-        not_yet_delegated("atlassian", "confluence"),
-    ];
     // The registration targets another site than Jira and Confluence use.
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
@@ -960,11 +916,7 @@ fn atlassian_registration_and_site_mismatches_fail_offline_validation() {
             target: OTHER_CLOUD_ID,
             ..Deployment::default()
         })),
-        sorted(
-            [elsewhere("jira"), elsewhere("confluence")]
-                .into_iter()
-                .chain(pending.clone())
-        )
+        sorted([elsewhere("jira"), elsewhere("confluence")])
     );
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
@@ -972,12 +924,8 @@ fn atlassian_registration_and_site_mismatches_fail_offline_validation() {
             rotation: "rotate_both",
             ..Deployment::default()
         })),
-        sorted(
-            [
-                "oauth.registrations.atlassian is not a valid atlassian registration: Atlassian requires rotation = \"rotate_refresh\": every refresh replaces the refresh token".to_owned()
-            ]
-            .into_iter()
-            .chain(pending)
-        )
+        [
+            "oauth.registrations.atlassian is not a valid atlassian registration: Atlassian requires rotation = \"rotate_refresh\": every refresh replaces the refresh token".to_owned()
+        ]
     );
 }

@@ -70,7 +70,7 @@ connection still needs its own grant. Service-mode actions use the configured
 shared identity and may not require a personal credential. Teams destination
 URLs are managed by administrators.
 
-For Gmail, GitLab and other supported OAuth-backed services, your administrator enables
+For Gmail, GitLab, Jira, Confluence and other supported OAuth-backed services, your administrator enables
 self-service, configures the connection's OAuth registration, and grants you or
 one of your current groups an active `per_user` action grant on a service that
 uses it. No separate

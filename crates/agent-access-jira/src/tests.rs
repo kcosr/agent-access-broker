@@ -442,13 +442,16 @@ struct CredentialObservation {
 }
 
 impl StubJiraBackend {
-    fn record_credential(&self, operation: &str, credential: &ExecutionCredential) {
+    fn record_credential(&self, operation: &str, credential: &AtlassianCredential) {
         self.credential_observations
             .lock()
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential: credential.clone(),
+                credential: credential
+                    .static_credential()
+                    .expect("the stub backend receives static tokens")
+                    .clone(),
             });
     }
 }
@@ -459,7 +462,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         project: &str,
         request: JiraIssueTypeListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueTypePage>, JiraBackendError> {
         self.record_credential("issue_types", credential);
         self.issue_type_requests
@@ -480,7 +483,7 @@ impl JiraBackend for StubJiraBackend {
 
     async fn current_user(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         self.record_credential("current_user", credential);
         Ok(JiraBackendResponse {
@@ -493,7 +496,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_metadata(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, JiraBackendError> {
         self.record_credential("issue_metadata", credential);
         let issue = self
@@ -515,7 +518,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError> {
         self.record_credential("issue", credential);
         if let Some(error) = self.issue_errors.lock().unwrap().get(issue_key).cloned() {
@@ -542,7 +545,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue(
         &self,
         request: JiraIssueCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCreatedIssue>, JiraBackendError> {
         self.record_credential("create_issue", credential);
         self.created_issues.lock().unwrap().push(request);
@@ -568,7 +571,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("update_issue", credential);
         if let Some(error) = self.issue_update_error.lock().unwrap().clone() {
@@ -589,7 +592,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueParentSetRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_issue_parent", credential);
         if let Some(error) = self.issue_parent_update_error.lock().unwrap().clone() {
@@ -609,7 +612,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_parent(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueParentReadback>, JiraBackendError> {
         self.record_credential("issue_parent", credential);
         if let Some(error) = self.issue_parent_error.lock().unwrap().clone() {
@@ -630,7 +633,7 @@ impl JiraBackend for StubJiraBackend {
 
     async fn issue_link_types(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraIssueLinkType>>, JiraBackendError> {
         self.record_credential("issue_link_types", credential);
         Ok(JiraBackendResponse {
@@ -643,7 +646,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue_link(
         &self,
         request: JiraIssueLinkCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("create_issue_link", credential);
         self.created_issue_links.lock().unwrap().push(request);
@@ -657,7 +660,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_links(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueLinks>, JiraBackendError> {
         self.record_credential("issue_links", credential);
         if let Some(error) = self.issue_links_error.lock().unwrap().clone() {
@@ -679,7 +682,7 @@ impl JiraBackend for StubJiraBackend {
     async fn search(
         &self,
         request: JiraSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraSearchPage>, JiraBackendError> {
         self.record_credential("search", credential);
         *self.last_search.lock().unwrap() = Some(request);
@@ -694,7 +697,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraCommentListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.record_credential("comments", credential);
         *self.last_comment_list.lock().unwrap() = Some(request.clone());
@@ -746,7 +749,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         request: JiraCommentAddRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("add_comment", credential);
         self.added_comments.lock().unwrap().push(request.clone());
@@ -777,7 +780,7 @@ impl JiraBackend for StubJiraBackend {
         _issue_key: &str,
         comment_id: &str,
         request: JiraCommentUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("update_comment", credential);
         self.updated_comments
@@ -804,7 +807,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment", credential);
         self.deleted_comments
@@ -822,7 +825,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         attachment: JiraAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, JiraBackendError> {
         self.record_credential("add_attachment", credential);
         let mut uploaded = self.uploaded_attachments.lock().unwrap();
@@ -862,7 +865,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_metadata(
         &self,
         _issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraAttachment>>, JiraBackendError> {
         self.record_credential("issue_attachment_metadata", credential);
         Ok(JiraBackendResponse {
@@ -875,7 +878,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_list(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueAttachmentList>, JiraBackendError> {
         self.record_credential("issue_attachment_list", credential);
         let issue = if let Some(issue) = self.attachment_list_issue.lock().unwrap().clone() {
@@ -905,7 +908,7 @@ impl JiraBackend for StubJiraBackend {
     async fn attachment_content(
         &self,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachmentContent>, JiraBackendError> {
         self.record_credential("attachment_content", credential);
         Ok(JiraBackendResponse {
@@ -925,7 +928,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("comment", credential);
         if let Some(error) = self.comment_error.lock().unwrap().clone() {
@@ -957,7 +960,7 @@ impl JiraBackend for StubJiraBackend {
     async fn comment_property_keys(
         &self,
         _comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPropertyKeys>, JiraBackendError> {
         self.record_credential("comment_property_keys", credential);
         Ok(JiraBackendResponse {
@@ -973,7 +976,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         self.record_credential("comment_property", credential);
         Ok(JiraBackendResponse {
@@ -994,7 +997,7 @@ impl JiraBackend for StubJiraBackend {
         _comment_id: &str,
         property_key: &str,
         value: Value,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_comment_property", credential);
         self.set_properties
@@ -1012,7 +1015,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment_property", credential);
         self.deleted_properties
@@ -1814,7 +1817,7 @@ async fn issue_child_create_capability_and_scope_resolution_use_lookup_metadata(
                 "summary": "Child issue",
                 "parentIssue": "OLD-100"
             }),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap();
@@ -2559,7 +2562,7 @@ async fn issue_update_capability_and_scope_resolution_use_lookup_metadata() {
         .lookup_scopes(
             "issue.update",
             &json!({"issue": "OLD-1", "summary": "Updated summary"}),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap();
@@ -2602,7 +2605,7 @@ async fn issue_dependency_add_capability_and_scope_resolution_use_lookup_metadat
                 "blockingIssue": "OLD-101",
                 "blockedUrl": "https://example.atlassian.net/browse/OPS-8"
             }),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap();
@@ -2789,7 +2792,7 @@ async fn issue_dependency_add_rejects_same_canonical_issue_after_lookup() {
         .lookup_scopes(
             "issue.dependency.add",
             &json!({"blockingIssue": "OLD-1", "blockedIssue": "PROJ-1"}),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap_err();
@@ -3033,7 +3036,7 @@ async fn issue_parent_set_capability_and_scope_resolution_use_lookup_metadata() 
                 "issue": "OLD-102",
                 "parentUrl": "https://example.atlassian.net/browse/OPS-100"
             }),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap();
@@ -3217,7 +3220,7 @@ async fn issue_parent_set_rejects_same_canonical_issue_after_lookup() {
         .lookup_scopes(
             "issue.parent.set",
             &json!({"issue": "OLD-1", "parentIssue": "PROJ-1"}),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap_err();
@@ -3876,7 +3879,7 @@ async fn attachment_list_scope_resolution_uses_authoritative_current_project() {
         .lookup_scopes(
             "attachment.list",
             &json!({"issue": "PROJ-1"}),
-            Some(&test_lookup_credential()),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
         .unwrap();
@@ -6916,7 +6919,10 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
         );
 
         let backend_error = backend
-            .issue("PROJ-1", &test_credential())
+            .issue(
+                "PROJ-1",
+                &AtlassianCredential::from_static(test_credential()),
+            )
             .await
             .unwrap_err();
         let JiraBackendError::RateLimited(wait) = &backend_error else {
@@ -7222,7 +7228,8 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
 /// Jira declares the vendor-level Atlassian profiles Confluence declares:
 /// the classic API token on every site, reaching the site route, and the
 /// service-account bearer token only when the site uses the gateway,
-/// reaching it.
+/// reaching it. It accepts delegated (OAuth) access on every site; validation
+/// requires the gateway for it.
 #[test]
 fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
     let mut config = jira_config();
@@ -7231,6 +7238,7 @@ fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
         site.credentials,
         agent_access_provider::CredentialDescriptor::default()
             .profile("atlassian-api-token", "basic_api_token")
+            .delegated(JIRA_OAUTH_CONNECTION)
     );
     let cloud_id = "11111111-1111-1111-1111-111111111111";
     config.cloud_id = Some(cloud_id.to_string());
@@ -7257,7 +7265,10 @@ fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
             "{profile}"
         );
         assert_eq!(
-            backend.api_base(&credential).unwrap().as_str(),
+            backend
+                .api_base(&AtlassianCredential::from_static(credential.clone()))
+                .unwrap()
+                .as_str(),
             base,
             "{profile}"
         );
@@ -7282,12 +7293,17 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     let backend = HttpJiraBackend::for_tests(config, ProviderLimits::default());
 
     assert_eq!(
-        backend.api_base(&test_credential()).unwrap().as_str(),
+        backend
+            .api_base(&AtlassianCredential::from_static(test_credential()))
+            .unwrap()
+            .as_str(),
         "https://example.atlassian.net/rest/api/3/"
     );
     assert_eq!(
         backend
-            .api_base(&bearer_credential("token"))
+            .api_base(&AtlassianCredential::from_static(bearer_credential(
+                "token"
+            )))
             .unwrap()
             .as_str(),
         "https://api.atlassian.com/ex/jira/11111111-1111-1111-1111-111111111111/rest/api/3/"
@@ -7346,7 +7362,10 @@ async fn http_backend_issue_metadata_requests_project_only_without_body() {
     );
 
     let response = backend
-        .issue_metadata("PROJ-1", &test_credential())
+        .issue_metadata(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap();
 
@@ -7403,7 +7422,7 @@ async fn http_backend_search_requests_bounded_output_fields() {
                 max_results: 1,
                 next_page_token: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         ),
     )
     .await
@@ -7474,7 +7493,7 @@ async fn http_backend_issue_update_sends_controlled_fields_and_optional_notify_q
                 description: Some(adf_text("description secret")),
                 notify_users: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7486,7 +7505,7 @@ async fn http_backend_issue_update_sends_controlled_fields_and_optional_notify_q
                 description: None,
                 notify_users: Some(true),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7498,7 +7517,7 @@ async fn http_backend_issue_update_sends_controlled_fields_and_optional_notify_q
                 description: Some(adf_text("quiet description")),
                 notify_users: Some(false),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7591,12 +7610,15 @@ async fn http_backend_issue_parent_set_uses_parent_field_and_readback_route() {
             JiraIssueParentSetRequest {
                 parent_issue: "PROJ-100".to_string(),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
     let readback = backend
-        .issue_parent("PROJ-2", &test_credential())
+        .issue_parent(
+            "PROJ-2",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap();
 
@@ -7733,7 +7755,10 @@ async fn http_backend_issue_dependency_uses_link_type_create_and_readback_routes
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
-    let link_types = backend.issue_link_types(&test_credential()).await.unwrap();
+    let link_types = backend
+        .issue_link_types(&AtlassianCredential::from_static(test_credential()))
+        .await
+        .unwrap();
     assert_eq!(link_types.value, vec![blocks_link_type()]);
     backend
         .create_issue_link(
@@ -7742,12 +7767,15 @@ async fn http_backend_issue_dependency_uses_link_type_create_and_readback_routes
                 outward_issue: "PROJ-1".to_string(),
                 inward_issue: "PROJ-2".to_string(),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
     let readback = backend
-        .issue_links("PROJ-1", &test_credential())
+        .issue_links(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap();
     assert_eq!(readback.value.issue.key, "PROJ-1");
@@ -7814,7 +7842,7 @@ async fn http_backend_issue_create_sends_controlled_fields_without_query() {
                 parent_issue: None,
                 description: Some(adf_text("description secret")),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7827,7 +7855,7 @@ async fn http_backend_issue_create_sends_controlled_fields_without_query() {
                 parent_issue: None,
                 description: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7840,7 +7868,7 @@ async fn http_backend_issue_create_sends_controlled_fields_without_query() {
                 parent_issue: Some("PROJ-1".to_string()),
                 description: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -7935,7 +7963,7 @@ async fn http_backend_issue_create_rejects_non_201_success_status() {
                 parent_issue: None,
                 description: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -7977,7 +8005,7 @@ async fn http_backend_issue_create_ignores_ambiguous_error_messages() {
                 parent_issue: None,
                 description: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8019,7 +8047,7 @@ async fn http_backend_issue_create_exposes_structured_body_validation() {
                 parent_issue: None,
                 description: Some(adf_text("malformed")),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8064,7 +8092,10 @@ async fn http_backend_lookup_does_not_expose_structured_validation_body() {
     );
 
     let backend_error = backend
-        .issue("PROJ-1", &test_credential())
+        .issue(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap_err();
     assert_eq!(backend_error, JiraBackendError::HttpStatus(400));
@@ -8102,7 +8133,7 @@ async fn http_backend_mutation_ignores_non_json_validation_body() {
                 description: Some(adf_text("malformed")),
                 notify_users: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8139,7 +8170,7 @@ async fn http_backend_issue_create_invalid_201_carries_partial_created_issue() {
                 parent_issue: None,
                 description: None,
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8180,7 +8211,7 @@ async fn http_backend_issue_update_permission_failure_is_sanitized() {
                 description: None,
                 notify_users: Some(false),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8223,7 +8254,10 @@ async fn http_backend_attachment_list_requests_project_and_attachment_fields() {
     );
 
     let response = backend
-        .issue_attachment_list("PROJ-1", &test_credential())
+        .issue_attachment_list(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap();
 
@@ -8286,7 +8320,7 @@ async fn http_backend_streams_jira_attachment_upload_from_file() {
                 ))),
                 sha256: sha256_hex(bytes),
             },
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap();
@@ -8355,7 +8389,10 @@ async fn credential_verification_current_user_url_must_be_allowlisted() {
         Url::parse(&format!("{}/rest/api/3/", api.uri())).unwrap(),
     );
 
-    let error = backend.current_user(&test_credential()).await.unwrap_err();
+    let error = backend
+        .current_user(&AtlassianCredential::from_static(test_credential()))
+        .await
+        .unwrap_err();
 
     assert!(
         matches!(error, JiraBackendError::Protocol(message) if message.contains("not allowlisted"))
@@ -8395,7 +8432,7 @@ async fn attachment_content_redirects_are_allowlisted_and_strip_cross_origin_cre
         crate::CorrelationContext::for_tests(),
         backend.attachment_content_response(
             Url::parse(&format!("{}/redirect", api.uri())).unwrap(),
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         ),
     )
     .await
@@ -8454,7 +8491,7 @@ async fn attachment_content_redirects_are_allowlisted_and_strip_cross_origin_cre
     let error = backend
         .attachment_content_response(
             Url::parse(&format!("{}/redirect", denied_api.uri())).unwrap(),
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8481,7 +8518,7 @@ async fn attachment_content_redirect_limit_is_enforced() {
     let error = backend
         .attachment_content_response(
             Url::parse(&format!("{}/loop", api.uri())).unwrap(),
-            &test_credential(),
+            &AtlassianCredential::from_static(test_credential()),
         )
         .await
         .unwrap_err();
@@ -8504,7 +8541,7 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         Url::parse("https://example.atlassian.net/rest/api/3/").unwrap(),
     );
 
-    let audit = backend.egress_proxy_for_test(&test_credential());
+    let audit = backend.egress_proxy_for_test(&AtlassianCredential::from_static(test_credential()));
     assert_eq!(audit["mode"], json!("service"));
     assert_eq!(audit["proxy"], json!("http://jira-proxy.example:8080"));
 }
@@ -8536,7 +8573,10 @@ async fn http_backend_issue_rejects_non_object_description_without_leaking_conte
     );
 
     let error = backend
-        .issue("PROJ-1", &test_credential())
+        .issue(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap_err();
     let provider_error = jira_backend_error(error);
@@ -8572,7 +8612,13 @@ async fn http_backend_routes_issue_requests_through_selected_proxy() {
         Url::parse(&format!("{}/rest/api/3/", upstream.uri())).unwrap(),
     );
 
-    let response = backend.issue("PROJ-1", &test_credential()).await.unwrap();
+    let response = backend
+        .issue(
+            "PROJ-1",
+            &AtlassianCredential::from_static(test_credential()),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(response.value.summary.as_deref(), Some("via proxy"));
     let request = request_rx.await.unwrap();
@@ -8607,7 +8653,10 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
     );
 
     let response = backend
-        .attachment_content("10055", &test_credential())
+        .attachment_content(
+            "10055",
+            &AtlassianCredential::from_static(test_credential()),
+        )
         .await
         .unwrap();
     let bytes = stream_bytes(response.value.stream).await;
@@ -9356,7 +9405,7 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
                         bytes: b"evidence".to_vec(),
                         temp_file: None,
                     },
-                    &test_credential(),
+                    &AtlassianCredential::from_static(test_credential()),
                 ),
             ),
         ))
@@ -9373,73 +9422,4 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     assert_eq!(events[0]["http.statusCode"], 200);
     assert_eq!(events[0]["reasonCode"], "upstream_timeout");
     server.abort();
-}
-
-/// A delegated lease that no Jira path may use.
-struct UnusedLease;
-
-#[async_trait::async_trait]
-impl DelegatedLease for UnusedLease {
-    fn access(&self) -> DelegatedAccess {
-        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
-    }
-    fn binding_identity(&self) -> DelegatedBindingId {
-        agent_access_provider::test_support::delegated_binding_id("unused")
-    }
-    async fn revalidate(&self) -> Result<(), ProviderError> {
-        panic!("Jira must not revalidate delegated lookup access");
-    }
-    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
-        panic!("Jira must not mark delegated lookup access rejected");
-    }
-    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
-        panic!("Jira must not recover delegated lookup access");
-    }
-}
-
-/// Jira accepts no delegated credentials, so delegated lookup access fails
-/// closed in scope resolution and at execution, before any upstream call,
-/// instead of standing in for a static credential.
-#[tokio::test]
-async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
-    let mut backend = StubJiraBackend::default();
-    backend.issues.insert("PROJ-1".to_string(), visible_issue());
-    let backend = Arc::new(backend);
-    let provider =
-        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
-    let inputs = json!({"issue": "PROJ-1"});
-    let assert_unsupported = |error: ProviderError| {
-        assert_eq!(error.decision(), Decision::Deny);
-        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
-        assert_eq!(
-            error.message,
-            "Jira lookups do not accept delegated credentials"
-        );
-    };
-
-    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
-        "jira",
-        "issue.view",
-        inputs.clone(),
-    )
-    .delegated_lookup(delegated.clone());
-    assert_unsupported(
-        provider
-            .resolve_scopes(fixture.request())
-            .await
-            .unwrap_err(),
-    );
-
-    let invocation = InvocationBuilder::new("jira", "issue.view")
-        .inputs(inputs)
-        .resources(BTreeMap::from([(
-            "project".to_string(),
-            vec!["PROJ".to_string()],
-        )]))
-        .credential(test_credential())
-        .delegated_lookup(delegated)
-        .build();
-    assert_unsupported(provider.invoke(invocation).await.unwrap_err());
-    assert_credential_observations(&backend, &[]);
 }

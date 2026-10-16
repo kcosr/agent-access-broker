@@ -1,17 +1,19 @@
 //! The Confluence backend seam, its wire types, request bodies, and the HTTP implementation.
 use super::*;
-use agent_access_atlassian::{AtlassianClients, AtlassianProduct, AtlassianRoutes};
+use agent_access_atlassian::{
+    AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianProduct, AtlassianRoutes,
+};
 use agent_access_provider::host::UpstreamClientFactory;
 
 #[async_trait]
 pub trait ConfluenceBackend: Send + Sync {
-    fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, _credential: &AtlassianCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
         &self,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Value>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence current-user verification is not supported by this backend".to_string(),
@@ -21,13 +23,13 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn page_metadata(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError>;
 
     async fn space_by_key(
         &self,
         _space: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence space key lookup is not supported by this backend".to_string(),
@@ -37,7 +39,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn space_by_id(
         &self,
         _space_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence space id lookup is not supported by this backend".to_string(),
@@ -47,7 +49,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn blog_metadata(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog metadata is not supported by this backend".to_string(),
@@ -57,7 +59,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn blog_scope_evidence(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
     {
         let response = self.blog_metadata(blog_id, credential).await?;
@@ -75,7 +77,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn blog(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog view is not supported by this backend".to_string(),
@@ -85,14 +87,14 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError>;
 
     async fn page_hierarchy(
         &self,
         _page_id: &str,
         _get_draft: bool,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page hierarchy lookup is not supported by this backend".to_string(),
@@ -102,7 +104,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn page_ancestors(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -113,7 +115,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn page_direct_children(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageChild>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence direct-child lookup is not supported by this backend".to_string(),
@@ -125,7 +127,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _page_id: &str,
         _position: ConfluencePageMovePosition,
         _target_page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<String>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page move is not supported by this backend".to_string(),
@@ -135,13 +137,13 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn search(
         &self,
         request: ConfluenceSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError>;
 
     async fn search_blogs(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchBlog>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog search is not supported by this backend".to_string(),
@@ -151,19 +153,19 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError>;
 
     async fn update_page(
         &self,
         request: ConfluencePageUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError>;
 
     async fn create_page_draft(
         &self,
         _request: ConfluenceDraftCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page draft create is not supported by this backend".to_string(),
@@ -174,7 +176,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _page_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page draft lookup is not supported by this backend".to_string(),
@@ -184,7 +186,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn update_page_draft(
         &self,
         _request: ConfluenceDraftUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page draft update is not supported by this backend".to_string(),
@@ -194,7 +196,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn discard_page_draft(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page draft discard is not supported by this backend".to_string(),
@@ -204,7 +206,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn create_blog(
         &self,
         _request: ConfluenceBlogCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog create is not supported by this backend".to_string(),
@@ -214,7 +216,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn update_blog(
         &self,
         _request: ConfluenceBlogUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog update is not supported by this backend".to_string(),
@@ -224,7 +226,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn create_blog_draft(
         &self,
         _request: ConfluenceDraftCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog draft create is not supported by this backend".to_string(),
@@ -235,7 +237,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _blog_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog draft lookup is not supported by this backend".to_string(),
@@ -245,7 +247,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn update_blog_draft(
         &self,
         _request: ConfluenceDraftUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog draft update is not supported by this backend".to_string(),
@@ -255,7 +257,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn discard_blog_draft(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog draft discard is not supported by this backend".to_string(),
@@ -266,14 +268,14 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         page_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError>;
 
     async fn add_blog_attachment(
         &self,
         _blog_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog attachment upload is not supported by this backend".to_string(),
@@ -284,7 +286,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence page draft attachment upload is not supported by this backend".to_string(),
@@ -295,7 +297,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _blog_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog draft attachment upload is not supported by this backend".to_string(),
@@ -305,7 +307,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn page_attachments(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError>;
 
     async fn page_attachments_page(
@@ -313,7 +315,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _page_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -326,7 +328,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _blog_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -340,7 +342,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _page_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -354,7 +356,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _blog_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -366,7 +368,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn blog_attachments(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog attachment lookup is not supported by this backend".to_string(),
@@ -377,7 +379,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _blog_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -389,14 +391,14 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>;
 
     async fn page_draft_attachment_content(
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -409,7 +411,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _blog_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -423,7 +425,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _kind: ConfluenceCommentKind,
         _comment_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment lookup is not supported by this backend".to_string(),
@@ -433,7 +435,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn comments_page(
         &self,
         _request: ConfluenceCommentListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment listing is not supported by this backend".to_string(),
@@ -447,7 +449,7 @@ pub trait ConfluenceBackend: Send + Sync {
         _body_format: Option<&str>,
         _max_results: u32,
         _cursor: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment reply listing is not supported by this backend".to_string(),
@@ -457,7 +459,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn add_comment(
         &self,
         _request: ConfluenceCommentCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment creation is not supported by this backend".to_string(),
@@ -467,7 +469,7 @@ pub trait ConfluenceBackend: Send + Sync {
     async fn update_comment(
         &self,
         _request: ConfluenceCommentUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment update is not supported by this backend".to_string(),
@@ -478,7 +480,7 @@ pub trait ConfluenceBackend: Send + Sync {
         &self,
         _kind: ConfluenceCommentKind,
         _comment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "Confluence comment delete is not supported by this backend".to_string(),
@@ -893,6 +895,22 @@ pub enum ConfluenceBackendError {
     ResponseTooLarge,
     #[error("protocol: {0}")]
     Protocol(String),
+    /// Delegated (OAuth) access could not be presented: the lease's own
+    /// failure (a refresh busy, throttled or uncertain, consent pending, a
+    /// reconnect required, or an operation that already recovered), access
+    /// for another site, or access Confluence rejected again. Nothing was
+    /// sent, or Confluence's 401 applied nothing. Reported unchanged.
+    #[error("Confluence credential could not be presented")]
+    Credential(ProviderError),
+}
+
+impl From<AtlassianAccessError> for ConfluenceBackendError {
+    fn from(error: AtlassianAccessError) -> Self {
+        match error {
+            AtlassianAccessError::Credential(error) => Self::Credential(error),
+            _ => Self::Protocol("unsupported Confluence credential kind".to_string()),
+        }
+    }
 }
 
 /// Marks a failure that followed a write's success `status` as
@@ -962,6 +980,7 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
                 "Confluence response protocol error",
             )
         }
+        ConfluenceBackendError::Credential(error) => error,
     }
 }
 
@@ -994,6 +1013,9 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
         ConfluenceBackendError::ResponseTooLarge
         | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
+        // Never the outcome of reading a response; only presenting a
+        // credential reports it.
+        ConfluenceBackendError::Credential(_) => ReasonCode::CredentialInvalid,
     }
 }
 
@@ -1032,9 +1054,37 @@ impl HttpConfluenceBackend {
         })
     }
 
+    /// This backend with its gateway route served below `gateway`, an
+    /// origin such as a stub server's:
+    /// `{gateway}/ex/confluence/{cloud_id}/wiki/rest/api/`.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn with_gateway_origin(
+        mut self,
+        gateway: &str,
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
+        let site = self.config.site();
+        let cloud_id = site.gateway_cloud_id().ok_or_else(|| {
+            ProviderBuildError::invalid(
+                "the test Confluence site does not use the Atlassian gateway",
+            )
+        })?;
+        let base = Url::parse(&format!(
+            "{}/ex/confluence/{cloud_id}/{}",
+            gateway.trim_end_matches('/'),
+            CONFLUENCE_PRODUCT.api_path
+        ))
+        .map_err(|error| ProviderBuildError::invalid(error.to_string()))?;
+        let gateway = AtlassianClients::new(CONFLUENCE_PRODUCT, &site, base, clients)?;
+        if let Some(route) = self.routes.gateway_mut() {
+            *route = gateway;
+        }
+        Ok(self)
+    }
+
     pub(crate) fn client_for(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&AtlassianClients, ConfluenceBackendError> {
         self.routes
             .for_credential(credential)
@@ -1066,14 +1116,14 @@ impl HttpConfluenceBackend {
 
     pub(crate) fn api_base(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<Url, ConfluenceBackendError> {
         Ok(self.client_for(credential)?.api_base.clone())
     }
 
     pub(crate) fn api_v2_base(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<Url, ConfluenceBackendError> {
         let mut base = self.api_base(credential)?;
         let path = base.path().to_string();
@@ -1097,7 +1147,7 @@ impl HttpConfluenceBackend {
 
 #[cfg(test)]
 impl HttpConfluenceBackend {
-    pub(crate) fn egress_proxy_for_test(&self, credential: &ExecutionCredential) -> Value {
+    pub(crate) fn egress_proxy_for_test(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .unwrap()
             .client
@@ -1109,14 +1159,14 @@ impl HttpConfluenceBackend {
 impl HttpConfluenceBackend {
     pub(crate) fn request_client(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&UpstreamClient, ConfluenceBackendError> {
         Ok(&self.client_for(credential)?.client)
     }
 
     pub(crate) fn stream_client(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&UpstreamClient, ConfluenceBackendError> {
         Ok(&self.client_for(credential)?.stream_client)
     }
@@ -1124,7 +1174,7 @@ impl HttpConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for HttpConfluenceBackend {
-    fn egress_proxy_audit(&self, credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .map(|clients| clients.client.egress_route().audit_value())
             .unwrap_or_else(|_| EgressRoute::direct().audit_value())
@@ -1132,7 +1182,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
 
     async fn current_user(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Value>, ConfluenceBackendError> {
         let url = self
             .api_base(credential)?
@@ -1163,25 +1213,30 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         blog_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         let url = self
             .api_base(credential)?
             .join(&format!("content/{blog_id}/child/attachment"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        let upload_part = confluence_upload_part(&attachment).await?;
-        let form = reqwest::multipart::Form::new().part("file", upload_part.part);
         let started = Instant::now();
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
             credential,
-            client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .header("X-Atlassian-Token", "nocheck")
-                .multipart(form),
-            upload_part.progress,
+            || async {
+                // Each attempt reopens the spooled body.
+                let upload_part = confluence_upload_part(&attachment).await?;
+                let form = reqwest::multipart::Form::new().part("file", upload_part.part);
+                Ok((
+                    client
+                        .request(Method::POST, url.clone())
+                        .header("Accept", "application/json")
+                        .header("X-Atlassian-Token", "nocheck")
+                        .multipart(form),
+                    upload_part.progress,
+                ))
+            },
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             UpstreamCall::new("blog.attachment.add"),
         )
@@ -1212,7 +1267,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1245,7 +1300,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         get_draft: bool,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1278,7 +1333,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn page_ancestors(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
     {
         let api_base = self.api_v2_base(credential)?;
@@ -1335,7 +1390,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn page_direct_children(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageChild>>, ConfluenceBackendError> {
         let api_base = self.api_v2_base(credential)?;
         let mut url = api_base
@@ -1393,7 +1448,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         page_id: &str,
         position: ConfluencePageMovePosition,
         target_page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<String>, ConfluenceBackendError> {
         let url = self
             .api_base(credential)?
@@ -1438,7 +1493,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1472,7 +1527,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn space_by_key(
         &self,
         space: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1505,7 +1560,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn space_by_id(
         &self,
         space_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -1535,7 +1590,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn blog_metadata(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -1565,7 +1620,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn blog_scope_evidence(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
     {
         let url = self
@@ -1596,7 +1651,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn blog(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1627,7 +1682,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn search(
         &self,
         request: ConfluenceSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1669,7 +1724,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn search_blogs(
         &self,
         request: ConfluenceSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchBlog>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1709,7 +1764,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1745,7 +1800,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn update_page(
         &self,
         request: ConfluencePageUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let url = self
             .api_base(credential)?
@@ -1783,7 +1838,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn create_page_draft(
         &self,
         request: ConfluenceDraftCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1819,7 +1874,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1856,7 +1911,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn update_page_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -1893,7 +1948,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn discard_page_draft(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -1925,7 +1980,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn create_blog(
         &self,
         request: ConfluenceBlogCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -1957,7 +2012,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn update_blog(
         &self,
         request: ConfluenceBlogUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -1989,7 +2044,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn create_blog_draft(
         &self,
         request: ConfluenceDraftCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -2023,7 +2078,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         blog_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -2060,7 +2115,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn update_blog_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -2097,7 +2152,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn discard_blog_draft(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -2130,25 +2185,30 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         let url = self
             .api_base(credential)?
             .join(&format!("content/{page_id}/child/attachment"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        let upload_part = confluence_upload_part(&attachment).await?;
-        let form = reqwest::multipart::Form::new().part("file", upload_part.part);
         let started = Instant::now();
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
             credential,
-            client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .header("X-Atlassian-Token", "nocheck")
-                .multipart(form),
-            upload_part.progress,
+            || async {
+                // Each attempt reopens the spooled body.
+                let upload_part = confluence_upload_part(&attachment).await?;
+                let form = reqwest::multipart::Form::new().part("file", upload_part.part);
+                Ok((
+                    client
+                        .request(Method::POST, url.clone())
+                        .header("Accept", "application/json")
+                        .header("X-Atlassian-Token", "nocheck")
+                        .multipart(form),
+                    upload_part.progress,
+                ))
+            },
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             UpstreamCall::new("attachment.add"),
         )
@@ -2180,26 +2240,31 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
             .join(&format!("content/{page_id}/child/attachment"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
         url.query_pairs_mut().append_pair("status", "draft");
-        let upload_part = confluence_upload_part(&attachment).await?;
-        let form = reqwest::multipart::Form::new().part("file", upload_part.part);
         let started = Instant::now();
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
             credential,
-            client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .header("X-Atlassian-Token", "nocheck")
-                .multipart(form),
-            upload_part.progress,
+            || async {
+                // Each attempt reopens the spooled body.
+                let upload_part = confluence_upload_part(&attachment).await?;
+                let form = reqwest::multipart::Form::new().part("file", upload_part.part);
+                Ok((
+                    client
+                        .request(Method::POST, url.clone())
+                        .header("Accept", "application/json")
+                        .header("X-Atlassian-Token", "nocheck")
+                        .multipart(form),
+                    upload_part.progress,
+                ))
+            },
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             UpstreamCall::new("page.draft.attachment.add"),
         )
@@ -2231,26 +2296,31 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         blog_id: &str,
         attachment: ConfluenceAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
             .join(&format!("content/{blog_id}/child/attachment"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
         url.query_pairs_mut().append_pair("status", "draft");
-        let upload_part = confluence_upload_part(&attachment).await?;
-        let form = reqwest::multipart::Form::new().part("file", upload_part.part);
         let started = Instant::now();
         let client = self.stream_client(credential)?;
         let mut response = send_confluence_upload(
             client,
             credential,
-            client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .header("X-Atlassian-Token", "nocheck")
-                .multipart(form),
-            upload_part.progress,
+            || async {
+                // Each attempt reopens the spooled body.
+                let upload_part = confluence_upload_part(&attachment).await?;
+                let form = reqwest::multipart::Form::new().part("file", upload_part.part);
+                Ok((
+                    client
+                        .request(Method::POST, url.clone())
+                        .header("Accept", "application/json")
+                        .header("X-Atlassian-Token", "nocheck")
+                        .multipart(form),
+                    upload_part.progress,
+                ))
+            },
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             UpstreamCall::new("blog.draft.attachment.add"),
         )
@@ -2281,7 +2351,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn page_attachments(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -2335,7 +2405,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         let mut url = self
@@ -2398,7 +2468,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn blog_attachments(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -2452,7 +2522,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         blog_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         let mut url = self
@@ -2516,7 +2586,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         let mut url = self
@@ -2580,7 +2650,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         blog_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         self.blog_attachments_page(blog_id, max_results, next_position, credential)
@@ -2591,7 +2661,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         blog_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let url = self
@@ -2648,7 +2718,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         kind: ConfluenceCommentKind,
         comment_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -2682,7 +2752,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn comments_page(
         &self,
         request: ConfluenceCommentListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         let container_segment = match request.container_type {
             ConfluenceCommentContainerType::Page => "pages",
@@ -2754,7 +2824,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         body_format: Option<&str>,
         max_results: u32,
         cursor: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         let mut url = self
             .api_v2_base(credential)?
@@ -2807,7 +2877,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn add_comment(
         &self,
         request: ConfluenceCommentCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -2839,7 +2909,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
     async fn update_comment(
         &self,
         request: ConfluenceCommentUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -2879,7 +2949,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         kind: ConfluenceCommentKind,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         let url = self
             .api_v2_base(credential)?
@@ -2911,7 +2981,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let url = self
@@ -2967,7 +3037,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let mut url = self
@@ -2985,7 +3055,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         &self,
         blog_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let mut url = self
@@ -3004,7 +3074,7 @@ impl HttpConfluenceBackend {
     pub(crate) async fn draft_attachment_content_response(
         &self,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         let started = Instant::now();
@@ -3050,51 +3120,88 @@ impl HttpConfluenceBackend {
         })
     }
 
+    /// Downloads `url`, following Atlassian's media redirects. Only the
+    /// first request carries the credential: delegated access that
+    /// Confluence itself answers with 401 recovers once and the download
+    /// starts over.
     pub(crate) async fn attachment_content_response(
         &self,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<reqwest::Response, ConfluenceBackendError> {
         let client = self.stream_client(credential)?;
-        let authorization = atlassian_authorization(credential)?;
-        client
-            .get_following_redirects(
-                url,
-                RedirectRules::new(5, Duration::from_millis(self.limits.request_timeout_ms))
-                    .with_authorization(&authorization)
-                    // Atlassian media hosts join broker logs by these headers.
-                    .correlating_other_origins(),
-                "attachment.download",
-            )
-            .await
-            .map_err(confluence_upstream_error)
+        let mut attempt = 1;
+        loop {
+            let presented = credential.present().await?;
+            let mut response = client
+                .get_following_redirects(
+                    url.clone(),
+                    RedirectRules::new(5, Duration::from_millis(self.limits.request_timeout_ms))
+                        .with_authorization(presented.authorization())
+                        // Atlassian media hosts join broker logs by these headers.
+                        .correlating_other_origins(),
+                    "attachment.download",
+                )
+                .await
+                .map_err(confluence_upstream_error)?;
+            if response.status().as_u16() == 401
+                && presented.is_delegated()
+                && same_origin(response.url(), &url)
+            {
+                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+                credential
+                    .rejected(&presented, (attempt == 1).then_some(()), "Confluence")
+                    .await?;
+                attempt += 1;
+                continue;
+            }
+            return Ok(response);
+        }
     }
 }
 
-/// `credential`'s authorization as the SDK presents it; an unsupported
-/// credential kind fails before any request is sent.
-fn atlassian_authorization(
-    credential: &ExecutionCredential,
-) -> Result<UpstreamAuthorization, ConfluenceBackendError> {
-    atlassian_credential_authorization(credential).ok_or_else(|| {
-        ConfluenceBackendError::Protocol("unsupported Confluence credential kind".to_string())
-    })
-}
-
 /// Sends through `client` with `credential`'s authorization, mapping
-/// transport failures to Confluence errors. An unsupported credential kind fails
-/// before anything is sent.
+/// transport failures to Confluence errors. An unsupported credential kind
+/// fails before anything is sent. Delegated access is pinned immediately
+/// before each attempt. Confluence answering it with 401 authenticated
+/// nothing and so applied nothing: the presented version is marked rejected
+/// and, when the operation's lease can still recover, the request is
+/// repeated once with the renewed access ([`AtlassianCredential::rejected`]).
+/// A static token's 401 is never repeated.
 pub(crate) async fn send_confluence_request(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
+    credential: &AtlassianCredential,
     request: reqwest::RequestBuilder,
     call: UpstreamCall<'_>,
 ) -> Result<reqwest::Response, ConfluenceBackendError> {
-    let authorization = atlassian_authorization(credential)?;
-    client
-        .send(request, call.with_authorization(&authorization))
-        .await
-        .map_err(confluence_upstream_error)
+    let mut request = request;
+    let mut attempt = call.attempt;
+    loop {
+        let presented = credential.present().await?;
+        // A copy for the one repeat a delegated 401 permits.
+        let replay = if attempt == call.attempt && presented.is_delegated() {
+            request.try_clone()
+        } else {
+            None
+        };
+        let mut response = client
+            .send(
+                request,
+                call.with_attempt(attempt)
+                    .with_authorization(presented.authorization()),
+            )
+            .await
+            .map_err(confluence_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            request = credential
+                .rejected(&presented, replay, "Confluence")
+                .await?;
+            attempt += 1;
+            continue;
+        }
+        return Ok(response);
+    }
 }
 
 pub(crate) fn confluence_upstream_error(error: UpstreamError) -> ConfluenceBackendError {
@@ -3790,24 +3897,54 @@ pub(crate) async fn confluence_upload_part(
         .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))
 }
 
-pub(crate) async fn send_confluence_upload(
+/// Sends one upload through `client`. Its body is a stream that cannot be
+/// repeated, so `prepare` builds the request and its progress for each
+/// attempt; a delegated 401 repeats the upload at most once, as
+/// [`send_confluence_request`] does.
+pub(crate) async fn send_confluence_upload<F, Fut>(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
-    request: reqwest::RequestBuilder,
-    progress: Option<UploadProgress>,
+    credential: &AtlassianCredential,
+    mut prepare: F,
     idle_timeout: Duration,
     call: UpstreamCall<'_>,
-) -> Result<reqwest::Response, ConfluenceBackendError> {
-    let authorization = atlassian_authorization(credential)?;
-    client
-        .send_upload(
-            request,
-            progress,
-            idle_timeout,
-            call.with_authorization(&authorization),
-        )
-        .await
-        .map_err(confluence_upstream_error)
+) -> Result<reqwest::Response, ConfluenceBackendError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<
+                (reqwest::RequestBuilder, Option<UploadProgress>),
+                ConfluenceBackendError,
+            >,
+        >,
+{
+    let mut attempt = call.attempt;
+    loop {
+        let presented = credential.present().await?;
+        let (request, progress) = prepare().await?;
+        let mut response = client
+            .send_upload(
+                request,
+                progress,
+                idle_timeout,
+                call.with_attempt(attempt)
+                    .with_authorization(presented.authorization()),
+            )
+            .await
+            .map_err(confluence_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            credential
+                .rejected(
+                    &presented,
+                    (attempt == call.attempt).then_some(()),
+                    "Confluence",
+                )
+                .await?;
+            attempt += 1;
+            continue;
+        }
+        return Ok(response);
+    }
 }
 
 pub(crate) fn validate_confluence_body_response(

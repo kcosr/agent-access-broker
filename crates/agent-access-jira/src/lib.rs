@@ -1,6 +1,8 @@
 //! Jira backend: issue, search, comment, attachment, and verification
 //! actions against Jira Cloud, authorized against `jira_project`
 //! resources.
+#[cfg(test)]
+mod access_tests;
 mod backend;
 mod config;
 mod jql;
@@ -17,9 +19,9 @@ use jql::*;
 use search_continuation::*;
 use validation::*;
 
+pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
-    atlassian_credential_authorization, bind_atlassian_access,
-    validate_atlassian_gateway_credential,
+    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_gateway_credential,
 };
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
@@ -69,6 +71,9 @@ pub struct JiraProvider {
     /// Search continuations, sealed with this instance's generation key.
     search_pages: SearchPages,
     search_configuration: [u8; 32],
+    /// The cloud ID of the site's gateway route, which delegated access is
+    /// pinned to; `None` when the site does not use the gateway.
+    gateway_cloud_id: Option<Arc<str>>,
 }
 
 impl JiraProvider {
@@ -76,20 +81,25 @@ impl JiraProvider {
         config: JiraProviderConfig,
         host: &BuildContext<'_>,
     ) -> Result<Self, ProviderBuildError> {
+        let backend = HttpJiraBackend::new(config.clone(), host.limits().clone(), host.clients())?;
+        Ok(Self::over_http(config, host, backend))
+    }
+
+    fn over_http(
+        config: JiraProviderConfig,
+        host: &BuildContext<'_>,
+        backend: HttpJiraBackend,
+    ) -> Self {
         let limits = host.limits().clone();
-        let backend = Arc::new(HttpJiraBackend::new(
-            config.clone(),
-            limits.clone(),
-            host.clients(),
-        )?);
-        Ok(Self {
+        Self {
             search_pages: SearchPages::new(&limits),
             search_configuration: config.site().route_fingerprint(),
+            gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
             limits,
-            backend,
+            backend: Arc::new(backend),
             attribution: host.attribution().clone(),
-        })
+        }
     }
 
     fn from_backend(
@@ -100,6 +110,7 @@ impl JiraProvider {
         Self {
             search_pages: SearchPages::new(&limits),
             search_configuration: config.site().route_fingerprint(),
+            gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
             limits,
             backend,
@@ -114,6 +125,65 @@ impl JiraProvider {
     ) -> Self {
         Self::from_backend(config, limits, backend)
     }
+
+    /// The execution material the host selected, as Jira presents it.
+    fn execution_credential(
+        &self,
+        request: &AdmittedRequest,
+    ) -> Result<AtlassianCredential, ProviderError> {
+        AtlassianCredential::from_execution(request.execution(), self.gateway_cloud_id.as_ref())
+    }
+
+    /// The lookup access of an admitted operation, which Jira requires.
+    fn lookup_credential(
+        &self,
+        request: &AdmittedRequest,
+    ) -> Result<AtlassianCredential, ProviderError> {
+        self.optional_lookup_credential(request.lookup_access())?
+            .ok_or_else(|| {
+                ProviderError::deny(
+                    ReasonCode::CredentialNotProvisioned,
+                    "lookup credential material is unavailable",
+                )
+            })
+    }
+
+    /// The lookup access the host selected, if any: a static token, or the
+    /// operation's delegated credential, whose lease and recovery budget
+    /// execution shares.
+    fn optional_lookup_credential(
+        &self,
+        lookup_access: Option<&LookupAccess>,
+    ) -> Result<Option<AtlassianCredential>, ProviderError> {
+        AtlassianCredential::from_lookup(lookup_access, self.gateway_cloud_id.as_ref())
+    }
+}
+
+/// Provider fixtures for tests outside this crate.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use super::*;
+
+    /// The production Jira provider for `config`'s site, built with `host`,
+    /// whose Atlassian gateway route is served below `gateway`, an origin
+    /// such as a stub server's, instead of `https://api.atlassian.com`:
+    /// `{gateway}/ex/jira/{cloud_id}/rest/api/3/`. The site must use the
+    /// gateway, and `config.allowed_upstream_hosts` must also admit that
+    /// route. Everything else, including the descriptor, is the production
+    /// provider's.
+    pub fn provider_with_gateway(
+        config: JiraProviderConfig,
+        host: &BuildContext<'_>,
+        gateway: &str,
+    ) -> Result<ServiceProvider, ProviderBuildError> {
+        let backend = HttpJiraBackend::new(config.clone(), host.limits().clone(), host.clients())?
+            .with_gateway_origin(gateway, host.clients())?;
+        let descriptor = jira_descriptor(&config);
+        Ok(ServiceProvider::new(
+            descriptor,
+            Arc::new(JiraProvider::over_http(config, host, backend)),
+        ))
+    }
 }
 
 /// Jira projects, identified by project key.
@@ -125,6 +195,10 @@ pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescripto
     is_project_key,
     &[],
 );
+
+/// What connecting an Atlassian account through OAuth lets agents do in
+/// Jira, shown where a person connects it.
+const JIRA_OAUTH_CONNECTION: &str = "Lets agents act on Jira as your Atlassian account, through the Atlassian gateway. Agent access is limited by your Broker grants. Atlassian's consent page lists the broader scopes the connection grants.";
 
 /// Jira's authoritative service definition. Every action is authorized
 /// against a project; comment writes are offered only while ADF comment
@@ -757,7 +831,12 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 })
                 .collect(),
         )
-        .with_credentials(config.site().credential_descriptor())
+        .with_credentials(
+            config
+                .site()
+                .credential_descriptor()
+                .delegated(JIRA_OAUTH_CONNECTION),
+        )
         .with_presentation_body_limit(config.content.max_body_bytes);
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),
@@ -849,7 +928,7 @@ impl JiraProvider {
         &self,
         action: &str,
         inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
+        lookup_credential: Option<&AtlassianCredential>,
     ) -> Result<ResourceScopes, ProviderError> {
         match action {
             "issue.view"
@@ -923,10 +1002,11 @@ impl Provider for JiraProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
+        let lookup_credential = self.optional_lookup_credential(request.lookup_access())?;
         self.lookup_scopes(
             request.action(),
             request.inputs(),
-            static_lookup_credential(request.lookup_access())?,
+            lookup_credential.as_ref(),
         )
         .await
         .map(ScopeResolution::resources)
@@ -943,7 +1023,7 @@ impl Provider for JiraProvider {
                 "Jira action does not accept multipart body parts",
             ));
         }
-        let credential = lookup_credential(request)?;
+        let credential = &self.lookup_credential(request)?;
         let inputs = parse_attachment_add_inputs(request.inputs())?;
         validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
         let body_part_specs = attachment_body_part_specs(&inputs.attachments);
@@ -960,11 +1040,15 @@ impl Provider for JiraProvider {
         ))
     }
 
+    /// Verifies a stored or service token with `myself`. Delegated (OAuth)
+    /// access has no verification route: people connect and reconnect it in
+    /// the portal.
     async fn verify_execution_credential(
         &self,
         credential: &ExecutionCredential,
         _correlation: &crate::CorrelationContext,
     ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        let credential = &AtlassianCredential::from_static(credential.clone());
         let response = self
             .backend
             .current_user(credential)
@@ -1036,7 +1120,7 @@ impl JiraProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_issue_type_list_inputs(request.inputs())?;
         ensure_authorized_project_scope(&inputs.project, request.resource_scopes()?)?;
-        let credential = invocation_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
         let page_request = JiraIssueTypeListRequest {
             start_at: inputs.start_at,
             max_results: inputs.max_results,
@@ -1083,8 +1167,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let locator = issue_locator_from_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
@@ -1144,7 +1228,7 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
         let scope_inputs = parse_issue_create_scope_inputs(request.inputs())?;
         ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
         let mut inputs = parse_issue_create_inputs(request.inputs(), &self.config)?;
@@ -1259,7 +1343,7 @@ impl JiraProvider {
                         merge_attribution_audit(&mut audit, attribution);
                         // The issue exists: throttling here must not invite a second create.
                         return Err(jira_backend_error(error)
-                            .unverified_after_mutation(
+                            .unverified_after_atlassian_write(
                                 "post_create_readback",
                                 issue_create_object_ids(Some(&created)),
                             )
@@ -1368,8 +1452,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let scope_inputs = parse_issue_child_create_scope_inputs(request.inputs(), &self.config)?;
         // Reconfirm immediately before mutation instead of reusing scope-resolution
         // metadata so parent moves are caught before the create request.
@@ -1496,7 +1580,7 @@ impl JiraProvider {
                         audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                         merge_attribution_audit(&mut audit, attribution);
                         return Err(jira_backend_error(error)
-                            .unverified_after_mutation(
+                            .unverified_after_atlassian_write(
                                 "post_create_readback",
                                 issue_child_create_object_ids(Some(&created), &parent),
                             )
@@ -1579,7 +1663,7 @@ impl JiraProvider {
                             audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                             merge_attribution_audit(&mut audit, attribution);
                             return Err(jira_backend_error(error)
-                                .unverified_after_mutation(
+                                .unverified_after_atlassian_write(
                                     "post_parent_readback",
                                     issue_child_create_object_ids(Some(&created), &parent),
                                 )
@@ -1708,8 +1792,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let mut inputs = parse_issue_update_inputs(request.inputs(), &self.config)?;
         let attribution = if let Some(description) = inputs.description.as_mut() {
             self.apply_adf_attribution("issue.update", description, &request)?
@@ -1762,7 +1846,7 @@ impl JiraProvider {
                     .issue(&metadata.key, credential)
                     .await
                     .map_err(|error| {
-                        jira_backend_error(error).unverified_after_mutation(
+                        jira_backend_error(error).unverified_after_atlassian_write(
                             "post_update_readback",
                             issue_create_object_ids_partial(
                                 Some(&metadata.id),
@@ -1831,8 +1915,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_issue_parent_set_inputs(request.inputs(), &self.config)?;
         let (issue, parent, mut upstream_duration_ms) = self
             .confirm_parent_set_issue_metadata(&inputs, lookup_credential)
@@ -1874,7 +1958,7 @@ impl JiraProvider {
                         );
                         audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                         return Err(jira_backend_error(error)
-                            .unverified_after_mutation(
+                            .unverified_after_atlassian_write(
                                 "post_parent_readback",
                                 issue_parent_set_object_ids(&issue, &parent),
                             )
@@ -1969,8 +2053,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_issue_dependency_add_inputs(request.inputs(), &self.config)?;
         let (blocking, blocked, mut upstream_duration_ms) = self
             .confirm_dependency_issue_metadata(&inputs, lookup_credential)
@@ -2023,7 +2107,7 @@ impl JiraProvider {
                         );
                         audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                         return Err(jira_backend_error(error)
-                            .unverified_after_mutation(
+                            .unverified_after_atlassian_write(
                                 "post_dependency_readback",
                                 issue_dependency_object_ids(&blocking, &blocked),
                             )
@@ -2106,12 +2190,7 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = request.execution().static_credential().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "selected credential material is unavailable",
-            )
-        })?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_projects(&inputs)?;
         let authorization = search_authorization(&request)?;
@@ -2236,8 +2315,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
@@ -2307,8 +2386,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
@@ -2352,8 +2431,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.add")?;
         let mut inputs = parse_comment_add_inputs(request.inputs(), &self.config)?;
         let attribution = self.apply_adf_attribution("comment.add", &mut inputs.body, &request)?;
@@ -2423,8 +2502,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.reply")?;
         let mut inputs = parse_comment_reply_inputs(request.inputs(), &self.config)?;
         let requested_parent_comment_id = inputs.parent_comment_id.clone();
@@ -2528,8 +2607,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         self.validate_configured_comment_body_format("jira.comment.update")?;
         let mut inputs = parse_comment_update_inputs(request.inputs(), &self.config)?;
         let attribution =
@@ -2616,8 +2695,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_issue_locator(&inputs.locator, lookup_credential)
@@ -2666,8 +2745,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs =
             parse_comment_property_inputs("comment.property.list", request.inputs(), &self.config)?;
         let (metadata, proof_response, metadata_duration_ms) = self
@@ -2725,8 +2804,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs =
             parse_comment_property_inputs("comment.property.get", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
@@ -2780,8 +2859,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs =
             parse_comment_property_inputs("comment.property.set", request.inputs(), &self.config)?;
         let property_key = inputs.property_key.as_deref().ok_or_else(|| {
@@ -2845,8 +2924,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_property_inputs(
             "comment.property.delete",
             request.inputs(),
@@ -2909,8 +2988,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_add_inputs(request.inputs())?;
         let metadata_response =
             match ProviderState::optional::<JiraIssuePreflight>(request.state())? {
@@ -2962,6 +3041,12 @@ impl JiraProvider {
                         "attachmentId": response.value.id,
                         "attachment": upload_audit,
                     }));
+                }
+                // Delegated access that could not be presented, or that Jira
+                // rejected, uploaded nothing: before any upload applied, the
+                // batch fails with the connection's own failure.
+                Err(JiraBackendError::Credential(error)) if successes.is_empty() => {
+                    return Err(error);
                 }
                 Err(error) => {
                     if let JiraBackendError::RateLimited(retry_after) = &error {
@@ -3090,8 +3175,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_download_inputs(request.inputs())?;
         let metadata = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
@@ -3174,8 +3259,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .backend
@@ -3254,8 +3339,8 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(request.admitted())?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_verify_inputs(request.inputs())?;
         let metadata_response = self
             .confirm_issue_project(&inputs.issue, lookup_credential)
@@ -3352,7 +3437,7 @@ impl JiraProvider {
     async fn confirm_issue_project(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, ProviderError> {
         let locator = issue_locator_from_key(issue_key)?;
         self.confirm_issue_locator(&locator, credential).await
@@ -3361,7 +3446,7 @@ impl JiraProvider {
     async fn confirm_issue_locator(
         &self,
         locator: &IssueLocator,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, ProviderError> {
         let response = self
             .backend
@@ -3382,7 +3467,7 @@ impl JiraProvider {
     async fn confirm_dependency_issue_metadata(
         &self,
         inputs: &IssueDependencyAddInputs,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<(JiraIssueMetadata, JiraIssueMetadata, u64), ProviderError> {
         let blocking_response = self
             .confirm_issue_locator(&inputs.blocking, credential)
@@ -3405,7 +3490,7 @@ impl JiraProvider {
     async fn confirm_parent_set_issue_metadata(
         &self,
         inputs: &IssueParentSetInputs,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<(JiraIssueMetadata, JiraIssueMetadata, u64), ProviderError> {
         let issue_response = self
             .confirm_issue_locator(&inputs.issue, credential)
@@ -3429,8 +3514,8 @@ impl JiraProvider {
         &self,
         locator: &IssueLocator,
         comment_id: &str,
-        lookup_credential: &ExecutionCredential,
-        credential: &ExecutionCredential,
+        lookup_credential: &AtlassianCredential,
+        credential: &AtlassianCredential,
     ) -> Result<(JiraIssueMetadata, JiraBackendResponse<JiraComment>, u64), ProviderError> {
         let metadata_response = self
             .confirm_issue_locator(locator, lookup_credential)
@@ -3478,7 +3563,7 @@ impl JiraProvider {
         &self,
         issue_key: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraAttachment, ProviderError> {
         Ok(self
             .attachment_for_issue_response(issue_key, attachment_id, credential)
@@ -3490,7 +3575,7 @@ impl JiraProvider {
         &self,
         issue_key: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, ProviderError> {
         let response = self
             .backend
@@ -5091,40 +5176,6 @@ fn parse_verify_inputs(inputs: &Value) -> Result<VerifyInputs, ProviderError> {
     Ok(parsed)
 }
 
-fn invocation_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
-    request.execution().static_credential().ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "selected credential material is unavailable",
-        )
-    })
-}
-
-fn lookup_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
-    static_lookup_credential(request.lookup_access())?.ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "lookup credential material is unavailable",
-        )
-    })
-}
-
-/// The static lookup credential the host selected, if any. Jira does not
-/// accept delegated credentials, so delegated or unknown lookup access fails
-/// closed instead of standing in for a static credential.
-fn static_lookup_credential(
-    lookup_access: Option<&LookupAccess>,
-) -> Result<Option<&ExecutionCredential>, ProviderError> {
-    match lookup_access {
-        None => Ok(None),
-        Some(LookupAccess::Static(credential)) => Ok(Some(credential)),
-        Some(_) => Err(ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "Jira lookups do not accept delegated credentials",
-        )),
-    }
-}
-
 fn serialized_body_size(value: &Value) -> Result<u64, ProviderError> {
     serde_json::to_vec(value)
         .map(|bytes| bytes.len() as u64)
@@ -5896,6 +5947,8 @@ impl JiraWrite {
             | JiraBackendError::IssueCreateResponseInvalid { .. } => {
                 jira_backend_error(error).with_mutation_receipt(self.receipt())
             }
+            // Delegated access that could not be presented, or that Jira
+            // rejected, applied nothing and keeps its own reason.
             JiraBackendError::Unauthorized
             | JiraBackendError::Forbidden
             | JiraBackendError::NotFound
@@ -5905,7 +5958,8 @@ impl JiraWrite {
             | JiraBackendError::Transport(_)
             | JiraBackendError::Timeout
             | JiraBackendError::ResponseTooLarge
-            | JiraBackendError::Protocol(_) => jira_backend_error(error),
+            | JiraBackendError::Protocol(_)
+            | JiraBackendError::Credential(_) => jira_backend_error(error),
         }
     }
 }
@@ -5922,15 +5976,16 @@ fn upload_may_have_applied(error: &JiraBackendError) -> bool {
 }
 
 /// Runs what follows a write Jira accepted: a failure that reports no
-/// receipt keeps its reason and gains `applied_unverified` at `stage`.
+/// receipt gains `applied_unverified` at `stage`, keeping its reason unless
+/// delegated access or throttling stopped the verification
+/// ([`AtlassianWriteVerification`]).
 async fn after_accepted_write(
     stage: &str,
     locators: Value,
     tail: impl Future<Output = Result<ProviderResult, ProviderError>>,
 ) -> Result<ProviderResult, ProviderError> {
-    tail.await.map_err(|error| {
-        error.or_mutation_receipt(MutationReceipt::applied_unverified(stage, locators))
-    })
+    tail.await
+        .map_err(|error| error.unverified_after_atlassian_write(stage, locators))
 }
 
 fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
@@ -5958,6 +6013,7 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
         | JiraBackendError::IssueCreateResponseInvalid { .. }
         | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",
+        JiraBackendError::Credential(_) => "delegated_access_failed",
     }
 }
 

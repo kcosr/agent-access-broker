@@ -854,6 +854,30 @@ All notable changes to this project are documented in this file.
   the integration's setup, scopes, per-product registrations for people with
   only one product, the shared 65,000-point hourly quota and the 90-day
   inactivity expiry. See [Atlassian OAuth](docs/oauth.md#atlassian).
+- Jira and Confluence accept delegated access: a credential connection they use
+  may set an `atlassian` OAuth registration, and people's lookups and actions
+  then use their Atlassian connection, with one lease per invocation. OAuth
+  always goes through the Atlassian gateway,
+  `https://api.atlassian.com/ex/{jira|confluence}/{cloudId}/`, while stored and
+  service tokens keep routing by kind. Immediately before each request,
+  including lookups, list pages and read-backs, the provider pins the access to
+  the gateway route's cloud ID and the `api.atlassian.com` audience. A 401
+  marks the presented access rejected and renews it once per invocation,
+  whether it answered a lookup or the execution, and repeats that request,
+  including a write or an upload; a further 401 fails as `credential_invalid`
+  asking the person to reconnect Atlassian. A connection failure before a write
+  keeps its own reason without a receipt, also for an attachment batch before
+  any upload applied; one that stops a read-back after the write was accepted
+  reports `mutation_verification_failed` with an `applied_unverified` receipt,
+  `retrySafe: false` and its safe locators. Credential verification stays
+  token-only. The provider guides list each action's Atlassian OAuth scopes,
+  and the sample and OAuth guide request that inventory: `read:me`,
+  `offline_access`, `read:jira-work`, `write:jira-work` and Confluence's
+  classic (REST API v1) and granular (v2) scopes, without `read:jira-user` or
+  `read:confluence-space.summary`. See
+  [Jira](docs/providers-jira.md#oauth-connections) and
+  [Confluence](docs/providers-confluence.md#oauth-connections) OAuth
+  connections.
 
 ### Changed
 
@@ -873,7 +897,10 @@ All notable changes to this project are documented in this file.
   `atlassian` OAuth dialect, the assembly links it directly, its build status
   module is listed with release provenance, and `api/agent-access-atlassian.txt`
   inventories its selection entry point. Its Jira and Confluence helpers stay
-  unsupported outside the first-party providers.
+  unsupported outside the first-party providers; their backend seams
+  (`JiraBackend`, `ConfluenceBackend`) now take an `AtlassianCredential`, a
+  static token or the invocation's delegated access, instead of a static
+  credential.
 - Git gateway error responses are labeled `Content-Type: text/plain;
   charset=utf-8`, so Git shows their one-line reason as `remote:` output when
   ref discovery fails. Their status, reason code header and body are unchanged.

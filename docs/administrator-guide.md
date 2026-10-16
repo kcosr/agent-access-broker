@@ -133,8 +133,9 @@ never falls back from one method to the other:
 
 OAuth is available for services that accept delegated credentials: Gmail,
 GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
-per instance ([GitLab setup](oauth.md#gitlab)), and imported MCP OAuth
-services. An import with a personal binding publishes its own connection under
+per instance ([GitLab setup](oauth.md#gitlab)), Jira and Confluence, which can
+share one Atlassian OAuth connection per site ([Atlassian setup](oauth.md#atlassian)),
+and imported MCP OAuth services. An import with a personal binding publishes its own connection under
 its service ID. See
 [credential connections](configuration.md#credential-connections) for every
 rule.
@@ -231,7 +232,8 @@ version checks and caller setup.
 ## Enable personal OAuth connections
 
 For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see
-[GitLab setup](oauth.md#gitlab)) and imported MCP OAuth, enable the human
+[GitLab setup](oauth.md#gitlab)), Jira and Confluence (one Atlassian connection;
+see [Atlassian setup](oauth.md#atlassian)) and imported MCP OAuth, enable the human
 owner's self-service setting, configure a credential connection whose `oauth`
 names the registration and permission profile (imports publish theirs), and
 assign a matching active action grant with `credentialMode = "per_user"` on a

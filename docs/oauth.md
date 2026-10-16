@@ -431,9 +431,14 @@ encoding = "json"
 rotation = "rotate_refresh"
 
 [oauth.registrations.atlassian.permission_profiles.default]
-scopes = ["read:me", "offline_access", "read:jira-work", "write:jira-work", "read:jira-user",
-          "search:confluence", "read:confluence-content.all", "read:confluence-space.summary",
-          "write:confluence-content"]
+scopes = ["read:me", "offline_access",
+          "read:jira-work", "write:jira-work",
+          "read:confluence-content.all", "write:confluence-content", "search:confluence",
+          "write:confluence-file", "readonly:content.attachment:confluence",
+          "read:page:confluence", "write:page:confluence", "delete:page:confluence",
+          "read:space:confluence", "read:content.metadata:confluence",
+          "read:hierarchical-content:confluence", "read:attachment:confluence",
+          "read:comment:confluence", "write:comment:confluence", "delete:comment:confluence"]
 audience = "api.atlassian.com"
 target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 
@@ -502,18 +507,57 @@ that both products use, gives only people an Atlassian credential.
 ### Atlassian scopes
 
 Scopes are deployment configuration: the integration's permissions allow them
-and the profile requests them.
+and the profile requests them. The registration above requests what every Jira
+and Confluence action needs:
 
 - `read:me` (User Identity API) lets the Broker identify the connected account,
   and `offline_access` lets it refresh access. The profile must request both.
-- Add the Jira and Confluence scopes your granted actions need, such as
-  `read:jira-work`, `write:jira-work` and `read:jira-user` for Jira and
-  `search:confluence`, `read:confluence-content.all`,
-  `read:confluence-space.summary` and `write:confluence-content` for
-  Confluence. Request only scopes the integration's permissions include.
+- Jira: `read:jira-work` for every action and `write:jira-work` for its writes.
+- Confluence: the classic scopes of its REST API v1 calls
+  (`read:confluence-content.all`, `write:confluence-content`,
+  `search:confluence`, `write:confluence-file` and
+  `readonly:content.attachment:confluence`) and the granular scopes of its v2
+  calls (`read:page:confluence`, `write:page:confluence`,
+  `delete:page:confluence`, `read:space:confluence`,
+  `read:content.metadata:confluence`, `read:hierarchical-content:confluence`,
+  `read:attachment:confluence`, `read:comment:confluence`,
+  `write:comment:confluence` and `delete:comment:confluence`). Atlassian
+  allows classic and granular scopes together.
+
+[Jira's](providers-jira.md#oauth-connections) and
+[Confluence's](providers-confluence.md#oauth-connections) provider guides list
+the scopes of each action. A deployment that grants only some actions, such as
+reads, may request only their scopes; Atlassian refuses an action whose scope
+the profile omits. `read:jira-user` and
+`read:confluence-user` serve only token verification, which OAuth connections
+do not use. Request only scopes the integration's permissions include.
 
 Changing the profile's scopes changes the registration, so every person
 reconnects.
+
+### Jira and Confluence through OAuth
+
+- **Route.** OAuth always reaches the site through the gateway,
+  `https://api.atlassian.com/ex/jira/<cloud_id>/` and
+  `https://api.atlassian.com/ex/confluence/<cloud_id>/`; stored and service
+  tokens keep routing by kind.
+- **Access per request.** Before every request, including each lookup, page
+  and read-back, the provider revalidates the invocation's lease and pins its
+  access to the gateway route's cloud ID and the `api.atlassian.com` audience.
+  Access for another site fails as `credential_invalid` before anything is
+  sent.
+- **One recovery.** The lookups before policy and at execution and the
+  execution share one lease. When Atlassian answers it with 401, the provider
+  marks that access rejected and, once per invocation, renews it and repeats
+  the request, writes and uploads included, because the 401 applied nothing. A
+  second 401 fails as `credential_invalid`, asking the person to reconnect
+  Atlassian.
+- **Writes.** A connection failure before a write keeps its own reason and
+  carries no receipt. One that stops a read-back after Atlassian accepted the
+  write reports `mutation_verification_failed` with an `applied_unverified`
+  receipt, so a caller never repeats an applied write.
+- **No verification.** Credential verification applies to stored tokens; an
+  OAuth connection is checked by connecting it.
 
 ### One registration or one per product
 
@@ -935,8 +979,8 @@ is lost, malformed, or ambiguous, the family becomes uncertain. The Broker does 
 refresh token or continue handing out prior access leases. The owner reconnects.
 A persisted unfinished attempt after process loss is likewise treated
 conservatively. An upstream 401 on a read permits at most one version-aware
-refresh/retry. Gmail and GitLab REST also permit this one recovery after a
-mutation's explicit 401 authentication rejection; no timeout, transport or
+refresh/retry. Gmail, GitLab REST, Jira and Confluence also permit this one
+recovery after a mutation's explicit 401 authentication rejection; no timeout, transport or
 server-error replay occurs.
 Leases stay pinned to their original connection/generation across both revalidation
 and unauthorized recovery.
