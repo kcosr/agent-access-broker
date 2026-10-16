@@ -727,8 +727,10 @@ for example a row with a non-default name, a retired profile, a row of a service
 that no longer has its own connection, or a token row of a connection that now
 uses OAuth for the caller. `DELETE /v1/credentials/retained/{credentialId}`
 deletes one of them; it returns HTTP 404 `credential_not_found` for another
-owner's row and HTTP 400 `credential_invalid` for a connection's active token,
-which is deleted through its connection.
+owner's row and HTTP 403 `credential_invalid` for a connection's active token,
+which is deleted through its connection. The check runs inside the deleting
+transaction, so a concurrent replacement cannot turn it into a delete of the
+active token.
 
 `GET /v1/credentials/targets` returns the connections whose token the caller can
 store now, with the schema-driven input form:
@@ -821,7 +823,12 @@ retired the import or its command entry in the meantime.
 
 Credential management audit targets name `{"principal": …, "connection": …}`
 (verification adds `probeService`); retained-row deletes name
-`{"principal": …, "credentialId": …}`.
+`{"principal": …, "credentialId": …}`. Records of connection operations also
+list the connection's consuming services in
+`providerAudit.management.targetServices`, in configured order. An administrator
+operation on a connection with exactly one consumer names it as `targetService`,
+its scope service; one on a connection several services share has no scope
+service, so no service policy manager sees it.
 
 Self-service token management:
 
@@ -1538,8 +1545,9 @@ predicate that filters cannot widen:
 A record's scope service is its `service`, except that `broker` records use
 `providerAudit.management.targetService` (set on policy management that names a
 service or grant, and on admin operations (`admin.*`) whose target names a
-service). Management admission rejections also use `service = "broker"` but
-have no scope service. Self-service operations never carry `targetService`.
+service or a credential connection with a single consuming service).
+Management admission rejections also use `service = "broker"` but have no scope
+service. Self-service operations never carry `targetService`.
 
 **Filter suggestions.** `GET …/options` takes no query parameters and returns
 `result = {"services": [{"service": "broker", "actions": ["auth.local.login", …]}]}`.
@@ -3100,12 +3108,16 @@ user or their current groups, on at least one consuming service whose connection
 selects OAuth for the user. The broker rechecks this against current runtime
 policy and group membership when the flow starts, when the callback claims it,
 and inside the transaction installing the tokens. Credential rights do not
-authorize these routes. An administrator discovering an imported MCP service
-connects with `importedService` naming it, for example
-`{"registration": "tickets-oauth", "importedService": "tickets", "returnPath": "/ui/admin/catalog"}`;
-the import's administrator-discovery admission then applies to that service, and
-`importedService` is required with `returnPath` `/ui/admin/catalog`. Imported
-consumers keep their imported-version fence. Connect/Reconnect without current
+authorize these routes. An imported consumer also admits an administrator
+through its service-keyed import-discovery admission, and counts only at the
+imported version it had when the flow started; a consumer rebound to another
+registration or profile makes the flow stale. `importedService` names the
+imported consumer whose catalog Import tab the completion page links to, and is
+required with `returnPath` `/ui/admin/catalog`, for example
+`{"registration": "tickets-oauth", "importedService": "tickets", "returnPath": "/ui/admin/catalog"}`.
+A consent flow left pending by an earlier Broker version is discarded, as if it
+had expired; its user starts consent again, and the stored connection is
+unaffected. Connect/Reconnect without current
 Broker setup authority returns HTTP 403 with `reasonCode: "service_action_denied"`
 and `error.message: "oauth_setup_denied"`. Upstream permission or scope rejection
 remains HTTP 400 with `reasonCode: "credential_invalid"` and

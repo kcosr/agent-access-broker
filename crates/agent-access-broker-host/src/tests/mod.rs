@@ -68,6 +68,7 @@ pub(crate) use broker::{ConfigDoc, TestBroker, TestProvider, with_provider_insta
 mod confluence_read_presentation;
 mod conformance;
 pub(crate) mod conformance_import;
+mod credential_connections;
 mod discovery;
 mod domain_reasons;
 mod gitlab_uploads;

@@ -1720,7 +1720,10 @@ every query, and filters cannot widen it:
   admission rejections also use `broker` and have no scope service. The broker sets
   `targetService` on policy management that names a service or grant and on
   admin operations (`admin.*`) whose target names a service, such as manager
-  assignments, credential changes, and service-limit overrides. Records
+  assignments and service-limit overrides, or a credential connection with a
+  single consuming service. Connection records list every consumer in
+  `targetServices`; a change to a connection several services share has no
+  scope service. Records
   without a scope service, such as users' own token, credential, and login
   activity, are never visible to this tier;
 - managed users see records whose `principal` is their own, including records

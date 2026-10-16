@@ -927,7 +927,7 @@ contains `001_audit_baseline`.
 | `ts_us` | `timestamp` as UTC epoch microseconds; the insert time, with a warning, if it does not parse. |
 | `broker_request_id`, `agent_request_id` | `brokerRequestId`, `agentRequestId`. |
 | `principal`, `service`, `action`, `decision`, `reason_code`, `execution_context` | The same-named record fields. `decision` is `allow`, `deny`, or `error`. |
-| `scope_service` | The configured service the record is about: `service`, except that `broker` records use `providerAudit.management.targetService` (set on policy management and on `admin.*` operations whose target names a service; otherwise NULL). Management admission rejections use `broker` without a target service. |
+| `scope_service` | The configured service the record is about: `service`, except that `broker` records use `providerAudit.management.targetService` (set on policy management and on `admin.*` operations whose target names a service or a credential connection with a single consuming service; otherwise NULL). Management admission rejections use `broker` without a target service. |
 | `phase` | The first present of `providerAudit.streamPhase`, `gateway.phase`, `gatewayPhase`, `management.phase`, and `auth.phase`. Password change and authenticated logout use `preflight` before mutation and `success` for completion. |
 | `token_id`, `token_class` | `identitySource.tokenId`, `identitySource.tokenClass`. |
 | `grant_id` | `matchedGrant.grantId`; for search records, the first grant of the matched band. |
