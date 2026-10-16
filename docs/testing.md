@@ -214,6 +214,7 @@ node scripts/public-api.mjs check
 python3 scripts/generate-rust-notices.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
+python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 node scripts/check-doc-links.mjs
 ```
 
@@ -382,6 +383,8 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
 - `cloudbees_smoke.rs`
+- `command_import_smoke.rs` imports the reference command through the real CLI
+  and broker; see [command imports](#command-imports).
 - `rate_limit_errors.rs` answers the real CLI with synthetic broker 429
   responses (`rate_limited`, `upstream_rate_limited`, `concurrency_limited`) and
   checks exit 7, the single stderr `rate limited: ` line, the unchanged stdout
@@ -1896,6 +1899,91 @@ operator removal of the document destination on offline restart.
 The portal OpenAPI fixture covers public/private definition discovery, the
 security-scheme picker, reviewed actions, refresh and invocation. The ordinary
 MCP and OAuth fixtures remain regression checks.
+
+## Command imports
+
+The reference command,
+`crates/agent-access/tests/fixtures/command-imports/ticketing.py`, implements the
+[command contract](command-imports.md) in Python's standard library with
+deterministic data and alternative manifests. Its triggers cover every
+contract error code (with `retryAfterSeconds` on `upstream_rate_limited`),
+each failure receipt status, some contract violations (an unknown receipt
+field, a nested locator, a locator holding a supplied credential or proxy
+password, an unknown code, a control character in a message, a wrong shape,
+an output schema mismatch, invalid, trailing or empty JSON and oversized
+output) and process failures (a non-zero exit, a signal, a process that never
+answers, a delay and a stderr flood). It has no trigger for pipes held open by
+a descendant, credentials or proxy secrets in a message or verification
+stage, an invalid `retryAfterSeconds` or a receipt on a read; the adapter's
+own tests in `crates/agent-access-command-import` cover those, with shell
+fixtures for the process cases. Its own check runs it as the Broker would, as
+separate processes with a cleared environment, and checks the manifest rules
+and the request shapes it accepts:
+
+```bash
+python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
+```
+
+Run it whenever the reference command or the contract it documents changes.
+
+`crates/agent-access/tests/command_import_smoke.rs`, part of `cargo test`,
+approves the reference command in a real broker and drives the shipped CLI
+and HTTP API: `describe` discovery and acceptance, the `username_token`
+service credential, resources of the imported type, a personal credential
+verified by the command's `verify`, and Broker-checked and command-checked
+reads and writes with their receipts. It checks that the Broker's own denial
+of an uncovered project, for a read and a write, starts no process (the
+audit's `spawned` fact) and carries no write receipt, while the command's
+refusal of a write starts one and reports `not_applied`. It maps command
+answers to statuses and reasons: an error code, `upstream_rate_limited` with
+`retryAfterSeconds` and `Retry-After`, `applied_unverified` with its stage
+and locators, and as contract violations a malformed receipt, a locator
+echoing the service credential (absent from the response) and oversized
+output. A same-subject, same-priority pair of `issue.search` grants in
+personal and service modes, with distinct boundaries and a group exclusion
+arriving as `except`, is compared with the catalog, MCP listing and resource
+discovery, also under a token restricted to one resource and after the
+personal credential is removed. Refreshes that remove one attribute and then
+the last one are accepted and the next call, without a reload, carries
+exactly the remaining attributes. It also checks the caller block (kind,
+groups and token ID), the request's `network` object under
+`network = "inherit"` without a configured proxy, and the absence of
+supplied secrets from responses and the audit log. Both it and the portal's
+real-service spec run the command through `python3`; a missing interpreter
+fails them rather than skipping them.
+
+```bash
+cargo test --locked -p agent-access --test command_import_smoke
+```
+
+The portal's `tests/imports-command.spec.ts` runs the same reference command
+under a real Broker in the browser: importing it by its approved name, the
+preview's command metadata and "Resources checked by", the service credential
+with its username, the grant editor, the personal `username-token`
+credential form and its verification, HTTP invocation in both authorization
+modes with write receipts, the Broker's denial of an uncovered project
+(its audit record shows no process started) beside the command's refusal of
+a write (which started one and applied nothing), the HTTP MCP listing, the
+Actions tab and audit records, and a refresh after the command is upgraded
+(reloaded with its `v2` manifest) with a resource type change and confirmed
+grants.
+
+The rest of the portal's command import coverage uses explicit API fixtures
+shaped like an import of the reference command
+(`apps/portal/unit/command-import.fixture.ts`) and starts no Broker and no
+command. `unit/import-command.test.ts` covers the approved-name picker and
+credential modes, stdin bindings, "Resources checked by" in the review and the
+grant editor, the preview's command metadata and resource type decisions,
+Broker type ID choices (including IDs already registered), the credential
+modes the manifest declares, metadata-only acceptance, the structured lists
+of a refused acceptance (`target.affectedGrants`, with links only for
+resolvable grant references, and `target.resources`) and removed types.
+`tests/imports-command-review.spec.ts` drives the same flows in the browser:
+draft creation with and without credentials, discovery and refresh review,
+acceptance bodies and refusals, the Actions tab, the username-and-token and
+token-only execution credentials and resource creation without removed types.
+`tests/token-page.spec.ts` covers a command service's resource restrictions on
+the token page.
 
 ### Local password method transitions
 

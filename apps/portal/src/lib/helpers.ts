@@ -184,6 +184,11 @@ export function credentialStatus(credential?: CredentialMetadata) {
   return "Not verified";
 }
 
+/** The toast after a verification: a service without upstream verification checks the credential locally only. */
+export function credentialVerifiedMessage(status: CredentialMetadata["verificationStatus"]) {
+  return status === "local_verified" ? "Credential checked locally; the service does not verify it upstream" : "Credential verified";
+}
+
 export function credentialTone(credential?: CredentialMetadata): BadgeTone {
   if (!credential) return "neutral";
   if (credential.status !== "active") return "neutral";

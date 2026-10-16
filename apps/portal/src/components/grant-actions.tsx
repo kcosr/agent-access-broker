@@ -1,5 +1,6 @@
 // Grant action selection in read-only and write-capable columns, and the
-// write-capability badge shown for a selection.
+// write-capability badge shown for a selection. A command import's actions
+// also say whether the Broker or the command checks their resources.
 import { useId, useState } from "react";
 import { actionSelectionCounts, grantActionGroups, selectMatchingActions, type ClassifiedAction } from "../lib/grant-actions";
 import { Badge, Button, Checkbox, FilterInput } from "../workbench";
@@ -10,12 +11,15 @@ export const ACTION_COLUMNS_HINT = "All / None apply to the matching actions in 
 const actionDescription = (action: ClassifiedAction) =>
   action.available === false ? `Unavailable · ${action.unavailableReason ?? "Not currently executable"}` : action.description;
 
+const CHECKED_BY: Record<NonNullable<ClassifiedAction["resourcesCheckedBy"]>, string> = { broker: "Broker", command: "Command" };
+
 export function GrantActionSelector({
   available,
   selected,
   disabled,
   filterLabel = "Filter actions",
   hint = true,
+  commandCaveatId,
   onChange
 }: {
   available: readonly ClassifiedAction[];
@@ -24,6 +28,8 @@ export function GrantActionSelector({
   filterLabel?: string;
   /** False when the page explains All / None once for several selectors. */
   hint?: boolean;
+  /** The element explaining what a command must enforce, which command-checked actions point to. */
+  commandCaveatId?: string | undefined;
   onChange: (selected: string[]) => void;
 }) {
   const id = useId();
@@ -74,13 +80,19 @@ export function GrantActionSelector({
                   <Checkbox
                     key={action.action}
                     aria-label={action.action}
+                    aria-describedby={action.resourcesCheckedBy === "command" ? commandCaveatId : undefined}
                     label={
                       <span className="wb-mono">
                         <ActionName action={action.action} />
                       </span>
                     }
                     // Descriptions are clamped; the title shows the full text.
-                    description={<span title={actionDescription(action)}>{actionDescription(action)}</span>}
+                    description={
+                      <span title={actionDescription(action)}>
+                        {action.resourcesCheckedBy ? <b>Resources checked by: {CHECKED_BY[action.resourcesCheckedBy]}. </b> : null}
+                        {actionDescription(action)}
+                      </span>
+                    }
                     checked={selected.includes(action.action)}
                     disabled={disabled || (action.available === false && !selected.includes(action.action))}
                     onChange={(event) => onChange(selectMatchingActions(selected, [action.action], event.target.checked))}

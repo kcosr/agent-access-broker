@@ -555,17 +555,44 @@ All notable changes to this project are documented in this file.
   command's write receipt with `operationDispatched`; a response that breaks
   the contract, including a message, verification stage or locator
   containing a supplied credential or proxy secret in any form the command
-  receives it, fails `operation_failed`; private attribute values are not
-  checked. Every admitted exact resource is fenced by its row version,
-  creation time (to the second), display name, type and selector, and the
-  import's dispatch fence is checked again immediately before the process
-  starts. Invocation audit adds
+  receives or derives (each token, the Basic `username:token` form, and the
+  proxy password raw, percent-encoded, in the proxy URL and in its Basic
+  `username:password` form), fails `operation_failed`; private attribute
+  values are not checked, and command messages may hold no control
+  character other than tab. Every admitted exact resource is fenced by its
+  row version, creation time (to the second), display name, type, selector
+  and private attribute versions, and the import's dispatch fence is checked
+  again immediately before the process starts. Invocation audit adds
   `providerAudit.command` (process facts, with `contractViolation` `null`
   until a verdict) and `providerAudit.commandAuthorization` (the admitted
-  grants), kept for interrupted calls. Verifying a personal credential runs
-  the command's `verify` when its manifest declares it, fenced like a call,
-  and stays local otherwise; its audit, failed or not, keeps the process facts
-  with no upstream status.
+  authorization in either mode), kept for interrupted calls. Shutdown fails a
+  command call it stops with `operation_cancelled`. Verifying a personal
+  credential runs the command's `verify` when its manifest declares it,
+  fenced like a call, and stays local otherwise; its audit, failed or not,
+  keeps the process facts with no upstream status.
+- The portal imports local commands. **Import service** offers the **Local
+  command** type, which picks an operator-approved command by name, never a
+  path, and chooses shared and personal credential modes, or none. The
+  discovery preview shows the command version, credential kind and
+  verification support, any OAuth notice, each resource type's decision with
+  the stored resources it depends on and an editable Broker type ID for new
+  types (sent as `resourceTypeIds`), and for each action **Resources checked
+  by: Broker** or **Command**, with what the command must enforce. A command
+  import with accepted actions may accept a preview with no selections. The
+  Import tab shows the accepted version, credential, verification and resource
+  types and takes the username of a `username_token` execution credential; the
+  Actions tab, action drawer and grant editor (from the policy catalog's
+  `resourcesCheckedBy`) show who checks each action's resources. Acceptance
+  messages report deleted attribute values and dropped types, and a refused
+  import change lists the retained grants and stored resources in its
+  `target.affectedGrants` (each grant once, by the managed ID or `toml:<index>`
+  reference the grant routes accept, with its subjects' reasons joined) and
+  `target.resources`, linked to where they are fixed. The preview rejects a
+  Broker type ID another service's type already registers, the credential
+  mode controls name the modes the manifest declares, a token-only execution
+  credential is saved without a username, and verifying a credential the
+  command does not verify upstream says it was checked locally. Resource
+  creation no longer offers removed imported types.
 
 ### Changed
 

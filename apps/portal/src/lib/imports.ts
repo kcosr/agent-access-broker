@@ -57,9 +57,22 @@ export function importReviewRows(data: ImportPreviewResult): ImportReviewRow[] {
 export function selectedImportActions(rows: ImportReviewRow[]): ImportSelection[] {
   return rows.filter((row) => row.selected && row.selectable).map((row) => ({ source: row.tool.definition.source, action: row.action.trim(), ...(row.label.trim() ? { label: row.label.trim() } : {}), readOnly: row.readOnly }));
 }
-export function importSelectionError(service: ImportedServiceRecord, rows: ImportReviewRow[]): string | null {
+/** What an adapter's discovered items are called: OpenAPI operations, command actions, MCP tools. */
+export function importItemNoun(adapterKind: string): "operation" | "action" | "tool" {
+  return adapterKind === "openapi_http" ? "operation" : adapterKind === "command" ? "action" : "tool";
+}
+/**
+ * Whether the preview may be accepted with no selections: a command preview
+ * for an import that already has accepted actions, which then applies only
+ * its service metadata and resource type changes. A draft needs a selection.
+ */
+export function metadataOnlyAcceptance(data: ImportPreviewResult): boolean {
+  return data.service.actions.length > 0 && Boolean(data.preview?.manifest.serviceMetadata);
+}
+export function importSelectionError(data: ImportPreviewResult, rows: ImportReviewRow[]): string | null {
+  const service = data.service;
   const selected = rows.filter((row) => row.selected && row.selectable);
-  if (!selected.length) return `Select at least one supported ${service.definition.adapterKind === "openapi_http" ? "operation" : "tool"}.`;
+  if (!selected.length) return metadataOnlyAcceptance(data) ? null : `Select at least one supported ${importItemNoun(service.definition.adapterKind)}.`;
   const names = new Set<string>();
   for (const row of selected) {
     const name = row.action.trim();
@@ -70,10 +83,14 @@ export function importSelectionError(service: ImportedServiceRecord, rows: Impor
   }
   return null;
 }
+/** `record[key]` only when the record itself has it: keys such as action names may name `Object.prototype` members. */
+function ownEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
 export function affectedImportGrants(data: ImportPreviewResult, rows: ImportReviewRow[]): string[] {
   return [...new Set(rows.filter((row) => row.selected && row.selectable && row.existing && row.existing.status !== "retired"
     && (row.existing.status !== "enabled" || row.readOnly !== row.existing.definition.readOnly || behaviorChanged(row.existing.definition, row.tool.definition)))
-    .flatMap((row) => data.affectedGrantsByAction[row.existing!.definition.action] ?? []))].sort();
+    .flatMap((row) => ownEntry(data.affectedGrantsByAction, row.existing!.definition.action) ?? []))].sort();
 }
 export function importVersions(data: { catalogRevision: number; service: ImportedServiceRecord }) {
   return { expectedVersion: data.service.version, expectedCatalogRevision: data.catalogRevision };

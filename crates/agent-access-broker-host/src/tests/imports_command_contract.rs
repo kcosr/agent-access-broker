@@ -1464,15 +1464,16 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
 /// Criterion 17: `network = "inherit"` passes the proxy route with its
 /// credentials, the trust mode and the configured `caCertificate` path as
 /// is, with the convenience variables each trust mode sets; `network =
-/// "none"` passes neither fields nor variables. A locator echoing the proxy
-/// password is a contract violation.
+/// "none"` passes neither fields nor variables. A locator or message echoing
+/// the proxy password in any form a command receives it, including the Basic
+/// `username:password` form, is a contract violation, for invoke and verify.
 #[tokio::test]
 async fn inherited_network_settings_follow_the_trust_mode() {
     let ca = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../agent-access-core/tests/fixtures/outbound-tls/ca-a.pem"
     );
-    let mut contract = Contract::new(&tickets_manifest(false));
+    let mut contract = Contract::new(&tickets_manifest(true));
     contract.approve("offline", &clock_manifest(), |entry| {
         entry.network = agent_access_core::CommandNetwork::None;
         entry.env.insert(
@@ -1625,7 +1626,62 @@ async fn inherited_network_settings_follow_the_trust_mode() {
         assert_eq!(body["reasonCode"], "operation_failed");
         assert!(!body.to_string().contains("proxy-pass"), "{body}");
     }
+
+    // So does the Basic `username:password` form of the proxy credentials,
+    // in a locator or an error message of a call and of a verification.
+    use base64::Engine;
+    let basic = base64::engine::general_purpose::STANDARD.encode("proxy-user:proxy-pass/5e");
+    for (case, response) in [
+        (
+            "basic-locator",
+            format!(
+                r#"{{"ok": true, "result": {{"key": "K"}}, "receipt": {{"safeLocators": {{"auth": "Basic {basic}"}}}}}}"#
+            ),
+        ),
+        (
+            "basic-message",
+            format!(
+                r#"{{"ok": false, "error": {{"code": "upstream_failed", "message": "Proxy rejected Basic {basic}."}}}}"#
+            ),
+        ),
+    ] {
+        contract.respond("invoke", Some(&response));
+        let (status, body) = invoke_as(
+            &app,
+            &agent,
+            case,
+            "tickets",
+            "issue.create",
+            json!({"project": "OPS", "summary": "x"}),
+        )
+        .await;
+        if proxied {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{case}: {body}");
+            assert_eq!(body["reasonCode"], "operation_failed", "{case}");
+            assert!(!body.to_string().contains(&basic), "{case}: {body}");
+        }
+    }
     contract.respond("invoke", None);
+    contract.respond(
+        "verify",
+        Some(&format!(
+            r#"{{"ok": false, "error": {{"code": "upstream_unauthorized", "message": "Proxy said Basic {basic}."}}}}"#
+        )),
+    );
+    let (status, body) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        None,
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    if proxied {
+        assert_eq!(body["reasonCode"], "operation_failed", "{body}");
+        assert!(!body.to_string().contains(&basic), "{body}");
+    }
+    contract.respond("verify", None);
 
     // `network = "none"`: no network field and only the configured `env`.
     let (status, body) = invoke_as(&app, &agent, "offline", "offline", "time.now", json!({})).await;

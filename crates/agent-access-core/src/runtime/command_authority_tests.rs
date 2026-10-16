@@ -1477,6 +1477,72 @@ fn publish_retained(
     )
 }
 
+#[test]
+fn refusals_name_each_retained_grant_once_by_the_reference_clients_resolve() {
+    // A two-subject grant whose credential mode the action does not support
+    // fails once per subject; it is listed once, as `toml:0`, with the
+    // reasons of both subjects. The second invalid grant is `toml:1`, and the
+    // valid third grant is not listed.
+    let mut both = grant(
+        "user:alice",
+        "issue.svc_search",
+        "per_user",
+        0,
+        &[],
+        &["wide"],
+    );
+    both.subjects.push("user:bob".into());
+    let error = publish_retained(
+        actions(),
+        vec![
+            both,
+            grant(
+                "group:engineering",
+                "issue.stats",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+            grant(
+                "group:engineering",
+                "issue.search",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+    )
+    .err()
+    .unwrap();
+    let ManagedStoreError::ImportChangeBlocked(blocked) = error else {
+        panic!("expected a blocked import change: {error}");
+    };
+    assert_eq!(
+        blocked
+            .affected_grants
+            .iter()
+            .map(|grant| grant.id.as_str())
+            .collect::<Vec<_>>(),
+        ["toml:0", "toml:1"],
+        "{blocked:?}"
+    );
+    let first = &blocked.affected_grants[0];
+    assert!(
+        first.reason.contains("policy.grants[0] subjects[0]")
+            && first.reason.contains("policy.grants[0] subjects[1]"),
+        "{first:?}"
+    );
+    assert!(!first.reason_code.is_empty());
+    assert!(
+        blocked.affected_grants[1]
+            .reason
+            .starts_with("policy.grants[1] subjects[0]"),
+        "{blocked:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_action_naming_a_dropped_type_fails_closed_alone() {
     // A refresh removed `legacy` and quarantined its action; once its

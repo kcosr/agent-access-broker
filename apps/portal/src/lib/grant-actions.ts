@@ -1,5 +1,7 @@
+import type { ResourcesCheckedBy } from "../types";
+
 /** Classification describes upstream effects; it never changes a grant's actions. */
-export type ClassifiedAction = { action: string; description?: string; readOnly?: boolean; available?: boolean; unavailableReason?: string };
+export type ClassifiedAction = { action: string; description?: string; readOnly?: boolean; available?: boolean; unavailableReason?: string; resourcesCheckedBy?: ResourcesCheckedBy };
 
 export function actionSelectionCounts(available: readonly ClassifiedAction[], selected: readonly string[]) {
   const reviewedReads = new Set(available.filter((action) => action.readOnly === true).map((action) => action.action));

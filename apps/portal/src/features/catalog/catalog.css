@@ -153,6 +153,12 @@
   flex-direction: column;
   gap: 8px;
 }
+/* Resources or grants a rejected acceptance names */
+.pt-catalog-error-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
 
 /* Private attribute value with reveal and copy */
 .pt-catalog-secret {

@@ -1,12 +1,14 @@
 import { AdminIconButton, AdminButton } from "../../components/admin-access";
 // A service page's Actions tab: every action from the policy catalog; for an
 // imported service, every accepted action record with its status, OpenAPI
-// operation, label, and enable/disable/retire controls. Rows open a drawer.
+// operation or who checks a command action's resources, label, and
+// enable/disable/retire controls. Rows open a drawer.
 import { useMemo, type ReactNode } from "react";
-import type { ImportActionRecord, ImportActionStatus, ImportPreviewResult } from "../../import-types";
+import type { ImportActionRecord, ImportActionStatus, ImportPreviewResult, ImportResourceTypeDeclaration } from "../../import-types";
 import type { PolicyActionCatalog } from "../../types";
 import { ACTION_GRANT_LABEL } from "../../lib/helpers";
 import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
+import { COMMAND_CHECK_CAVEAT, COMMAND_KIND, commandResourceCheck, resourceCheckParts, resourceCheckText } from "../../lib/import-command";
 import { groupRows, sortRows } from "../../lib/table-sort";
 import { urlParam } from "../../lib/url-state";
 import { Badge, Banner, Button, type DataColumn, DataTable, Disclosure, Drawer, DrawerSection, EmptyState, FilterInput, Icon, KeyValue, List, ListFooter, plural, Seg, type SortState, StateCell, StatePill, TableGroupHeader, type Tone, Toolbar, ToolbarRow, ToolbarSummary } from "../../workbench";
@@ -68,14 +70,30 @@ export function serviceActionRows(service: CatalogService): ActionRow[] {
   }));
 }
 
-function filterRows(rows: ActionRow[], state: { effect: string; q: string }) {
+/**
+ * Who checks an imported action's resources: the policy catalog's
+ * `resourcesCheckedBy` when the Broker reports it, with the type and inputs
+ * from the action's declaration.
+ */
+function actionResourceCheck(row: ActionRow) {
+  const check = commandResourceCheck(row.record!.definition);
+  return row.catalog?.resourcesCheckedBy ? { ...check, by: row.catalog.resourcesCheckedBy } : check;
+}
+
+/** The resource types a command import has accepted, for its actions' "Resources checked by". */
+function commandTypes(service: CatalogService | null): readonly ImportResourceTypeDeclaration[] | null {
+  return service?.imported?.definition.adapterKind === COMMAND_KIND ? service.imported.acceptedMetadata?.resourceTypes ?? [] : null;
+}
+
+function filterRows(rows: ActionRow[], state: { effect: string; q: string }, types: readonly ImportResourceTypeDeclaration[] | null) {
   const query = state.q.trim().toLowerCase();
   return rows.filter((row) => {
     if (state.effect === "read" && !row.readOnly) return false;
     if (state.effect === "write" && row.readOnly) return false;
     if (!query) return true;
     const operation = row.record ? openApiOperation(row.record.definition) : null;
-    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, ...(row.catalog?.requiredScopeTypes ?? [])]
+    const checked = row.record && types ? resourceCheckText(actionResourceCheck(row), types) : null;
+    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, ...(row.catalog?.requiredScopeTypes ?? [])]
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
@@ -132,9 +150,10 @@ export function useServiceActions(service: CatalogService | null) {
   // Only imported actions have a status to group by.
   const grouping: Grouping = list.state.group === "status" && !imported ? "none" : list.state.group;
   const namespaces = useMemo(() => namespaceKeys(all), [all]);
+  const types = useMemo(() => commandTypes(service), [service]);
   const shown = useMemo(
-    () => orderActions(filterRows(all, list.state), list.state.sort, grouping, namespaces),
-    [all, list.state, grouping, namespaces]
+    () => orderActions(filterRows(all, list.state, types), list.state.sort, grouping, namespaces),
+    [all, list.state, types, grouping, namespaces]
   );
   const open = list.openId ? all.find((row) => row.action === list.openId) ?? null : null;
   const counts = { all: all.length, read: all.filter((row) => row.readOnly).length, write: all.filter((row) => !row.readOnly).length };
@@ -219,13 +238,29 @@ function describe(row: ActionRow) {
   );
 }
 
+/** "Broker" or "Command", with the type the action's resources are checked against. */
+function checkedByCell(row: ActionRow, types: readonly ImportResourceTypeDeclaration[]) {
+  if (!row.record) return <span className="wb-muted">—</span>;
+  const check = actionResourceCheck(row);
+  const parts = resourceCheckParts(check, types);
+  return (
+    <span title={check.by === "command" ? COMMAND_CHECK_CAVEAT : undefined}>
+      {check.by === "broker" ? "Broker" : "Command"}
+      <span className="wb-muted"> · {parts.type ?? "no resource type"}</span>
+    </span>
+  );
+}
+
 function actionColumns({
   operations,
   scopes,
+  commandTypes: types,
   rowActions
 }: {
   operations: boolean;
   scopes: boolean;
+  /** A command import's accepted types: adds "Resources checked by". */
+  commandTypes: readonly ImportResourceTypeDeclaration[] | null;
   rowActions: ((row: ActionRow) => ReactNode) | null;
 }): DataColumn<ActionRow>[] {
   return [
@@ -280,6 +315,18 @@ function actionColumns({
           } satisfies DataColumn<ActionRow>
         ]
       : []),
+    ...(types
+      ? [
+          {
+            key: "checked-by",
+            header: "Resources checked by",
+            priority: 2,
+            truncate: true,
+            minWidth: "12ch",
+            cell: (row: ActionRow) => checkedByCell(row, types)
+          } satisfies DataColumn<ActionRow>
+        ]
+      : []),
     {
       key: "credentials",
       header: "Credentials",
@@ -319,12 +366,16 @@ function ActionTable({ model, data, error, retrying }: { model: ServiceActionsMo
   const actions = useImportActions();
   const imported = Boolean(service?.imported);
   const operations = useMemo(() => all.some((row) => row.record && openApiOperation(row.record.definition)), [all]);
+  const types = useMemo(() => commandTypes(service), [service]);
   const columns = useMemo(
     () =>
       actionColumns({
         operations,
-        // Imported actions never carry resource scopes (they are action grants).
+        // Imported actions carry no catalog scope column: MCP and OpenAPI
+        // actions are action grants, and command actions show who checks
+        // their resources instead.
         scopes: !imported,
+        commandTypes: types,
         rowActions: imported
           ? (row) =>
               row.record && data ? (
@@ -343,7 +394,7 @@ function ActionTable({ model, data, error, retrying }: { model: ServiceActionsMo
               ) : null
           : null
       }),
-    [operations, imported, data, actions]
+    [operations, imported, types, data, actions]
   );
   if (!service) return null;
   const empty = !all.length ? (
@@ -404,6 +455,10 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
   const actions = useImportActions();
   if (!open || !service) return null;
   const operation = open.record ? openApiOperation(open.record.definition) : null;
+  const types = commandTypes(service);
+  const check = open.record && types ? actionResourceCheck(open) : null;
+  const checkParts = check && types ? resourceCheckParts(check, types) : null;
+  const checkType = check?.type ? types?.find((type) => type.id === check.type) : undefined;
   const transitions = open.record && data ? actionTransitions(open, data) : [];
   const status = open.status ? ACTION_STATUS[open.status] : null;
   const inputSchema = open.record?.definition.inputSchema ?? open.catalog?.inputSchema;
@@ -493,6 +548,32 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
               operation.security ? { label: "Security", value: openApiSchemeLabel(operation.security) } : null
             ]}
           />
+        </DrawerSection>
+      ) : null}
+      {check && checkParts ? (
+        <DrawerSection title="Resources">
+          <KeyValue
+            labelWidth={150}
+            items={[
+              { label: "Checked by", value: check.by === "broker" ? "Broker" : "Command" },
+              {
+                label: "Resource type",
+                value: checkParts.type ? (
+                  <>
+                    {checkParts.type} {checkType ? <span className="wb-mono wb-muted">{checkType.brokerType}</span> : null}
+                  </>
+                ) : (
+                  <span className="wb-muted">No resource type: grants cover the whole action</span>
+                )
+              },
+              checkParts.inputs.length ? { label: "From inputs", value: <span className="wb-mono">{checkParts.inputs.join(", ")}</span> } : null
+            ]}
+          />
+          <p className="pt-prose wb-small">
+            {check.by === "broker"
+              ? "The Broker resolves these inputs against the resource catalog and grants, and denies the call before the command starts unless a grant covers every value."
+              : COMMAND_CHECK_CAVEAT}
+          </p>
         </DrawerSection>
       ) : null}
       {inputSchema || open.record ? (

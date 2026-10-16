@@ -1,6 +1,7 @@
 // Imported service mutations. Each call resolves after the admin caches have
-// refetched, so the next action uses the new service and catalog versions.
-// Failures reject; callers show them where they happened.
+// refetched, so the next action uses the new service and catalog versions;
+// an acceptance also refetches the registered resource types. Failures
+// reject; callers show them where they happened.
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { brokerApi } from "../../api";
@@ -13,6 +14,7 @@ import type {
   ImportServiceStatus
 } from "../../import-types";
 import { importVersions, selectedImportActions, type ImportReviewRow } from "../../lib/imports";
+import { chosenResourceTypeIds, resourceTypeEffectsText, type ResourceTypeIdChoices } from "../../lib/import-command";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { Session } from "../../types";
 import { useToast } from "../../workbench";
@@ -55,10 +57,18 @@ export function useImportActions() {
       ]);
     }
 
-    async function run<T>(operation: (current: Session) => Promise<T>, message: string) {
+    /**
+     * The registered resource types, which the portal keeps for the session:
+     * accepting a command import adds, changes or drops its types.
+     */
+    async function refreshResourceTypes() {
+      await queryClient.invalidateQueries({ queryKey: portalQueryKeys.resourceTypes(viewer) });
+    }
+
+    async function run<T>(operation: (current: Session) => Promise<T>, message: string | ((result: T) => string), changesResourceTypes = false) {
       const result = await attempt(operation);
-      await refresh();
-      toast(message, { tone: "success" });
+      await Promise.all([refresh(), changesResourceTypes ? refreshResourceTypes() : null]);
+      toast(typeof message === "string" ? message : message(result), { tone: "success" });
       return result;
     }
 
@@ -80,19 +90,27 @@ export function useImportActions() {
       return result;
     }
 
-    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean): Promise<ImportRecordResult> {
+    /** Accepts the selected actions; a command preview also takes the chosen Broker type IDs of its new resource types. */
+    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ResourceTypeIdChoices): Promise<ImportRecordResult> {
       const preview = data.preview;
       if (!preview) return Promise.reject(new Error("This preview has expired. Run discovery again."));
       const selections = selectedImportActions(rows);
+      const resourceTypeIds = chosenResourceTypeIds(data.resourceTypeChanges ?? [], typeIds);
       return run(
         (current) =>
           brokerApi.acceptImport(current, data.service.definition.service, {
             ...importVersions(data),
             manifestHash: preview.manifestHash,
             selections,
-            confirmAffectedGrants
+            confirmAffectedGrants,
+            ...(Object.keys(resourceTypeIds).length ? { resourceTypeIds } : {})
           }),
-        `${selections.length} ${selections.length === 1 ? "action" : "actions"} accepted`
+        (result) => {
+          const accepted = selections.length ? `${selections.length} ${selections.length === 1 ? "action" : "actions"} accepted` : "Command metadata and type changes accepted";
+          const effects = resourceTypeEffectsText(result.resourceTypeEffects);
+          return effects ? `${accepted}; ${effects}` : accepted;
+        },
+        true
       );
     }
 
@@ -126,10 +144,11 @@ export function useImportActions() {
       });
     }
 
-    function writeToken(data: Versioned, purpose: ImportPurpose, token: string) {
+    /** `username` accompanies the token of a command import whose credential is a username and token. */
+    function writeToken(data: Versioned, purpose: ImportPurpose, token: string, username?: string) {
       return run(
-        (current) => brokerApi.writeImportToken(current, data.service.definition.service, purpose, { ...importVersions(data), token }),
-        `${purpose[0]!.toUpperCase()}${purpose.slice(1)} token saved`
+        (current) => brokerApi.writeImportToken(current, data.service.definition.service, purpose, { ...importVersions(data), token, ...(username !== undefined ? { username } : {}) }),
+        `${purpose[0]!.toUpperCase()}${purpose.slice(1)} ${username !== undefined ? "credential" : "token"} saved`
       );
     }
 

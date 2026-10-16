@@ -28,6 +28,10 @@ export type ResourceTypeMetadata = {
   attributes?: ResourceAttributeMetadata[];
   /** Present only when the type accepts namespace selectors. */
   namespace?: { label: string; membersLabel: string; example: string };
+  /** The imported service that declares the type. */
+  importedService?: string;
+  /** Present when the declaring import no longer does: the type accepts no new resources. */
+  removed?: true;
 };
 
 export type OAuthScopeMode = "explicit" | "server_default";
@@ -509,7 +513,12 @@ export type PolicyActionCatalog = {
   credentialModes: string[];
   lookupRequired: boolean;
   inputSchema: Record<string, unknown>;
+  /** A command import's action: whether the Broker or the command checks its resources. */
+  resourcesCheckedBy?: ResourcesCheckedBy;
 };
+
+/** `broker` checks the resources an action names before it runs; `command` enforces the caller's grants itself. */
+export type ResourcesCheckedBy = "broker" | "command";
 
 export type PolicyServiceCatalog = {
   available?: boolean;

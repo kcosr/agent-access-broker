@@ -227,6 +227,10 @@ broker against a stubbed controller and drives typed and JSON-send downloads,
 stdio MCP output, bounded reads, build triggers, redirect rejection,
 and audit checks through the real `agent-access` binary.
 
+The command import smoke (`command_import_smoke.rs`) is included in `cargo
+test`; it imports the reference command through the real `agent-access`
+binary and needs `python3`, whose absence fails it.
+
 ## Layout
 
 - `crates/agent-access-provider`: the backend contract: service descriptors,
@@ -337,6 +341,11 @@ and audit checks through the real `agent-access` binary.
   `src/build_info.rs` stamps its identity, including the release commit for its
   workspace modules. Its library exports only those two functions.
 - `crates/agent-access`: CLI binary, typed service wrappers, and smoke tests.
+  `tests/fixtures/command-imports/ticketing.py` is the reference import
+  command, in Python's standard library only, which `command_import_smoke.rs`
+  and the portal's `imports-command.spec.ts` import; run
+  `python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py`
+  when changing it, and keep it in step with `docs/command-imports.md`.
 - `apps/portal`: same-origin browser management portal frontend and Playwright
   e2e harness.
   `apps/portal/src/workbench` is a pinned shared workbench-ui snapshot. Builds
@@ -473,6 +482,11 @@ and audit checks through the real `agent-access` binary.
   authentication, scheme selection, supported operation profile and write receipts.
 - `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
   discovery onboarding, unknown upstream identity, and optional refresh.
+- `docs/command-imports.md`: operator-approved local command imports:
+  `[command_imports]` approval, import and refresh with resource-type changes,
+  Broker- versus command-enforced resources, credentials, the describe/invoke/
+  verify stdin and stdout contract, error codes and receipts, network settings,
+  process lifecycle and limits, audit, and the trust model.
 - `docs/providers-jira.md`: Jira issue, search, comment, attachment,
   verification, URL locator, and attribution behavior.
 - `docs/providers-gmail.md`: Google connection setup, Gmail actions, MIME bounds,
@@ -700,7 +714,11 @@ must be gated by catalog read capability. Never infer service visibility from a
 global resource/group change.
 
 Keep private resource attributes out of `ResourceDefinition`, catalog/export
-serialization, agent tool inputs/results, Debug output, and audit. Only explicit
+serialization, agent tool inputs/results, Debug output, and audit. Command
+imports are the exception: the Broker passes them to the approved command on
+stdin only and never adds them to results or audit itself, but it checks the
+command's messages, stages and locators for credentials and proxy secrets
+only, so a command's own reply may carry an attribute value. Only explicit
 admin reveal returns plaintext, after authorization/CSRF and audit preflight, with
 `Cache-Control: no-store`. Store changes are atomic with resource versions and
 policy publication. At dispatch, revalidate the admitted resource identity, alias,

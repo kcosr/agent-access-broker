@@ -1,12 +1,14 @@
 import { AdminButton } from "../../components/admin-access";
 // The import editor: creates an imported service draft or edits one, for HTTP
-// MCP and OpenAPI adapters. Service ID and endpoint are fixed after creation;
-// adapter settings and credential delivery are fixed once actions are accepted.
+// MCP, OpenAPI and local command adapters. Service ID and endpoint (or
+// command) are fixed after creation; adapter settings and credential delivery
+// are fixed once actions are accepted.
 import { useState, type ReactNode } from "react";
 import type { ImportAuthentication, ImportDefinition, ImportPreviewResult } from "../../import-types";
 import { importSourceKey } from "../../lib/imports";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
 import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
+import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName, credentialModesText } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
 import { Banner, Button, Checkbox, Field, Input, Select } from "../../workbench";
 import { FormError } from "../../components/form";
@@ -21,6 +23,8 @@ export type ImportEditorProps = {
   /** The Broker's import-authentication projection, grouped by import kind. */
   authentication: ImportAuthentication[];
   availableKinds: string[];
+  /** Command names the operator approved for command imports. */
+  commandImports?: string[];
   /** Imports are enabled by operator configuration (new imports only). */
   operatorEnabled?: boolean;
   onClose: () => void;
@@ -159,7 +163,9 @@ export function ImportEditor(props: ImportEditorProps) {
       </Select>
     </Field>
   );
-  return kind === "openapi_http" ? <OpenApiImportForm {...props} kindPicker={kindPicker} /> : <McpImportForm {...props} kind={kind} kindPicker={kindPicker} />;
+  if (kind === "openapi_http") return <OpenApiImportForm {...props} kindPicker={kindPicker} />;
+  if (kind === COMMAND_KIND) return <CommandImportForm {...props} kindPicker={kindPicker} />;
+  return <McpImportForm {...props} kind={kind} kindPicker={kindPicker} />;
 }
 
 function McpImportForm({
@@ -578,7 +584,7 @@ function OpenApiImportForm({
         </Field>
         {securityScheme ? (
           <p className="pt-prose wb-small">
-            Token delivery: {delivery.kind === "bearer" ? "Authorization: Bearer" : delivery.name}.{mutable ? " Save changes, then refresh the definition to review operations." : ""}
+            Token delivery: {delivery.kind === "raw_header" ? delivery.name : "Authorization: Bearer"}.{mutable ? " Save changes, then refresh the definition to review operations." : ""}
           </p>
         ) : (
           <p className="pt-prose wb-small">Create the draft and load its definition first. Operations remain unavailable until you select an API security scheme and refresh.</p>
@@ -589,6 +595,173 @@ function OpenApiImportForm({
           </Banner>
         ) : null}
         {!mutable ? <p className="pt-prose wb-small">The definition settings and token delivery are fixed after accepting actions. Create a new service to change them.</p> : null}
+      </fieldset>
+      <LimitFields requests={requests} windowSeconds={windowSeconds} onRequests={setRequests} onWindow={setWindowSeconds} disabled={busy} issues={shown} />
+      <AffectedGrantsCheck count={affected.length} checked={confirmed} onChange={setConfirmed} disabled={busy} />
+      <FormError error={save.error} />
+    </div>
+  );
+
+  return frame({
+    title: data ? "Edit imported service" : "Import service",
+    body,
+    footer: <EditorFooter onClose={onClose} pending={busy} disabled={blocked} editing={Boolean(data)} />,
+    onSubmit: () => void save.submit(issues, definition, confirmed),
+    onClose,
+    pending: busy
+  });
+}
+
+/**
+ * A local command: an operator-approved name (never a path) and the credential
+ * modes the command takes, or none. Discovery runs `describe` without
+ * credentials; the manifest then decides the credential kind, and accepted
+ * imports keep their modes within its declaration.
+ */
+function CommandImportForm({
+  data,
+  commandImports = [],
+  operatorEnabled = true,
+  onClose,
+  onSave,
+  frame = modalFrame,
+  kindPicker
+}: ImportEditorProps & { kindPicker: (disabled: boolean) => ReactNode }) {
+  const old = data?.service.definition;
+  const mutable = !data || (data.service.status === "draft" && data.service.actions.length === 0);
+  const accepted = data?.service.acceptedMetadata;
+  const has = (mode: "service" | "per_user") => Boolean(old?.executionBindings.some((binding) => binding.ownerMode === mode));
+  // Accepted imports keep their stored modes and may add only declared ones.
+  const offered = (mode: "service" | "per_user") => mutable || (!has(mode) && Boolean(accepted?.credential?.modes.includes(mode)));
+  // A single approved command is preselected for a new import.
+  const initialCommand = old ? commandName(old.endpoint) ?? "" : commandImports.length === 1 ? commandImports[0]! : "";
+  const [command, setCommand] = useState(initialCommand);
+  const [name, setName] = useState(old?.service ?? initialCommand);
+  const [nameEdited, setNameEdited] = useState(Boolean(old));
+  const [label, setLabel] = useState(old?.displayName ?? "");
+  const [shared, setShared] = useState(has("service"));
+  const [personal, setPersonal] = useState(has("per_user"));
+  const [requests, setRequests] = useState(String(old?.invocationLimit?.requests ?? ""));
+  const [windowSeconds, setWindowSeconds] = useState(String(old?.invocationLimit?.windowSeconds ?? 60));
+  const [confirmed, setConfirmed] = useState(false);
+  const save = useSave(onSave, onClose);
+  const busy = save.pending;
+
+  const bindings = commandBindings(old?.executionBindings ?? [], shared, personal);
+  const affected = old && importSourceKey(old.executionBindings) !== importSourceKey(bindings) ? data?.affectedGrants ?? [] : [];
+  const approved = !command || commandImports.includes(command);
+  const issues = commonIssues({ creating: false, name, label, endpoint: "", requests, windowSeconds }, "command");
+  if (!old) {
+    if (!name.trim()) issues.name = "Enter a service ID.";
+    else if (name.trim().length > 63 || !SERVICE_ID.test(name.trim())) issues.name = "Use up to 63 lowercase letters, digits, hyphens or underscores, starting with a letter.";
+    if (!command) issues.command = "Choose an approved command.";
+  }
+  const shown = save.attempted ? issues : {};
+  const blocked = (!old && (!operatorEnabled || !commandImports.length)) || (affected.length > 0 && !confirmed);
+  const modes = accepted ? accepted.credential : undefined;
+  // The credential the manifest declares, once a discovery has read it: the
+  // accepted one, else the pending preview's; null declares none.
+  const declared = accepted ? accepted.credential : data?.preview?.manifest.serviceMetadata?.credential;
+  const undeclared = declared === undefined ? [] : bindings.map((binding) => binding.ownerMode).filter((mode) => !declared?.modes.includes(mode));
+
+  function definition(): ImportDefinition {
+    return {
+      service: name.trim(),
+      displayName: label.trim(),
+      adapterKind: COMMAND_KIND,
+      endpoint: old?.endpoint ?? commandEndpoint(command),
+      connectionSettings: {},
+      executionBindings: bindings,
+      discovery: { kind: "anonymous" },
+      transportAuth: false,
+      ...invocationLimit(requests, windowSeconds)
+    };
+  }
+
+  const body = (
+    <div className="wb-form-stack pt-catalog-form" onChange={() => setConfirmed(false)}>
+      {!old && !operatorEnabled ? (
+        <Banner tone="warning" slim>
+          Imports are disabled by operator configuration.
+        </Banner>
+      ) : !old && !commandImports.length ? (
+        <Banner tone="warning" slim title="No approved commands">
+          An operator approves each command in Broker configuration under <span className="wb-mono">[command_imports.&lt;name&gt;]</span>, then reloads.
+        </Banner>
+      ) : null}
+      {kindPicker(busy)}
+      <Field label="Command" hint={old ? "Fixed after creation." : "Commands the operator approved by name. The Broker runs the configured executable; its path is not shown."} error={shown.command}>
+        <Select
+          value={command}
+          disabled={Boolean(old) || busy || !commandImports.length}
+          onChange={(event) => {
+            setCommand(event.target.value);
+            // Until edited, the service ID follows the command name, which has the same grammar.
+            if (!nameEdited) setName(event.target.value);
+          }}
+        >
+          {!old ? <option value="">{commandImports.length ? "Select an approved command" : "No approved commands"}</option> : null}
+          {command && !approved ? <option value={command}>{command} (no longer approved)</option> : null}
+          {commandImports.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {old && !approved ? (
+        <Banner tone="warning" slim>
+          Operator configuration no longer approves this command. Its definitions, grants and credentials are retained, but it cannot run.
+        </Banner>
+      ) : null}
+      <div className="pt-catalog-row">
+        <Field label="Service ID" hint={old ? "Fixed after creation." : "Lowercase; used in grants and agent calls."} error={shown.name}>
+          <Input
+            mono
+            required
+            maxLength={63}
+            value={name}
+            disabled={Boolean(old) || busy}
+            onChange={(event) => {
+              setName(event.target.value);
+              setNameEdited(true);
+            }}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+        <Field label="Display name" error={shown.label}>
+          <Input required maxLength={256} value={label} disabled={busy} onChange={(event) => setLabel(event.target.value)} />
+        </Field>
+      </div>
+      <fieldset className="pt-fieldset">
+        <legend>Execution credentials</legend>
+        {accepted && !modes ? (
+          <p className="pt-prose wb-small">The accepted manifest declares no credential. Grants use service mode, and calls carry no credential.</p>
+        ) : (
+          <>
+            <Checkbox label="Shared service credential" checked={shared} disabled={busy || !offered("service")} onChange={(event) => setShared(event.target.checked)} />
+            <Checkbox label="Personal credentials for each user" checked={personal} disabled={busy || !offered("per_user")} onChange={(event) => setPersonal(event.target.checked)} />
+            <p className="pt-prose wb-small">
+              {declared === null
+                ? "The command's manifest declares no credential: clear both modes."
+                : declared
+                  ? `The command's manifest declares a ${CREDENTIAL_KIND_LABEL[declared.kind].toLowerCase()} credential in ${credentialModesText(declared.modes)} mode.${
+                      modes ? " Existing credential modes are retained; only declared modes can be added." : ""
+                    }`
+                  : shared || personal
+                    ? "Choose the modes the command's manifest declares; discovery fails otherwise. Personal credentials never fall back to a shared credential."
+                    : "No credential: for a command that needs none. Grants then use service mode and calls carry no credential."}
+            </p>
+            {undeclared.length ? (
+              <Banner tone="warning" slim>
+                The manifest does not declare {credentialModesText(undeclared)} mode
+                {declared ? `; it declares ${credentialModesText(declared.modes)} only` : ""}. Discovery and acceptance fail until the modes match.
+              </Banner>
+            ) : null}
+          </>
+        )}
+        <p className="pt-prose wb-small">Credentials reach the command only in the request on its stdin, never in arguments or its environment.</p>
       </fieldset>
       <LimitFields requests={requests} windowSeconds={windowSeconds} onRequests={setRequests} onWindow={setWindowSeconds} disabled={busy} issues={shown} />
       <AffectedGrantsCheck count={affected.length} checked={confirmed} onChange={setConfirmed} disabled={busy} />

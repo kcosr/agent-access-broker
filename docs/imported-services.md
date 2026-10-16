@@ -1,17 +1,24 @@
 # Imported services
 
-Base administrators can connect a generic upstream MCP HTTP server or import an
-[OpenAPI document](imported-openapi.md) and review operations as broker actions. Each import is an independent service with a stable ID,
-its own credentials, invocation limit, and accepted action catalog. Nothing in the
-importer depends on Grafana, Prometheus, or a particular vendor.
+Base administrators can connect a generic upstream MCP HTTP server, import an
+[OpenAPI document](imported-openapi.md), or import an operator-approved
+[local command](command-imports.md), and review operations as broker actions.
+Each import is an independent service with a stable ID, its own credentials,
+invocation limit, and accepted action catalog. Nothing in the importer depends
+on Grafana, Prometheus, or a particular vendor. This page describes the shared
+workflow and MCP imports; command imports add their own operator approval,
+process contract and resource types.
 
-MCP and OpenAPI imports grant whole actions. A grant still names subjects, execution
-contexts, actions, and a configured credential mode; their actions have no broker
-resource scopes. Use context-specific grants when the entire action is appropriate for
-that context. Command imports may also declare resource types, which the Broker
-checks before the command runs or passes to the command with the caller's grants. An upstream search or generic API tool may reach everything its backend
-credential can access. Importing it does not create folder, project, namespace, or
-query-level containment. Use a compiled provider when that containment is needed.
+MCP and OpenAPI imports grant whole actions. A grant still names subjects,
+execution contexts, actions, and a configured credential mode; their actions have
+no broker resource scopes. Use context-specific grants when the entire action is
+appropriate for that context. Command imports may also declare resource types,
+which the Broker checks before the command runs or passes to the command with the
+caller's grants; see [who checks resources](command-imports.md#who-checks-resources).
+An upstream search or generic API tool may reach everything its backend credential
+can access. Importing it does not create folder, project, namespace, or query-level
+containment. Use a compiled provider, or a command import that declares resource
+types, when that containment is needed.
 
 ## Operator setup
 
@@ -83,8 +90,11 @@ credential rewrap. See [database operations](database.md).
    restoring such actions requires acceptance; affected grants require confirmation.
    A change that would leave a retained grant invalid, for example by removing a
    credential mode it uses, is refused and names the grants to update or remove
-   first; the error's `target.affectedGrants` lists each as `{id, reasonCode,
-   reason}`, with the policy validation code and message.
+   first; the error's `target.affectedGrants` lists each grant once as `{id,
+   reasonCode, reason}`: `id` is the reference `/v1/admin/policy/grants/{grant_ref}`
+   accepts (the managed grant ID, or `toml:<index>` for a configured grant),
+   `reasonCode` the policy validation code of its first issue, and `reason` the
+   validation messages of all its subjects, joined by `; `.
 
 The service's **Actions** tab lists each saved action identifier, optional display
 label and description without another discovery request. Long descriptions have
@@ -223,7 +233,9 @@ dialect ID into new bindings. A stored binding naming a dialect that is not the
 kind's current companion, or whose kind is unavailable, stays unchanged and
 unavailable; it is never rewritten to another registration. OpenAPI imports use the same lifecycle with a separate document parser,
 security-scheme picker and HTTP executor; see [OpenAPI setup](imported-openapi.md).
-Upstream stdio process hosting remains outside this release.
+Hosting upstream MCP servers over stdio remains outside this release;
+[command imports](command-imports.md) run local executables under their own
+one-request contract instead.
 
 ## CLI and HTTP management
 
@@ -467,9 +479,13 @@ then runs its final checks: the import's dispatch fence, the resource entries
 the request names, and the credentials. A resource entry changed (any change
 advances its version), deleted and recreated, or disabled while the call
 waited fails `scope_unresolved`, with or without private attributes. Each
-entry is compared on its version, creation time (to the second), display
-name, type and selector, so an entry deleted and recreated within the same
-second with identical fields counts as the same entry. A rotated service
+entry is compared on its version (which every change advances), its creation
+time (to the second), and its display name, type and selector. An entry with
+private attributes is also compared on the versions of its attribute
+material, which are fresh for every stored value, so a recreated entry that
+holds attributes always counts as replaced. An entry without attributes
+deleted and recreated within the same second with the same version, display
+name, type and selector counts as the same entry. A rotated service
 slot, a disabled or quarantined action, or a changed or removed command entry
 fails `service_action_denied`; a removed personal credential fails
 `credential_not_provisioned`. The dispatch fence is checked again once the
@@ -486,9 +502,12 @@ request ID and the deadline; the `caller` (principal, kind, display name and
 email, the asserted username, the agent token's ID and label, and the policy
 groups); the validated `inputs`; the admitted `authorization`; the
 `credentials` it uses, keyed by wire mode `service` or `user`; and, with
-`network = "inherit"`, the egress `network` settings. Credentials and
-decrypted private attributes travel only on stdin, never in arguments, the
-environment, responses, logs or audit.
+`network = "inherit"`, the egress `network` settings. The Broker passes
+credentials and decrypted private attributes only on stdin, never in
+arguments or the environment, and never adds them to responses, logs or audit
+itself. The command's messages, verification stages and locators are checked
+for credentials and proxy secrets only, so a command must keep any attribute
+it treats as secret out of them.
 
 - **Broker-enforced** actions get `{"mode": "broker", "credential",
   "resourceType", "resources"}`: each value the inputs name, with the ID,
@@ -510,23 +529,25 @@ Broker reasons with the command's message: `input_invalid`,
 `upstream_rate_limited` (with the command's `retryAfterSeconds` as the
 upstream rate-limit result), `upstream_unreachable`
 (`upstream_connection_failed`), `upstream_timeout` and `upstream_failed`. Write
-receipts follow [mutation receipts](http-api.md#mutation-receipts), with
-`operationDispatched` saying whether the process started. A response that
-breaks the command contract, such as invalid JSON, an unknown field or code, a
-message over 1,024 bytes or with control characters, a receipt on a read, an
-invalid locator, an echoed secret (below), or a result its output schema
-rejects, fails `operation_failed` with an `unknown` write receipt and never
-exposes the output. The command timeout fails `upstream_timeout`.
+receipts follow [mutation receipts](http-api.md#mutation-receipts); a failed
+write's result adds `operationDispatched`, saying whether the process started.
+A response that breaks the command contract, such as invalid JSON, an unknown
+field or code, a message over 1,024 bytes or with control characters, a
+receipt on a read, an invalid locator, a supplied credential or proxy secret
+(below), or a result its output schema rejects, fails `operation_failed` with
+an `unknown` write receipt and never exposes the output. The command timeout
+fails `upstream_timeout`.
 
 Error messages, verification stages and `safeLocators` keys and values leave
 the sensitive result, so none may contain, anywhere, a credential or proxy
 secret the request supplied: a credential token or the Basic `username:token`
 form of a `username_token` credential, the proxy password, its
-percent-encoded form or the credentialed proxy URL. Private resource attribute
-values are not checked: they are stored privately, but many, such as an issue
-key or a region, legitimately appear in replies, so a command must not repeat
-an attribute value it treats as a secret in these fields. A verification
-response is checked against the credential it verified and the proxy secrets.
+percent-encoded form, its Basic `username:password` form or the credentialed
+proxy URL. Private resource attribute values are not checked: they are stored
+privately, but many, such as an issue key or a region, legitimately appear in
+replies, so a command must not repeat an attribute value it treats as a secret
+in these fields. A verification response is checked against the credential it
+verified and the proxy secrets.
 
 Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
 `exitCode`, `signal`, `durationMs`, `contractViolation` and
@@ -537,12 +558,13 @@ a call the Broker interrupts at the HTTP MCP deadline or at shutdown keeps
 them; facts not yet known are `null`. `contractViolation` is `true` for
 oversized output, pipes held open or an invalid response, `false` once a
 response was read and kept the contract or the process failed on its own with
-a non-zero exit or signal, and `null` when the process never started or the
-Broker stopped it (command timeout, HTTP MCP deadline, shutdown) before reading
-a response. A client disconnect or MCP cancellation does not stop a running
-command. A command verification records the same `command` facts under
-`providerAudit.verification`, for a failed verification too, and leaves
-`upstreamStatus` `null`, since a command has no upstream status.
+a non-zero exit or signal, and `null` when the process never started, its
+exit could not be observed, or the Broker stopped it (command timeout, HTTP
+MCP deadline, shutdown) before reading a response. A client disconnect or MCP
+cancellation does not stop a running command. A command verification records
+the same `command` facts under `providerAudit.verification`, for a failed
+verification too, and leaves `upstreamStatus` `null`, since a command has no
+upstream status.
 
 ## Connecting one imported service
 

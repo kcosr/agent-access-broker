@@ -87,6 +87,7 @@ function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () 
       principal={session.principal ?? ""}
       authentication={imports?.importAuthentication ?? []}
       availableKinds={imports?.availableKinds ?? []}
+      commandImports={imports?.commandImports.map((entry) => entry.name) ?? []}
       operatorEnabled={imports?.operatorEnabled ?? false}
       onClose={() => {
         if (!created.current) onClose();

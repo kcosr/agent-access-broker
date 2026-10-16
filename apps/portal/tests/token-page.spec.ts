@@ -1,15 +1,12 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import { readFile } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
-import path from "node:path";
 import type { AgentTokenIssueBody, AgentTokenOptions, PrincipalRole, Session } from "../src/types";
 import { RESOURCE_TYPES } from "../unit/resource-types.fixture";
-import { portalDist } from "./support/binaries";
+import { COMMAND_RESOURCE_TYPES } from "../unit/command-import.fixture";
+import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
 
 // These exercise portal contracts against explicit API fixtures. The real-service
 // self/admin issuance and MCP reveal assertions remain in portal.spec.ts.
-let server: Server;
+let assets: PortalAssets;
 let baseUrl: string;
 const envelope = (result: unknown) => ({ ok: true, result });
 const stamp = { createdAt: "2026-10-14T00:00:00Z", updatedAt: "2026-10-14T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
@@ -32,18 +29,10 @@ function tokenOptions(): AgentTokenOptions {
 }
 
 test.beforeAll(async () => {
-  server = createServer(async (request, response) => {
-    const pathname = new URL(request.url!, "http://localhost").pathname;
-    const asset = pathname.startsWith("/ui/assets/") ? pathname.slice(4) : "index.html";
-    try {
-      response.setHeader("content-type", asset.endsWith(".js") ? "text/javascript" : asset.endsWith(".css") ? "text/css" : "text/html");
-      response.end(await readFile(path.join(portalDist, asset)));
-    } catch { response.writeHead(404).end(); }
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  assets = await servePortalAssets();
+  baseUrl = assets.baseUrl;
 });
-test.afterAll(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
+test.afterAll(async () => { await assets.close(); });
 
 async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnabled = true) {
   const model = {
@@ -68,7 +57,11 @@ async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnab
     let result: unknown = [];
     if (pathname === "/v1/auth/session") { model.sessionReads++; result = model.session; }
     else if (pathname === "/v1/auth/logout") { model.session = { authenticated: false, loginOptions: { localPassword: { enabled: true } } }; result = model.session; }
-    else if (pathname === "/v1/resource-types") result = { resourceTypes: RESOURCE_TYPES };
+    else if (pathname === "/v1/resource-types") {
+      // A discovery route: its body is the result itself, without an envelope.
+      await route.fulfill({ json: { resourceTypes: [...RESOURCE_TYPES, ...COMMAND_RESOURCE_TYPES] } });
+      return;
+    }
     else if (pathname.endsWith("/tokens/options") || pathname.endsWith("/agent-token-options")) { model.optionReads++; result = model.options; }
     else if ((pathname.endsWith("/effective-access") || pathname.endsWith("/agent-token-effective-access"))) {
       const body = request.postDataJSON() as AgentTokenIssueBody;
@@ -571,6 +564,68 @@ test("a service named constructor keeps its own explicit action and resource res
   expect(model.issued[0].body.allowedServices).toEqual(["constructor"]);
   expect(Object.hasOwn(model.issued[0].body.serviceRestrictions!, "constructor")).toBe(true);
   expect(model.issued[0].body.serviceRestrictions?.constructor).toEqual({ actions: ["issue.view"], resources: { resourceIds: [], resourceGroupIds: [] } });
+  expect(model.invalidPreviews).toEqual([]);
+  expect(model.errors).toEqual([]);
+});
+
+test("a command service restricts its typed actions to resources of its imported type only", async ({ page }) => {
+  const model = await fixture(page);
+  const contexts = ["internal", "external"];
+  // Broker-checked and command-checked typed actions name the import's Broker type; an untyped action names none.
+  const commandAction = (name: string, resourceType: string | null) => ({
+    ...action(name, true),
+    requiredScopeTypes: resourceType ? [resourceType] : [],
+    resourceType,
+    effectiveAccessByExecutionContext: Object.fromEntries(contexts.map((context) => [context, resourceType ? [{ included: [{ kind: "all" as const }], excluded: [] }] : []]))
+  });
+  const resource = (id: string, displayName: string, resourceType: string, value: string) => ({ id, displayName, resourceType, selector: { kind: "exact" as const, value }, allowedExecutionContexts: contexts, enabled: true });
+  model.options = {
+    ...model.options,
+    resources: [...model.options.resources, resource("ops", "Operations", "ticketing_project", "OPS"), resource("triage-queue", "Triage", "ticketing_queue", "triage")],
+    services: [
+      ...model.options.services,
+      { service: "ticketing", displayName: "Ticketing", brokerHosts: [], executionContexts: contexts, actions: [commandAction("issue.view", "ticketing_project"), commandAction("issue.search", "ticketing_project"), commandAction("whoami", null)] }
+    ]
+  };
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "ticketing", exact: true }).check();
+  const ticketing = service(page, "Ticketing");
+  await reads(ticketing).getByLabel("issue.search", { exact: true }).check();
+  await ticketing.getByRole("group", { name: "ticketing resources", exact: true }).getByRole("button", { name: "Selected resources and groups", exact: true }).click();
+  // Only resources of the actions' imported type are offered, labelled by the type the import declared.
+  await expect(ticketing.getByLabel("Operations · OPS", { exact: true })).toBeVisible();
+  await expect(ticketing.getByText("Project · internal, external", { exact: true })).toBeVisible();
+  await expect(ticketing.getByLabel("Example project · EXAMPLE", { exact: true })).toHaveCount(0);
+  await expect(ticketing.getByLabel("Triage · triage", { exact: true })).toHaveCount(0);
+  await ticketing.getByLabel("Operations · OPS", { exact: true }).check();
+  await expect.poll(() => model.previews.at(-1)?.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("command-boundary");
+  await editor(page).getByRole("button", { name: "Issue token", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();
+  expect(model.issued[0].body.serviceRestrictions?.ticketing).toEqual({ actions: ["issue.search"], resources: { resourceIds: ["ops"], resourceGroupIds: [] } });
+  expect(model.invalidPreviews).toEqual([]);
+  expect(model.errors).toEqual([]);
+});
+
+test("a command service with only untyped actions has no resource selection", async ({ page }) => {
+  const model = await fixture(page);
+  const contexts = ["internal", "external"];
+  model.options = {
+    ...model.options,
+    services: [
+      ...model.options.services,
+      { service: "notes", displayName: "Notes", brokerHosts: [], executionContexts: contexts, actions: [{ ...action("note.list", true), requiredScopeTypes: [], resourceType: null, effectiveAccessByExecutionContext: { internal: [], external: [] } }] }
+    ]
+  };
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "notes", exact: true }).check();
+  const notes = service(page, "Notes");
+  await reads(notes).getByLabel("note.list", { exact: true }).check();
+  await expect(notes).toContainText("Access is controlled by action grants; this service has no resource selections.");
+  await expect(notes.getByRole("group", { name: "notes resources", exact: true })).toHaveCount(0);
+  await expect.poll(() => model.previews.at(-1)?.serviceRestrictions?.notes).toEqual({ actions: ["note.list"] });
   expect(model.invalidPreviews).toEqual([]);
   expect(model.errors).toEqual([]);
 });

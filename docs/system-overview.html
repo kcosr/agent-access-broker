@@ -673,7 +673,7 @@
         </ul>
       </div>
       <h3 id="imports">Imported services</h3>
-      <p>Base administrators can connect an upstream MCP HTTP server or import an OpenAPI document and review its operations as ordinary broker actions. This is a general integration model: agents use the same CLI, HTTP API and MCP interfaces, and calls receive the same identity, context, grant, credential, rate-limit and audit checks as built-in actions.</p>
+      <p>Base administrators can connect an upstream MCP HTTP server, import an OpenAPI document, or import a local command the operator approved, and review its operations as ordinary broker actions. This is a general integration model: agents use the same CLI, HTTP API and MCP interfaces, and calls receive the same identity, context, grant, credential, rate-limit and audit checks as built-in actions.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="import-flow-title">
           <title id="import-flow-title">Import lifecycle: operator permits destinations, administrator discovers and reviews tools, then grants authorize agent calls</title>
@@ -704,7 +704,7 @@
         <div>
           <h4>Configuration and ownership</h4>
           <ul class="list">
-            <li><b>Operator gates.</b> TOML enables imports, selects allowed kinds and exact destinations, and can disable individual imported services. Removing permission stops discovery and execution while retaining definitions and grants.</li>
+            <li><b>Operator gates.</b> TOML enables imports, selects allowed kinds, exact destinations and approved local commands, and can disable individual imported services. Removing permission stops discovery and execution while retaining definitions and grants.</li>
             <li><b>Database catalog.</b> Service definitions, accepted actions and encrypted shared tokens are database-managed. Startup loads the accepted catalog locally without contacting the upstream.</li>
             <li><b>Administrator roles.</b> Base administrators manage import definitions, review and shared tokens. They can assign service managers to the imported service to manage its grants. That role does not grant import-administration or credential-management rights.</li>
             <li><b>Credential choices.</b> A service enables shared tokens, personal tokens or a supported personal OAuth connection. Grants select a permitted ownership mode. A missing personal credential never falls back to a shared credential.</li>
@@ -725,10 +725,11 @@
         <tbody>
           <tr><td>MCP HTTP</td><td>Connect to an MCP URL and list tools. Discovery can use a shared execution token, a separate token, or the administrator's personal credential.</td><td>Shared or personal static tokens using Bearer or a configured header; personal OAuth through an approved registration.</td></tr>
           <tr><td>OpenAPI HTTP</td><td>Fetch an OpenAPI 3.1 JSON document from an approved URL. The API base URL is approved separately. A private document uses its own discovery credential.</td><td>Shared or personal static tokens with a selected HTTP Bearer or header API-key scheme. An OAuth declaration in the document does not configure OAuth.</td></tr>
+          <tr><td>Local command</td><td>Run an executable the operator approved by name in TOML with <code>describe</code>, which prints a manifest of actions and resource types. Each call runs it once with one JSON request on stdin.</td><td>Shared or personal static tokens or username-and-token credentials, passed only on stdin, or none for a command that needs no credential.</td></tr>
         </tbody>
       </table>
-      <div class="callout warm"><b>Whole-action access.</b> MCP and OpenAPI describe operation arguments, but provide no standard mapping to the broker's resource catalog. Imports therefore grant whole actions, subject to upstream permissions. To enforce project, space or repository limits within the broker, implement a provider in code instead of importing.</div>
-      <p>The broker does not host upstream stdio processes. The current OpenAPI profile supports bounded JSON operations, not arbitrary API features or file transfers. Neither adapter automatically replays a failed write. See <a href="imported-services.md">import administration</a>, <a href="imported-openapi.md">OpenAPI support</a> and <a href="#backend-oauth">OAuth connections</a>.</p>
+      <div class="callout warm"><b>Whole-action access.</b> MCP and OpenAPI describe operation arguments, but provide no standard mapping to the broker's resource catalog. Those imports therefore grant whole actions, subject to upstream permissions. A local command may declare resource types: the broker checks actions that name their resources in typed inputs before the command starts, and passes the caller's grants to the command for the rest, which it must enforce itself. To enforce project, space or repository limits within the broker otherwise, implement a provider in code instead of importing.</div>
+      <p>The broker does not host upstream MCP stdio servers; a local command import runs one trusted process per call. The current OpenAPI profile supports bounded JSON operations, not arbitrary API features or file transfers. No import adapter automatically replays a failed write. See <a href="imported-services.md">import administration</a>, <a href="imported-openapi.md">OpenAPI support</a>, <a href="command-imports.md">command imports</a> and <a href="#backend-oauth">OAuth connections</a>.</p>
     </div>
   </section>
 
@@ -1157,7 +1158,7 @@
             <dt>subjects</dt><dd>Users and/or managed groups</dd>
             <dt>service</dt><dd>Exactly one, e.g. <code>jira</code>, <code>gitlab</code>, <code>gitlab_git</code>, <code>cloudbees_ci</code></dd>
             <dt>actions</dt><dd>Typed operations, e.g. <code>issue.view</code>, <code>merge_request.create</code>, <code>repo.push</code></dd>
-            <dt>resources</dt><dd>Catalog entries and/or groups for resource-scoped actions; none for imports</dd>
+            <dt>resources</dt><dd>Catalog entries and/or groups for resource-scoped actions; none for MCP and OpenAPI imports</dd>
             <dt>contexts</dt><dd>Where the grant applies, e.g. <code>internal</code></dd>
             <dt>credential_mode</dt><dd><code>per_user</code> or <code>service</code></dd>
             <dt>priority</dt><dd>Orders overlapping grants</dd>

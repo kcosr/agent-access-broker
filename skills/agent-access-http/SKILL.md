@@ -996,3 +996,19 @@ not authorize mutations, secret reveals, credential verification, or import
 discovery. The caller-filtered runtime catalog distinguishes administrative
 read/write access. `self_service_disabled` means personal management is disabled;
 existing permitted invocation remains independent.
+
+## Imported command actions
+
+Imported command actions (an operator-approved local command, endpoint
+`command:<name>`) are discovered and invoked like other actions. Unlike MCP and
+OpenAPI imports, an action may have a resource scope: the Broker checks the
+resources an action names in its inputs before running the command, and passes
+the caller's grants for the command to enforce otherwise. Results sit under
+`result.upstreamCommand`, sensitive like other imported payloads. A request the
+command refuses for a resource outside your access arrives as
+`service_action_denied`; `retryAfterSeconds` accompanies
+`upstream_rate_limited`. A write reports the command's receipt:
+`not_applied` when it applied nothing, `applied_unverified` with identifier
+locators when it applied the write, and `unknown` when the outcome is
+uncertain; never replay a write whose outcome is unknown. See
+`docs/command-imports.md`.
