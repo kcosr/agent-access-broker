@@ -275,3 +275,250 @@ async fn audit_names_the_connection_only_when_a_personal_credential_is_used() {
         shared[0]
     );
 }
+
+const RELAY_SECRET: &str = "fixture-connection-relay-credential";
+
+/// A managed-identity broker where `alice` (user), `svc` (service account)
+/// and `sys` (system) belong to `agents` and each holds a token for the
+/// `tracker` connection Jira consumes. Callers reach it with Broker bearer
+/// tokens, Git Basic broker tokens, or a relayed username assertion.
+fn managed_matrix() -> (
+    BrokerRuntime,
+    Arc<Mutex<Vec<CredentialObservation>>>,
+    TempDir,
+) {
+    let directory = TempDir::new().unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let store_path = directory.path().join("matrix.sqlite");
+    let store_config = ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: store_path.display().to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    };
+    // Managed policy subjects must exist before the runtime validates them.
+    let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
+    store
+        .create_group(crate::GroupWriteRequest {
+            group_id: "agents".into(),
+            display_name: None,
+            description: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    for (principal, kind) in [
+        ("alice", "user"),
+        ("svc", "service_account"),
+        ("sys", "system"),
+    ] {
+        store
+            .create_principal(crate::PrincipalWriteRequest {
+                role: crate::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: principal.into(),
+                kind: kind.into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+        store.add_group(principal, "agents", "admin").unwrap();
+    }
+    store
+        .create_username_binding("alice", "linux", "Alice", "admin")
+        .unwrap();
+    drop(store);
+
+    let hash_key = directory.path().join("hash.key");
+    fs::write(
+        &hash_key,
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([23_u8; 32]),
+    )
+    .unwrap();
+    let relay = directory.path().join("relay.token");
+    fs::write(&relay, RELAY_SECRET).unwrap();
+    let (mut config, _) = connection_config("tracker");
+    config.managed_store = Some(store_config);
+    config.identity = IdentityConfig {
+        trusted_callers: BTreeMap::from([(
+            "relay".to_string(),
+            crate::TrustedCallerConfig {
+                credential_ref: format!("file:{}", relay.display()),
+                credential_transport: crate::TrustedCallerCredentialTransport::CallerAuthorization,
+                username_namespace: Some("linux".into()),
+                context_mode: crate::TrustedCallerContextMode::Fixed,
+                execution_context: Some("default".into()),
+                allowed_execution_contexts: None,
+                allow_forwarded_identity: false,
+            },
+        )]),
+        mode: "required".into(),
+        authority: "managed".into(),
+        sources: vec![IdentitySourceConfig {
+            name: "broker".into(),
+            kind: "broker_tokens".into(),
+            header: "Authorization".into(),
+            scheme: "Bearer".into(),
+            principals: vec![],
+        }],
+        groups: vec![],
+    };
+    config.broker_tokens = Some(BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", hash_key.display()),
+        ..Default::default()
+    });
+    let provider = Arc::new(LookupTraceProvider::default());
+    let observations = provider.observations();
+    let runtime = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
+    let store = runtime.managed_store().unwrap();
+    for principal in ["alice", "svc", "sys"] {
+        store
+            .upsert_user_credential(
+                runtime.credential_key_ring().unwrap(),
+                crate::CredentialWriteRequest {
+                    owner_principal_id: principal.into(),
+                    service: "tracker".into(),
+                    name: "default".into(),
+                    profile: PROFILE.into(),
+                    credential_kind: "basic_api_token".into(),
+                    secret: json!({"username": principal, "token": format!("{principal}-token")}),
+                    metadata: json!({}),
+                    actor: "admin".into(),
+                },
+                crate::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+    }
+    (runtime, observations, directory)
+}
+
+fn agent_token(runtime: &BrokerRuntime, principal: &str) -> String {
+    runtime
+        .managed_store()
+        .unwrap()
+        .issue_broker_token(
+            runtime.broker_token_hasher().unwrap(),
+            crate::BrokerTokenIssueRequest {
+                principal_id: principal.into(),
+                name: format!("{principal} agent"),
+                token_class: BrokerTokenClass::AgentInvoke,
+                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                expires_at: None,
+                created_by: "admin".into(),
+            },
+        )
+        .unwrap()
+        .token
+}
+
+/// Discovery and execution through `identity`'s connection selection: the
+/// principal's own token for a managed kind, nothing without one.
+async fn assert_selected(
+    runtime: &BrokerRuntime,
+    observations: &Arc<Mutex<Vec<CredentialObservation>>>,
+    identity: IdentityContext,
+    expected: Option<&str>,
+    ingress: &str,
+) {
+    let service = runtime
+        .service_capabilities(&identity, &default_execution_context(), "jira")
+        .unwrap();
+    observations.lock().unwrap().clear();
+    let response = invoke_as(runtime, identity).await;
+    match expected {
+        Some(principal) => {
+            assert_eq!(
+                service.availability.state,
+                AvailabilityState::Available,
+                "{ingress} {principal}"
+            );
+            assert_eq!(response.status, 200, "{ingress} {principal}");
+            let token = basic_credential(principal, &format!("{principal}-token"));
+            assert!(
+                observations
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|observation| observation.credential.as_ref() == Some(&token)),
+                "{ingress} {principal}"
+            );
+        }
+        None => {
+            assert_eq!(
+                service.availability.requirements[0].resolution, "administrator",
+                "{ingress}"
+            );
+            assert_eq!(response.status, 403, "{ingress}");
+            assert!(observations.lock().unwrap().is_empty(), "{ingress}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_ingress_carries_the_principal_kind_that_selects_the_connection() {
+    let (runtime, observations, _directory) = managed_matrix();
+    runtime.readiness().await.unwrap();
+    for (principal, kind) in [
+        ("alice", crate::PrincipalKind::User),
+        ("svc", crate::PrincipalKind::ServiceAccount),
+        ("sys", crate::PrincipalKind::System),
+    ] {
+        let token = agent_token(&runtime, principal);
+        // Broker bearer.
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", format!("Bearer {token}").parse().unwrap());
+        let identity = runtime.resolve_identity(&headers).unwrap();
+        assert_eq!(identity.principal_kind, Some(kind), "bearer {principal}");
+        assert_selected(&runtime, &observations, identity, Some(principal), "bearer").await;
+        // Git Basic with the Broker token as the password.
+        let identity = runtime.resolve_gateway_basic_broker_token(&token).unwrap();
+        assert_eq!(identity.principal_kind, Some(kind), "git basic {principal}");
+        assert_selected(
+            &runtime,
+            &observations,
+            identity,
+            Some(principal),
+            "git basic",
+        )
+        .await;
+    }
+
+    // A trusted caller's username assertion resolves the managed human.
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_HEADER, "Alice".parse().unwrap());
+    headers.insert(
+        CALLER_AUTHORIZATION_HEADER,
+        format!("Bearer {RELAY_SECRET}").parse().unwrap(),
+    );
+    let admission = runtime.admit_mcp_ingress(&headers).unwrap();
+    let identity = runtime
+        .resolve_admitted_identity_with_proof(&headers, &admission)
+        .unwrap()
+        .identity;
+    assert_eq!(identity.principal, "alice");
+    assert_eq!(identity.principal_kind, Some(crate::PrincipalKind::User));
+    assert_selected(
+        &runtime,
+        &observations,
+        identity,
+        Some("alice"),
+        "trusted ingress",
+    )
+    .await;
+
+    // An identity without a managed kind, as a configured static principal
+    // has, selects nothing, though alice's row exists.
+    let identity = IdentityContext {
+        principal: "alice".into(),
+        principal_kind: None,
+        principal_subject: Some("alice".into()),
+        groups: vec!["agents".into()],
+        policy_groups: vec!["agents".into()],
+        authenticated: true,
+        source: None,
+        caller_id: None,
+    };
+    assert_selected(&runtime, &observations, identity, None, "static").await;
+}

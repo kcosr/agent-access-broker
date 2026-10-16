@@ -1151,6 +1151,23 @@ async fn trusted_caller_browser_login_and_session_work_without_proxy_headers() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
+    // A browser session resolves a user principal, whose kind selects a
+    // credential connection's method.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("host", "localhost".parse().unwrap());
+    headers.insert("cookie", cookie.parse().unwrap());
+    let session = crate::handlers::auth::resolve_browser_cookie_identity_blocking(
+        f.broker.as_ref().unwrap().state().current(),
+        headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(session.identity.principal, "alice");
+    assert_eq!(
+        session.identity.principal_kind,
+        Some(agent_access_core::PrincipalKind::User)
+    );
 }
 
 async fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture {
