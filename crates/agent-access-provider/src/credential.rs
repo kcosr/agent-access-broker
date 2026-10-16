@@ -283,6 +283,30 @@ mod tests {
         assert!(rendered.contains("basic_api_token") && rendered.contains("bearer_token"));
     }
 
+    /// The host's token-as-Basic placement presents a `bearer_token`
+    /// credential's token under the configured username. A `basic_api_token`
+    /// credential is not a token: it keeps its own username.
+    #[test]
+    fn host_token_as_basic_presents_only_bearer_credentials() {
+        let placement = crate::host::token_as_basic("oauth2");
+        let bearer = ExecutionCredential::bearer("glpat-secret".into());
+        assert_eq!(
+            authorization_header(bearer.authorization_as(&placement).unwrap()),
+            "Basic b2F1dGgyOmdscGF0LXNlY3JldA=="
+        );
+        let basic = ExecutionCredential::basic("deploy-user".into(), "deploy-secret".into());
+        assert_eq!(
+            basic.authorization_as(&placement).unwrap_err(),
+            CredentialPlacementError::KindMismatch
+        );
+        assert_eq!(
+            ExecutionCredential::bearer("glpat-secret".into())
+                .authorization_as(&crate::host::token_as_basic("oauth:2"))
+                .unwrap_err(),
+            CredentialPlacementError::InvalidMaterial
+        );
+    }
+
     #[test]
     fn credentials_compare_by_kind_and_material() {
         let basic = ExecutionCredential::basic("user".into(), "token".into());

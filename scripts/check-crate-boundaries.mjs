@@ -28,11 +28,13 @@ const FORBIDDEN_EDGES = Object.freeze({
 });
 // Roles that an adapter's production edges may reach.
 const ADAPTER_PRODUCTION_TARGETS = new Set(["sdk", "helper", "core"]);
-// Host-only SDK items that hand back a request carrying a credential. Provider,
-// adapter, reference and helper code presents credentials only through the
-// upstream client's send methods, so none of their sources, tests included,
-// may name these.
-export const HOST_ONLY_ITEMS = Object.freeze(["authorize_host_request"]);
+// Host-only SDK items: `authorize_host_request` hands back a request carrying a
+// credential, and `token_as_basic` presents token material as HTTP Basic under
+// a host-configured username. Provider, adapter, reference and helper code
+// presents credentials only through the upstream client's send methods, in
+// their own scheme or a placement of its own, so none of their sources, tests
+// included, may name these.
+export const HOST_ONLY_ITEMS = Object.freeze(["authorize_host_request", "token_as_basic"]);
 const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper"]);
 // The Rust source locations of a package, relative to its manifest directory.
 const SOURCE_ROOTS = Object.freeze(["src", "tests", "benches", "examples", "build.rs"]);

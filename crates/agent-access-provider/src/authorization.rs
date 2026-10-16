@@ -25,6 +25,10 @@ use subtle::ConstantTimeEq;
 /// The largest token, in bytes, that a [`CredentialPlacement`] presents.
 const PLACED_TOKEN_MAX_BYTES: usize = 32 * 1024;
 
+/// The longest username, in bytes, that the host-only token-as-Basic
+/// placement ([`crate::host::token_as_basic`]) presents.
+const TOKEN_BASIC_USERNAME_MAX_BYTES: usize = 64;
+
 /// Where a provider presents a credential when the upstream needs a specific
 /// placement instead of the credential's own HTTP authentication
 /// ([`ExecutionCredential::authorization`](crate::ExecutionCredential::authorization)).
@@ -39,6 +43,10 @@ const PLACED_TOKEN_MAX_BYTES: usize = 32 * 1024;
 ///   character.
 /// - [`Self::basic`] presents a `basic_api_token` credential whose username
 ///   and token are both non-empty.
+///
+/// The host also builds one placement providers never use:
+/// [`crate::host::token_as_basic`] presents a token as HTTP Basic with a
+/// configured username, for the host's own clients.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialPlacement {
     placement: Placement,
@@ -49,6 +57,8 @@ enum Placement {
     Bearer,
     Basic,
     Header(HeaderName),
+    /// A token as the password of HTTP Basic under this username.
+    TokenAsBasic(String),
 }
 
 impl CredentialPlacement {
@@ -74,6 +84,14 @@ impl CredentialPlacement {
             placement: Placement::Header(name),
         }
     }
+
+    /// A token as `Authorization: Basic <base64 of username:token>`; the host
+    /// builds it with [`crate::host::token_as_basic`].
+    pub(crate) fn token_as_basic(username: String) -> Self {
+        Self {
+            placement: Placement::TokenAsBasic(username),
+        }
+    }
 }
 
 /// Why a credential cannot be presented in a [`CredentialPlacement`]. It
@@ -87,8 +105,9 @@ pub enum CredentialPlacementError {
     #[error("the credential kind cannot be presented in this placement")]
     KindMismatch,
     /// The material is not what the placement requires: an empty Basic
-    /// username or token, or a token that is empty, too long or contains a
-    /// character the placement does not allow.
+    /// username or token, a token that is empty, too long or contains a
+    /// character the placement does not allow, or a username the host's
+    /// token-as-Basic placement cannot carry.
     #[error("the credential material cannot be presented in this placement")]
     InvalidMaterial,
 }
@@ -269,10 +288,18 @@ impl Material<'_> {
                 name.clone(),
                 placed_token(token)?.to_owned(),
             )),
-            (Placement::Basic, Self::Token(_))
-            | (Placement::Bearer | Placement::Header(_), Self::Basic { .. }) => {
-                Err(CredentialPlacementError::KindMismatch)
+            (Placement::TokenAsBasic(username), Self::Token(token)) => {
+                if token_basic_username_is_valid(username) {
+                    Ok(basic(username, placed_token(token)?))
+                } else {
+                    Err(CredentialPlacementError::InvalidMaterial)
+                }
             }
+            (Placement::Basic, Self::Token(_))
+            | (
+                Placement::Bearer | Placement::Header(_) | Placement::TokenAsBasic(_),
+                Self::Basic { .. },
+            ) => Err(CredentialPlacementError::KindMismatch),
         }
     }
 
@@ -312,6 +339,17 @@ fn basic(username: &str, token: &str) -> UpstreamAuthorization {
         AUTHORIZATION,
         format!("Basic {}", STANDARD.encode(format!("{username}:{token}"))),
     )
+}
+
+/// Whether `username` can carry a token as HTTP Basic: 1 to 64 printable
+/// ASCII characters (space through `~`), without the colon that ends the
+/// username.
+fn token_basic_username_is_valid(username: &str) -> bool {
+    !username.is_empty()
+        && username.len() <= TOKEN_BASIC_USERNAME_MAX_BYTES
+        && username
+            .bytes()
+            .all(|byte| (0x20..=0x7e).contains(&byte) && byte != b':')
 }
 
 fn placed_token(token: &str) -> Result<&str, CredentialPlacementError> {
@@ -583,6 +621,85 @@ mod tests {
         }
     }
 
+    /// The host's token-as-Basic placement presents a token under the
+    /// configured username with the bytes reqwest's `basic_auth` produces, as
+    /// a sensitive header, whether the upstream client attaches it or the host
+    /// applies it to its own request.
+    #[test]
+    fn token_as_basic_presents_a_token_under_the_configured_username() {
+        let longest = "~".repeat(TOKEN_BASIC_USERNAME_MAX_BYTES);
+        for username in ["oauth2", "service account", "!", longest.as_str()] {
+            let authorization = Material::Token("glpat-token")
+                .placed(&CredentialPlacement::token_as_basic(username.to_owned()))
+                .unwrap();
+            let expected = request()
+                .basic_auth(username, Some("glpat-token"))
+                .build()
+                .unwrap();
+            let mut built = request().build().unwrap();
+            attach(
+                built.headers_mut(),
+                std::slice::from_ref(&authorization),
+                AuthorizationPosition::End,
+            )
+            .unwrap();
+            assert_eq!(listed(built.headers()), listed(expected.headers()));
+            assert!(built.headers()[AUTHORIZATION].is_sensitive());
+            let applied = authorization.apply_to_builder(request()).build().unwrap();
+            assert_eq!(
+                applied.headers()[AUTHORIZATION],
+                expected.headers()[AUTHORIZATION]
+            );
+            assert!(applied.headers()[AUTHORIZATION].is_sensitive());
+        }
+    }
+
+    #[test]
+    fn token_as_basic_rejects_basic_material_and_unsuitable_usernames_or_tokens() {
+        let oauth2 = CredentialPlacement::token_as_basic("oauth2".to_owned());
+        assert_eq!(
+            Material::Basic {
+                username: "user",
+                token: "token"
+            }
+            .placed(&oauth2)
+            .unwrap_err(),
+            CredentialPlacementError::KindMismatch
+        );
+        for username in [
+            String::new(),
+            "a".repeat(TOKEN_BASIC_USERNAME_MAX_BYTES + 1),
+            "user:name".to_owned(),
+            ":".to_owned(),
+            "tab\tname".to_owned(),
+            "line\nbreak".to_owned(),
+            "\u{7f}".to_owned(),
+            "uni\u{e9}code".to_owned(),
+        ] {
+            assert_eq!(
+                Material::Token("token")
+                    .placed(&CredentialPlacement::token_as_basic(username.clone()))
+                    .unwrap_err(),
+                CredentialPlacementError::InvalidMaterial,
+                "{username:?}"
+            );
+        }
+        for token in [
+            String::new(),
+            "with space".to_owned(),
+            "line\nbreak".to_owned(),
+            "uni\u{e9}code".to_owned(),
+            "a".repeat(PLACED_TOKEN_MAX_BYTES + 1),
+        ] {
+            assert_eq!(
+                Material::Token(&token).placed(&oauth2).unwrap_err(),
+                CredentialPlacementError::InvalidMaterial
+            );
+        }
+        let longest = "~".repeat(PLACED_TOKEN_MAX_BYTES);
+        assert!(Material::Token(&longest).placed(&oauth2).is_ok());
+    }
+
     /// Digests separate kinds and field boundaries, and compare equal only
     /// for the same kind and material.
     #[test]
@@ -617,18 +734,24 @@ mod tests {
     #[test]
     fn debug_output_names_only_the_header() {
         let rendered = format!(
-            "{:?} {:?}",
+            "{:?} {:?} {:?}",
             Material::Token("bearer-secret").authorization(),
             Material::Basic {
                 username: "user@example.test",
                 token: "basic-secret"
             }
-            .authorization()
+            .authorization(),
+            Material::Token("token-secret")
+                .placed(&CredentialPlacement::token_as_basic(
+                    "user@example.test".to_owned()
+                ))
+                .unwrap()
         );
         for secret in [
             "bearer-secret",
             "user@example.test",
             "basic-secret",
+            "token-secret",
             "Bearer",
             "Basic",
         ] {

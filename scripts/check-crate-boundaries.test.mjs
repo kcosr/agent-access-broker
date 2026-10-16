@@ -148,22 +148,27 @@ test("the CLI production closure excludes host, assembly, native, adapter and re
   }
 });
 
-test("provider-side crates must not use host-only credential attachment", () => {
+test("provider-side crates must not use host-only credential attachment or presentation", () => {
   const sources = {
-    "agent-access-jira": [{ path: "crates/agent-access-jira/src/backend.rs", text: "fn send() {}\nlet request = host::authorize_host_request(builder, &auth);\n" }],
-    "agent-access-conformance": [{ path: "crates/agent-access-conformance/tests/it.rs", text: "use agent_access_provider::host::{authorize_host_request};\n" }],
-    "agent-access-mcp-upstream": [{ path: "crates/agent-access-mcp-upstream/src/lib.rs", text: "// authorize_host_request_like is another name\nfn presents() {}\n" }],
+    "agent-access-jira": [
+      { path: "crates/agent-access-jira/src/backend.rs", text: "fn send() {}\nlet request = host::authorize_host_request(builder, &auth);\n" },
+      { path: "crates/agent-access-jira/src/client.rs", text: "let auth = credential.authorization_as(&host::token_as_basic(\"oauth2\"))?;\n" },
+    ],
+    "agent-access-conformance": [{ path: "crates/agent-access-conformance/tests/it.rs", text: "use agent_access_provider::host::{authorize_host_request};\nuse agent_access_provider::host::token_as_basic;\n" }],
+    "agent-access-mcp-upstream": [{ path: "crates/agent-access-mcp-upstream/src/lib.rs", text: "// authorize_host_request_like and token_as_basic_like are other names\nfn presents() {}\n" }],
     "agent-access-content": [{ path: "crates/agent-access-content/src/lib.rs", text: "authorize_host_request(request, &authorization)\n" }],
-    // Host-side crates may use it.
-    "agent-access-core": [{ path: "crates/agent-access-core/src/runtime.rs", text: "host::authorize_host_request(builder, &auth)\n" }],
+    // Host-side crates may use them.
+    "agent-access-core": [{ path: "crates/agent-access-core/src/runtime.rs", text: "host::authorize_host_request(builder, &auth)\nhost::token_as_basic(username)\n" }],
     "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/handlers/gateway.rs", text: "authorize_host_request(builder, &auth)\n" }],
   };
   const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []);
-  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request"]);
+  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic"]);
   assert.deepEqual(errors, [
     "agent-access-conformance (reference) must not use host-only authorize_host_request; found at crates/agent-access-conformance/tests/it.rs:1",
+    "agent-access-conformance (reference) must not use host-only token_as_basic; found at crates/agent-access-conformance/tests/it.rs:2",
     "agent-access-content (helper) must not use host-only authorize_host_request; found at crates/agent-access-content/src/lib.rs:1",
     "agent-access-jira (native) must not use host-only authorize_host_request; found at crates/agent-access-jira/src/backend.rs:2",
+    "agent-access-jira (native) must not use host-only token_as_basic; found at crates/agent-access-jira/src/client.rs:1",
   ]);
 });
 

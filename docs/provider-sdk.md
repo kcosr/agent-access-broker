@@ -562,6 +562,11 @@ before dispatch:
   | `CredentialPlacement::basic()` | `Authorization: Basic <base64 of username:token>` | A `basic_api_token` credential with a non-empty username and token. |
   | `CredentialPlacement::header(name)` | `<name>: <token>` | The same tokens as `bearer()`, as the whole header value, such as an API key. |
 
+  The host-only `host::token_as_basic(username)` placement, which presents a
+  token as HTTP Basic under a configured username, is for the host's own Git
+  gateway. Provider crates never use it, and the crate-boundary check rejects
+  it there.
+
 - `UpstreamCall::new(operation).with_authorization(&authorization)` sends a
   request with the credential; `with_authorizations(&[..])` sends several,
   such as an API key and a separate transport token, in order. The client adds

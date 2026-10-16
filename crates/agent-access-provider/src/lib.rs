@@ -35,9 +35,10 @@
 //! - [`host`] holds the cooperation ports the Broker host implements and
 //!   calls: the network factory contract, construction of admitted request
 //!   values, the initial correlation, hook and deadline scopes, service-scoped
-//!   signer wrapping, delegated-lease wrapping and the host-origin failure
-//!   port. Provider code consumes the capabilities they produce; provider tests
-//!   may implement or call them.
+//!   signer wrapping, delegated-lease wrapping, the host-origin failure port
+//!   and the host-only authorization of the host's own requests. Provider code
+//!   consumes the capabilities they produce; provider tests may implement or
+//!   call them, except the host-only request authorization.
 //! - [`deps`] re-exports the third-party types and macros that supported
 //!   signatures name (see [Third-party dependencies](#third-party-dependencies)).
 //! - `test_support`, behind the `test-support` Cargo feature, holds

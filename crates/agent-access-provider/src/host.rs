@@ -41,10 +41,11 @@
 //!   the [`HostPort`]s produced, which providers pass on unchanged.
 //! - **Host request authorization**: [`authorize_host_request`] adds an
 //!   [`UpstreamAuthorization`](crate::UpstreamAuthorization) to a request the
-//!   host sends with its own client, such as the Git smart HTTP gateway's.
-//!   It is host-only: it returns a request that carries the credential, so
-//!   provider, adapter, reference and helper crates never call it, and
-//!   `scripts/check-crate-boundaries.mjs` rejects it there.
+//!   host sends with its own client, such as the Git smart HTTP gateway's,
+//!   and [`token_as_basic`] presents token material there as HTTP Basic with
+//!   a configured username. Both are host-only: provider, adapter, reference
+//!   and helper crates never use them, and
+//!   `scripts/check-crate-boundaries.mjs` rejects them there.
 //!
 //! Nothing here resolves secret references, loads keys or TLS files, reads the
 //! process environment or touches a store: those stay inside the host. Nothing
@@ -53,9 +54,9 @@
 //! as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
-    ClientProfile, CorrelationContext, CredentialMode, Decision, DelegatedBindingId,
-    DelegatedCredential, DelegatedLease, EgressDeclaration, EgressRoute, ExecutionAccess,
-    ExecutionCredential, HookPhase, InvocationAuthority, InvocationIdentity,
+    ClientProfile, CorrelationContext, CredentialMode, CredentialPlacement, Decision,
+    DelegatedBindingId, DelegatedCredential, DelegatedLease, EgressDeclaration, EgressRoute,
+    ExecutionAccess, ExecutionCredential, HookPhase, InvocationAuthority, InvocationIdentity,
     ProviderAttributionConfig, ProviderError, ProviderFinalizationContext, ProviderInvocation,
     ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode, ResourceAttributes,
     ScopeRequest, StableSigningKey,
@@ -501,4 +502,31 @@ pub fn authorize_host_request(
     authorization: &crate::UpstreamAuthorization,
 ) -> reqwest::RequestBuilder {
     authorization.apply_to_builder(request)
+}
+
+/// Host-only: the placement presenting token material, a `bearer_token`
+/// credential's token or delegated access, as
+/// `Authorization: Basic <base64 of username:token>` under `username`, for an
+/// upstream that accepts tokens only as HTTP Basic, such as a Git smart HTTP
+/// server behind the gateway. Present it with
+/// [`ExecutionCredential::authorization_as`] or
+/// [`DelegatedAccess::authorization_as`](crate::DelegatedAccess::authorization_as),
+/// then attach the result with [`authorize_host_request`].
+///
+/// The placement checks before presenting anything. `username` must be 1 to
+/// 64 printable ASCII characters (space through `~`) without a colon, and the
+/// token 1 to 32,768 visible ASCII characters, as
+/// [`CredentialPlacement::bearer`] requires; otherwise presentation fails with
+/// [`InvalidMaterial`](crate::CredentialPlacementError::InvalidMaterial). A
+/// `basic_api_token` credential fails with
+/// [`KindMismatch`](crate::CredentialPlacementError::KindMismatch): it
+/// presents its own stored username through
+/// [`ExecutionCredential::authorization`]. The header is sensitive, and the
+/// resulting authorization exposes nothing, like every presented credential.
+///
+/// Provider, adapter, reference and helper code never uses this: a provider
+/// presents credentials in their own scheme or in a placement of its own, and
+/// `scripts/check-crate-boundaries.mjs` rejects any use in those crates.
+pub fn token_as_basic(username: impl Into<String>) -> CredentialPlacement {
+    CredentialPlacement::token_as_basic(username.into())
 }
