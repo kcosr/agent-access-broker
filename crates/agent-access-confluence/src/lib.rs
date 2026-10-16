@@ -354,7 +354,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
     let mut actions = confluence_content_actions(config);
     actions.extend(confluence_draft_actions(config));
     actions.extend(confluence_comment_actions(config));
-    ServiceDescriptor::new("confluence", "Confluence")
+    let descriptor = ServiceDescriptor::new("confluence", "Confluence")
         .with_resource_scopes(BTreeMap::from([(
             "space".to_string(),
             ResourceScopeCapabilities::new(
@@ -372,7 +372,11 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .collect(),
         )
         .with_credentials(credentials)
-        .with_presentation_body_limit(config.content.max_body_bytes)
+        .with_presentation_body_limit(config.content.max_body_bytes);
+    match config.site().upstream_authority() {
+        Some(authority) => descriptor.with_upstream_authority(authority),
+        None => descriptor,
+    }
 }
 
 /// When a Confluence action needs the broker's lookup credential. Actions

@@ -2229,6 +2229,17 @@ impl BrokerRuntime {
         }
         let source_config = config.clone();
         imports::effective_credentials(&mut config, &imported_catalog);
+        let authority_errors = crate::connections::connection_authority_errors(
+            &config.credentials,
+            &services,
+            &config.oauth,
+            config.providers.registry(),
+        );
+        if !authority_errors.is_empty() {
+            return Err(RuntimeError::Config(ConfigError::Invalid {
+                errors: authority_errors,
+            }));
+        }
         let policy_snapshot = Arc::new(ArcSwap::from_pointee(load_policy_snapshot(
             &imports::retention_config(&config, &imported_catalog),
             managed_store.as_ref(),
@@ -6995,6 +7006,12 @@ pub(crate) fn gateway_service_descriptor(
             )]))
             .with_actions(actions)
             .with_credentials(credentials),
+    )
+    .map(
+        |descriptor| match UpstreamAuthority::from_base_url(&gateway.upstream_base_url) {
+            Ok(authority) => descriptor.with_upstream_authority(authority),
+            Err(_) => descriptor,
+        },
     )
 }
 

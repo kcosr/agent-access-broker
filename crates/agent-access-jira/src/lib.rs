@@ -744,7 +744,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     if config.site().uses_gateway() {
         credentials = credentials.profile("jira-bearer-token", "bearer_token");
     }
-    ServiceDescriptor::new("jira", "Jira")
+    let descriptor = ServiceDescriptor::new("jira", "Jira")
         .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
             ResourceScopeCapabilities::new(
@@ -762,7 +762,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 .collect(),
         )
         .with_credentials(credentials)
-        .with_presentation_body_limit(config.content.max_body_bytes)
+        .with_presentation_body_limit(config.content.max_body_bytes);
+    match config.site().upstream_authority() {
+        Some(authority) => descriptor.with_upstream_authority(authority),
+        None => descriptor,
+    }
 }
 
 fn jira_read_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {

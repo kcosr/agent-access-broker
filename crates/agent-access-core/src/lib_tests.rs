@@ -3000,6 +3000,29 @@ fn accepts_a_shared_gitlab_connection_for_rest_and_the_git_gateway() {
 }
 
 #[test]
+fn rejects_a_shared_token_connection_across_different_upstreams_offline() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    gateway.upstream_base_url = "https://git.other.example".to_string();
+    gateway.allowed_upstream_hosts = vec!["https://git.other.example/**".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        token_connection("gitlab-access-token"),
+        &["gitlab", "gitlab_git"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.gitlab: gitlab acts on https://gitlab.example.com but gitlab_git acts on https://git.other.example; a token connection's consumers must act on one upstream",
+    );
+}
+
+#[test]
 fn accepts_separate_jira_and_confluence_connections_on_product_profiles() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);

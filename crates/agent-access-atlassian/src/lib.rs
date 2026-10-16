@@ -3,8 +3,8 @@
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
     ClientProfile, EgressDeclaration, EgressProxyConfig, ExecutionCredential, ProviderBuildError,
-    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthorization,
-    UpstreamClient, UpstreamClientSpec,
+    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority,
+    UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -73,6 +73,9 @@ pub fn validate_atlassian_gateway_credential(
     }
 }
 
+/// The Atlassian API gateway's origin.
+pub const ATLASSIAN_GATEWAY_ORIGIN: &str = "https://api.atlassian.com";
+
 /// Whether an Atlassian provider allowlist routes through the Atlassian API
 /// gateway. Only an exact `api.atlassian.com` host counts.
 pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
@@ -126,6 +129,24 @@ impl AtlassianSite<'_> {
     /// cloud ID is configured and `api.atlassian.com` is allowed.
     pub fn uses_gateway(&self) -> bool {
         self.cloud_id.is_some() && uses_atlassian_gateway_host(self.allowed_upstream_hosts)
+    }
+
+    /// The site's upstream authority: the tenant host's origin, the cloud
+    /// ID when configured, and the Atlassian gateway when it routes through
+    /// it. Jira and Confluence on one site therefore act on the same
+    /// instance. `None` for a tenant host that is not a valid host.
+    pub fn upstream_authority(&self) -> Option<UpstreamAuthority> {
+        let mut authority =
+            UpstreamAuthority::from_base_url(&format!("https://{}", self.tenant_host)).ok()?;
+        if let Some(cloud_id) = self.cloud_id {
+            authority = authority.with_tenant(cloud_id);
+        }
+        if self.uses_gateway() {
+            authority = authority
+                .with_tenant_gateway(ATLASSIAN_GATEWAY_ORIGIN)
+                .ok()?;
+        }
+        Some(authority)
     }
 
     /// A digest of the configuration an upstream cursor's route depends on:
@@ -324,6 +345,31 @@ mod tests {
             egress_proxy: None,
             allowed_upstream_hosts: hosts,
         }
+    }
+
+    #[test]
+    fn a_site_declares_its_host_cloud_id_and_gateway_route() {
+        let site_only = hosts(false);
+        let authority = site(None, &site_only).upstream_authority().unwrap();
+        assert_eq!(authority.origin(), "https://example.atlassian.net");
+        assert_eq!(
+            (authority.tenant(), authority.tenant_gateway()),
+            (None, None)
+        );
+        let routed_hosts = hosts(true);
+        let routed = site(Some(CLOUD_ID), &routed_hosts)
+            .upstream_authority()
+            .unwrap();
+        assert_eq!(routed.tenant(), Some(CLOUD_ID));
+        assert_eq!(routed.tenant_gateway(), Some(ATLASSIAN_GATEWAY_ORIGIN));
+        // Jira and Confluence on one site act on the same instance.
+        assert!(authority.same_instance(&routed));
+        assert!(site(None, &site_only).upstream_authority().is_some());
+        let invalid = AtlassianSite {
+            tenant_host: "not a host",
+            ..site(None, &site_only)
+        };
+        assert!(invalid.upstream_authority().is_none());
     }
 
     #[test]

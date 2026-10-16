@@ -171,6 +171,7 @@
 
 mod admitted;
 mod attribution;
+mod authority;
 mod authorization;
 mod backend;
 mod capabilities;
@@ -216,6 +217,7 @@ pub use attribution::{
     ProviderAttributionConfig, attribution_audit_applied, attribution_skip_target_absent_audit,
     matching_attribution_capabilities, merge_attribution_audit, validate_attribution_pattern,
 };
+pub use authority::UpstreamAuthority;
 pub use authorization::{CredentialPlacement, CredentialPlacementError, UpstreamAuthorization};
 pub use backend::{
     BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, ServiceCredentialKinds,

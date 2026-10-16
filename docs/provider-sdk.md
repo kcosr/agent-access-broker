@@ -271,9 +271,19 @@ discovery, OpenAPI and the send schema carry but MCP tool definitions omit.
 `CredentialDescriptor` states whether invocations need a broker-selected
 execution credential (`CredentialDescriptor::without_execution_credential()`
 when they do not), which static kinds `credentials.service.<service>` accepts,
-managed-store credential profiles, inputs that credential verification needs,
-and, with `.delegated(description)`, that per-user delegated OAuth credentials
-are accepted.
+the token profiles a per-user credential connection may store, inputs that
+credential verification needs, and, with `.delegated(description)`, that
+per-user delegated OAuth credentials are accepted.
+
+`.with_upstream_authority(authority)` declares the upstream instance the
+service's credentials act on, derived from its configuration alone: an
+`UpstreamAuthority` built with `UpstreamAuthority::from_base_url` (a normalized
+origin and instance path), optionally `.with_tenant(id)` and
+`.with_tenant_gateway(url)`. Services that consume one credential connection
+with a token profile must declare authorities naming the same instance, and an
+OAuth connection's dialect checks each consumer's authority (see
+[delegated access](#delegated-access)). A service that declares none cannot
+share a token connection with another service.
 
 ### Typed resources
 
@@ -722,6 +732,13 @@ subrequest once after a received HTTP 401, never after a transport error, 403,
 `binding_identity()` returns an opaque `DelegatedBindingId` for the lease. Routine
 refresh keeps it; new consent, replacement and reconnection change it. Bind
 continuation tokens to it (see [binding](#binding)).
+
+An OAuth dialect whose grants act on one upstream instance or tenant overrides
+`OAuthDialect::check_consumer_authority(registration, profile, consumer)`. The
+host calls it offline, at configuration validation, startup and reload, for
+each service that consumes a credential connection using the registration, with
+that service's declared authority (`None` when it declares none). The default
+accepts every consumer.
 
 ### Credential verification
 

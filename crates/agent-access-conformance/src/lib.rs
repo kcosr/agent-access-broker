@@ -21,10 +21,11 @@ use agent_access_provider::{
     ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
     ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
     ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
-    StaticCredentialKind, UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    UpstreamError, ValidationContext, attachment_upload_plan, complete_upstream_trace,
-    file_upload_body, parse_backend_config, read_bounded_body, take_upstream_trace,
-    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
+    StaticCredentialKind, UpstreamAuthority, UpstreamAuthorization, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
+    complete_upstream_trace, file_upload_body, parse_backend_config, read_bounded_body,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -294,14 +295,19 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             .resource_attributes(),
         );
     }
-    ServiceDescriptor::new(SERVICE, "Conformance")
+    let descriptor = ServiceDescriptor::new(SERVICE, "Conformance")
         .with_resource_scopes(resource_scopes)
         .with_actions(actions)
         .with_credentials(
             CredentialDescriptor::default()
                 .service_kinds(&["bearer_token"])
                 .profile("api_token", "bearer_token"),
-        )
+        );
+    // The upstream its credentials act on, for credential connections.
+    match UpstreamAuthority::from_base_url(&config.base_url) {
+        Ok(authority) => descriptor.with_upstream_authority(authority),
+        Err(_) => descriptor,
+    }
 }
 
 const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(
@@ -1356,6 +1362,10 @@ mod tests {
         assert_eq!(
             descriptor.credential_profile_kind("api_token"),
             Some("bearer_token")
+        );
+        assert_eq!(
+            descriptor.upstream_authority.as_ref().unwrap().origin(),
+            "https://conformance.example.test"
         );
     }
 

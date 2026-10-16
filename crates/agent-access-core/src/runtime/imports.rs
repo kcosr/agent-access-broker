@@ -253,7 +253,7 @@ pub(super) fn descriptor(
             action
         })
         .collect();
-    ServiceDescriptor::new(
+    let descriptor = ServiceDescriptor::new(
         record.definition.service.clone(),
         record.definition.display_name.clone(),
     )
@@ -275,7 +275,12 @@ pub(super) fn descriptor(
     } else {
         let kind = execution_credential_kind(record);
         CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
-    })
+    });
+    // An HTTP import acts on its endpoint; a command import declares none.
+    match UpstreamAuthority::from_base_url(&record.definition.endpoint) {
+        Ok(authority) => descriptor.with_upstream_authority(authority),
+        Err(_) => descriptor,
+    }
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {
@@ -814,6 +819,15 @@ impl BrokerRuntime {
             providers.insert(name, provider.provider());
         }
         effective_credentials(&mut config, &catalog);
+        let authority_errors = crate::connections::connection_authority_errors(
+            &config.credentials,
+            &services,
+            &config.oauth,
+            config.providers.registry(),
+        );
+        if !authority_errors.is_empty() {
+            return Err(ManagedStoreError::InputInvalid(authority_errors.join("; ")));
+        }
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
         next.resource_types = resource_types;
