@@ -89,18 +89,9 @@ the upstream credential; give your agent only its Broker invocation token.
    button is **Replace credential**. Supply the required replacement fields.
 4. After saving, check the status and verify it as described below.
 
-![Personal credential connections and statuses](../images/portal/guide-annotated/user-credentials-light.png)
-
-*Credential connections come from the broker's configuration and your permitted
-personal credential access. This capture predates shared connections and shows
-one row per service.*
-
-![Jira credential replacement fields with the secret masked](../images/portal/guide-annotated/user-credential-input-light.png)
-
-*This example already has a stored credential, so it shows Replace credential.
-First-time entry uses Save credential. Stored plaintext is not loaded into this
-replacement form. This capture predates the shared Atlassian connection and
-shows a Jira row.*
+Credential connections come from the broker's configuration and your permitted
+personal credential access. Stored plaintext is never loaded into the
+replacement form.
 
 Expected result: the broker saves its encrypted copy and the form clears the
 entered fields. Saving does not create service access or prove that the upstream
@@ -141,7 +132,7 @@ verification timestamps.*
 ![Git gateway verification requiring a repository](../images/portal/guide-annotated/user-credential-test-repository-light.png)
 
 *Verifying through a Git gateway requires a repository the credential should
-reach. This capture predates shared connections.*
+reach.*
 
 Expected result: the status reflects the latest supported verification outcome.
 An upstream verification establishes the tested credential's access at that time;
