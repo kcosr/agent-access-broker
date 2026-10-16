@@ -816,6 +816,12 @@ All notable changes to this project are documented in this file.
   silently become a token that follows all current grants.
 - Confirming **Discard changes** after browser Back or Forward in the grant
   editor now leaves the page instead of leaving the confirmation pending.
+- GitLab Git gateway examples in the sample broker config and CLI guide now use
+  Basic credentials (`basic_api_token` or the `git-basic-api-token` profile)
+  instead of a Bearer token, which GitLab's Git HTTP endpoint rejects. The
+  configuration reference's gateway example includes its Basic service
+  credential, and the Git gateway guide notes that GitLab accepts the access
+  token with any non-empty username, such as `oauth2`.
 
 ### Removed
 

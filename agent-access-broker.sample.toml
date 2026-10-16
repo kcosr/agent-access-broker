@@ -304,14 +304,19 @@ read_only = true
 # credential_name = "default"
 # profile = "gitlab-access-token"
 
+# GitLab's Git HTTP endpoint accepts only HTTP Basic credentials. Use the
+# access token with any non-empty username, such as oauth2; a deploy token
+# needs its own username.
+#
 # [credentials.service.gitlab_git]
-# type = "bearer_token"
+# type = "basic_api_token"
+# username_ref = "env:GITLAB_GIT_USERNAME"
 # token_ref = "env:GITLAB_SERVICE_TOKEN"
 #
 # [credentials.per_user.gitlab_git]
 # type = "managed_store"
 # credential_name = "default"
-# profile = "git-bearer-token"
+# profile = "git-basic-api-token"
 
 [policy]
 authority = "toml"

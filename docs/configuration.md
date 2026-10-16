@@ -1428,6 +1428,12 @@ deny_ref_patterns = ["refs/heads/main"]
 deny_delete_refs = true
 receive_pack_prefix_max_bytes = 65536
 
+# GitLab's Git HTTP endpoint accepts only Basic credentials.
+[credentials.service.gitlab_git]
+type = "basic_api_token"
+username_ref = "env:GITLAB_GIT_USERNAME"     # any non-empty name, such as oauth2
+token_ref = "env:GITLAB_GIT_TOKEN"
+
 [[policy.resources]]
 id = "git-project"
 resource_type = "git_repository"
