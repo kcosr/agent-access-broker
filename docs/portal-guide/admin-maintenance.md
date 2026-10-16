@@ -93,18 +93,20 @@ Review the breadth of the delegation before saving it. Use the
 3. Select an agent token to inspect its ceiling. Use **Pause token** for a
    temporary suspension, **Resume token** to restore a paused token, or **Revoke**
    to retire it. Changing its restrictions requires a replacement token.
-4. Open **Credentials** to inspect the account's configured stored API-token
-   targets. Replace or delete the stored credential when its purpose changes.
+4. Open **Credentials** to inspect the account's credential connections that use
+   a stored token, and any stored credentials the configuration no longer
+   selects (**Not used**). Replace or delete a token when its purpose changes;
+   provision a service account's tokens here. Delete unused rows by ID.
 5. Return to **Access** and confirm that current grants still match the intended
    service/action/resource boundary.
 
 Expected result: administrative changes apply to the selected account. Your own
 **My access > Credentials** and **Tokens** act on your personal account instead.
-An administrator's own OAuth setup needs self-service, a configured binding, a
-matching `per_user` action grant and browser consent. The import discovery
+An administrator's own OAuth setup needs self-service, a credential connection
+with OAuth, a matching `per_user` action grant and browser consent. The import discovery
 workflow has a bounded administrator exception. Editing another account's stored
-API-token credential does not grant it invocation access or complete its OAuth
-consent.
+token does not grant it invocation access or complete its OAuth consent; a
+person's connection that uses OAuth takes no administrator-stored token.
 
 Deleting a broker credential copy does not revoke the upstream secret. Arrange
 upstream revocation or rotation when needed. See

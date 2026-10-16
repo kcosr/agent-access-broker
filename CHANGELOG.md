@@ -327,6 +327,35 @@ All notable changes to this project are documented in this file.
   service ID and need no configuration change. There is no schema migration;
   rewrite the configuration before upgrading, following the credential
   connections steps under the operator guide's upgrade and rollback section.
+- Personal credential management is keyed by credential connection. `GET
+  /v1/credentials` returns `{connections, retained}`: each connection's method
+  for the caller (`token`, `oauth` or `unavailable`), the services it serves
+  that the caller is entitled to with a count of the others, and its active
+  token, plus the stored rows the configuration no longer selects. `GET
+  /v1/credentials/targets` lists connections, and `GET|PUT|DELETE
+  /v1/credentials/connections/{connection}` with `/verify` and
+  `/input-schema` replace the `{service}/{name}` routes; the administrator
+  routes move to `/v1/admin/principals/{principal}/credentials/connections/{connection}`
+  and apply only when the connection selects a token for that principal.
+  Verification takes an optional `service` beside `repository`, probes as the
+  credential owner and returns `probeService`. `DELETE
+  /v1/credentials/retained/{credentialId}` removes a retained row, and
+  `PUT /v1/admin/credentials/{id}` and `POST /v1/admin/credentials/{id}/verify`
+  are removed. OAuth routes are keyed by registration: `POST /v1/oauth/connect`
+  takes `registration` (and `importedService` for an administrator's import
+  discovery), `DELETE /v1/oauth/connections/{registration}` disconnects, and
+  `GET /v1/oauth/connections` returns one row per registration with its
+  `consumers` and `otherConsumers` instead of `service` and
+  `serviceDisplayName`. Management audit targets name `{principal,
+  connection}`, `{principal, credentialId}` for retained-row deletes, and
+  `{registration}` for OAuth. The CLI follows: `credentials
+  inspect|put|delete|verify <connection>` drop the credential-name positional,
+  `credentials targets` and `credentials delete-retained <credential-id>` are
+  added, verification takes `--service` (`--verify-service` on `put`), and
+  `admin credentials` adds `targets`, `list --principal`, `inspect-by-id` and
+  `delete-by-id`. The portal's Credentials list has one row per connection and
+  per OAuth registration, merging the separate Connected accounts section, and
+  lists retained rows for deletion.
 
 ### Added
 

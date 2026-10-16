@@ -56,12 +56,14 @@ for request, token-response and permission-boundary semantics.
 
 ## Connection lifecycle
 
-1. A signed-in user opens **Credentials → Connected accounts** and clicks
+1. A signed-in user opens **My access > Credentials**, where each OAuth
+   registration their credential connections use is one row, and clicks
    **Connect account**. Setup requires self-service enabled, a credential
    connection with `oauth` and a matching active `per_user` action grant on a
-   service that uses it, for the user or their current groups. An administrator may connect their own imported
-   discovery account through the import workflow's bounded discovery exception,
-   including for later discovery refreshes.
+   service that uses it, for the user or their current groups. An administrator
+   may connect their own imported discovery account through the import
+   workflow's bounded discovery exception, including for later discovery
+   refreshes.
 2. The Broker stores an encrypted, five-minute, one-use flow bound to the owner,
    live browser session, registration configuration and connection generation.
    It generates independent state and an S256 PKCE verifier/challenge. Only one
@@ -263,26 +265,27 @@ connected mailbox. The test records provider does not define mail actions; see
 
 | Method/path | Behavior |
 | --- | --- |
-| `GET /v1/oauth/connections` | Metadata for configured services the owner may inspect, including each service's `serviceDisplayName` and the `connectionDescription` its backend declares |
-| `POST /v1/oauth/connect` | `{ "service": "oauth_stub", "intent": "connect" }`; returns an authorization URL and expiry |
+| `GET /v1/oauth/connections` | One row per registration the owner's credential connections select: its `displayName`, the `connectionDescription` a consuming backend declares, the entitled `consumers` and the count of `otherConsumers` |
+| `POST /v1/oauth/connect` | `{ "registration": "stub", "intent": "connect" }`; returns an authorization URL and expiry |
 | `GET /v1/oauth/callback/{registration}` | One-use browser callback; successful or canceled consent returns HTTP 200 HTML with a small completion page |
-| `DELETE /v1/oauth/connections/{service}` | Idempotent local disconnect, including when no owned connection remains; reports `remoteRevocation: "not_requested"` |
+| `DELETE /v1/oauth/connections/{registration}` | Idempotent local disconnect, including when no owned connection remains; reports `remoteRevocation: "not_requested"` |
 
-Each connection target includes `canConnect`, `canDisconnect` and the required
-nullable `connectUnavailableReason`. The reason is `null` when setup is available,
-`no_personal_access` when the owner lacks a matching `per_user` grant, or
-`service_unavailable` when the configured service cannot currently accept setup.
-A retained connection can therefore offer Disconnect while Connect/Reconnect is
-unavailable. These flags describe personal management, not invocation access.
+Each row includes `canConnect`, `canDisconnect` and the required nullable
+`connectUnavailableReason`. The reason is `null` when setup is available,
+`no_personal_access` when the owner lacks a matching `per_user` grant on every
+consumer, or `service_unavailable` when an imported consumer cannot currently
+accept setup. A retained connection can therefore offer Disconnect while
+Connect/Reconnect is unavailable. These flags describe personal management, not
+invocation access.
 
-Entitled service/profile bindings retain separate rows even when they share one
-registration. Cleanup-only rows appear only for an actual owned connection, and
-only once per registration when no entitled row represents it. Disconnect affects
-every service sharing that owner's registration; those services do not have
-independent token families. Prefer one compatible permission profile per
-registration.
+A row appears when the owner may set up at least one consumer of the
+registration. An owned connection stays listed after grant loss, with no
+entitled `consumers`, so its owner can disconnect it. Disconnect affects every
+service whose credential connection uses the registration; those services do
+not have independent token families. The portal's disconnect confirmation names
+the entitled services and counts the others.
 
-Each target also includes `scopeMode` (`explicit` or `server_default`) and
+Each row also includes `scopeMode` (`explicit` or `server_default`) and
 `requestedScopes`. Server-default targets have an empty `requestedScopes` array;
 the mode identifies an authorization policy, not an absence of permissions.
 `connection.targets[].scopes` contains current known scope evidence from token
@@ -298,8 +301,8 @@ or **Scope details unavailable** as appropriate.
 accept optional `returnPath` on connect: `/ui/credentials` (the default) or
 `/ui/admin/catalog`. The broker saves this fixed destination with the pending
 flow for the completion page's link to open Broker in a new tab. For Catalog,
-the link opens the initiating imported service's Import tab,
-`/ui/admin/catalog/services/{service}/import`.
+the connect request names the imported service in `importedService`, and the
+link opens its Import tab, `/ui/admin/catalog/services/{service}/import`.
 Other paths, supplied queries and external URLs are rejected. The callback does
 not accept a destination or automatically navigate to the portal. Successful
 authorization attempts to close its tab; canceled consent stays visible.
@@ -346,9 +349,13 @@ predicate. Each authoritative check loads the current published runtime rather
 than retaining the request's earlier snapshot. With managed policy, grant rows
 and effective group membership, including membership expiry, are read within the
 same store transaction as admission. With TOML policy, grants come from the
-current runtime. The service must still bind the flow's exact registration and
-profile; imported flows must also match the current import revision. Existing
-session, PKCE, issuer, generation and registration-fingerprint checks still apply.
+current runtime. Admission is for the registration as a whole: at least one
+consuming service whose credential connection selects OAuth for the owner, with
+the flow's exact registration and profile, must have an active `per_user` grant
+for the owner. An administrator's discovery connection for an imported service
+names that service and uses its discovery admission instead. Imported consumers
+must also match the current import revision. Existing session, PKCE, issuer,
+generation and registration-fingerprint checks still apply.
 
 If a valid matching callback loses setup authority or its binding changes before
 exchange, the Broker retires that pending flow and returns the denial. It does
@@ -373,10 +380,10 @@ registration, generation, configuration fingerprint and encryption key ID.
 Key readiness and rewrap include these rows. Back up the database and encryption
 key ring together using the existing managed-store procedures.
 
-Removing a service binding does not remove that owner's registration slot. An
-unbound retained slot is not invocable or exposed by the service-based connection
-routes, but still participates in startup decryption, used-key inventory,
-readiness and rewrap. Removing the registration, activating a changed
+Removing every credential connection that uses a registration does not remove
+that owner's registration slot. An unused retained slot is not invocable or
+listed by the connection routes, but still participates in startup decryption,
+used-key inventory, readiness and rewrap. Removing the registration, activating a changed
 registration fingerprint, or disabling/removing the owner deletes the applicable
 slots. Do not retire an encryption key merely because its connection is unbound.
 

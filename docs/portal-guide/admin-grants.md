@@ -6,8 +6,8 @@ uses each principal's own credential (`per_user`), and references the exact DEMO
 project resource.
 
 Start from [Sign in and choose a workflow](index.md) and
-[users and groups](admin-users-groups.md). The Jira integration and its per-user
-credential target must already be configured by the operator. These steps
+[users and groups](admin-users-groups.md). The Jira integration and its
+credential connection must already be configured by the operator. These steps
 assume managed policy. An administrator creates resources; a service policy
 manager can manage grants for directly assigned services, using the resource
 catalog made available to them. See [roles](../roles.md) and
@@ -134,7 +134,7 @@ access; narrowing one grant does not remove permissions from every other grant.
 | --- | --- |
 | Resource creation or grant editing is unavailable | Check the account role, managed policy authority, and the service policy manager's direct service assignments. Resource changes require administrator authority. |
 | Jira is unavailable in the Service picker | Have the operator configure the integration, validate it, and reload. The portal does not create the provider configuration. |
-| `per_user` is marked not configured | Have the operator configure the per-user credential target for the selected service and actions. Choosing a mode in a grant does not create that target. |
+| `per_user` is marked not configured | Have the operator configure a credential connection for the selected service. Choosing a mode in a grant does not create that connection. |
 | A project resource cannot be saved | Check its canonical key, contexts, and whether the same Jira project selector already exists. |
 | Effective access is empty | Check active status, selected actions, resource type, enabled resources, matching execution contexts, and any selected resource-group exclusions. |
 | Validation prevents saving | Follow the reported field or section, correct the selection, and review the preview again. |

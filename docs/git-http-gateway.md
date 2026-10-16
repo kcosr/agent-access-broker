@@ -43,7 +43,8 @@ from invoke/send runtime specs because they are not `/v1/invoke` actions.
 ```bash
 agent-access services list
 agent-access actions list --service gitlab_git
-agent-access --url http://127.0.0.1:8787 credentials verify gitlab_git default --repository team/project
+# Verify your token for the gitlab credential connection through the gateway
+agent-access --url http://127.0.0.1:8787 credentials verify gitlab --service gitlab_git --repository team/project
 ```
 
 Git clients point at the gateway listener host. When prompted for HTTP Basic

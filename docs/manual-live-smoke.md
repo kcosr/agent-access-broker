@@ -363,31 +363,36 @@ file or into tracked docs.
 
 ## Upstream Credential Prep
 
-Use `user_manage` or admin credential routes to store per-user upstream tokens.
-Prefer generic field sources for upstream token material:
+Use `user_manage` or admin credential routes to store each principal's token for
+its credential connections. Prefer generic field sources for upstream token
+material:
 
 ```bash
 export ATLASSIAN_API_TOKEN_FILE=/secure/path/atlassian-api-token
 export GITLAB_TOKEN_FILE=/secure/path/gitlab-token
 
-"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> jira default \
-  --profile jira-cloud-api-token \
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> jira \
   --username <email-or-user> \
   --field-file token="$ATLASSIAN_API_TOKEN_FILE" \
   --verify
 
-"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> confluence default \
-  --profile confluence-cloud-api-token \
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> confluence \
   --username <email-or-user> \
   --field-file token="$ATLASSIAN_API_TOKEN_FILE" \
   --verify
 
-"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> gitlab default \
-  --profile gitlab-access-token \
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials put <principal> gitlab \
   --field-file token="$GITLAB_TOKEN_FILE" \
-  --verify-repository "$GITLAB_REPOSITORY" \
   --verify
+
+# When the GitLab Git gateway shares the gitlab connection, verify the same
+# token through it against the smoke repository.
+"$AAB_BIN" --config "$ADMIN_CONFIG" admin credentials verify <principal> gitlab \
+  --service gitlab_git --repository "$GITLAB_REPOSITORY"
 ```
+
+Verification probes as the principal through a service it is granted
+`per_user`, so grant the principal before verifying.
 
 ## Attribution Setup
 

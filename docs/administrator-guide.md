@@ -210,7 +210,7 @@ permission profile (imports publish theirs), and assign a matching active action
 grant with `credentialMode = "per_user"` on a service that uses the connection
 to the user or one of their current groups. The same setup applies to an administrator connecting a
 personal account. A signed-in browser session is required; a setup bearer alone
-cannot perform consent. Use **My access > Credentials > Connected accounts**.
+cannot perform consent. Use the registration's row in **My access > Credentials**.
 
 Setup does not require a resource or execution context to be usable now, and the
 matching grant need not win invocation precedence. A user can prepare an account
