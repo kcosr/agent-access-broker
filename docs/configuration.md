@@ -468,7 +468,7 @@ Connection keys (`[credentials.connections.<id>]`):
 
 | Key | Rule |
 | --- | --- |
-| `display_name` | Optional name that management shows; must not be empty when set |
+| `display_name` | Optional name that management shows, the connection ID when unset; must not be empty when set |
 | `token_profile` | Optional stored token form, one of the [token profiles](#connection-token-profiles) |
 | `oauth` | Optional `{ registration, profile }`: a configured `[oauth.registrations.<registration>]` and one of its `permission_profiles` |
 

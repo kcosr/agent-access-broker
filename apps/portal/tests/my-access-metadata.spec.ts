@@ -82,11 +82,13 @@ mode = "create_if_empty"
 principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
 [credentials.connections.jira]
+display_name = "Jira"
 token_profile = "jira-cloud-api-token"
 [credentials.per_user.jira]
 type = "connection"
 connection = "jira"
 [credentials.connections.gitlab_git]
+display_name = "GitLab Git"
 token_profile = "git-bearer-token"
 [credentials.per_user.gitlab_git]
 type = "connection"

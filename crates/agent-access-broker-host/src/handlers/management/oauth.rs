@@ -170,7 +170,9 @@ pub(crate) async fn list(
         Err(e) => return error(&context, operation, e).await,
     };
     let mut rows = Vec::new();
-    for (registration_id, selected) in selected_registrations(&context) {
+    let selected_registrations = selected_registrations(&context);
+    for (registration_id, selected) in &selected_registrations {
+        let registration_id = registration_id.clone();
         let (entitled, reasons) = match entitlement(&context, &selected.consumers) {
             Ok(entitlement) => entitlement,
             Err(failure) => return error(&context, operation, failure).await,
@@ -202,12 +204,11 @@ pub(crate) async fn list(
         else {
             continue;
         };
-        let (consumers, other_consumers) =
-            registration_consumer_view(runtime, &selected, &entitled);
-        // The backend describes its own connection.
+        let (consumers, other_consumers) = registration_consumer_view(runtime, selected, &entitled);
+        // An entitled consumer's backend describes the connection; the
+        // caller learns nothing of consumers it is not entitled to.
         let description = entitled
             .first()
-            .or(selected.consumers.first())
             .and_then(|service| runtime.service_descriptor(service))
             .and_then(|descriptor| {
                 descriptor
@@ -224,6 +225,39 @@ pub(crate) async fn list(
             "target":profile.target,"consumers":consumers,"otherConsumers":other_consumers,
             "canConnect":unavailable.is_none(),"connectUnavailableReason":unavailable,
             "canDisconnect":owned,"connection":connection}));
+    }
+    // An owned connection whose registration no credential connection
+    // selects for the caller any more, because its last consumer was
+    // removed or rebound, stays listed for local disconnect.
+    for connection in owned_connections.iter().filter(|connection| {
+        connection.connection_id.is_some()
+            && !selected_registrations.contains_key(&connection.registration)
+    }) {
+        let Some(registration) = manager.config().registrations.get(&connection.registration)
+        else {
+            continue;
+        };
+        let profiles = match manager
+            .connected_profiles(&context.identity.principal, &connection.registration)
+        {
+            Ok(profiles) => profiles,
+            Err(failure) => return error(&context, operation, failure).await,
+        };
+        let Some((profile_id, profile)) = profiles.iter().find_map(|id| {
+            registration
+                .permission_profiles
+                .get(id)
+                .map(|profile| (id, profile))
+        }) else {
+            continue;
+        };
+        rows.push(json!({"registration":connection.registration,
+            "permissionProfile":profile_id,
+            "displayName":connection.registration,"connectionDescription":null,
+            "scopeMode":profile.scope_mode,"requestedScopes":profile.requested_scopes(),
+            "target":profile.target,"consumers":[],"otherConsumers":0,
+            "canConnect":false,"connectUnavailableReason":"no_personal_access",
+            "canDisconnect":true,"connection":connection}));
     }
     private_response(management_success_response(&context, operation, None, json!(rows)).await)
 }

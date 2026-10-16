@@ -1219,6 +1219,25 @@ impl OAuthManager {
             })
             .collect()
     }
+    /// The permission profiles `owner`'s connection for `registration` holds
+    /// access for, in name order; empty without a connection. A connection
+    /// no credential connection selects any more still names the profile it
+    /// was consented for.
+    pub fn connected_profiles(
+        &self,
+        owner: &str,
+        registration: &str,
+    ) -> Result<Vec<String>, OAuthError> {
+        self.active()?;
+        let r = self.registration(registration)?;
+        Ok(self
+            .inner
+            .store
+            .oauth_read(&self.inner.ring, owner, registration, &r.fingerprint)?
+            .and_then(|slot| slot.connection)
+            .map(|connection| connection.family.access.into_keys().collect())
+            .unwrap_or_default())
+    }
     pub fn status(&self, owner: &str, registration: &str) -> Result<OAuthConnection, OAuthError> {
         self.active()?;
         let r = self.registration(registration)?;

@@ -254,7 +254,8 @@ fn assert_token_option_metadata(options: &Value) {
 fn assert_credential_target_metadata(targets: &Value) {
     assert_eq!(targets.as_array().unwrap().len(), 2, "{targets}");
     let git = entry(targets, "connection", "gitlab_git");
-    assert_eq!(git["displayName"], "GitLab Git");
+    // Without a configured display name, the connection shows its ID.
+    assert_eq!(git["displayName"], "gitlab_git");
     assert_eq!(
         git["consumers"],
         json!([{"service": "gitlab_git", "displayName": "GitLab Git",
@@ -264,7 +265,7 @@ fn assert_credential_target_metadata(targets: &Value) {
     assert_eq!(git["profile"], "git-bearer-token");
     assert_eq!(git["inputSchema"]["connection"], "gitlab_git");
     let jira = entry(targets, "connection", "jira");
-    assert_eq!(jira["displayName"], "Jira");
+    assert_eq!(jira["displayName"], "jira");
     // Always serialized, empty when verification needs no input.
     assert_eq!(
         jira["consumers"][0]["credentialVerificationInputs"],

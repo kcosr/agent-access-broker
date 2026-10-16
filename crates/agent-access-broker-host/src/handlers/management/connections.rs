@@ -82,23 +82,15 @@ pub(super) struct ConnectionRow {
 }
 
 /// The name management shows for `connection`: its configured display name,
-/// else its first consumer's, else its ID.
+/// else its ID. A consumer's name never stands in for it, since the caller
+/// may not be entitled to that consumer.
 pub(super) fn display_name(runtime: &BrokerRuntime, connection: &str) -> String {
-    let credentials = runtime.effective_credentials();
-    if let Some(name) = credentials
+    runtime
+        .effective_credentials()
         .connections
         .get(connection)
         .and_then(|config| config.display_name.clone())
-    {
-        return name;
-    }
-    credentials
-        .connection_consumers(connection)
-        .find_map(|service| runtime.service_descriptor(service))
-        .map_or_else(
-            || connection.to_string(),
-            |descriptor| descriptor.display_name.clone(),
-        )
+        .unwrap_or_else(|| connection.to_string())
 }
 
 /// The services consuming `connection`, in configured order.

@@ -87,10 +87,11 @@ struct Fixture {
     audit_path: PathBuf,
     /// The Jira connection's ID.
     jira: String,
-    /// `user_manage` tokens of alice (granted on every consumer) and bob
-    /// (no grants).
+    /// `user_manage` tokens of alice (granted on every consumer), bob (no
+    /// grants) and gitter (granted only on GitLab Git).
     alice: String,
     bob: String,
+    gitter: String,
     /// An administrator who holds a per_user Jira grant of its own, and an
     /// auditor.
     admin: String,
@@ -175,6 +176,7 @@ async fn fixture(jira: &str) -> Fixture {
         grant("user:alice", "gitlab", "issue.view", repository()),
         grant("user:alice", "gitlab_git", "repo.fetch", repository()),
         grant("user:robot", "jira", "issue.view", jira_project()),
+        grant("user:gitter", "gitlab_git", "repo.fetch", repository()),
         grant("user:admin", "jira", "issue.view", jira_project()),
     ];
 
@@ -186,6 +188,7 @@ async fn fixture(jira: &str) -> Fixture {
     for (principal, kind) in [
         ("alice", "user"),
         ("bob", "user"),
+        ("gitter", "user"),
         ("admin", "user"),
         ("auditor", "user"),
         ("robot", "service_account"),
@@ -237,6 +240,7 @@ async fn fixture(jira: &str) -> Fixture {
     };
     let alice = issue("alice", BrokerTokenClass::UserManage);
     let bob = issue("bob", BrokerTokenClass::UserManage);
+    let gitter = issue("gitter", BrokerTokenClass::UserManage);
     let admin = issue("admin", BrokerTokenClass::Admin);
     let auditor = issue("auditor", BrokerTokenClass::Admin);
     let probe = Arc::new(ProbeJira::default());
@@ -251,6 +255,7 @@ async fn fixture(jira: &str) -> Fixture {
         jira: jira.to_string(),
         alice,
         bob,
+        gitter,
         admin,
         auditor,
     }
@@ -525,6 +530,62 @@ async fn first_provisioning_lists_entitled_consumers_from_an_empty_store() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}");
     assert_eq!(unknown["reasonCode"], "input_invalid");
+}
+
+/// A shared connection without a configured display name shows its ID,
+/// never the name of a consumer the caller is not entitled to.
+#[tokio::test]
+async fn hidden_consumers_never_name_a_shared_connection() {
+    let fixture = fixture("jira").await;
+    let targets = fixture
+        .ok(
+            &fixture.gitter,
+            Method::GET,
+            "/v1/credentials/targets",
+            None,
+        )
+        .await;
+    assert_eq!(targets.as_array().unwrap().len(), 1, "{targets}");
+    let gitlab = &targets[0];
+    assert_eq!(gitlab["connection"], "gitlab");
+    assert_eq!(gitlab["displayName"], "gitlab");
+    assert_eq!(
+        gitlab["consumers"],
+        json!([{"service": "gitlab_git", "displayName": "GitLab Git",
+            "credentialVerificationInputs": ["repository"]}])
+    );
+    assert_eq!(gitlab["otherConsumers"], 1);
+    let schema = fixture
+        .ok(
+            &fixture.gitter,
+            Method::GET,
+            "/v1/credentials/connections/gitlab/input-schema",
+            None,
+        )
+        .await;
+    assert_eq!(schema, gitlab["inputSchema"]);
+    for field in schema["fields"].as_array().unwrap() {
+        assert!(
+            field["prompt"].as_str().unwrap().starts_with("gitlab "),
+            "{schema}"
+        );
+    }
+    let list = fixture
+        .ok(&fixture.gitter, Method::GET, "/v1/credentials", None)
+        .await;
+    let row = connection_row(&list, "gitlab");
+    assert_eq!(row["displayName"], "gitlab");
+    assert_eq!(row["consumers"], gitlab["consumers"]);
+    // An administrator's view of gitter shows the same.
+    let administered = fixture
+        .ok(
+            &fixture.admin,
+            Method::GET,
+            "/v1/admin/principals/gitter/credentials",
+            None,
+        )
+        .await;
+    assert_eq!(administered, list);
 }
 
 #[tokio::test]

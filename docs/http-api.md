@@ -754,8 +754,9 @@ store now, with the schema-driven input form:
 ]
 ```
 
-`displayName` is the connection's configured `display_name`, or its first
-consumer's display name. A target needs the token method for the caller's
+`displayName` is the connection's configured `display_name`, or its ID; a
+consumer's name never stands in for it, since the caller may not be entitled to
+that consumer. A target needs the token method for the caller's
 principal kind. Broker-issued `user_manage` callers and browser sessions see
 targets for connections where they hold an active `per_user` grant on a
 consumer; classless self-service callers see targets where they hold the
@@ -3220,6 +3221,15 @@ active `per_user` grant, or administrator discovery of an imported service);
 `otherConsumers` counts the rest, which the connection serves too. A row appears
 when the caller may set up at least one consumer, and an owned connection stays
 listed after grant loss for local disconnect, with `consumers: []`.
+`displayName` is the first selecting connection's configured `display_name`, or
+its ID, and `connectionDescription` comes from an entitled consumer's backend.
+An owned connection whose registration no credential connection selects for the
+caller any more, because its last consumer was removed or rebound, is still
+listed for local disconnect: its `displayName` is the registration ID, its
+profile fields describe the permission profile it was consented for, and it has
+`consumers: []`, `otherConsumers: 0`, `connectionDescription: null`,
+`canConnect: false`, `connectUnavailableReason: "no_personal_access"` and
+`canDisconnect: true`.
 `canConnect`, `canDisconnect` and required nullable `connectUnavailableReason`
 are as follows: `connectUnavailableReason` is `null` when setup is available,
 `no_personal_access` for missing grant authority, or `service_unavailable` for an

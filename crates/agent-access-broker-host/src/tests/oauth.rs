@@ -19,7 +19,8 @@ const SOURCE: &str = "127.0.0.1:43200";
 
 struct OAuthFixture {
     _dir: tempfile::TempDir,
-    _broker: TestBroker,
+    broker: TestBroker,
+    config: BrokerConfig,
     audit_path: PathBuf,
     runtime: BrokerRuntime,
     app: Router,
@@ -285,7 +286,8 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         .to_string();
     OAuthFixture {
         _dir: dir,
-        _broker: broker,
+        broker,
+        config,
         audit_path,
         runtime,
         app,
@@ -896,7 +898,8 @@ async fn connection_rows_describe_services_from_their_descriptors() {
     let connection = descriptor.credentials.delegated.as_ref().unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
     assert_eq!(rows[0]["registration"], "stub");
-    assert_eq!(rows[0]["displayName"], descriptor.display_name);
+    // The connection has no configured display name: it shows its ID.
+    assert_eq!(rows[0]["displayName"], "oauth_stub");
     assert_eq!(
         rows[0]["consumers"],
         json!([{"service": "oauth_stub", "displayName": descriptor.display_name,
@@ -1158,6 +1161,107 @@ async fn oauth_owned_connection_remains_visible_and_disconnectable_after_grant_l
         .await;
     assert_eq!(response_json(response).await["result"], json!([]));
     assert!(fixture.requests_after_consent().await.is_empty());
+}
+
+/// An owned connection stays listed for local disconnect after its
+/// registration loses its last selecting consumer, whether the consumer is
+/// removed or rebound to another registration.
+#[tokio::test]
+async fn owned_connections_outlive_their_last_selecting_consumer() {
+    for rebind in [false, true] {
+        let fixture = oauth_fixture().await;
+        fixture.connect("").await;
+        let mut changed = fixture.config.clone();
+        // Reload admission needs every configured service credential; the
+        // fixture's development service credential names an unset variable.
+        changed.credentials.service.remove("fake");
+        if rebind {
+            let mut registration = changed.oauth.registrations["stub"].clone();
+            registration.redirect_uri = registration
+                .redirect_uri
+                .replace("/callback/stub", "/callback/stub_two");
+            changed
+                .oauth
+                .registrations
+                .insert("stub_two".into(), registration);
+            changed
+                .credentials
+                .connections
+                .get_mut("oauth_stub")
+                .unwrap()
+                .oauth
+                .as_mut()
+                .unwrap()
+                .registration = "stub_two".into();
+        } else {
+            fixture
+                .runtime
+                .delete_managed_policy_grant(agent_access_core::ManagedPolicyGrantStatusRequest {
+                    grant_id: "personal-oauth".into(),
+                    expected_version: 1,
+                    updated_by: "admin".into(),
+                })
+                .unwrap();
+            changed.credentials.per_user.remove("oauth_stub");
+            changed.credentials.connections.remove("oauth_stub");
+        }
+        fixture.broker.reload_config(&changed).await;
+        let response = fixture
+            .browser(Method::GET, "/v1/oauth/connections", "orphan-list", None)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let rows = response_json(response).await["result"].clone();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["registration"] == "stub")
+            .unwrap_or_else(|| panic!("rebind={rebind}: {rows}"))
+            .clone();
+        assert_eq!(row["displayName"], "stub");
+        assert_eq!(row["permissionProfile"], "read");
+        assert_eq!(row["consumers"], json!([]));
+        assert_eq!(row["otherConsumers"], 0);
+        assert_eq!(row["connectionDescription"], Value::Null);
+        assert_eq!(row["canConnect"], false);
+        assert_eq!(row["connectUnavailableReason"], "no_personal_access");
+        assert_eq!(row["canDisconnect"], true);
+        assert!(row["connection"]["connectionId"].is_string());
+        let response = fixture
+            .browser(
+                Method::POST,
+                "/v1/oauth/connect",
+                "orphan-reconnect",
+                Some(json!({"registration": "stub", "intent": "reconnect"})),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = fixture
+            .browser(
+                Method::DELETE,
+                "/v1/oauth/connections/stub",
+                "orphan-disconnect",
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["result"],
+            json!({"disconnected":true,"remoteRevocation":"not_requested"})
+        );
+        let response = fixture
+            .browser(Method::GET, "/v1/oauth/connections", "orphan-gone", None)
+            .await;
+        let rows = response_json(response).await["result"].clone();
+        assert!(
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["registration"] != "stub"),
+            "rebind={rebind}: {rows}"
+        );
+        assert!(fixture.requests_after_consent().await.is_empty());
+    }
 }
 
 #[tokio::test]

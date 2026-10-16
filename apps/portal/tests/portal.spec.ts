@@ -1657,7 +1657,7 @@ test("local browser login supports administration, self-service credentials, tok
     const tabs = page.getByRole("navigation", { name: "User sections", exact: true });
     await tabs.getByRole("link", { name: "Credentials", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/ui/admin/principals/${principalId}/credentials$`));
-    // The jira connection, shown under its consumer's display name.
+    // The jira connection, shown under its configured display name.
     const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Jira", exact: true }) });
     await expect(row).toContainText("jira-cloud-api-token");
     await row.getByRole("link").click();
@@ -2998,6 +2998,7 @@ enabled = true
 public_url = "http://127.0.0.1:${port}/mcp"
 
 [credentials.connections.jira]
+display_name = "Jira"
 token_profile = "jira-cloud-api-token"
 
 [credentials.per_user.jira]

@@ -64,7 +64,7 @@ impl PrincipalKind {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionConfig {
-    /// The name management shows for the connection.
+    /// The name management shows for the connection; its ID when unset.
     pub display_name: Option<String>,
     /// The stored token form: self-service for users when `oauth` is unset
     /// and for system principals, administrator-provisioned for service
