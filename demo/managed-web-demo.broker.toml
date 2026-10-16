@@ -157,13 +157,11 @@ connection = "gitlab"
 type = "bearer_token"
 token_ref = "env:AAB_DEMO_GITLAB_GIT_SERVICE_TOKEN"
 
-[credentials.connections.gitlab_git]
-display_name = "GitLab Git"
-token_profile = "git-bearer-token"
-
+# GitLab REST and the Git gateway share the gitlab connection: one stored
+# GitLab token per principal, presented to Git as Basic (see the gateway).
 [credentials.per_user.gitlab_git]
 type = "connection"
-connection = "gitlab_git"
+connection = "gitlab"
 
 [providers.jira]
 tenant_host = "jira.example.invalid"
@@ -233,6 +231,8 @@ allowed_upstream_hosts = ["https://gitlab.example.invalid/**"]
 auth_modes = ["basic_broker_token"]
 basic_broker_token_username = "agent-access"
 credential_modes = ["service", "per_user"]
+# GitLab's Git endpoint accepts only Basic credentials.
+upstream_token_auth = { scheme = "basic", username = "oauth2" }
 redirect_policy = "none"
 correlation_headers = true
 request_body_max_bytes = 536870912

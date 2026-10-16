@@ -286,7 +286,7 @@ async function credentialGuide(page) {
   let outcome = null;
   let record;
   const listPath = '/v1/credentials';
-  const verifyPath = '/v1/credentials/jira/default/verify';
+  const verifyPath = '/v1/credentials/connections/jira/verify';
   const checkedAt = new Date().toISOString();
   const simulated = () => ({ ...record,
     verificationStatus: outcome === 'success' ? 'upstream_verified' : 'verification_failed',
@@ -301,9 +301,9 @@ async function credentialGuide(page) {
     if (request.method() === 'GET' && pathname === listPath) {
       const response = await route.fetch();
       const body = await response.json();
-      record = body.result?.find(value => value.service === 'jira' && value.name === 'default');
+      record = body.result?.connections?.find(value => value.connection === 'jira')?.credential;
       if (!record) throw new Error('Credential test capture requires the seeded Jira credential');
-      if (outcome) body.result = body.result.map(value => value.credentialId === record.credentialId ? simulated() : value);
+      if (outcome) body.result.connections = body.result.connections.map(value => value.connection === 'jira' ? { ...value, credential: simulated() } : value);
       await route.fulfill({ response, json: body });
     } else if (request.method() === 'POST' && pathname === verifyPath && outcome) {
       await route.fulfill({ status: outcome === 'success' ? 200 : 424,
@@ -315,7 +315,7 @@ async function credentialGuide(page) {
   await page.route('**/v1/credentials**', fixture);
   try {
     await visit(page, '/ui/credentials', listPath);
-    const row = page.getByRole('row').filter({ hasText: 'jira/default' });
+    const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'Jira', exact: true }) });
     await row.getByRole('link').click();
     const drawer = page.getByRole('complementary', { name: 'Jira credential', exact: true });
     await drawer.getByLabel(/username/i).fill('alice@example.test');
@@ -323,7 +323,7 @@ async function credentialGuide(page) {
     await expect(drawer.getByRole('button', { name: 'Replace credential', exact: true })).toBeEnabled();
     await capture(page, 'guide', 'user-credential-input-light', 'light', 'Jira credential entry with a synthetic username and masked token; replacement draft is not saved');
     // Discard input before testing the saved synthetic credential.
-    await page.goto(`${origin}/ui/credentials?credential=jira%2Fdefault`);
+    await page.goto(`${origin}/ui/credentials?credential=jira`);
     await drawer.waitFor();
     outcome = 'success';
     await drawer.getByRole('button', { name: 'Verify', exact: true }).click();
@@ -339,12 +339,12 @@ async function credentialGuide(page) {
   } finally {
     await page.unroute('**/v1/credentials**', fixture);
   }
-  // Show the repository input required by Git HTTP credential verification.
+  // Show the repository input that verifying the shared GitLab connection through Git HTTP requires.
   await visit(page, '/ui/credentials', listPath);
-  await page.getByRole('row').filter({ hasText: 'gitlab_git/default' }).getByRole('link').click();
-  const gitDrawer = page.getByRole('complementary').filter({ has: page.getByLabel('Repository', { exact: true }) });
+  await page.getByRole('row').filter({ has: page.getByRole('link', { name: 'GitLab', exact: true }) }).getByRole('link', { name: 'GitLab', exact: true }).click();
+  const gitDrawer = page.getByRole('complementary', { name: 'GitLab credential', exact: true });
   await gitDrawer.getByLabel('Repository', { exact: true }).fill('demo/app');
-  await capture(page, 'guide', 'user-credential-test-repository-light', 'light', 'Git HTTP credential verification requires a repository; populated draft without submitting verification');
+  await capture(page, 'guide', 'user-credential-test-repository-light', 'light', 'Verifying the shared GitLab credential through the Git gateway requires a repository; populated draft without submitting verification');
 }
 
 async function tokenCreation(page, destination, theme) {
