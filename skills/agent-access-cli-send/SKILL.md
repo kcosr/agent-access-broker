@@ -417,6 +417,11 @@ Raw attachment download:
 
 ## Confluence
 
+Personal spaces use their actual keys, such as `~alice`, with the same space
+inputs and grants as team spaces. Preserve the tilde and case; for search use
+`"spaces":["~alice"]`. In raw CQL, quote the key: `space = "~alice"`.
+A personal-space grant does not imply ownership.
+
 Page view by ID or URL:
 
 ```json

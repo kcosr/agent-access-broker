@@ -594,8 +594,20 @@ All notable changes to this project are documented in this file.
   command does not verify upstream says it was checked locally. Resource
   creation no longer offers removed imported types.
 
+- Native Confluence personal spaces use existing `confluence_space` exact
+  resources and grants with their actual `~`-prefixed keys. Page/blog reads,
+  writes, drafts, locators, and search preserve those keys; `all` space coverage
+  includes personal spaces subject to the same upstream permissions, exclusions,
+  and token restrictions. No caller-relative home selection is implied.
+
 ### Changed
 
+- Existing Confluence `all` resources used by grants, groups, and token
+  restrictions now cover personal spaces visible to the selected upstream
+  credential; those keys were previously rejected. Review this coverage before
+  upgrading, especially service-mode grants using shared credentials. To limit
+  access to team spaces, select exact team-space resources; exact personal-space
+  exclusions cover only the listed keys and do not exclude future personal spaces.
 - Startup, reload and import-write diagnostics for a retained imported service
   identity collision now name both owners, such as
   `retained imported service jira collides with the selected native provider kind jira`.

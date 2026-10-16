@@ -9,8 +9,12 @@ fn real_broker_confluence_read_smoke() {
         .expect("AGENT_ACCESS_REAL_CONFLUENCE_PAGE_ID is required");
     let space = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_SPACE")
         .expect("AGENT_ACCESS_REAL_CONFLUENCE_SPACE is required");
-    let cql = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_CQL")
-        .unwrap_or_else(|_| format!("space = {space} and type = page"));
+    let cql = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_CQL").unwrap_or_else(|_| {
+        format!(
+            "space = {} and type = page",
+            serde_json::to_string(&space).unwrap()
+        )
+    });
 
     let page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args(["--url", &broker_url, "confluence", "page", "view", &page_id])
@@ -279,8 +283,12 @@ fn real_broker_confluence_blog_smoke() {
         .expect("AGENT_ACCESS_REAL_CONFLUENCE_SPACE is required");
     let blog_id = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_ID")
         .expect("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_ID is required");
-    let blog_cql = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_CQL")
-        .unwrap_or_else(|_| format!("space = {space} and type = blogpost"));
+    let blog_cql = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_CQL").unwrap_or_else(|_| {
+        format!(
+            "space = {} and type = blogpost",
+            serde_json::to_string(&space).unwrap()
+        )
+    });
     let create_title = std::env::var("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_CREATE_TITLE")
         .expect("AGENT_ACCESS_REAL_CONFLUENCE_BLOG_CREATE_TITLE is required");
     let create_content_file =

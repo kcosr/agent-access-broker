@@ -60,7 +60,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "operators": cql_operator_names(field),
             "values": match field {
                 CqlField::Type => kind.cql_type(),
-                CqlField::Space => "space key",
+                CqlField::Space => "space key; quote personal keys such as \"~alice\"; case is preserved",
                 field if field.is_page_id() => "numeric content ID",
                 field if field.is_date() => "valid YYYY-MM-DD or YYYY/MM/DD; optional HH:mm requires quoting",
                 field if field.is_text() => "quoted text",

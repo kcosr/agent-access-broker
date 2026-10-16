@@ -71,6 +71,58 @@ search action and verify its scope and audit record. The explicit content settin
 above enable the write formats used in this document; inspect the running catalog
 before using a mutation. Confluence page create/update require an enabled native page format.
 
+### Personal spaces
+
+A personal space uses the same `confluence_space` resource type as a team space.
+Use its actual Confluence key, including the leading `~`: for example,
+`https://example.atlassian.net/wiki/spaces/~alice/overview` identifies `~alice`.
+Keep the key's case and spelling; do not construct it from the Broker username
+or the upstream account's email address.
+
+This example grants Alice page reads and search in that one personal space. It
+assumes Alice's Broker principal, the `default` execution context, and the
+Confluence per-user credential target described above are configured:
+
+```bash
+agent-access admin policy resources create \
+  --id confluence-alice-personal --resource-type confluence_space \
+  --selector-kind exact --selector-value '~alice' \
+  --execution-context default --display-name "Alice's personal Confluence space"
+
+agent-access admin policy grants create \
+  --grant-id confluence-alice-personal-read --subject user:alice@example.com \
+  --service confluence --action page.view --action search \
+  --execution-context default --resource-id confluence-alice-personal \
+  --credential-mode per_user --description "Alice's personal space reads"
+```
+
+The resource and grant can also be created in the portal's catalog and policy
+editors. Its display name is descriptive: the explicit grant determines who can
+access `~alice`. `per_user` selects the caller's upstream credential; it does not
+resolve a user's home or restrict access to spaces they own. A service-mode
+grant can address the same resource with a shared credential. In both cases,
+Confluence's permissions still apply. An `all` space selector includes personal
+spaces permitted by the selected upstream credential, subject to the grant's
+exclusions and token restrictions.
+
+This coverage applies to existing `all` resources in grants, groups, and token
+restrictions too. Review them before upgrading, especially service-mode grants
+using shared credentials. Select exact team-space resources when access must
+remain limited to team spaces. Exact personal-space exclusions cover only the
+listed keys; newly created personal spaces remain within `all` coverage.
+
+Exclusions also compare the exact key, including case: excluding `~Alice` has
+no effect on a space reported as `~alice`. Copy the key from a Broker content
+result's `space` field and preserve it in the excluded resource. Confirm an
+exclusion using a page ID, for example
+`agent-access confluence page view 123456`, as well as search; the ID lookup
+checks the space reported by Confluence.
+
+For example, search the granted space with
+`agent-access confluence page search --space '~alice' --text 'notes'`.
+Use a page ID or a supported page URL to read a page; the space overview URL
+above identifies the resource key but is not a page locator.
+
 ## Access surfaces and examples
 
 Confluence actions are available through the typed CLI wrappers, generic
@@ -389,8 +441,10 @@ do not carry a stable numeric content ID.
 ## Keys, locators, and page-to-space confirmation
 
 - **Page ID** matches `^[1-9][0-9]*$`.
-- **Space key** matches `^[A-Z][A-Z0-9_-]{1,254}$` (2–255 characters, uppercase
-  first). The uppercase-first rule rejects personal `~`-prefixed space keys.
+- **Space key** is 2–255 ASCII characters. Team-space keys match
+  `^[A-Z][A-Z0-9_-]{1,254}$`; personal-space keys match
+  `^~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253}$`. Keys retain their exact spelling and
+  case. A bare `~`, whitespace, slashes, and percent-encoded aliases are invalid.
 - **Attachment ID** matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
 
 A page may be supplied as a page ID or as a URL. The URL locator
@@ -465,7 +519,8 @@ Accepted CQL fields: `space`, `type`, `id`/`content.id`, `title`, `text`,
 `label`/`labels`, `creator`, `contributor`, `mention`, `ancestor`, `parent`,
 `created`, and `lastModified`. Supported operators are field-specific:
 
-- `space` accepts `=` and `IN`.
+- `space` accepts `=` and `IN`. Quote personal-space keys, for example
+  `space = "~alice"` or `space IN (ENG, "~alice")`.
 - `type` accepts only `= page`; other content types such as `blogpost` are
   rejected.
 - `id`, `content.id`, `ancestor`, and `parent` accept `=` and `IN` with page IDs.
@@ -502,6 +557,9 @@ is bounded by `limits.max_upstream_response_bytes`. Page status is read from the
 base content item. Every result must be a current page in an authorized space;
 otherwise the request denies with `scope_unresolved` and returns no partial
 results.
+
+Personal-space keys are also quoted in injected scope constraints. For example,
+`--space '~alice' --cql ''` emits `space IN ("~alice") AND type = page`.
 
 Examples with a finite space scope of `ENG`:
 

@@ -1479,6 +1479,15 @@ asserting that the native body is unchanged, `renderedBody` is beside `body`,
 and the Markdown search performs no additional fetch. Configure the CQL so it
 returns at least one page in the target space.
 
+To check a personal space, use its exact key, for example
+`AGENT_ACCESS_REAL_CONFLUENCE_SPACE='~alice'`, a page ID inside that space, and
+`AGENT_ACCESS_REAL_CONFLUENCE_CQL='space = "~alice"'`. Set
+`AGENT_ACCESS_REAL_CONFLUENCE_PAGE_URL` to that page's modern
+`https://example.atlassian.net/wiki/spaces/~alice/pages/123456/...` URL to exercise
+the personal-space locator too. The Broker grant and selected upstream
+credential must both permit that space. Use dedicated throwaway content for
+write smokes.
+
 ### Write, Download, And Verify Smoke
 
 This mutates the configured space and update page.

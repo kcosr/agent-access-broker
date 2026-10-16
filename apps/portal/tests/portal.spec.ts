@@ -2101,6 +2101,65 @@ test("the catalog adds, filters, groups, and deletes resources with live referen
   expect(pageErrors).toEqual([]);
 });
 
+test("the catalog preserves personal Confluence space keys through creation, editing, and grants", async ({ page }) => {
+  const pageErrors = watchPageErrors(page);
+  const resourcePath = "/v1/admin/policy/resources";
+  const grantPath = "/v1/admin/policy/grants";
+  const grantId = "personal-confluence-search";
+  await signInAsAdmin(page);
+  await page.goto(`${baseUrl}/ui/admin/catalog/resources`);
+
+  // These are real catalog mutations; the fixture never contacts Confluence.
+  await page.getByRole("main").getByRole("button", { name: "Add resource", exact: true }).first().click();
+  const add = page.getByRole("complementary", { name: "Add resource", exact: true });
+  await add.getByLabel("Resource type").selectOption("confluence_space");
+  await add.getByLabel("Coverage").selectOption("exact");
+  await add.getByLabel("Canonical identifier").fill("~alice");
+  await add.getByLabel("Display name").fill("Alice personal space");
+  await add.getByRole("group", { name: "Allowed execution contexts" }).getByLabel("default", { exact: true }).check();
+  await add.getByRole("button", { name: "Save resource", exact: true }).click();
+  const details = page.getByRole("complementary", { name: "Resource Alice personal space", exact: true });
+  await expect(details.getByText("~alice", { exact: true })).toBeVisible();
+  const resourceId = new URL(page.url()).searchParams.get("item");
+  expect(resourceId).not.toBeNull();
+  expect(await browserManagementRequest(page, `${resourcePath}/${resourceId}`)).toMatchObject({
+    resourceType: "confluence_space", selector: { kind: "exact", value: "~alice" }
+  });
+
+  await details.getByRole("button", { name: "Edit", exact: true }).click();
+  const edit = page.getByRole("complementary", { name: "Edit resource Alice personal space", exact: true });
+  await expect(edit.getByLabel("Canonical identifier")).toHaveValue("~alice");
+  await edit.getByLabel("Canonical identifier").fill("~Alice");
+  await edit.getByLabel("Display name").fill("Alice personal documentation");
+  await edit.getByRole("button", { name: "Save resource", exact: true }).click();
+  const renamed = page.getByRole("complementary", { name: "Resource Alice personal documentation", exact: true });
+  await expect(renamed.getByText("~Alice", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(renamed.getByText("~Alice", { exact: true })).toBeVisible();
+  expect(await browserManagementRequest(page, `${resourcePath}/${resourceId}`)).toMatchObject({
+    resourceType: "confluence_space", selector: { kind: "exact", value: "~Alice" },
+    displayName: "Alice personal documentation", version: 2
+  });
+
+  await page.goto(`${baseUrl}/ui/admin/policies/new`);
+  const grant = grantEditor(page);
+  await page.getByLabel("Grant ID").fill(grantId);
+  await addGrantSubject(page, "User", "admin", /^admin/);
+  await grant.service.selectOption("confluence");
+  await page.getByRole("checkbox", { name: "search", exact: true }).check();
+  await grant.resources.getByRole("checkbox", { name: /^Alice personal documentation/ }).check();
+  await grant.create.click();
+  await expect(page).toHaveURL(new RegExp(`/ui/admin/policies\\?grant=${grantId}$`));
+  expect(await browserManagementRequest(page, `${grantPath}/${grantId}`)).toMatchObject({
+    subjects: ["user:admin"], service: "confluence", actions: ["search"],
+    resources: { resourceIds: [resourceId], resourceGroupIds: [] }
+  });
+
+  await browserManagementRequest(page, `${grantPath}/${grantId}?expectedVersion=1`, { method: "DELETE" });
+  await browserManagementRequest(page, `${resourcePath}/${resourceId}?expectedVersion=2`, { method: "DELETE" });
+  expect(pageErrors).toEqual([]);
+});
+
 test("audit and activity show real broker records by visibility tier", async ({ page }, testInfo) => {
   const suffix = testInfo.project.name;
   const userId = `audit-user-${suffix}`;
@@ -2800,6 +2859,7 @@ test("the portal fits a 1024px window and the command palette navigates", async 
     expect(clipped, path).toEqual([]);
   }
   await page.goto(`${baseUrl}/ui/admin/policies`);
+  await expect(page.getByRole("main", { name: "Policies", exact: true })).toBeVisible();
   await page.keyboard.press("Control+k");
   const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
   await expect(palette).toBeVisible();

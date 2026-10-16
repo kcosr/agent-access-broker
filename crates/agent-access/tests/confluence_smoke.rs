@@ -704,6 +704,9 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         next_blog_id: Mutex::new(800001),
         next_attachment_id: Mutex::new(123),
         next_comment_id: Mutex::new(9001),
+        search_page: Mutex::new(None),
+        searches: Mutex::new(Vec::new()),
+        credentials: Mutex::new(Vec::new()),
     });
     let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
     let base_url = broker.public_url();
@@ -2837,6 +2840,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     }
 }
 
+#[derive(Default)]
 struct WriteStubConfluenceBackend {
     spaces: Mutex<BTreeMap<String, ConfluenceSpace>>,
     pages: Mutex<BTreeMap<String, ConfluencePage>>,
@@ -2858,6 +2862,9 @@ struct WriteStubConfluenceBackend {
     next_blog_id: Mutex<u64>,
     next_attachment_id: Mutex<u64>,
     next_comment_id: Mutex<u64>,
+    search_page: Mutex<Option<ConfluenceSearchPage>>,
+    searches: Mutex<Vec<ConfluenceSearchRequest>>,
+    credentials: Mutex<Vec<agent_access_provider::ExecutionCredential>>,
 }
 
 impl WriteStubConfluenceBackend {
@@ -2904,8 +2911,9 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
+        self.credentials.lock().unwrap().push(credential.clone());
         let page = self
             .pages
             .lock()
@@ -3167,15 +3175,22 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
 
     async fn search(
         &self,
-        _request: ConfluenceSearchRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        request: ConfluenceSearchRequest,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
+        self.searches.lock().unwrap().push(request);
+        self.credentials.lock().unwrap().push(credential.clone());
         Ok(ConfluenceBackendResponse {
-            value: ConfluenceSearchPage {
-                pages: vec![],
-                max_results: 0,
-                next_page_token: None,
-            },
+            value: self
+                .search_page
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(ConfluenceSearchPage {
+                    pages: vec![],
+                    max_results: 0,
+                    next_page_token: None,
+                }),
             status: 200,
             duration_ms: 1,
         })
@@ -3219,8 +3234,9 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_provider::ExecutionCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
+        self.credentials.lock().unwrap().push(credential.clone());
         let space = self.space_for_id(&request.space_id)?;
         if space.key != request.space {
             return Err(ConfluenceBackendError::Protocol(
@@ -4581,3 +4597,6 @@ use temp_dirs::temp_path;
 
 #[path = "confluence_smoke/normalized_reads.rs"]
 mod confluence_normalized_reads;
+
+#[path = "confluence_smoke/personal_spaces.rs"]
+mod confluence_personal_spaces;
