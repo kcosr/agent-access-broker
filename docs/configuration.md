@@ -482,15 +482,17 @@ principal's kind selects the method from configuration alone:
 | `user` | The person's OAuth connection for the registration; a stored token is never read | A token the person stores |
 | `service_account` | A token an administrator provisions, when `token_profile` is set; otherwise none | A token an administrator provisions |
 | `system` | A token the principal stores, when `token_profile` is set; otherwise none | A token the principal stores |
-| Configured static principal or anonymous caller | None | None |
+| Configured static principal without an active managed principal of its ID, or anonymous caller | None | None |
 
 Selection never reads stored tokens or OAuth connections. Whether the selected
 token is stored, or the selected OAuth connection is connected, is checked
 separately: a missing token fails with `credential_not_found`, and an
 unconnected account requires connecting. A principal for which the connection
 selects no method has no personal credential for its consumers, and their
-`per_user` calls fail with `credential_not_provisioned`. Configured static
-principals keep using `secret_store` entries.
+`per_user` calls fail with `credential_not_provisioned`. A configured static
+principal whose ID names an active managed principal takes that principal's
+kind, as do the classless management routes; other static principals keep
+using `secret_store` entries.
 
 Validation rules:
 

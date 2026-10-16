@@ -1282,9 +1282,10 @@ OAuth connection for the connection's `oauth` registration and profile, or
 nothing. `user` principals use OAuth when the connection sets it and a stored
 token otherwise; `service_account` and `system` principals use a stored token
 when the connection sets `token_profile` and have no personal method
-otherwise; configured static principals and anonymous callers have none. The
-principal kind travels on the identity from `principals.kind` (never defaulted;
-unknown kinds select nothing). Selection never reads stored material, and there
+otherwise. A configured static principal takes the kind of the active managed
+principal with its ID, read once per authentication; other static principals
+and anonymous callers have none. The principal kind travels on the identity
+from `principals.kind` (never defaulted; unknown kinds select nothing). Selection never reads stored material, and there
 is no fallback between methods. Runtime execution, both lookup phases, the Git
 gateway, discovery and readiness, management, consent admission, verification,
 backend validation and the command-import paths all use this one selection.

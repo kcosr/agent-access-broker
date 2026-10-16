@@ -315,8 +315,9 @@ All notable changes to this project are documented in this file.
   configuration alone, with no fallback between methods: people use OAuth when
   the connection sets it and a token they store otherwise; service accounts use
   tokens administrators provision and `system` principals tokens they store,
-  never OAuth; configured static principals and anonymous callers have no
-  connection method. A connection's tokens are stored under its ID with the
+  never OAuth; a configured static principal takes the kind of the active
+  managed principal with its ID, and other static principals and anonymous
+  callers have no connection method. A connection's tokens are stored under its ID with the
   name `default`, so a connection with the same ID and profile as an earlier
   per-service credential reads its tokens unchanged; tokens under another name
   stay stored but unread. Credential rights apply to the connection and
