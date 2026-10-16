@@ -19,6 +19,8 @@ const JIRA_PROFILE: &str = "jira-cloud-api-token";
 #[derive(Default)]
 struct ProbeJira {
     verified: Mutex<Vec<ExecutionCredential>>,
+    /// The execution credentials invocations received.
+    invoked: Mutex<Vec<Option<ExecutionCredential>>>,
 }
 
 impl agent_access_provider::test_support::DescribedProvider for ProbeJira {
@@ -42,11 +44,17 @@ impl agent_access_provider::test_support::DescribedProvider for ProbeJira {
 
 #[async_trait::async_trait]
 impl Provider for ProbeJira {
-    async fn resolve_scopes(&self, _: ScopeRequest<'_>) -> Result<ScopeResolution, ProviderError> {
-        Err(ProviderError::deny(
-            ReasonCode::ServiceActionDenied,
-            "the probe double serves no invocations",
-        ))
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        let project = request.inputs()["project"]
+            .as_str()
+            .ok_or_else(|| ProviderError::deny(ReasonCode::InputInvalid, "project is required"))?;
+        Ok(ScopeResolution::resources(BTreeMap::from([(
+            "project".to_string(),
+            vec![project.to_string()],
+        )])))
     }
 
     async fn verify_execution_credential(
@@ -62,8 +70,12 @@ impl Provider for ProbeJira {
         )))
     }
 
-    async fn invoke(&self, _: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        panic!("the probe double serves no invocations")
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        self.invoked
+            .lock()
+            .unwrap()
+            .push(request.execution().static_credential().cloned());
+        Ok(ProviderResult::new(json!({"key": "TEST-1"})))
     }
 }
 
@@ -1014,8 +1026,8 @@ struct ClasslessFixture {
 }
 
 /// TOML static principals with classless self-service: alice has a managed
-/// principal row (kind `user`) and a per_user Jira grant; ghost has no
-/// managed row.
+/// principal row (kind `user`); ghost has none. Both hold a per_user Jira
+/// grant.
 async fn classless_fixture() -> ClasslessFixture {
     let admin_token_path = temp_path("classless-connections-admin-token");
     let ghost_token_path = temp_path("classless-connections-ghost-token");
@@ -1034,6 +1046,14 @@ async fn classless_fixture() -> ClasslessFixture {
             principal: "ghost".to_string(),
             token_refs: vec![format!("file:{}", ghost_token_path.display())],
         });
+    // Ghost holds alice's per_user grant, but no managed principal row.
+    config
+        .policy
+        .grants
+        .last_mut()
+        .unwrap()
+        .subjects
+        .push("user:ghost".to_string());
     let probe = Arc::new(ProbeJira::default());
     let broker = TestBroker::start_with_providers(&config, vec![Arc::clone(&probe)]).await;
     let store = broker.runtime().managed_store().unwrap().clone();
@@ -1210,6 +1230,80 @@ async fn classless_rights_on_the_connection_authorize_each_token_operation() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// A classless static principal with a managed principal row stores its
+/// token through the management routes and then invokes with it: its
+/// identity carries the row's kind at every resolution, so discovery and
+/// execution select the same stored token.
+#[tokio::test]
+async fn a_classless_static_principal_invokes_with_the_token_it_stored() {
+    let fixture = classless_fixture().await;
+    fixture.grant("credentials:self:write", "default");
+    let (status, stored) = fixture
+        .request(
+            "alice-token",
+            Method::PUT,
+            "/v1/credentials/connections/jira",
+            Some(jira_secret("classless-invocation-token")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let (status, discovered) = fixture
+        .request("alice-token", Method::GET, "/v1/services/jira", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{discovered}");
+    assert_eq!(
+        discovered["availability"]["state"], "available",
+        "{discovered}"
+    );
+    let (status, invoked) = fixture
+        .request(
+            "alice-token",
+            Method::POST,
+            "/v1/invoke/jira/issue.view",
+            Some(json!({"inputs": {"project": "TEST"}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{invoked}");
+    assert_eq!(invoked["result"]["key"], "TEST-1", "{invoked}");
+    assert_eq!(
+        *fixture.probe.invoked.lock().unwrap(),
+        [Some(basic_credential(
+            "alice@example.com",
+            "classless-invocation-token"
+        ))]
+    );
+
+    // Ghost, granted alike but without a managed row, has no kind: its
+    // personal mode is unavailable, which only an administrator can change,
+    // and nothing reaches the provider.
+    let (status, discovered) = fixture
+        .request("ghost-token", Method::GET, "/v1/services/jira", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{discovered}");
+    assert_eq!(
+        discovered["availability"]["state"], "unavailable",
+        "{discovered}"
+    );
+    assert_eq!(
+        discovered["availability"]["requirements"][0]["resolution"], "administrator",
+        "{discovered}"
+    );
+    let (status, denied) = fixture
+        .request(
+            "ghost-token",
+            Method::POST,
+            "/v1/invoke/jira/issue.view",
+            Some(json!({"inputs": {"project": "TEST"}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(
+        denied["reasonCode"], "credential_not_provisioned",
+        "{denied}"
+    );
+    assert_eq!(fixture.probe.invoked.lock().unwrap().len(), 1);
 }
 
 /// A classless static principal without a managed principal row has no

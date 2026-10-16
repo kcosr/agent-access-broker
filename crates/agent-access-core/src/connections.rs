@@ -27,8 +27,9 @@ use std::sync::Arc;
 pub const CONNECTION_CREDENTIAL_NAME: &str = "default";
 
 /// The kind of a managed principal, read from `principals.kind`. It selects a
-/// credential connection's method; configured static principals and
-/// anonymous callers have none, so they select no personal method.
+/// credential connection's method. A configured static principal carries the
+/// kind of the active managed principal with its ID; other static principals
+/// and anonymous callers have none, so they select no personal method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalKind {
@@ -113,7 +114,7 @@ pub enum Selection<'a> {
 /// | `User` | `OAuth` | `Token` |
 /// | `ServiceAccount` | `Token` if `token_profile` is set, otherwise `Unavailable` | `Token` |
 /// | `System` | `Token` if `token_profile` is set, otherwise `Unavailable` | `Token` |
-/// | `None` | `Unavailable` | `Unavailable` |
+/// | `None` (no active managed principal) | `Unavailable` | `Unavailable` |
 pub fn select(
     connection: &ConnectionConfig,
     principal_kind: Option<PrincipalKind>,

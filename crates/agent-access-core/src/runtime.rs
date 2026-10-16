@@ -193,8 +193,9 @@ pub struct IdentityContext {
     pub principal: String,
     /// The managed principal's kind, which selects its credential
     /// connections' methods: set wherever a managed principal is resolved,
-    /// `None` for configured static principals and anonymous callers. Never
-    /// defaulted; an unknown kind fails deserialization.
+    /// including a configured static principal whose ID names an active
+    /// managed principal; `None` for other static principals and anonymous
+    /// callers. Never defaulted; an unknown kind fails deserialization.
     pub principal_kind: Option<crate::PrincipalKind>,
     pub principal_subject: Option<String>,
     pub groups: Vec<String>,
@@ -7650,7 +7651,7 @@ impl IdentitySourceResolver {
 
     fn resolve(&self, token: &str) -> Result<SourceResolution, IdentityFailure> {
         match &self.resolver {
-            IdentitySourceResolverKind::Static(source) => Ok(source.resolve(token)),
+            IdentitySourceResolverKind::Static(source) => source.resolve(token),
             IdentitySourceResolverKind::BrokerTokens(source) => source.resolve(token),
         }
     }
@@ -7673,23 +7674,35 @@ impl IdentitySourceResolver {
 
 struct StaticPrincipalsSource {
     tokens: BTreeMap<String, StaticPrincipalIdentity>,
+    /// The managed store, whose principal row for a static principal's ID
+    /// supplies its kind.
+    store: Option<ManagedStore>,
 }
 
 impl StaticPrincipalsSource {
-    fn resolve(&self, token: &str) -> SourceResolution {
+    /// A configured static principal carries the kind of the active managed
+    /// principal with its ID, as classless management resolves it, and none
+    /// without one. A store that cannot answer fails the resolution.
+    fn resolve(&self, token: &str) -> Result<SourceResolution, IdentityFailure> {
         let Some(identity) = self.tokens.get(token) else {
-            return SourceResolution::NoMatch;
+            return Ok(SourceResolution::NoMatch);
         };
-        SourceResolution::Resolved(ResolvedTokenIdentity {
+        let principal_kind = match &self.store {
+            Some(store) => store
+                .static_principal_kind(&identity.principal)
+                .map_err(|_| IdentityFailure::Unavailable)?,
+            None => None,
+        };
+        Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
             principal: identity.principal.clone(),
-            principal_kind: None,
+            principal_kind,
             subject: Some(identity.principal.clone()),
             groups: Vec::new(),
             policy_groups: Vec::new(),
             token_class: None,
             token_id: None,
             token_scopes: None,
-        })
+        }))
     }
 }
 
@@ -7821,7 +7834,10 @@ fn load_identity_sources(
                 }
                 sources.push(IdentitySourceResolver {
                     audit,
-                    resolver: IdentitySourceResolverKind::Static(StaticPrincipalsSource { tokens }),
+                    resolver: IdentitySourceResolverKind::Static(StaticPrincipalsSource {
+                        tokens,
+                        store: managed_store.clone(),
+                    }),
                 });
             }
             "broker_tokens" => {

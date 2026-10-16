@@ -581,7 +581,7 @@ impl BrokerRuntime {
     /// The request's `caller`, read from the managed store: the principal's
     /// kind, display name and email, the asserted username binding, the
     /// agent token and its label, and the caller's policy groups.
-    async fn command_caller(
+    pub(super) async fn command_caller(
         &self,
         identity: &IdentityContext,
     ) -> Result<CommandCaller, ProviderError> {

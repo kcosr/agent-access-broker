@@ -516,3 +516,152 @@ async fn every_ingress_carries_the_principal_kind_that_selects_the_connection() 
     };
     assert_selected(&runtime, &observations, identity, None, "static").await;
 }
+
+/// A configured static principal carries the kind of the active managed
+/// principal with its ID, read at each resolution, so discovery and
+/// execution select its stored token; without an active row it has none.
+#[tokio::test]
+async fn static_principals_carry_their_managed_rows_kind() {
+    let provider = Arc::new(LookupTraceProvider::default());
+    let observations = provider.observations();
+    let (mut config, store_path) = connection_config("tracker");
+    let token_path = write_temp_secret("static-agent-token");
+    config.identity = static_identity_config(
+        "required",
+        &token_path,
+        "agent-one",
+        vec!["agents".to_string()],
+    );
+    let runtime = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Agent-Access-Identity-Token",
+        "static-agent-token".parse().unwrap(),
+    );
+
+    // No managed row: no kind, so no personal method.
+    let identity = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(identity.principal_kind, None);
+    assert_selected(
+        &runtime,
+        &observations,
+        identity,
+        None,
+        "static without row",
+    )
+    .await;
+
+    // A managed user row with a token for the connection.
+    store_token(&runtime, "tracker", "static-token");
+    let identity = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(identity.principal_kind, Some(crate::PrincipalKind::User));
+    let service = runtime
+        .service_capabilities(&identity, &default_execution_context(), "jira")
+        .unwrap();
+    assert_eq!(service.availability.state, AvailabilityState::Available);
+    observations.lock().unwrap().clear();
+    let response = invoke_as(&runtime, identity).await;
+    assert_eq!(response.status, 200, "{:?}", response.envelope);
+    let token = basic_credential("synthetic-user", "static-token");
+    assert!(
+        observations
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|observation| observation.credential.as_ref() == Some(&token))
+    );
+
+    // A disabled row selects nothing; the static principal still
+    // authenticates.
+    runtime
+        .managed_store()
+        .unwrap()
+        .patch_principal(crate::PrincipalPatchRequest {
+            principal_id: "agent-one".into(),
+            display_name: None,
+            email: None,
+            status: Some("disabled".into()),
+        })
+        .unwrap();
+    let identity = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(identity.principal_kind, None);
+    assert_selected(
+        &runtime,
+        &observations,
+        identity,
+        None,
+        "static disabled row",
+    )
+    .await;
+
+    // A store that cannot answer fails the resolution closed.
+    let conn = rusqlite::Connection::open(&store_path).unwrap();
+    conn.execute("ALTER TABLE principals RENAME TO principals_moved", [])
+        .unwrap();
+    assert_eq!(
+        runtime.resolve_identity(&headers).unwrap_err(),
+        IdentityFailure::Unavailable
+    );
+}
+
+/// The kind that selected a static principal's credentials is the kind its
+/// command is told: dispatch refuses an identity resolved before its
+/// managed row's kind changed.
+#[tokio::test]
+async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
+    let (mut config, _store_path) = connection_config("tracker");
+    let token_path = write_temp_secret("static-command-token");
+    config.identity = static_identity_config(
+        "required",
+        &token_path,
+        "agent-one",
+        vec!["agents".to_string()],
+    );
+    let runtime =
+        BrokerRuntime::with_providers(config, vec![Arc::new(LookupTraceProvider::default())])
+            .unwrap();
+    let store = runtime.managed_store().unwrap();
+    let principal = |kind: &str| crate::PrincipalWriteRequest {
+        role: crate::PrincipalRole::User,
+        self_service_enabled: None,
+        principal_id: "agent-one".into(),
+        kind: kind.into(),
+        display_name: None,
+        email: None,
+        external_subject: None,
+        created_by: "admin".into(),
+    };
+    store
+        .create_or_update_principal(principal("service_account"))
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Agent-Access-Identity-Token",
+        "static-command-token".parse().unwrap(),
+    );
+    let identity = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(
+        identity.principal_kind,
+        Some(crate::PrincipalKind::ServiceAccount)
+    );
+    assert_eq!(
+        runtime.command_caller(&identity).await.unwrap().kind,
+        "service_account"
+    );
+
+    store
+        .create_or_update_principal(principal("system"))
+        .unwrap();
+    let stale = runtime.command_caller(&identity).await.unwrap_err();
+    assert_eq!(stale.reason_code(), ReasonCode::ServiceActionDenied);
+    assert_eq!(
+        stale.message,
+        "the caller's principal kind changed after admission"
+    );
+    let current = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(current.principal_kind, Some(crate::PrincipalKind::System));
+    assert_eq!(
+        runtime.command_caller(&current).await.unwrap().kind,
+        "system"
+    );
+}

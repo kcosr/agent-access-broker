@@ -4845,7 +4845,7 @@ fn bearer_static_identity_matches_authorization_scheme() {
     headers.insert("Authorization", "Bearer bearer-token".parse().unwrap());
     let identity = runtime.resolve_identity(&headers).unwrap();
     assert_eq!(identity.principal, "agent-one");
-    // Configured static principals have no managed kind.
+    // A configured static principal without a managed store has no kind.
     assert_eq!(identity.principal_kind, None);
 
     let mut invalid_headers = HeaderMap::new();

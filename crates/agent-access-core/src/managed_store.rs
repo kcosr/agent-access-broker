@@ -2176,6 +2176,31 @@ impl ManagedStore {
         })
     }
 
+    /// The kind of the managed principal a configured static principal's ID
+    /// names, which selects its credential connections' methods. `None` when
+    /// no managed principal has the ID, or it is disabled, so a static
+    /// principal without an active managed row selects no personal method.
+    pub fn static_principal_kind(
+        &self,
+        principal_id: &str,
+    ) -> Result<Option<crate::PrincipalKind>, ManagedStoreError> {
+        if validate_principal_id(principal_id).is_err() {
+            return Ok(None);
+        }
+        let conn = self.connection.lock().unwrap();
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT kind, status FROM principals WHERE principal_id = ?1",
+                params![principal_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_unavailable)?;
+        Ok(row
+            .filter(|(_, status)| status == "active")
+            .and_then(|(kind, _)| crate::PrincipalKind::from_stored(&kind)))
+    }
+
     pub fn resolve_broker_token(
         &self,
         hasher: &BrokerTokenHasher,
