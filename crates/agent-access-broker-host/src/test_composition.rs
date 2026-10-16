@@ -7,7 +7,7 @@ use agent_access_confluence::CONFLUENCE_BACKEND;
 use agent_access_core::BackendRegistry;
 use agent_access_core::imports::ImportedAdapterRegistration;
 use agent_access_fake::{FAKE_BACKEND, OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
-use agent_access_gitlab::GITLAB_BACKEND;
+use agent_access_gitlab::{GITLAB_BACKEND, GITLAB_OAUTH_DIALECT};
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use agent_access_jira::JIRA_BACKEND;
 use agent_access_provider::{BackendRegistration, OAuthDialectRegistration};
@@ -25,8 +25,11 @@ static NATIVES: [&BackendRegistration; 8] = [
     // Last, so its resource type keeps the bundled listing order.
     &OAUTH_STUB_BACKEND,
 ];
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] =
-    [&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT];
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+    &GOOGLE_OAUTH_DIALECT,
+    &GITLAB_OAUTH_DIALECT,
+    &STUB_OAUTH_DIALECT,
+];
 
 /// The MCP selection contributes its mcp_oauth companion dialect.
 fn import_adapters() -> [ImportedAdapterRegistration; 3] {

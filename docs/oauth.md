@@ -2,10 +2,11 @@
 
 The Broker can hold a user's delegated upstream OAuth connection and obtain a
 short-lived access token when an authorized action needs it. [Gmail](providers-gmail.md)
-provides a production Google dialect and typed mailbox actions. The development-only
-`stub` dialect and `oauth_stub` records provider use the separate
-`oauth-provider-stub` repository. Microsoft Graph,
-Atlassian and GitLab delegated adapters are not enabled.
+provides a production Google dialect and typed mailbox actions, and the
+production [GitLab dialect](#gitlab) connects one GitLab instance's accounts.
+The development-only `stub` dialect and `oauth_stub` records provider use the
+separate `oauth-provider-stub` repository. Microsoft Graph and Atlassian
+delegated adapters are not enabled.
 
 This is separate from `[browser_auth.oidc.microsoft]`, which signs a person into
 the Broker. A Broker browser session identifies the connection owner; connecting
@@ -18,11 +19,12 @@ access tokens, refresh tokens, client secrets or authorization codes.
 | Adapter | Purpose | Setup |
 | --- | --- | --- |
 | `google` | Production Gmail account connection | [Gmail operator setup](providers-gmail.md#setup) |
+| `gitlab` | Production GitLab account connection for GitLab REST and Git | [GitLab](#gitlab) |
 | `mcp_oauth` | Personal OAuth for reviewed imported MCP services | [Imported MCP OAuth](imported-oauth.md) |
 | `stub` | Development records provider and lifecycle fault tests; forbidden in production | [Test-provider configuration](#development-test-provider-configuration) |
 
-The linked production adapters do not enable Microsoft Graph, Atlassian, or
-GitLab delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
+The linked production adapters do not enable Microsoft Graph or Atlassian
+delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
 Microsoft OIDC remains a separate browser-login feature.
 
 ## Credential connections and shared registrations
@@ -87,8 +89,8 @@ for request, token-response and permission-boundary semantics.
 4. The Broker checks issuer, state and browser ownership, exchanges the code
    using the configured client authentication plus PKCE. The dialect determines
    identity and target evidence: the test provider uses `/me` and `/targets`,
-   Google identifies the connected account, and imported MCP OAuth may provide
-   no upstream account identity. The Broker rechecks the active session,
+   Google and GitLab identify the connected account, and imported MCP OAuth may
+   provide no upstream account identity. The Broker rechecks the active session,
    self-service setting, current grant/group authority and exact service binding
    before exchange and again before committing the connection.
 5. Encrypted connection state contains any refresh family, available subject
@@ -149,6 +151,142 @@ pending consent unchanged. It does **not** claim to revoke provider-side consent
 that separately at the provider if desired. Disabling/removing a Broker principal
 also removes its OAuth state. Existing provider requests already dispatched
 cannot be recalled.
+
+## GitLab
+
+The `gitlab` dialect connects a person's account on one GitLab instance. GitLab
+REST and a GitLab [Git gateway](git-http-gateway.md) on that instance consume
+one credential connection, so a person connects once for both, and each
+service's own grants still decide what it may do.
+
+### GitLab administrator setup
+
+1. In the GitLab Admin area, open **Applications** and add an instance-wide
+   application. Keep it **confidential**.
+2. Set its redirect URI to the Broker's exact callback for the registration,
+   `<browser_auth.public_origin>/v1/oauth/callback/<registration>`, such as
+   `https://broker.example.com/v1/oauth/callback/gitlab`.
+3. Select the [scopes](#gitlab-scopes) the Broker profile requests.
+4. Optionally mark the application **trusted**, so people are not shown
+   GitLab's consent screen. Only the Admin area can set this; the Applications
+   API has no such setting. When GitLab's `disable_admin_oauth_scopes` setting
+   is on, GitLab administrators can authorize only trusted applications with API
+   or repository scopes.
+5. Hand the application ID and secret to the Broker administrator, who stores
+   the secret in a file or environment variable the Broker reads.
+
+When people sign in to GitLab through an external identity provider, such as
+Microsoft Entra ID, setting GitLab's `auto_sign_in_with_provider` to it lets a
+trusted application connect without a click for anyone with a session. The
+provider can still prompt, for example for multi-factor authentication. Keep a
+GitLab administrator who can sign in without it; `?auto_sign_in=false` on the
+sign-in page bypasses it.
+
+### GitLab registration
+
+```toml
+[oauth.registrations.gitlab]
+adapter = "gitlab"
+base_url = "https://gitlab.example.com"
+redirect_uri = "https://broker.example.com/v1/oauth/callback/gitlab"
+client_id = "YOUR_GITLAB_APPLICATION_ID"
+client_secret_ref = "file:/etc/agent-access-broker/secrets/gitlab-oauth-client-secret"
+client_auth = "client_secret_post"
+rotation = "rotate_both"
+
+[oauth.registrations.gitlab.permission_profiles.default]
+scopes = ["api", "write_repository"]
+audience = "gitlab"
+target = "https://gitlab.example.com"
+
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+oauth = { registration = "gitlab", profile = "default" }
+
+[credentials.per_user.gitlab]
+type = "connection"
+connection = "gitlab"
+
+[credentials.per_user.gitlab_git]
+type = "connection"
+connection = "gitlab"
+```
+
+`config validate`, startup and reload check, without contacting GitLab:
+
+- `base_url` is the instance base, including any relative URL root such as
+  `https://example.com/gitlab`, without credentials, query or fragment. Every
+  endpoint is below it.
+- `client_auth = "client_secret_post"`, the default form encoding, no
+  `adapter_settings`, and `rotation = "rotate_both"`, because every GitLab
+  refresh replaces both the access and the refresh token.
+- The registration has exactly one permission profile. It requests explicit
+  `scopes`, its `audience` is `gitlab`, and its `target` is the normalized
+  instance base: `base_url` with a lowercase scheme and host, no default port
+  and no trailing slash.
+- Every service using the connection acts on that instance: GitLab REST whose
+  `api_base_url` is the target followed by `/api/v4`, and Git gateways whose
+  `upstream_base_url` is the target. Any other consumer fails with
+  `credentials.connections.<id>.oauth: <service> does not act on the upstream
+  registration <registration> grants access to: it acts on <origin>, not the
+  GitLab instance <target>`.
+
+People always use their OAuth connection and never store a GitLab token
+through it. With `token_profile` set, service accounts keep tokens an
+administrator provisions, because GitLab service accounts authenticate only
+with personal access tokens, and `system` principals store their own. Without
+`token_profile`, only people have a GitLab credential.
+
+### GitLab scopes
+
+Scopes are deployment configuration: the GitLab application allows them and
+the profile requests them. GitLab documents Git over HTTP for OAuth tokens only
+under its repository scopes, so request one explicitly:
+
+| Use | Scopes |
+| --- | --- |
+| REST reads and writes, Git fetch and push (default) | `api`, `write_repository` |
+| Read-only REST and Git fetch | `read_api`, `read_repository` |
+| REST reads, Git fetch and push | `read_api`, `write_repository` |
+
+The Broker identifies the connected account at `/api/v4/user`, which `api`,
+`read_api` or `read_user` allows; without one of them, connecting fails with a
+permission error. Changing the profile's scopes changes the registration, so
+every person reconnects.
+
+### GitLab protocol
+
+- The authorization page is `<base_url>/oauth/authorize`, requested with the
+  profile's scopes, the flow's state and a PKCE S256 challenge. Code exchange
+  and refresh are form-encoded POSTs to `<base_url>/oauth/token` carrying the
+  client ID and secret; refresh also sends the registration's redirect URI.
+- Each token response sets its access token's lifetime. Without `expires_in`,
+  GitLab's default of 7200 seconds applies. GitLab 19.1 and later let
+  administrators shorten it to as little as 300 seconds.
+- The connected account's numeric `id` is its stable subject, and its
+  `username` the name the portal shows. Reconnecting rejects a different
+  account unless the person chooses to replace it.
+- Granted scopes come from the token response's `scope`. When the code
+  exchange omits it, the Broker reads `<base_url>/oauth/token/info` with the
+  new access token; if that fails, connecting fails and nothing is stored. When
+  a refresh omits it, the connection keeps the scopes originally granted, and
+  the Broker sends nothing else between the refresh and storing its result.
+  Requested scopes are never taken as granted.
+- The connection's one target is the instance, with audience `gitlab` and the
+  granted scopes. Leases carry that target and audience.
+- Refresh material is consuming. GitLab invalidates both earlier tokens on
+  every refresh, with no grace period, so an access token in use when another
+  request refreshes stops working. A refresh whose outcome is unknown, such as a
+  lost response, a 5xx answer or an unrecognized rejection, leaves the
+  connection needing reconnect, for GitLab REST and Git together.
+  `invalid_grant` also requires reconnect, and HTTP 429 holds refresh until its
+  `Retry-After` wait.
+
+GitLab refresh tokens do not expire. Disconnecting removes the Broker's copy
+but does not revoke the grant in GitLab: the person revokes the application
+under their GitLab **Applications** settings, or a GitLab administrator revokes
+the application's tokens.
 
 ## Development test-provider configuration
 
@@ -502,7 +640,7 @@ version. The Broker supports **one connection and refresh family
 per owner/registration**. Separate independent grant families under one
 registration, adding permission profiles without reconnecting existing grants,
 interactive target selection, delegated OIDC ID-token/claims validation, client assertions,
-provider revocation orchestration and Microsoft/Jira/GitLab delegated adapters are
+provider revocation orchestration and Microsoft/Jira/Confluence delegated adapters are
 not supported. Changing the stub base URL does not provide a production adapter.
 
 The stub's identity endpoint and fault controls are test protocols, not a

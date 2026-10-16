@@ -1,9 +1,10 @@
 //! GitLab backend: project, issue, merge-request, note, discussion, review,
 //! branch, file, commit, pipeline, job, webhook, and provisioning actions
 //! against the GitLab REST API, authorized against `git_repository`
-//! resources.
+//! resources, and the `gitlab` OAuth dialect ([`GITLAB_OAUTH_DIALECT`]).
 mod backend;
 mod config;
+mod oauth;
 mod present;
 mod provisioning;
 #[cfg(test)]
@@ -12,6 +13,7 @@ mod validation;
 
 pub use backend::*;
 pub use config::*;
+pub use oauth::GITLAB_OAUTH_DIALECT;
 use validation::*;
 
 use agent_access_content::append_gitlab_markdown_attribution;

@@ -299,7 +299,8 @@ binary and needs `python3`, whose absence fails it.
   page-token and draft-handle families, `config.rs`, `present.rs`).
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `config.rs`, `provisioning.rs`,
-  `present.rs`).
+  `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`: one instance's
+  target and `gitlab` audience, token-info scope evidence at code exchange).
 - `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
   (gateway credential rules, request authorization, tenant/gateway client
   routes and their route fingerprint, the credential binding of their
@@ -474,8 +475,9 @@ binary and needs `python3`, whose absence fails it.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
-- `docs/oauth.md`: delegated OAuth, production Google dialect, separate test
-  provider, consent, refresh recovery, and connection boundaries.
+- `docs/oauth.md`: delegated OAuth, production Google and GitLab dialects
+  (including GitLab administrator setup and scopes), separate test provider,
+  consent, refresh recovery, and connection boundaries.
 - `docs/database.md`: managed-store database schema, token hashing, credential
   encryption, key readiness, rewrap, lifecycle, and backup/recovery model, plus
   the separate SQLite audit database.

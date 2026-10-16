@@ -1323,10 +1323,12 @@ declares an `UpstreamAuthority` in its service descriptor: a normalized origin
 and instance path, with an optional tenant and tenant gateway (GitLab REST the
 instance of its `api_base_url`, a Git gateway its `upstream_base_url`, Jira and
 Confluence their site with the cloud ID and Atlassian gateway, an HTTP import its
-endpoint). A token connection's consumers must all declare authorities naming
-the same instance. An OAuth connection's registration dialect checks each
-consumer's authority against the resource the registration grants through
-`OAuthDialect::check_consumer_authority`, which accepts by default. The checks
+endpoint, the development `oauth_stub` service its `base_url`). A token
+connection's consumers must all declare authorities naming the same instance.
+An OAuth connection's registration dialect checks each consumer's authority
+against the resource the registration grants through
+`OAuthDialect::check_consumer_authority`, which accepts by default; the `gitlab`
+dialect accepts only consumers on its registration's instance. The checks
 run at offline validation, at startup and reload, and at every imported-catalog
 publication, including import creation, without contacting upstream. Stored
 tokens are not bound to an authority, so a later base-URL change sends them to
@@ -2332,7 +2334,7 @@ classifying failures. The manager's fences rely on that classification: a
 dialect reports a retry-after, permission, or request rejection only when the
 authorization server guarantees the grant was not consumed. Dialects register
 with the binary through the backend registry, like backends; core registers
-none of its own, and this binary selects `google`, `mcp_oauth` and the
+none of its own, and this binary selects `google`, `gitlab`, `mcp_oauth` and the
 development-only `stub` dialect from `agent-access-fake`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
 connect), the registration's allowlist, and upstream traces. The manager
@@ -2346,3 +2348,11 @@ The Gmail backend is a separately linked provider crate. Its Google OAuth dialec
 declares reusable refresh material; the shared manager retains recovery budgets,
 persistence and fences. Delegated invocations retain their original connection
 across renewal. See [Gmail](providers-gmail.md) and [OAuth](oauth.md).
+
+The GitLab backend crate also exports the `gitlab` dialect. Its registrations
+target one instance, whose normalized base is the profile `target`, with the
+audience `gitlab`, so a consumer pins its lease to its own instance. Its refresh
+material is consuming, and each grant supersedes earlier access. Code exchange
+reads granted scopes from the token response, or else from the new token's info
+before returning the grant; refresh takes them from the response, or else keeps
+the consent evidence the manager supplies, without another request.

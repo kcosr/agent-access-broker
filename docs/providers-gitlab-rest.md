@@ -55,6 +55,16 @@ connection = "gitlab"
 
 A [GitLab Git gateway](git-http-gateway.md#credentials-limits-and-audit) can
 consume the same connection, so each principal stores one GitLab token for both.
+
+People can instead connect their GitLab account through OAuth: configure a
+`gitlab` OAuth registration for the instance and add
+`oauth = { registration = "gitlab", profile = "default" }` to the connection, as
+described in [GitLab OAuth](oauth.md#gitlab). People then always use their
+OAuth connection and never store a token through it, while service accounts
+keep administrator-provisioned tokens when the connection also sets
+`token_profile`. The registration's `target` must be this provider's instance,
+`api_base_url` without `/api/v4`, or `config validate` rejects the connection.
+Request scopes for the actions you grant, such as `api` and `write_repository`.
 Have the principal store their token, or provision a service account's, and
 grant `credential_mode = "per_user"`. Upstream project membership and token scopes must
 support the chosen actions. Configure `git_repository` resources and action grants

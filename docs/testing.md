@@ -1853,6 +1853,20 @@ reconnect. Test doubles never reach Google. The
 [Gmail live smoke](providers-gmail.md#validation-and-live-smoke) requires an
 operator-owned Google client, browser consent and disposable test messages.
 
+## GitLab OAuth
+
+`cargo test -p agent-access-gitlab --lib oauth::` covers the `gitlab` dialect
+against a stubbed GitLab instance: registration rules and target normalization,
+the consumer authority check, the authorization URL, code exchange with and
+without a response `scope` (reading token info, and failing when it fails),
+refresh with and without `scope`, identity mapping, token-response bounds and
+error classification. The Broker host's `tests::oauth::gitlab_dialect` drives
+browser consent and a delegated lease through the OAuth manager against a
+stubbed instance, including a token-info failure that stores nothing and a
+refresh that keeps the granted scopes, and validates full configurations in
+which GitLab REST and a Git gateway share one GitLab OAuth connection. No test
+reaches a real GitLab instance.
+
 
 ## Imported MCP services
 

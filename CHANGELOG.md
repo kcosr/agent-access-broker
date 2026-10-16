@@ -759,6 +759,22 @@ All notable changes to this project are documented in this file.
   conformance backend's `item.upload` uses it. GitLab's
   `project.access_token.create`/`rotate` and
   `service_account.token.create`/`rotate` are token-only.
+- The production `gitlab` OAuth dialect (`adapter = "gitlab"`,
+  `agent_access_gitlab::GITLAB_OAUTH_DIALECT`, selected by the Broker binary)
+  connects a person's account on one GitLab instance through an instance-wide
+  confidential GitLab application. Registrations use `client_secret_post`, form
+  encoding, `rotation = "rotate_both"` and exactly one permission profile whose
+  `audience` is `gitlab` and whose `target` is the normalized instance base of
+  `base_url`; the sample and docs default to the `api` and `write_repository`
+  scopes. The connected account is `/api/v4/user`'s numeric `id` and
+  `username`. Granted scopes come from the token response, or, when a code
+  exchange omits them, from `/oauth/token/info` (whose failure fails the
+  connection and stores nothing); a refresh that omits them keeps the
+  originally granted scopes. Refresh material is consuming. Only consumers on
+  the registration's instance, such as GitLab REST and a Git gateway there,
+  pass offline validation. See [GitLab OAuth](docs/oauth.md#gitlab).
+- The development `oauth_stub` service declares its `base_url` as its upstream
+  authority.
 
 ### Changed
 

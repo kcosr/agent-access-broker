@@ -532,15 +532,16 @@ Validation rules:
 - **Upstream authority.** Each service declares the upstream instance its
   credentials act on: GitLab REST the instance of its `api_base_url` (without
   `/api/v4`), a Git gateway its `upstream_base_url`, Jira and Confluence their
-  site with the configured cloud ID and Atlassian gateway, and an HTTP import its
-  endpoint. A token connection with several consumers requires each to declare
+  site with the configured cloud ID and Atlassian gateway, an HTTP import its
+  endpoint, and the development `oauth_stub` service its `base_url`. A token connection with several consumers requires each to declare
   an authority, with one origin and instance path; otherwise validation reports
   `credentials.connections.<id>: <service> declares no upstream authority, so it
   cannot share a token connection` or `... <a> acts on <origin> but <b> acts on
   <origin>; a token connection's consumers must act on one upstream`. An OAuth
   connection requires the registration's dialect to accept each consumer, or
   reports `credentials.connections.<id>.oauth: <service> does not act on the
-  upstream registration <registration> grants access to: <reason>`. These checks
+  upstream registration <registration> grants access to: <reason>`; the
+  `gitlab` dialect accepts only consumers on its registration's instance. These checks
   run at `config validate`, at startup and reload, and whenever the imported
   catalog is published, including import creation, without contacting
   upstream. Stored tokens are not bound to an upstream: changing the consumers'
@@ -2253,8 +2254,9 @@ The `[oauth.registrations]` configuration is documented in [oauth.md](oauth.md).
 A [credential connection](#credential-connections) binds services to a
 registration and permission profile with its `oauth` key. Registrations require
 managed storage/encryption and browser management. A registration's `adapter` must name an OAuth dialect the
-binary selects: `google` for Gmail, `mcp_oauth` for approved imported MCP
-services, or the development-only `stub`. The Broker core defines no dialect of
+binary selects: `google` for Gmail, [`gitlab`](oauth.md#gitlab) for GitLab
+REST and Git, `mcp_oauth` for approved imported MCP services, or the
+development-only `stub`. The Broker core defines no dialect of
 its own. This is separate from Microsoft OIDC browser login.
 Each approved OAuth destination origin (issuer, metadata, token, identity or
 target endpoint) follows the global egress proxy resolution independently. Only
