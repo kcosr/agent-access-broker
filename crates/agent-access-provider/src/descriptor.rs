@@ -296,9 +296,12 @@ impl ActionDescriptor {
     /// The host checks it for each grant region with the credential mode
     /// that region's winning grant selects. Where a `per_user` grant wins and
     /// the caller's credential connection selects OAuth, discovery hides the
-    /// action and invocation denies it before acquiring, refreshing or
-    /// looking anything up; it never falls back to another grant or
-    /// credential. A `service` region with a static credential, and a
+    /// action and invocation denies it without acquiring, refreshing or using
+    /// the caller's OAuth credential; it never falls back to another grant or
+    /// credential. The denial precedes any lookup when the lookup would use
+    /// the caller's own credential; after a shared lookup credential resolved
+    /// scope, final policy denies it as `scope_unresolved`. A `service`
+    /// region with a static credential, and a
     /// `per_user` region whose connection selects a stored token, keep it
     /// usable. Only native descriptors carry it; imported services' never do.
     pub fn token_only(mut self) -> Self {

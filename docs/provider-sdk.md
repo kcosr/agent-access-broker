@@ -294,9 +294,14 @@ host applies the marker with the credential mode that wins each grant region,
 after grant precedence, never with the caller's personal method alone:
 
 - Where a `per_user` grant wins and the caller's credential connection selects
-  OAuth, discovery hides the action, and invocation denies it with
-  `credential_not_provisioned` before acquiring, refreshing or looking anything
-  up. It never falls back to a lower grant or to another credential.
+  OAuth, discovery hides the action and invocation denies it without ever
+  acquiring, refreshing or using the caller's OAuth credential, and never falls
+  back to a lower grant or to another credential. When the action's lookup
+  would use the caller's own credential, the denial is
+  `credential_not_provisioned` before any lookup. When a shared lookup
+  credential resolves scope first, as with mixed `service` and `per_user`
+  grants, that lookup runs and final policy then denies the winning `per_user`
+  grant as `scope_unresolved`.
 - A `service` region with its static credential, and a `per_user` region whose
   connection selects a stored token, keep the action usable, so the provider
   receives only static execution material for it.
