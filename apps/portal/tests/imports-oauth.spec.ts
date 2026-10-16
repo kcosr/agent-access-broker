@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
 import { openOAuthWindow, preservePortalDocument } from "./support/oauth-window";
+import { releaseTestRoot } from "./support/test-root";
 import type { OAuthConnectionTarget } from "../src/types";
 
 test.use({ actionTimeout: 15_000 });
@@ -180,14 +181,13 @@ default = { requests = 1000, window = "1m" }
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker?.pid && broker.exitCode === null) {
     const stopped = once(broker, "exit"); broker.kill("SIGTERM");
     const timer = setTimeout(() => broker?.kill("SIGKILL"), 5000); await stopped; clearTimeout(timer);
   }
-  if (root) await fs.writeFile(path.join(root, "broker.log"), logs.join(""));
   if (issuerServer) await new Promise<void>((resolve) => issuerServer.close(() => resolve()));
-  // Retain the DB, logs and fixture for the implementation review.
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 const importTab = /\/ui\/admin\/catalog\/services\/metrics\/import$/;

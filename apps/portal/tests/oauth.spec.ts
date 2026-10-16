@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerBinary, cliBinary, portalDist } from "./support/binaries";
 import { openOAuthWindow } from "./support/oauth-window";
+import { releaseTestRoot } from "./support/test-root";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const stub = process.env.OAUTH_STUB_REPO;
@@ -35,13 +36,13 @@ test.describe("delegated OAuth browser connection", () => {
     }
     throw new Error("OAuth fixture readiness timed out");
   });
-  test.afterAll(async () => {
+  test.afterAll(async ({}, testInfo) => {
     if (fixture && fixture.exitCode === null) {
       const stopped = new Promise<void>((resolve) => fixture!.once("exit", () => resolve()));
       fixture.kill("SIGINT");
       await stopped;
     }
-    if (root) await fs.rm(root, { recursive: true, force: true });
+    await releaseTestRoot(root, testInfo);
   });
 
   test("consent denial, account selection, reconnect and local disconnect", async ({ page }) => {

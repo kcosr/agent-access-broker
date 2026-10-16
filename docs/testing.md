@@ -373,6 +373,17 @@ npm --prefix apps/portal run test:e2e
 The prebuilt broker must include every server change the portal under test
 relies on; use a fresh build when a change touches both.
 
+Each real-Broker spec keeps its Broker state in a private `aab-*` directory
+under the OS temporary directory (`TMPDIR`). Teardown stops the Broker and the
+spec's fixture servers, then deletes the directory if setup and the spec's tests
+passed. After a failure it keeps the directory, writes the Broker's output to
+its `broker.log` where the spec records that output, and prints the path. To
+keep the directories after passing runs too:
+
+```bash
+AAB_KEEP_TEST_ROOTS=1 npm --prefix apps/portal run test:e2e
+```
+
 The offline smoke harnesses live in `crates/agent-access/tests/`:
 
 - `fake_smoke.rs`
