@@ -8,7 +8,7 @@ import type { OAuthConnectionTarget } from "../src/types";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportCredentialDraft } from "../src/lib/import-credentials";
 import { ImportEditor } from "../src/features/catalog/import-editor";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
-import { OAuthConnectionButtons, OAuthConnectionDetails, OAuthConnectionRow, type OAuthConnectionActions } from "../src/components/oauth-connections";
+import { OAuthConnectionButtons, OAuthConnectionDetails, OAuthConnectionRow, oauthDisconnectNotice, type OAuthConnectionActions } from "../src/components/oauth-connections";
 
 const endpoint = "https://tools.example.test/mcp";
 const registration: ImportOAuthRegistration = { id: "tools", issuer: "https://login.example.test", resource: endpoint, permissionProfiles: [{ id: "read", scopeMode: "explicit", scopes: ["metrics.read"] }, { id: "write", scopeMode: "explicit", scopes: ["metrics.read", "metrics.write"] }] };
@@ -95,7 +95,7 @@ describe("imported personal authentication", () => {
   const oauthTarget = (overrides: Partial<OAuthConnectionTarget> = {}): OAuthConnectionTarget => ({
     registration: "tools", displayName: "Metrics", connectionDescription: "Read metrics", consumers: [consumer], otherConsumers: 0,
     permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint,
-    canConnect: true, connectUnavailableReason: null, canDisconnect: false, connection: null, ...overrides
+    canConnect: true, connectUnavailableReason: null, canDisconnect: false, remoteRevocation: "not_requested", connection: null, ...overrides
   });
   const idle: OAuthConnectionActions = { pending: null, connect: () => {}, disconnect: () => {} };
   // The Import tab's row, and the Credentials drawer's details with its buttons.
@@ -165,6 +165,35 @@ describe("imported personal authentication", () => {
       expect(html).not.toContain("Scope details unavailable");
       expect(html).toContain("Reader");
     }
+  });
+  test.each([
+    ["pending", "Revocation pending", "still revoking"],
+    ["revoked", "Revoked at provider", "revoked every token"],
+    ["failed", "Revocation failed", "did not revoke every token"],
+    ["unconfirmed", "Revocation unconfirmed", "token renewal&#x27;s outcome was lost"]
+  ] as const)("a %s remote revocation shows on both connection surfaces", (state, label, explanation) => {
+    for (const html of surfaces(oauthTarget({ remoteRevocation: state }))) {
+      expect(html).toContain(label);
+      expect(html).toContain(explanation);
+    }
+  });
+  test("failed and unconfirmed revocations ask for the provider-side revocation; nothing is shown when none was requested", () => {
+    for (const html of surfaces(oauthTarget({ remoteRevocation: "unconfirmed" }))) {
+      expect(html).toContain("Preferences › Applications › Authorized applications");
+    }
+    for (const html of surfaces(oauthTarget({ remoteRevocation: "failed" }))) {
+      expect(html).toContain("Revoke the broker application&#x27;s access");
+    }
+    for (const html of surfaces(oauthTarget())) {
+      expect(html).not.toContain("Revocation");
+      expect(html).not.toContain("Revoked at provider");
+    }
+    expect(oauthDisconnectNotice("not_requested")).toEqual({ message: "Account disconnected. Consent at the provider is not removed.", tone: "success" });
+    expect(oauthDisconnectNotice("revoked")).toMatchObject({ tone: "success" });
+    expect(oauthDisconnectNotice("pending").message).toContain("still revoking");
+    expect(oauthDisconnectNotice("failed")).toMatchObject({ tone: "error" });
+    expect(oauthDisconnectNotice("unconfirmed").message).toContain("Authorized applications");
+    expect(oauthDisconnectNotice("unconfirmed").tone).toBe("error");
   });
   test("an entitled unconnected account offers Connect without a rights-management step", () => {
     for (const html of surfaces(oauthTarget())) {

@@ -52,6 +52,7 @@ import {
   oauthConnected,
   oauthConnectionStatus,
   oauthConnectUnavailableMessage,
+  oauthRemoteRevocation,
   oauthScopeEvidence,
   useOAuthConnectionActions
 } from "../../components/oauth-connections";
@@ -279,10 +280,11 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
           const target = row.oauth;
           const evidence = target.scopeMode === "server_default" ? oauthScopeEvidence(target) : null;
           const unavailable = oauthConnectUnavailableMessage(target);
+          const revocation = oauthRemoteRevocation(target.remoteRevocation);
           // A cleanup-only row's profile is unknown: no permission text.
           const permissions =
             target.scopeMode === null ? null : target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions";
-          const notes = [evidence, unavailable].filter((note): note is string => Boolean(note));
+          const notes = [evidence, unavailable, revocation ? `${revocation.label}: ${revocation.message}` : null].filter((note): note is string => Boolean(note));
           return (
             <span>
               {permissions ? <span>{permissions}</span> : null}

@@ -45,6 +45,13 @@ export type ConnectionConsumer = {
 };
 
 /** One OAuth registration the signed-in user's credential connections use. */
+/**
+ * What the broker knows about revoking the owner's ended token families of
+ * a registration at the provider, most severe of several reported.
+ * `not_requested` when nothing was kept for revocation, as for providers the
+ * broker cannot revoke tokens at.
+ */
+export type RemoteRevocation = "not_requested" | "pending" | "revoked" | "failed" | "unconfirmed";
 export type OAuthConnectionTarget = {
   registration: string;
   /** The first selecting connection's display name. */
@@ -67,6 +74,7 @@ export type OAuthConnectionTarget = {
   canConnect: boolean;
   connectUnavailableReason: null | "no_personal_access" | "service_unavailable" | "login_binding_required";
   canDisconnect: boolean;
+  remoteRevocation: RemoteRevocation;
   connection: null | {
     connectionId: string | null;
     subjectId: string | null;
@@ -263,6 +271,8 @@ export type CredentialConnection = {
   profile: string | null;
   credentialKind: string | null;
   registration: string | null;
+  /** For the OAuth method, as `GET /v1/oauth/connections` reports it. */
+  remoteRevocation: RemoteRevocation | null;
   credential: ConnectionCredential | null;
 };
 

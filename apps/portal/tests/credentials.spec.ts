@@ -26,15 +26,23 @@ const token = { credentialId: "credential-gitlab", ownerPrincipal: "viewer", own
 const retained = { credentialId: "credential-old-git", ownerPrincipal: "viewer", ownerKind: "user", service: "gitlab_git", name: "default", profile: "git-basic-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", ...stamp };
 const credentials = {
   connections: [
-    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token", registration: null, credential: token },
-    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, profile: null, credentialKind: null, registration: "google", credential: null }
+    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token", registration: null, remoteRevocation: null, credential: token },
+    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, profile: null, credentialKind: null, registration: "google", remoteRevocation: "not_requested", credential: null }
   ],
   retained: [retained]
 };
 const oauthConnections = [{
   registration: "google", displayName: "Gmail", connectionDescription: "Read and manage your mailbox", consumers: [mail], otherConsumers: 1,
   permissionProfile: "mail", scopeMode: "explicit", requestedScopes: ["openid"], target: "me", canConnect: true, connectUnavailableReason: null, canDisconnect: true,
+  remoteRevocation: "not_requested",
   connection: { connectionId: "connection-google", subjectId: "subject", displayName: "morgan@example.test", status: "ready", reason: null, targets: [] }
+}, {
+  // GitLab revokes the tokens of the connections the broker ends; this
+  // owner's last one lost the outcome of a token renewal.
+  registration: "gitlab", displayName: "GitLab account", connectionDescription: "Lets agents act as your GitLab account.", consumers: [rest, git], otherConsumers: 0,
+  permissionProfile: "default", scopeMode: "explicit", requestedScopes: ["api", "write_repository"], target: "https://gitlab.example.test", canConnect: true, connectUnavailableReason: null, canDisconnect: false,
+  remoteRevocation: "unconfirmed",
+  connection: { connectionId: null, subjectId: null, displayName: null, status: "disconnected", reason: null, targets: [] }
 }];
 
 test.beforeAll(async () => {
@@ -78,7 +86,7 @@ async function fixture(page: Page, role: "user" | "admin" = "user", start = "/ui
     else if (pathname === "/v1/oauth/connections") result = oauthConnections;
     else if (pathname === "/v1/credentials/connections/gitlab/verify") result = { ...token, probeService: "gitlab_git" };
     else if (pathname === `/v1/credentials/retained/${retained.credentialId}`) result = retained;
-    else if (pathname === "/v1/oauth/connections/google") result = { disconnected: true, remoteRevocation: "not_requested" };
+    else if (pathname === "/v1/oauth/connections/google") result = { disconnected: true, remoteRevocation: "revoked" };
     else if (pathname === "/v1/admin/config/status") result = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
     else if (pathname === "/v1/admin/principals/bot") result = bot;
     else if (pathname === "/v1/admin/principals/bot/credentials") result = botCredentials;
@@ -132,8 +140,20 @@ test("OAuth connections are one row per registration and disconnect names every 
   await gmail.getByRole("button", { name: "Disconnect", exact: true }).click();
   const confirm = page.getByRole("alertdialog", { name: "Disconnect account?", exact: true });
   await expect(confirm).toContainText("Gmail and 1 other service stop using this account.");
+  await expect(confirm).toContainText("Where the provider supports it, the broker also revokes the account's tokens there.");
   await confirm.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect.poll(() => writes.map((write) => write.request)).toContain("DELETE /v1/oauth/connections/google");
+  await expect(page.getByText("Account disconnected. The provider revoked every token the broker held for the account.")).toBeVisible();
+});
+
+test("an OAuth connection's remote revocation state and the provider-side action show in its row", async ({ page }) => {
+  const { errors } = await fixture(page);
+  const gitlab = row(page, "GitLab account");
+  await expect(gitlab).toHaveCount(1);
+  await expect(gitlab).toContainText("Revocation unconfirmed");
+  await expect(gitlab).toContainText("Preferences › Applications › Authorized applications");
+  await expect(row(page, "Gmail")).not.toContainText("Revocation");
+  expect(errors).toEqual([]);
 });
 
 test("a retained stored credential is deleted by its ID", async ({ page }) => {

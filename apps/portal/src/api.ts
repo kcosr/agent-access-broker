@@ -265,7 +265,7 @@ export const brokerApi = {
     }, session);
   },
   oauthDisconnect(session: Session, registration: string) {
-    return managementRequest<{ disconnected: boolean }>(`/v1/oauth/connections/${enc(registration)}`, { method: "DELETE" }, session);
+    return managementRequest<{ disconnected: boolean; remoteRevocation: import("./types").RemoteRevocation }>(`/v1/oauth/connections/${enc(registration)}`, { method: "DELETE" }, session);
   },
   resources: (session: Session) => managementRequest<ResourceRecord[]>("/v1/admin/policy/resources", {}, session),
   resourceGroups: (session: Session) => managementRequest<ResourceGroupRecord[]>("/v1/admin/policy/resource-groups", {}, session),
