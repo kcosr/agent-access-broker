@@ -12476,7 +12476,12 @@ fn attachment_id_re() -> &'static Regex {
 
 fn space_key_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Z][A-Z0-9_-]{1,254}$").expect("space key regex"))
+    RE.get_or_init(|| {
+        // Personal keys are literal upstream identifiers, not Broker usernames.
+        // Keep both forms bounded to 255 ASCII bytes and safe as one URL segment.
+        Regex::new(r"^(?:[A-Z][A-Z0-9_-]{1,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
+            .expect("space key regex")
+    })
 }
 
 fn cql_date_re() -> &'static Regex {

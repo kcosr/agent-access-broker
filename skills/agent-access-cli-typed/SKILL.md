@@ -322,6 +322,11 @@ Jira attachment delete is not currently exposed.
 
 ## Confluence
 
+Personal spaces use their actual keys, such as `~alice`, with the same space
+inputs and grants as team spaces. Preserve the tilde and case, and quote shell
+arguments: `--space '~alice'`. In raw CQL, quote the key: `space = "~alice"`.
+A personal-space grant does not imply ownership.
+
 View pages by ID or URL:
 
 ```bash

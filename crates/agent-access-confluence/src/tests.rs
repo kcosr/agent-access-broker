@@ -10,6 +10,8 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+mod personal_spaces;
+
 #[test]
 fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
     let descriptor = confluence_descriptor(&confluence_config());

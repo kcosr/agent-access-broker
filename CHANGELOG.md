@@ -594,6 +594,12 @@ All notable changes to this project are documented in this file.
   command does not verify upstream says it was checked locally. Resource
   creation no longer offers removed imported types.
 
+- Native Confluence personal spaces use existing `confluence_space` exact
+  resources and grants with their actual `~`-prefixed keys. Page/blog reads,
+  writes, drafts, locators, and search preserve those keys; `all` space coverage
+  includes personal spaces subject to the same upstream permissions, exclusions,
+  and token restrictions. No caller-relative home selection is implied.
+
 ### Changed
 
 - Startup, reload and import-write diagnostics for a retained imported service

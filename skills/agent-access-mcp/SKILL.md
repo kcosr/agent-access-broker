@@ -206,6 +206,11 @@ query, `projects` or `spaces`, and `maxResults`; when it is rejected (expired
 after 15 minutes, invalidated by a Broker reload, or after a grant change
 rescoped the search), repeat the search without it.
 
+Confluence personal spaces use their actual keys, such as `~alice`, with the
+same space inputs and grants as team spaces. Preserve the tilde and case; for
+search use `"spaces":["~alice"]`. In raw CQL, quote the key: `space = "~alice"`.
+A personal-space grant does not imply ownership.
+
 ## Read outcomes and recover
 
 Check MCP `isError` and prefer `structuredContent` when the client exposes it.

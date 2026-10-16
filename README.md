@@ -36,7 +36,7 @@ Native integrations pair action permissions with the following resource controls
 | Integration | Supported operations | Resource controls |
 | --- | --- | --- |
 | [Jira](docs/providers-jira.md) | Issues, search, comments, and attachments | Projects |
-| [Confluence](docs/providers-confluence.md) | Pages, blogs, drafts, comments, and attachments | Spaces |
+| [Confluence](docs/providers-confluence.md) | Pages, blogs, drafts, comments, and attachments | Spaces, including personal spaces |
 | [GitLab REST](docs/providers-gitlab-rest.md) | Issues, merge requests, repositories, CI, uploads, and webhooks | Repositories and namespaces |
 | [CloudBees CI](docs/providers-cloudbees-ci.md) | Builds, Pipelines, logs, artifacts, queues, and triggers | Jobs, folders, and controllers |
 | [Teams Workflows](docs/providers-teams.md) | Notifications | Configured Workflow destinations |

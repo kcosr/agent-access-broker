@@ -52,8 +52,12 @@ An exact selector has the shape `{"kind":"exact","value":"engineering/payments"}
 Repository names are canonical paths shared across integrations: at least two
 segments, not all digits, used identically by GitLab REST authorization and Git
 HTTP gateway classification. Jira project
-and Confluence space selectors use their canonical keys. Backend ID resolution
-belongs to the integration, not the resource catalog.
+and Confluence space selectors use their canonical keys. A Confluence personal
+space is an ordinary exact selection, such as
+`{"kind":"exact","value":"~alice"}`; keep the actual upstream key, including its
+case and leading tilde. Its label implies no ownership or caller-relative home
+behavior. See [personal-space setup](providers-confluence.md#personal-spaces).
+Backend ID resolution belongs to the integration, not the resource catalog.
 
 A repository namespace selector such as
 `{"kind":"namespace","value":"engineering/platform"}` matches complete path
@@ -69,7 +73,9 @@ supported.
 An all selector is `{"kind":"all"}` with no value. It deliberately covers
 matching upstream objects that have never been individually registered,
 including objects created later. An administrator can therefore provide broad
-internal access without entering every project, space, or repository.
+internal access without entering every project, space, or repository. For
+Confluence this includes personal spaces, subject to upstream permissions and
+the effective grant and token restrictions.
 
 Teams destinations additionally require configured exact entries. An all selector
 can authorize those entries but cannot invent an endpoint for an unknown alias.

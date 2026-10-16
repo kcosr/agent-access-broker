@@ -335,6 +335,84 @@ async fn delegated_catalog_reads_filter_types_and_catalog_mutations_require_glob
 }
 
 #[tokio::test]
+async fn managed_personal_confluence_resources_preserve_exact_keys_and_group_exclusions() {
+    let fixture = managed_policy_admin_fixture().await;
+    for (id, key) in [
+        ("personal-alice", "~alice"),
+        ("personal-bob", "~Bob.Mixed-123"),
+    ] {
+        let created = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            &format!("create-{id}"),
+            Some(json!({"id":id,"resourceType":"confluence_space",
+                "selector":{"kind":"exact","value":key},"allowedExecutionContexts":["default"]})),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(created).await["result"]["record"]["selector"]["value"],
+            key
+        );
+        let read = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::GET,
+            &format!("/v1/admin/policy/resources/{id}"),
+            &format!("read-{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(read).await["result"]["selector"]["value"],
+            key
+        );
+    }
+    let group = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resource-groups",
+        "personal-group",
+        Some(
+            json!({"id":"personal-spaces","name":"Selected personal spaces",
+            "includedResourceIds":["personal-alice","personal-bob"],
+            "excludedResourceIds":["personal-bob"]}),
+        ),
+    )
+    .await;
+    assert_eq!(group.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(group).await["result"]["record"]["excludedResourceIds"],
+        json!(["personal-bob"])
+    );
+    for key in [
+        "~",
+        "~alice/other",
+        "~alice bob",
+        "%7Ealice",
+        "~alice%2Fbob",
+    ] {
+        let invalid = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            "invalid-personal-key",
+            Some(
+                json!({"id":"invalid-personal","resourceType":"confluence_space",
+                "selector":{"kind":"exact","value":key},"allowedExecutionContexts":["default"]}),
+            ),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST, "{key}");
+    }
+}
+
+#[tokio::test]
 async fn resource_policy_api_rejects_retired_scopes_and_invalid_selector_shapes() {
     let fixture = managed_policy_admin_fixture().await;
     for body in [
