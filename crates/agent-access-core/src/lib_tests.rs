@@ -3219,7 +3219,7 @@ fn rejects_oauth_connections_consumers_cannot_use() {
         "credentials.connections.gitlab.oauth must name a configured registration and permission profile",
         "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab does not",
         "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab_git does not",
-        "credentials.connections.gitlab and credentials.connections.gitlab_projects share OAuth registration gitlab and must use the same profile",
+        "credential connections gitlab and gitlab_projects share OAuth registration gitlab with different permission profiles (default and projects); connections sharing a registration must use the same profile",
     ] {
         assert_contains(&errors, needle);
     }

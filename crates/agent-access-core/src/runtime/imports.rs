@@ -819,14 +819,18 @@ impl BrokerRuntime {
             providers.insert(name, provider.provider());
         }
         effective_credentials(&mut config, &catalog);
-        let authority_errors = crate::connections::connection_authority_errors(
+        // The publication's synthesized connections join the configured
+        // ones; a catalog that breaks a check across them is not published.
+        let connection_errors = crate::connections::effective_connection_errors(
             &config.credentials,
             &services,
             &config.oauth,
             config.providers.registry(),
         );
-        if !authority_errors.is_empty() {
-            return Err(ManagedStoreError::InputInvalid(authority_errors.join("; ")));
+        if !connection_errors.is_empty() {
+            return Err(ManagedStoreError::InputInvalid(
+                connection_errors.join("; "),
+            ));
         }
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));

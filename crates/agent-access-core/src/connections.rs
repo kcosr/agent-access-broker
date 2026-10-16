@@ -261,12 +261,37 @@ pub(crate) fn validate_connections(
             validate_connection_oauth(config, &label, oauth, &descriptors, errors);
         }
     }
-    errors.extend(connection_authority_errors(
+    errors.extend(effective_connection_errors(
         credentials,
         services,
         &config.oauth,
         config.providers.registry(),
     ));
+}
+
+/// The checks that span every effective connection, configured and
+/// synthesized for imports: [`connection_authority_errors`] and
+/// [`shared_registration_errors`]. Offline validation runs them on the
+/// configured connections; startup, reload and every imported-catalog
+/// publication run them on the complete effective set, so a publication
+/// that would break them fails.
+pub(crate) fn effective_connection_errors(
+    credentials: &CredentialsConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    oauth: &OAuthConfig,
+    registry: &BackendRegistry,
+) -> Vec<String> {
+    let mut errors = connection_authority_errors(credentials, services, oauth, registry);
+    errors.extend(shared_registration_errors(credentials));
+    errors
+}
+
+/// Connections that share an OAuth registration share each user's OAuth
+/// connection for it, so they must use one permission profile: consent
+/// admits a registration's flow only for the profile every connection that
+/// selects it uses.
+pub(crate) fn shared_registration_errors(credentials: &CredentialsConfig) -> Vec<String> {
+    let mut errors = Vec::new();
     let mut registration_profiles = BTreeMap::<&str, (&str, &str)>::new();
     for (id, connection) in &credentials.connections {
         let Some(oauth) = &connection.oauth else {
@@ -274,8 +299,8 @@ pub(crate) fn validate_connections(
         };
         match registration_profiles.get(oauth.registration.as_str()) {
             Some((first, profile)) if *profile != oauth.profile => errors.push(format!(
-                "credentials.connections.{first} and credentials.connections.{id} share OAuth registration {} and must use the same profile",
-                oauth.registration
+                "credential connections {first} and {id} share OAuth registration {} with different permission profiles ({profile} and {}); connections sharing a registration must use the same profile",
+                oauth.registration, oauth.profile
             )),
             Some(_) => {}
             None => {
@@ -283,6 +308,7 @@ pub(crate) fn validate_connections(
             }
         }
     }
+    errors
 }
 
 /// Whether each connection's consumers act on one upstream (design: the

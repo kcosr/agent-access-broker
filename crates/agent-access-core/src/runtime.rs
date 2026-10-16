@@ -2230,15 +2230,16 @@ impl BrokerRuntime {
         }
         let source_config = config.clone();
         imports::effective_credentials(&mut config, &imported_catalog);
-        let authority_errors = crate::connections::connection_authority_errors(
+        // Imports add connections offline validation cannot see.
+        let connection_errors = crate::connections::effective_connection_errors(
             &config.credentials,
             &services,
             &config.oauth,
             config.providers.registry(),
         );
-        if !authority_errors.is_empty() {
+        if !connection_errors.is_empty() {
             return Err(RuntimeError::Config(ConfigError::Invalid {
-                errors: authority_errors,
+                errors: connection_errors,
             }));
         }
         let policy_snapshot = Arc::new(ArcSwap::from_pointee(load_policy_snapshot(
