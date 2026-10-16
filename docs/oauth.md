@@ -25,6 +25,28 @@ The linked production adapters do not enable Microsoft Graph, Atlassian, or
 GitLab delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
 Microsoft OIDC remains a separate browser-login feature.
 
+## Credential connections and shared registrations
+
+A service uses OAuth through a
+[credential connection](configuration.md#credential-connections) whose `oauth`
+names a registration and one of its permission profiles; each service that uses
+it names the connection from its `credentials.per_user` entry. Only `user`
+principals use OAuth: a person connects their upstream account, and the Broker
+never reads a stored token for them through that connection. Service accounts
+and `system` principals cannot complete browser consent. They use the
+connection's `token_profile` when it sets one, and otherwise have no personal
+credential for its services. Nobody chooses between a token and OAuth, and the
+Broker never falls back from one to the other.
+
+Several credential connections, and therefore several services, may reference
+one registration. They must use the same permission profile, and they share
+each person's OAuth connection: one consent and one refresh family per owner
+and registration. Each service still acquires its own service-bound lease, and
+its own grants decide what it may do. Connecting, reconnecting or disconnecting
+affects every service that uses a connection on that registration. Imported MCP
+OAuth services publish their own single-service connection; see
+[imported OAuth](imported-oauth.md).
+
 Permission profiles use `scope_mode = "explicit"` by default and require a
 nonempty `scopes` list. Only `mcp_oauth` supports `scope_mode = "server_default"`,
 which requires omitting `scopes` entirely and leaves permission selection to the
@@ -35,9 +57,9 @@ for request, token-response and permission-boundary semantics.
 ## Connection lifecycle
 
 1. A signed-in user opens **Credentials → Connected accounts** and clicks
-   **Connect account**. Setup requires self-service enabled, a configured
-   personal OAuth binding and a matching active `per_user` action grant for the
-   user or their current groups. An administrator may connect their own imported
+   **Connect account**. Setup requires self-service enabled, a credential
+   connection with `oauth` and a matching active `per_user` action grant on a
+   service that uses it, for the user or their current groups. An administrator may connect their own imported
    discovery account through the import workflow's bounded discovery exception,
    including for later discovery refreshes.
 2. The Broker stores an encrypted, five-minute, one-use flow bound to the owner,
@@ -101,8 +123,8 @@ wins invocation precedence. Setup does not broaden that grant: each invocation
 still needs its own action, resource, context and credential authorization.
 
 An existing owned connection stays visible and locally disconnectable after the
-last setup grant is removed, while self-service remains enabled and a configured
-service still binds the registration. Retired or blocked imports do not prevent
+last setup grant is removed, while self-service remains enabled and a credential
+connection still references the registration. Retired or blocked imports do not prevent
 local cleanup. Reconnect requires a current setup grant. An empty target without
 setup authority is hidden. Static API-token deletion retains its separate
 configured-target authorization; this OAuth cleanup rule does not change it.
@@ -121,7 +143,8 @@ cannot be recalled.
 
 A registration describes the upstream application and its token behavior. A
 named permission profile describes the requested scopes, API audience and selected
-target. A service's per-user credential points to that registration/profile.
+target. A credential connection points to that registration and profile, and the
+service's per-user entry names the connection.
 The records service itself is configured by its own `[providers.oauth_stub]`
 table, whose `base_url` names the records API. The fixture serves both from the
 same test server:
@@ -146,10 +169,12 @@ scopes = ["records.read", "offline_access"]
 audience = "records-api"
 target = "workspace-one"
 
+[credentials.connections.oauth_stub]
+oauth = { registration = "stub", profile = "read" }
+
 [credentials.per_user.oauth_stub]
-type = "oauth"
-provider = "stub"
-profile = "read"
+type = "connection"
+connection = "oauth_stub"
 ```
 
 This fragment also requires non-production `deployment.enable_fake_service =

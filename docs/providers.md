@@ -45,12 +45,15 @@ create permission to invoke an action. For each integration:
 2. Create the required resource entries and grant only the actions and execution
    contexts the intended principal needs. With managed policy, create grants in
    the portal or management CLI; inline TOML resources and grants are rejected.
-3. Configure the grant's credential mode and any required lookup credential. Enable
-   the owner's self-service flag for personal management. Ordinary managed browser
-   and `user_manage` API-token credential targets use current per-user policy
-   visibility. Personal OAuth setup requires a configured binding and a matching
-   active `per_user` action grant for the owner or their current groups. Existing
-   bound connections remain inspectable and disconnectable after grant loss.
+3. Configure the grant's credential mode and any required lookup credential.
+   `per_user` mode uses a
+   [credential connection](configuration.md#credential-connections), which
+   several services can share. Enable the owner's self-service flag for personal
+   management. Ordinary managed browser and `user_manage` management of
+   connection tokens uses current per-user policy visibility. Personal OAuth
+   setup requires a connection with `oauth` and a matching active `per_user`
+   action grant for the owner or their current groups. Existing bound
+   connections remain inspectable and disconnectable after grant loss.
    See the [administrator guide](administrator-guide.md) for explicit rights when
    classless static credential management is deliberately configured.
 4. Validate configuration, reload it, inspect the caller's runtime catalog, and

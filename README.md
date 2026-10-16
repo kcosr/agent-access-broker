@@ -84,7 +84,11 @@ A principal identifies a person or workload. Grants select the services, actions
 resources, execution contexts, and credential modes that principal can use.
 Resource groups combine reusable selections and exclusions, and agent tokens can
 narrow the granted access further. A stored credential provides upstream
-authentication; storing it does not grant permission to use it.
+authentication; storing it does not grant permission to use it. A
+[credential connection](docs/configuration.md#credential-connections) lets
+several services share one personal credential, such as one GitLab token for
+GitLab REST and Git, and people connect through OAuth where an administrator
+configures it.
 
 Before executing an action, the broker checks current grants and resource
 selections and applies the authorized credential mode. Agents discover their

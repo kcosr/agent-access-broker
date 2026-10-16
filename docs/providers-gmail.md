@@ -38,11 +38,18 @@ scopes = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
 audience = "https://gmail.googleapis.com/"
 target = "me"
 
+[credentials.connections.gmail]
+display_name = "Gmail"
+oauth = { registration = "google", profile = "mail" }
+
 [credentials.per_user.gmail]
-type = "oauth"
-provider = "google"
-profile = "mail"
+type = "connection"
+connection = "gmail"
 ```
+
+The [credential connection](configuration.md#credential-connections) sets only
+`oauth`, so people connect their mailbox; service accounts and `system`
+principals have no Gmail credential.
 
 Create the mailbox grant in the managed Policies dashboard or management CLI;
 managed policy rejects inline TOML grants. For example, run as an administrator

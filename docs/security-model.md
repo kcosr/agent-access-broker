@@ -135,8 +135,12 @@ which principal may use which service, action, resource scope, and credential
 mode. The managed store holds principals, token state, credential metadata, and
 encrypted credential material; user upstream credentials are decrypted only
 inside the broker when a policy-authorized provider call needs them. Credential
-resolution uses the authorized credential mode and service profile; storing a
-credential does not itself grant permission to invoke a provider action.
+resolution uses the authorized credential mode and, for `per_user`, the method
+the service's credential connection selects for the principal's kind from
+configuration alone, with no fallback between a stored token and OAuth. Storing
+a credential does not itself grant permission to invoke a provider action, and
+services sharing a connection keep separate grants, so sharing never widens
+access.
 
 ## Authorization lookup path
 
@@ -1007,8 +1011,9 @@ See [Teams boundaries](providers-teams.md).
 The [OAuth manager](oauth.md) keeps refresh tokens and access tokens in
 encrypted owner-bound store records. Browser session/CSRF controls and one-use
 PKCE flows govern connection management; Broker invocation tokens confer no
-consent rights. Personal setup requires enabled self-service, a configured
-binding and a current direct/group `per_user` action grant, independently of
+consent rights. Personal setup requires enabled self-service, a credential
+connection with OAuth and a current direct/group `per_user` action grant on a
+service that uses it, independently of
 resource/context availability and invocation precedence. Consent start, claim
 and install recheck that authority and the exact binding; managed grant and
 membership changes are ordered within admission transactions. No credential

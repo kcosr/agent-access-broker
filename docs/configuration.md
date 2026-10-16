@@ -37,8 +37,8 @@ These cross-section rules are enforced by validation (not by the parser):
 
 - A `broker_tokens` identity source requires both `[managed_store]` and
   `[broker_tokens]`.
-- Any `per_user` credential of type `managed_store` requires both
-  `[managed_store]` and `[credential_encryption]`.
+- Any `[credentials.connections]` entry requires both `[managed_store]` and
+  `[credential_encryption]`.
 - `management.enabled = true` requires `[managed_store]` unless management is
   configured only for explicit classless static TOML admin config operations:
   `allow_classless_admin_identities = true`, at least one configured admin
@@ -387,33 +387,35 @@ scheme = "Bearer"
 ## `[credentials]`
 
 ```toml
+[credentials.connections]
 [credentials.service]
 [credentials.per_user]
 [credentials.lookup]
 ```
 
-Each of the three maps is keyed by service name (`^[a-z][a-z0-9_-]{0,62}$`) and
-defaults to empty. A `CredentialConfig` uses `deny_unknown_fields`.
+`service`, `per_user` and `lookup` are keyed by service name
+(`^[a-z][a-z0-9_-]{0,62}$`); `connections` is keyed by connection ID, which
+follows the same pattern. All four default to empty, and their entries use
+`deny_unknown_fields`.
 
 A backend that explicitly declares no execution credential may use `service`
 grants without an entry in this map. Teams obtains its signed endpoint from the
 authorized managed resource; do not configure Teams service/per-user/lookup
 credentials or dummy tokens.
 
-There are five credential kinds:
+There are four credential entry types:
 
-| Kind | Required fields | Allowed in |
+| Type | Required fields | Allowed in |
 | --- | --- | --- |
-| `basic_api_token` | `username_ref`, `token_ref` (both `env:`/`file:` refs) | service, per_user*, lookup |
-| `bearer_token` | `token_ref` (`env:`/`file:` ref) | service, per_user*, lookup |
+| `basic_api_token` | `username_ref`, `token_ref` (both `env:`/`file:` refs) | service, lookup |
+| `bearer_token` | `token_ref` (`env:`/`file:` ref) | service, lookup |
 | `secret_store` | `provider = "local_file"`, absolute `path` | per_user only |
-| `managed_store` | `profile` (and optional `credential_name`) | per_user only |
-| `oauth` | `provider` (an `oauth.registrations` name), `profile` (one of its permission profiles) | per_user only, for services that accept delegated credentials |
+| `connection` | `connection` (a `credentials.connections` ID) | per_user only |
 
-\* A `per_user` credential's `type` must be `secret_store`, `managed_store`, or
-`oauth`.
-The static `basic_api_token` / `bearer_token` kinds are used under
-`credentials.service` and `credentials.lookup`.
+A `per_user` entry's `type` must be `connection` or `secret_store`. Managed
+principals' personal credentials come from [credential
+connections](#credential-connections); `secret_store` serves configured static
+principals from a local file.
 
 Additional rules:
 
@@ -422,27 +424,131 @@ Additional rules:
   `credentials.lookup.<service>` only when at least one lookup-backed grant for
   that service uses `credential_mode = "service"`. Per-user-only lookup-backed
   grants validate without a shared lookup credential.
-- Static kinds must not set `provider`, `path`, `credential_name`, or `profile`.
-- `secret_store` must not set `username_ref`, `token_ref`, `credential_name`,
-  `profile`, or `read_only`. Its `provider` must be `local_file` and `path`
-  must be absolute.
-- `oauth` sets only `provider` and `profile`. The service's descriptor must
-  accept delegated credentials (`gmail` and the development `oauth_stub`
-  service, each configured by its own `[providers.<kind>]` table), and none of the service's per-user actions may need a lookup
-  credential, which a delegated credential cannot provide. See
-  [oauth.md](oauth.md).
-- `managed_store` must not set `username_ref`, `token_ref`, `provider`, `path`,
-  or `read_only`. Its `credential_name` (optional) must be routable as
-  `/v1/credentials/{service}/{name}` and match
-  `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`; `profile` is required and must be
-  supported for the service.
+- Static kinds must not set `provider` or `path`.
+- `secret_store` must not set `username_ref`, `token_ref`, or `read_only`. Its
+  `provider` must be `local_file` and `path` must be absolute.
+- `connection` sets only `connection`, which must name a configured
+  `[credentials.connections.<id>]` entry, and its key must be a configured
+  service or gateway.
 
-### Managed-store profiles
+### Credential connections
 
-The supported `managed_store` `profile` values, and the credential kind each
-resolves to, depend on the surrounding config:
+A credential connection is one per-principal credential slot that one or more
+services consume. Each consuming service names it from its `per_user` entry,
+and every consumer then uses the same stored token or OAuth connection of the
+calling principal. Grants stay per service, so sharing a connection never
+widens what a principal may do: a GitLab REST grant does not authorize a Git
+fetch.
 
-| Service | Profile | Resolves to | Requires |
+```toml
+# One GitLab token for GitLab REST and the GitLab Git gateway.
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+
+[credentials.per_user.gitlab]
+type = "connection"
+connection = "gitlab"
+
+[credentials.per_user.gitlab_git]
+type = "connection"
+connection = "gitlab"
+
+# OAuth for people; Gmail has no stored token form.
+[credentials.connections.gmail]
+display_name = "Gmail"
+oauth = { registration = "google", profile = "mail" }
+
+[credentials.per_user.gmail]
+type = "connection"
+connection = "gmail"
+```
+
+Connection keys (`[credentials.connections.<id>]`):
+
+| Key | Rule |
+| --- | --- |
+| `display_name` | Optional name that management shows; must not be empty when set |
+| `token_profile` | Optional stored token form, one of the [token profiles](#connection-token-profiles) |
+| `oauth` | Optional `{ registration, profile }`: a configured `[oauth.registrations.<registration>]` and one of its `permission_profiles` |
+
+A connection must set `token_profile`, `oauth`, or both. The administrator
+decides the method per connection; principals do not choose between a token
+and OAuth, and the Broker never falls back from one method to the other. A
+principal's kind selects the method from configuration alone:
+
+| Principal | Connection sets `oauth` | Connection sets only `token_profile` |
+| --- | --- | --- |
+| `user` | The person's OAuth connection for the registration; a stored token is never read | A token the person stores |
+| `service_account` | A token an administrator provisions, when `token_profile` is set; otherwise none | A token an administrator provisions |
+| `system` | A token the principal stores, when `token_profile` is set; otherwise none | A token the principal stores |
+| Configured static principal or anonymous caller | None | None |
+
+Selection never reads stored tokens or OAuth connections. Whether the selected
+token is stored, or the selected OAuth connection is connected, is checked
+separately: a missing token fails with `credential_not_found`, and an
+unconnected account requires connecting. A principal for which the connection
+selects no method has no personal credential for its consumers, and their
+`per_user` calls fail with `credential_not_provisioned`. Configured static
+principals keep using `secret_store` entries.
+
+Validation rules:
+
+- **ID namespace.** A connection ID must not be `broker`. Token rows and
+  credential rights are keyed by connection ID in the same namespace as
+  services, so a connection ID may equal a service or gateway only when that
+  service consumes it, and must not equal any other configured service or
+  gateway. Startup and reload also reject a connection ID equal to an imported
+  service ID, and creating an import rejects an ID a configured connection
+  holds.
+- **Token profile.** Every consumer other than a Git gateway must declare
+  `token_profile`, and the consumers that declare it must agree on its
+  credential kind. A Git gateway consumer accepts any token- or basic-kind
+  profile that it or another consumer declares, and presents it as described
+  under [`upstream_token_auth`](#gateways).
+- **OAuth.** Every consumer must accept delegated credentials, and none of a
+  consumer's `per_user` actions may need a lookup credential, which an OAuth
+  credential cannot provide. Today these consumers are `gmail` and the
+  development `oauth_stub` service; see [oauth.md](oauth.md).
+- **Shared registrations.** Connections that reference the same OAuth
+  registration must use the same permission profile. They then share each
+  person's OAuth connection for that registration, so connecting or
+  disconnecting it affects every service using any of those connections.
+- **Upstream authority.** The consumers of a token connection must address the
+  same upstream instance, for example GitLab REST's `api_base_url` without
+  `/api/v4` and the Git gateway's `upstream_base_url`. Validation checks this
+  offline, without contacting upstream. Stored tokens are not bound to an
+  upstream: changing the consumers' base URLs sends existing tokens to the new
+  host, as changing a provider's base URL always has.
+
+**Storage.** A connection's token rows live in the managed store with the
+connection ID as their `service` and `default` as their name. A connection with
+the same ID and token profile as an earlier per-service credential therefore
+reads that service's stored tokens unchanged. Stored rows the configuration no
+longer selects, such as rows under another name or profile, stay stored but
+unread, and their owners and administrators can list and delete them.
+Credential rights apply to `(connection, default)`.
+
+**Imported services.** The runtime publishes a single-consumer connection,
+keyed by the imported service ID, for each import with a supported, allowed
+personal binding. It mirrors that binding and never adds a second method:
+
+| Import's personal binding | Published connection |
+| --- | --- |
+| None, unsupported or not allowed (service-only, credential-free, unapproved OAuth) | None |
+| Static personal token | `token_profile` only: `token`, or `username-token` for a command import that declares `username_token` |
+| Approved MCP OAuth | `oauth` only, with the import's registration and profile |
+
+Imported connections are not configured in TOML. See
+[imported services](imported-services.md#credentials-and-identity) and
+[command imports](command-imports.md#credentials).
+
+### Connection token profiles
+
+The supported `token_profile` values, and the credential kind each resolves to,
+depend on the consumers and the surrounding config:
+
+| Consumer | Profile | Resolves to | Requires |
 | --- | --- | --- | --- |
 | `jira` | `jira-cloud-api-token` | `basic_api_token` | `[providers.jira]` present |
 | `jira` | `jira-bearer-token` | `bearer_token` | Jira gateway enabled (`cloud_id` set AND `api.atlassian.com` allowlisted) |
@@ -453,9 +559,12 @@ resolves to, depend on the surrounding config:
 | any Git HTTP gateway | `git-basic-api-token` | `basic_api_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 | any Git HTTP gateway | `git-bearer-token` | `bearer_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 
-Any other profile fails validation. A Git gateway presents a `git-bearer-token`
-credential as its [`upstream_token_auth`](#gateways) selects, and a
-`git-basic-api-token` credential with its own username.
+Any other profile fails validation, as does a profile that one consumer of the
+connection does not declare; Jira and Confluence therefore keep separate
+connections. A Git gateway also accepts the profile of another consumer of its
+connection, such as `gitlab-access-token`. It presents a bearer-kind credential
+as its [`upstream_token_auth`](#gateways) selects, and a basic-kind credential
+with its own username.
 
 ### Secret-ref syntax
 
@@ -1034,9 +1143,10 @@ dependency_inward = "is blocked by"
   `bearer_token` credential requires `api.atlassian.com` in the allowlist).
   With the gateway enabled, each configured `credentials.service` and
   `credentials.per_user` entry must resolve to `bearer_token`: a static
-  `bearer_token`, or a `managed_store` bearer profile such as
-  `jira-bearer-token`. A `basic_api_token`, a basic `managed_store` profile and
-  a `secret_store` (whose records carry their own kinds) are rejected.
+  `bearer_token`, or a credential connection whose `token_profile` is a bearer
+  profile such as `jira-bearer-token`. A `basic_api_token`, a connection with a
+  basic profile and a `secret_store` (whose records carry their own kinds) are
+  rejected.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in
@@ -1260,8 +1370,9 @@ allow_disable_ssl_verification = false
   validated config reload applies the new destination ceiling to subsequent
   create and URL-change requests; it never retroactively quarantines an
   existing hook.
-- GitLab REST credentials use `bearer_token` secret material. Managed per-user
-  credentials use profile `gitlab-access-token`.
+- GitLab REST credentials use `bearer_token` secret material. Per-user
+  credentials come from a credential connection with the `gitlab-access-token`
+  profile, which the GitLab Git gateway can share.
 - Service-mode GitLab REST grants require `credentials.lookup.gitlab` because
   project, issue, merge request, note, discussion, branch, and commit actions
   confirm the authoritative project path before final repository-scope
@@ -1333,7 +1444,7 @@ head/search report incomplete coverage at the scan ceiling without an unusable
 continuation. Raising the text budget does not raise the scan ceiling.
 `[providers.cloudbees_ci.egress_proxy]` uses the usual provider proxy shape.
 Only `basic_api_token` execution credentials are supported, from a service
-secret or the `cloudbees-ci-api-token` managed per-user profile. See
+secret or a credential connection with the `cloudbees-ci-api-token` profile. See
 [the provider contract](providers-cloudbees-ci.md).
 
 ### `[providers.teams]`
@@ -1383,9 +1494,10 @@ with a literal loopback IP host (such as `127.0.0.1` or `[::1]`) and no path,
 query, fragment or user information. Host names, including `localhost`, are
 rejected. As an enabled development fixture, the backend receives the host's
 direct literal-loopback route to the records API, never an egress proxy.
-Its delegated credential is configured separately, as
-`[credentials.per_user.oauth_stub]` with `type = "oauth"` naming a `stub`
-registration; see [oauth.md](oauth.md#development-test-provider-configuration).
+Its delegated credential is configured separately, as a credential connection
+whose `oauth` names a `stub` registration, consumed by
+`[credentials.per_user.oauth_stub]`; see
+[oauth.md](oauth.md#development-test-provider-configuration).
 Like `fake`, it is accepted only with `deployment.enable_fake_service = true`.
 
 ## `[gateways]`
@@ -1535,7 +1647,7 @@ Git settings (`[gateways.<name>.git]`):
 Gateway services appear in `/v1/services` and `/v1/capabilities` with
 `surface = "gateway"`, `gatewayKind`, `brokerHosts`,
 `credentialVerificationInputs = ["repository"]`, and `resourceScopes` metadata. Their actions are grantable policy actions, not `/v1/invoke` actions.
-For managed per-user Git gateway credentials, credential verification requires a
+For per-user Git gateway credentials, credential verification requires a
 repository input and performs a read-only `repo.fetch` authorization check before
 probing upstream with `git-upload-pack` discovery. The verification probe uses
 `streaming_idle_timeout_ms` for stalled response header waits and discovery body
@@ -2092,9 +2204,10 @@ new administrator is rejected without provisioning one.
 
 ## Delegated upstream OAuth
 
-The `[oauth.registrations]` configuration and delegated credential bindings are
-documented in [oauth.md](oauth.md). They require managed storage/encryption and
-browser management. A registration's `adapter` must name an OAuth dialect the
+The `[oauth.registrations]` configuration is documented in [oauth.md](oauth.md).
+A [credential connection](#credential-connections) binds services to a
+registration and permission profile with its `oauth` key. Registrations require
+managed storage/encryption and browser management. A registration's `adapter` must name an OAuth dialect the
 binary selects: `google` for Gmail, `mcp_oauth` for approved imported MCP
 services, or the development-only `stub`. The Broker core defines no dialect of
 its own. This is separate from Microsoft OIDC browser login.
@@ -2107,8 +2220,9 @@ is rejected, and `https://localhost` follows the global resolution.
 
 ## Gmail OAuth
 
-`[providers.gmail]` has no settings and requires `credentials.per_user.gmail` of type
-`oauth`. The `google` dialect fixes Google endpoints and accepts `openid` plus
+`[providers.gmail]` has no settings and requires `credentials.per_user.gmail` to
+name a [credential connection](#credential-connections) that sets only `oauth`,
+and no service credential. The `google` dialect fixes Google endpoints and accepts `openid` plus
 `gmail.modify`, target `me`, audience `https://gmail.googleapis.com/`, form encoding,
 `client_secret_post`, and `preserve_old` rotation. See the complete
 [Gmail configuration fragment](providers-gmail.md#setup).
@@ -2146,8 +2260,9 @@ Credential deletion and disabling/retirement remain available.
 Imported integrations grant whole actions without resource scopes.
 Service and per-user credential ownership use existing grant selection rules.
 Imported credential bindings come from the effective runtime catalog, separately
-from the TOML credential definitions. See the [import workflow and supported
-limits](imported-services.md).
+from the TOML credential definitions; an import with a personal binding
+publishes its own [credential connection](#credential-connections) under its
+service ID. See the [import workflow and supported limits](imported-services.md).
 
 ### Command imports
 

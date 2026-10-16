@@ -40,8 +40,8 @@ The managed store is operational state. It answers questions such as:
 - Is this principal active?
 - Does this broker token admit this request class?
 - Has this principal been granted a right to manage this credential?
-- Which encrypted credential should be selected for this principal, service, and
-  credential name?
+- Which encrypted credential should be selected for this principal and the
+  service's credential connection?
 
 It does not replace provider-side authorization or the audit log. In
 `policy.authority = "managed"` mode, it is the source of truth for broker service
@@ -113,8 +113,8 @@ erDiagram
 | `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, timestamps, actor metadata |
 | `principal_groups` | Group membership for managed principals. | `principal_id`, `group_id`, creator metadata |
 | `broker_tokens` | HMAC-hashed broker-issued tokens. | `token_id`, `token_hash`, `principal_id`, `token_class`, `scopes_json`, expiry/revocation fields |
-| `rights` | Self-service management rights. | `right_id`, `principal_id`, `right_name`, `service`, `credential_name`, `resource_scope_json`, expiry/revocation fields |
-| `credentials` | Managed credential metadata and lifecycle. | `credential_id`, owner tuple, `service`, `name`, `profile`, `credential_kind`, `metadata_json`, `secret_ref`, `material_version`, `last_verification_attempt_at`, `last_verified_at`, `verification_status`, `last_verification_error_code` |
+| `rights` | Self-service management rights. A credential connection's rights have its ID in `service` and `default` in `credential_name`. | `right_id`, `principal_id`, `right_name`, `service`, `credential_name`, `resource_scope_json`, expiry/revocation fields |
+| `credentials` | Managed credential metadata and lifecycle. A credential connection's token rows have its ID in `service` and `default` in `name`. | `credential_id`, owner tuple, `service`, `name`, `profile`, `credential_kind`, `metadata_json`, `secret_ref`, `material_version`, `last_verification_attempt_at`, `last_verified_at`, `verification_status`, `last_verification_error_code` |
 | `credential_secret_material` | Encrypted credential secret bytes. | `secret_ref`, `credential_id`, `secret_ciphertext`, `secret_nonce`, `key_id` |
 | `principal_login_methods` | Browser-login methods for managed principals. | `login_method_id`, `principal_id`, `method`, external subject fields, `status`, password hash metadata |
 | `local_password_failures` | Failed local-password verifications and lockouts per principal and client source. | `principal_id`, `source`, `failed_attempts`, `last_failed_at`, `locked_until` |
@@ -555,8 +555,8 @@ uses it, and preserve keys needed to decrypt retained backups.
 
 ## Access Flow
 
-For a per-user managed credential invocation, the broker resolves state in this
-order:
+For a per-user invocation whose credential connection selects a stored token,
+the broker resolves state in this order:
 
 ```mermaid
 sequenceDiagram
@@ -569,7 +569,7 @@ sequenceDiagram
     Agent->>Broker: Invoke service/action with broker token
     Broker->>Store: Resolve token and principal
     Broker->>Broker: Apply service/action policy
-    Broker->>Store: Load credential by principal, service, and name
+    Broker->>Store: Load the principal's row for the connection, name default
     Store-->>Broker: Encrypted material and metadata
     Broker->>Broker: Decrypt selected credential
     Broker->>Broker: Apply resolved resource-scope policy
@@ -588,11 +588,13 @@ final resource-scope authorization, for lookup only.
 
 Self-service management uses the same store but a different authorization path.
 An administrator can create a principal and issue a `user_manage` token. That
-broker token can manage that principal's configured credentials for services
-visible through policy and issue `agent_invoke` tokens without separate
+broker token can manage that principal's tokens for credential connections
+whose consuming services are visible through policy and issue `agent_invoke`
+tokens without separate
 credential rights, bounded by token class and TTL limits. Configured rights gate
 classless static credential access when enabled. Personal OAuth instead requires
-a browser session, self-service and a matching active `per_user` grant for setup;
+a browser session, self-service and a matching active `per_user` grant on a
+service that uses the registration through a credential connection for setup;
 existing bound connections remain inspectable and disconnectable by their owner
 after grant loss. OAuth admission reads managed grants and current effective
 group membership within the slot transaction; it does not read credential rights.

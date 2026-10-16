@@ -1079,7 +1079,7 @@
         </div>
       </div>
       <h3 id="backend-oauth">Connecting an upstream account with OAuth</h3>
-      <p>Personal OAuth setup requires enabled self-service, a configured binding and an active <code>per_user</code> action grant for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal.</p>
+      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal.</p>
       <p>Authentication adapters implement the provider's OAuth behavior. The generic <code>mcp_oauth</code> adapter supports compatible MCP servers without new provider code. It requires an operator-approved client registration, the exact MCP endpoint/resource and a permission profile. Profiles use explicit scopes by default, or operator-selected <code>server_default</code> permissions with configured scopes absent. Importing tools alone does not establish a connection. Unusual provider flows still need a compiled adapter.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="oauth-flow-title">
@@ -1482,7 +1482,8 @@
         <dt>agent_invoke token</dt><dd>A broker token issued by or for a user for agent use outside managed environments. Scoped by context and optionally by service and resource.</dd>
         <dt>Resource / resource group</dt><dd>A catalog entry for an upstream repository, project, space or job, with its eligible contexts. Groups bundle entries with inclusions and exclusions.</dd>
         <dt>Grant</dt><dd>Policy allowing subjects to perform actions for one service in listed contexts, using a permitted credential mode and resource selections where the provider supports them.</dd>
-        <dt>Credential mode</dt><dd><code>per_user</code> uses the caller's registered token or supported OAuth connection. <code>service</code> uses a shared credential; imported shared tokens are encrypted in the database.</dd>
+        <dt>Credential mode</dt><dd><code>per_user</code> uses the caller's credential for the service's credential connection: a stored token or, for people where configured, an OAuth connection. <code>service</code> uses a shared credential; imported shared tokens are encrypted in the database.</dd>
+        <dt>Credential connection</dt><dd>One per-principal credential that one or more services use, such as one GitLab token for GitLab REST and Git. The administrator configures its method; grants stay per service.</dd>
         <dt>OAuth connection</dt><dd>A user's consent for the broker to access an upstream service through an approved authentication adapter. Separate from browser sign-in and broker agent tokens.</dd>
         <dt>Service policy manager</dt><dd>An account with the service policy manager role, directly assigned to manage grants for one or more services. Groups cannot hold these assignments.</dd>
         <dt>Lookup credential</dt><dd>A read-only credential used only to resolve a target's scope before authorization.</dd>
