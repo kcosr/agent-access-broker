@@ -20,12 +20,16 @@
 //! The connected account reports its linked sign-ins, `/api/v4/user`'s
 //! `identities[]` (`provider`, `extern_uid`), so registrations may set
 //! `login_binding`.
+//!
+//! GitLab refresh tokens do not expire, so the dialect revokes the tokens of
+//! a family the host ends through `POST /oauth/revoke` (RFC 7009), with
+//! `client_secret_post` and a `token_type_hint`.
 use agent_access_provider::{
     AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, LinkedIdentity,
     OAuthCallbackIssuer, OAuthClient, OAuthClientAuth, OAuthDialect, OAuthDialectError,
     OAuthDialectRegistration, OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig,
     OAuthResponse, OAuthRotation, OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, RefreshReplay,
-    TokenGrant, UpstreamAuthority, UpstreamRetryAfter,
+    RevocationOutcome, TokenGrant, TokenRevocation, UpstreamAuthority, UpstreamRetryAfter,
 };
 use async_trait::async_trait;
 use reqwest::Method;
@@ -47,6 +51,7 @@ const MAX_LINKED_IDENTITY_BYTES: usize = 1024;
 const AUTHORIZE_PATH: &str = "oauth/authorize";
 const TOKEN_PATH: &str = "oauth/token";
 const TOKEN_INFO_PATH: &str = "oauth/token/info";
+const REVOKE_PATH: &str = "oauth/revoke";
 const USER_PATH: &str = "api/v4/user";
 
 /// The `gitlab` OAuth dialect for GitLab REST and Git gateway connections.
@@ -87,6 +92,10 @@ fn endpoint(config: &OAuthRegistrationConfig, path: &str) -> Result<Url, OAuthDi
 #[async_trait]
 impl OAuthDialect for GitlabDialect {
     fn supports_login_binding(&self) -> bool {
+        true
+    }
+
+    fn supports_revocation(&self) -> bool {
         true
     }
 
@@ -155,7 +164,7 @@ impl OAuthDialect for GitlabDialect {
     fn upstream_allowlist(&self, config: &OAuthRegistrationConfig) -> Vec<String> {
         instance_base(config)
             .map(|base| {
-                [TOKEN_PATH, TOKEN_INFO_PATH, USER_PATH]
+                [TOKEN_PATH, TOKEN_INFO_PATH, REVOKE_PATH, USER_PATH]
                     .map(|path| format!("{base}/{path}"))
                     .to_vec()
             })
@@ -280,6 +289,58 @@ impl OAuthDialect for GitlabDialect {
         Ok(ConnectedIdentity::new(username)
             .with_subject(id.to_string())
             .with_linked_identities(linked_identities(&user)))
+    }
+
+    /// `POST /oauth/revoke`. GitLab answers 200 for a token it revoked and,
+    /// as RFC 7009 asks, for one it does not know; an `invalid_token` error
+    /// also reports a token that is already invalid.
+    async fn revoke(
+        &self,
+        http: &OAuthHttp,
+        client: &OAuthClient<'_>,
+        revocation: TokenRevocation<'_>,
+    ) -> Result<RevocationOutcome, OAuthDialectError> {
+        if client.client_secret.is_empty() {
+            return Err(OAuthDialectError::Configuration);
+        }
+        let form = [
+            ("token", revocation.token),
+            ("token_type_hint", revocation.token_type.hint()),
+            ("client_id", &client.config.client_id),
+            ("client_secret", client.client_secret),
+        ];
+        let request = http
+            .request(Method::POST, endpoint(client.config, REVOKE_PATH)?)
+            .header("Accept", "application/json")
+            .form(&form);
+        let response = http.send(request, "oauth.revoke").await?;
+        let status = response.status();
+        if (200..300).contains(&status) {
+            return Ok(RevocationOutcome::Revoked);
+        }
+        if status == 429 {
+            return Err(OAuthDialectError::RetryAfter(
+                response
+                    .header("retry-after")
+                    .and_then(UpstreamRetryAfter::parse)
+                    .map_or(1, |wait| wait.seconds()),
+            ));
+        }
+        if status >= 500 {
+            return Err(OAuthDialectError::Failed);
+        }
+        let body = response.json().await.ok();
+        match body
+            .as_ref()
+            .and_then(|body| body.get("error"))
+            .and_then(Value::as_str)
+        {
+            Some("invalid_token") => Ok(RevocationOutcome::AlreadyInvalid),
+            Some("invalid_client" | "unauthorized_client") => {
+                Err(OAuthDialectError::ClientRejected)
+            }
+            _ => Err(OAuthDialectError::RequestRejected),
+        }
     }
 
     async fn discover_targets(
