@@ -9,6 +9,7 @@ import { importAuthenticationFor, importCredentialBindings, importOAuthError, ma
 import { ImportEditor } from "../src/features/catalog/import-editor";
 import { inlineFrame } from "../src/features/catalog/catalog-ui";
 import { OAuthConnectionButtons, OAuthConnectionDetails, OAuthConnectionRow, oauthDisconnectNotice, type OAuthConnectionActions } from "../src/components/oauth-connections";
+import { needsAttention, type CredentialRow } from "../src/features/credentials/credential-list";
 
 const endpoint = "https://tools.example.test/mcp";
 const registration: ImportOAuthRegistration = { id: "tools", issuer: "https://login.example.test", resource: endpoint, permissionProfiles: [{ id: "read", scopeMode: "explicit", scopes: ["metrics.read"] }, { id: "write", scopeMode: "explicit", scopes: ["metrics.read", "metrics.write"] }] };
@@ -235,6 +236,23 @@ describe("imported personal authentication", () => {
       expect(html).not.toContain(">Disconnect<");
       expect(html).toContain("Revocation failed");
     }
+  });
+  test("failed and unconfirmed revocations need attention, also beside a ready replacement connection", () => {
+    const row = (target: OAuthConnectionTarget): CredentialRow => ({ kind: "oauth", key: target.registration, oauth: target });
+    const ready = { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "ready" as const, reason: null, targets: [] };
+    const cleanupOnly = (remoteRevocation: OAuthConnectionTarget["remoteRevocation"]) =>
+      oauthTarget({ consumers: [], otherConsumers: 0, canConnect: false, connectUnavailableReason: "no_personal_access", canDisconnect: false, remoteRevocation });
+    const replaced = (remoteRevocation: OAuthConnectionTarget["remoteRevocation"]) => oauthTarget({ canDisconnect: true, remoteRevocation, connection: ready });
+    for (const state of ["failed", "unconfirmed"] as const) {
+      expect(needsAttention(row(cleanupOnly(state)))).toBe(true);
+      expect(needsAttention(row(replaced(state)))).toBe(true);
+    }
+    for (const state of ["not_requested", "pending", "revoked"] as const) {
+      expect(needsAttention(row(cleanupOnly(state)))).toBe(false);
+      expect(needsAttention(row(replaced(state)))).toBe(false);
+    }
+    const rows = [row(cleanupOnly("failed")), row(replaced("unconfirmed")), row(replaced("revoked")), row(oauthTarget())];
+    expect(rows.filter(needsAttention)).toEqual([rows[0], rows[1]]);
   });
   test("failed and unconfirmed revocations ask for the provider-side revocation; nothing is shown when none was requested", () => {
     for (const html of surfaces(oauthTarget({ remoteRevocation: "unconfirmed" }))) {

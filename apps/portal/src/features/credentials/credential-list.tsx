@@ -119,12 +119,17 @@ function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boole
   }
 }
 
-function needsAttention(row: CredentialRow) {
+export function needsAttention(row: CredentialRow) {
   if (row.kind === "token") {
     const status = credentialStatus(row.connection.credential);
     return Boolean(row.connection.credential) && (status === "Not verified" || status === "Verification failed");
   }
-  if (row.kind === "oauth") return row.oauth.connection?.status === "reconnect_required" || row.oauth.connection?.status === "operator_action_required";
+  if (row.kind === "oauth") {
+    // An ended connection whose upstream revocation failed or is unconfirmed
+    // needs provider-side cleanup, whatever the current connection's status.
+    if (row.oauth.remoteRevocation === "failed" || row.oauth.remoteRevocation === "unconfirmed") return true;
+    return row.oauth.connection?.status === "reconnect_required" || row.oauth.connection?.status === "operator_action_required";
+  }
   return false;
 }
 

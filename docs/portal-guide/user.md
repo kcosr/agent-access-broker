@@ -115,7 +115,8 @@ whose own status shows beside it; revoking in GitLab also ends a current
 connection of the same account. **Unconfirmed** means a token renewal's answer
 was lost, so GitLab may hold a token the Broker never received. A row stays
 listed while its revocation is pending, failed or unconfirmed, even after you
-lost the grant and disconnected. Rows marked **Not used** are stored credentials no service
+lost the grant and disconnected, and **Needs attention** includes every row
+whose revocation failed or is unconfirmed. Rows marked **Not used** are stored credentials no service
 reads any more; delete them when you no longer need them. See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
 if **Connect** or **Reconnect** is unavailable.
 
