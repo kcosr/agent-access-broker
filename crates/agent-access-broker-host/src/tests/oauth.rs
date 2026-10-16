@@ -17,6 +17,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[path = "oauth/atlassian_dialect.rs"]
 pub(super) mod atlassian_dialect;
+#[path = "oauth/atlassian_products.rs"]
+mod atlassian_products;
 #[path = "oauth/delegated_lookups.rs"]
 mod delegated_lookups;
 #[path = "oauth/gitlab_dialect.rs"]

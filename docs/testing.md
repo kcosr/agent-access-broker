@@ -1929,8 +1929,19 @@ scopes and rereads the sites, and a 403 `invalid_grant` that requires reconnect.
 Installation stores nothing for an exchange without `scope`, a grant for another
 site, or a site without one of the shared profile's products. It also validates
 full configurations for every row of the Atlassian connection table, including
-simultaneous bearer service credentials and per-product registrations. No test
-reaches Atlassian.
+simultaneous bearer service credentials and per-product registrations.
+
+`tests::oauth::atlassian_products` runs the real Jira and Confluence providers
+and dialect against one stub serving the OAuth endpoints and, in place of
+`api.atlassian.com`, the gateway routes (the providers' `test-support`
+`provider_with_gateway`): a Jira issue read and a lookup-backed comment list, a
+personal-space (`~alice`) page read and search, audited with the connection; a
+request in flight across another request's refresh recovering once with the
+stored successor; a refresh response lost in transit requiring reconnect for
+both products; a service account's bearer token through the gateway beside
+people's OAuth; and a consent for another site or without Confluence, or a
+refresh that drops Confluence, leaving both products unusable (option A). No
+test reaches Atlassian.
 
 ## Imported MCP services
 

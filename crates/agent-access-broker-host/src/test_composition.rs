@@ -54,6 +54,15 @@ pub(crate) fn backend_registry_replacing(
     registry_of(replacing_native(replacement), OAUTH_DIALECTS)
 }
 
+/// The assembly's selection with `dialect` in place of the OAuth dialect of
+/// the same ID, for tests whose linked backends consume a dialect fixture
+/// that reaches a stub server.
+pub(crate) fn backend_registry_with_dialect(
+    dialect: &'static OAuthDialectRegistration,
+) -> BackendRegistry {
+    registry_of(NATIVES, replacing_dialect(dialect))
+}
+
 /// [`backend_registry_replacing`] with `dialect` in place of the OAuth
 /// dialect of the same ID, for tests whose test-local backend consumes a
 /// dialect fixture that reaches a stub server.
@@ -61,16 +70,19 @@ pub(crate) fn backend_registry_replacing_with_dialect(
     replacement: &'static BackendRegistration,
     dialect: &'static OAuthDialectRegistration,
 ) -> BackendRegistry {
-    registry_of(
-        replacing_native(replacement),
-        OAUTH_DIALECTS.map(|linked| {
-            if linked.id() == dialect.id() {
-                dialect
-            } else {
-                linked
-            }
-        }),
-    )
+    registry_of(replacing_native(replacement), replacing_dialect(dialect))
+}
+
+fn replacing_dialect(
+    dialect: &'static OAuthDialectRegistration,
+) -> [&'static OAuthDialectRegistration; 4] {
+    OAUTH_DIALECTS.map(|linked| {
+        if linked.id() == dialect.id() {
+            dialect
+        } else {
+            linked
+        }
+    })
 }
 
 fn replacing_native(

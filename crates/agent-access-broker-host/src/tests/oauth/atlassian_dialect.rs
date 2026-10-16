@@ -17,9 +17,9 @@ use agent_access_provider::{
 };
 use wiremock::matchers::body_partial_json;
 
-const CALLBACK: &str = "http://127.0.0.1/v1/oauth/callback/atlassian";
-const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
-const OTHER_CLOUD_ID: &str = "99999999-8888-4777-8666-555555555555";
+pub(super) const CALLBACK: &str = "http://127.0.0.1/v1/oauth/callback/atlassian";
+pub(super) const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
+pub(super) const OTHER_CLOUD_ID: &str = "99999999-8888-4777-8666-555555555555";
 const ACCOUNT_ID: &str = "5b10ac8d82e05b22cc7d4ef5";
 const JIRA_SCOPES: [&str; 3] = ["read:jira-work", "write:jira-work", "read:jira-user"];
 const CONFLUENCE_SCOPES: [&str; 2] = ["search:confluence", "read:confluence-content.all"];
@@ -218,7 +218,7 @@ async fn atlassian_fixture(atlassian: &MockServer) -> OAuthFixture {
 }
 
 /// A token response granting `scope`, or without `scope` when `None`.
-fn token(number: u32, scope: Option<&str>) -> Value {
+pub(super) fn token(number: u32, scope: Option<&str>) -> Value {
     let mut body = json!({
         "access_token": format!("atlassian-access-{number}"),
         "refresh_token": format!("atlassian-refresh-{number}"),
@@ -232,7 +232,7 @@ fn token(number: u32, scope: Option<&str>) -> Value {
 }
 
 /// One `accessible-resources` entry: a site's product container.
-fn site(id: &str, scopes: &[&str]) -> Value {
+pub(super) fn site(id: &str, scopes: &[&str]) -> Value {
     json!({
         "id": id,
         "name": "example",
@@ -244,7 +244,7 @@ fn site(id: &str, scopes: &[&str]) -> Value {
 
 /// The code exchange answers with `scope`, the account is alice's, and
 /// `accessible-resources` lists `sites`.
-async fn mount_consent(atlassian: &MockServer, scope: Option<&str>, sites: Value) {
+pub(super) async fn mount_consent(atlassian: &MockServer, scope: Option<&str>, sites: Value) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_partial_json(
@@ -266,7 +266,7 @@ async fn mount_consent(atlassian: &MockServer, scope: Option<&str>, sites: Value
     mount_sites(atlassian, sites).await;
 }
 
-async fn mount_sites(atlassian: &MockServer, sites: Value) {
+pub(super) async fn mount_sites(atlassian: &MockServer, sites: Value) {
     Mock::given(method("GET"))
         .and(path("/oauth/token/accessible-resources"))
         .respond_with(ResponseTemplate::new(200).set_body_json(sites))
