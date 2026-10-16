@@ -541,7 +541,10 @@ On `SIGTERM` or `SIGINT`, the broker stops accepting new public and gateway conn
 then cuts off the connections still open. If the timeout is reached while
 streaming downloads are still open, those streams are canceled and their
 terminal audit records are queued through the audit writer before final writer
-drain. Unix `SIGUSR2` reloads continue to work before shutdown starts; once
+drain. Once the connections have ended, the broker closes the HTTP MCP sessions
+still open, within the remaining budget and at least 100 ms, without cancelling
+admitted operations; a close that does not finish is logged as
+`mcp_session_shutdown_unfinished`. Unix `SIGUSR2` reloads continue to work before shutdown starts; once
 shutdown has started, reload signal handling exits and no new reload is
 admitted. After in-flight operations drain, the broker stops command-import
 processes, which can outlive the call that started them: every command process

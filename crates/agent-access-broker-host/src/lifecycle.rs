@@ -244,11 +244,10 @@ pub(crate) struct PreboundListeners {
     pub(crate) gateway: Option<std::net::TcpListener>,
 }
 
-/// A serving isolated test application's state and HTTP MCP endpoint.
+/// A serving isolated test application's state.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) struct Listening {
     pub(crate) state: Arc<ReloadableState>,
-    pub(crate) mcp: crate::mcp::Endpoint,
     /// The routers the listeners serve, for in-process host tests.
     #[cfg(test)]
     pub(crate) public_app: axum::Router,
@@ -430,7 +429,6 @@ async fn run_service(
         listener = "public",
         address = %public_address,
     );
-    #[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
     let (public_app, mcp) = public_router(state.clone());
     #[cfg(test)]
     let served_public_app = public_app.clone();
@@ -455,7 +453,6 @@ async fn run_service(
     if let Some(listening) = listening {
         let _ = listening.send(Listening {
             state: state.clone(),
-            mcp,
             #[cfg(test)]
             public_app: served_public_app,
             #[cfg(test)]
@@ -465,6 +462,7 @@ async fn run_service(
 
     drain_lifecycle(
         state,
+        mcp,
         coordinator,
         servers,
         reload_signal_task,
@@ -557,8 +555,10 @@ impl Servers {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn drain_lifecycle(
     state: Arc<ReloadableState>,
+    mcp: crate::mcp::Endpoint,
     coordinator: ShutdownCoordinator,
     mut servers: Servers,
     reload_signal_task: JoinHandle<()>,
@@ -639,6 +639,20 @@ async fn drain_lifecycle(
             terminalStreamsCanceled = canceled,
         );
         servers.cut_off().await;
+    }
+    // HTTP MCP sessions outlive the connections that use them, and each one
+    // holds the broker state. Once the listeners have ended, no request can
+    // reach a session and no response can be delivered through one, so end
+    // them. Closing a session never cancels an admitted operation; the
+    // operation drain still finalizes those.
+    let session_budget = remaining_shutdown_time(&coordinator, shutdown_timeout)
+        .unwrap_or_default()
+        .max(SHUTDOWN_DRAIN_FLOOR);
+    if tokio::time::timeout(session_budget, mcp.close_sessions())
+        .await
+        .is_err()
+    {
+        tracing::warn!(event = "mcp_session_shutdown_unfinished");
     }
 
     let lifecycle_timed_out = drain_reload_tasks_until_deadline(
@@ -762,8 +776,8 @@ async fn drain_lifecycle_handle(
     }
 }
 
-/// The least time the command and audit drains get once the shutdown budget
-/// is spent.
+/// The least time the MCP session, command and audit drains get once the
+/// shutdown budget is spent.
 const SHUTDOWN_DRAIN_FLOOR: Duration = Duration::from_millis(100);
 
 fn remaining_shutdown_time(
@@ -1413,7 +1427,7 @@ path="{}"
         )
         .await
         .unwrap();
-        let app = public_router(state.clone()).0;
+        let (app, mcp) = public_router(state.clone());
         let (reading_body, body_started) = tokio::sync::oneshot::channel();
         let (release_body, resume_body) = tokio::sync::oneshot::channel();
         let body = Body::from_stream(futures_util::stream::once(async move {
@@ -1458,6 +1472,7 @@ path="{}"
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         let mut drain = Box::pin(drain_lifecycle(
             state,
+            mcp,
             coordinator,
             servers,
             tokio::spawn(async {}),
@@ -1587,8 +1602,10 @@ path="{}"
         let reload_signal_task = tokio::spawn(async {});
         let shutdown_signal_task = tokio::spawn(async {});
 
+        let mcp = crate::mcp::Endpoint::new(state.clone());
         let error = drain_lifecycle(
             state,
+            mcp,
             coordinator,
             servers,
             reload_signal_task,
@@ -1667,8 +1684,10 @@ path="{}"
     ) -> DrainReport {
         let coordinator = ShutdownCoordinator::new();
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
+        let mcp = crate::mcp::Endpoint::new(state.clone());
         drain_lifecycle(
             state,
+            mcp,
             coordinator,
             Servers::new(),
             tokio::spawn(async {}),

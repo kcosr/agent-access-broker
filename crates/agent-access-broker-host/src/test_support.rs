@@ -459,7 +459,6 @@ impl IsolatedBroker {
             shutdown: Mutex::new(Some(shutdown)),
             reload,
             state: Some(listening.state),
-            mcp: Some(listening.mcp),
             task: Some(task),
             #[cfg(test)]
             public_app: listening.public_app,
@@ -503,7 +502,6 @@ pub struct RunningBroker {
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     reload: mpsc::UnboundedSender<ReloadRequest>,
     state: Option<Arc<ReloadableState>>,
-    mcp: Option<crate::mcp::Endpoint>,
     task: Option<tokio::task::JoinHandle<anyhow::Result<DrainReport>>>,
     #[cfg(test)]
     public_app: axum::Router,
@@ -569,13 +567,11 @@ impl RunningBroker {
         }
     }
 
-    /// Waits for a requested shutdown to drain listeners, operations,
-    /// command processes and audit, then for every state lock the
+    /// Waits for a requested shutdown to drain listeners, HTTP MCP sessions,
+    /// operations, command processes and audit, then for every state lock the
     /// application acquired to be released, so another broker may start on
     /// the same state. Fails with the serve error, or when a lock stays held
-    /// past the shutdown timeout plus a short grace period. HTTP MCP
-    /// sessions still open after the drain are closed, as process exit
-    /// would end them.
+    /// past the shutdown timeout plus a short grace period.
     pub async fn join(mut self) -> anyhow::Result<ShutdownReport> {
         let task = self.task.take().expect("a running broker has a task");
         let drained = task
@@ -584,11 +580,6 @@ impl RunningBroker {
         let state = self.state.take().expect("a running broker has state");
         let locks = state_lock_sets(&state);
         drop(state);
-        // Shutdown leaves HTTP MCP sessions open, each holding the broker
-        // state, until process exit ends them; end them here instead.
-        if let Some(mcp) = self.mcp.take() {
-            mcp.close_sessions().await;
-        }
         #[cfg(test)]
         {
             self.public_app = axum::Router::new();

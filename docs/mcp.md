@@ -182,7 +182,8 @@ and OAuth login are not accepted. Sessions bind to the exact credential and exec
 context, so replacing a token requires a fresh initialization. Permission checks
 are repeated for tool calls. Restart and changes to MCP, identity, execution
 context, token/store, or trusted-proxy configuration invalidate sessions; refresh
-the client connection. Ordinary policy and provider reloads preserve sessions and
+the client connection. Graceful shutdown delivers in-flight responses, then
+closes every open session. Ordinary policy and provider reloads preserve sessions and
 recheck current authority on each call. Missing or disallowed `Origin` values are
 handled as described in configuration; the public Host must match `public_url`.
 
@@ -197,8 +198,9 @@ their schema constraints. This exposes those inputs to the calling model and
 client history. Use local stdio secret sources when that exposure is unsuitable.
 Sensitive output markers remain advisory in both transports.
 
-Explicit cancellation before provider dispatch prevents execution. Session closure
-and reload do not synthesize explicit cancellation for already admitted work.
+Explicit cancellation before provider dispatch prevents execution. Session closure,
+including at shutdown, and reload do not synthesize explicit cancellation for
+already admitted work.
 Once dispatched, execution and audit remain owned by the broker until completion or the bounded
 deadline; losing the HTTP response does not prove a mutation failed. An oversized
 result returns `mcp_response_too_large` with correlation IDs, broker outcome,

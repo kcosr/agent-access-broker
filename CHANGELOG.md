@@ -839,6 +839,15 @@ All notable changes to this project are documented in this file.
   so these documented profiles could not be used. Gateway mode still requires
   every configured service and per-user credential to resolve to
   `bearer_token`.
+- An HTTP MCP response that a client has not read, including a `202`
+  notification or `DELETE` response, no longer keeps the runtime generation
+  that admitted it, or that generation's state locks, alive. It keeps only
+  its MCP capacity lease and delivery deadline.
+- Graceful shutdown now closes HTTP MCP sessions still open once the
+  listeners have drained, after in-flight responses are delivered.
+  Previously each open session kept the broker state, including its state
+  locks, until the process exited. Closing a session still never cancels an
+  admitted operation.
 
 ### Removed
 

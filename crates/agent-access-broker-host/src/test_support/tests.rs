@@ -495,64 +495,210 @@ async fn host_tests_reach_the_served_routers_and_state_in_process() {
     broker.join().await.unwrap();
 }
 
+/// Holds each fake call until the test releases it.
+struct GatedFake {
+    entered: Arc<tokio::sync::Semaphore>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait]
+impl Provider for GatedFake {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .resolve_scopes(request)
+            .await
+    }
+
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        self.entered.add_permits(1);
+        self.release.acquire().await.unwrap().forget();
+        agent_access_fake::FakeProvider.invoke(request).await
+    }
+}
+
+async fn mcp_post(
+    client: &reqwest::Client,
+    url: &str,
+    session: Option<&str>,
+    message: Value,
+) -> reqwest::Response {
+    let mut request = client
+        .post(url)
+        .bearer_auth("synthetic-mcp-token")
+        .header("accept", "application/json, text/event-stream")
+        .json(&message);
+    if let Some(session) = session {
+        request = request
+            .header("mcp-session-id", session)
+            .header("mcp-protocol-version", "2025-11-25");
+    }
+    request.send().await.unwrap()
+}
+
 #[tokio::test]
-async fn join_ends_http_mcp_sessions_left_open() {
-    let application = IsolatedBroker::new(composition(), IDENTITY).unwrap();
+async fn shutdown_delivers_in_flight_mcp_results_then_ends_sessions_left_open() {
+    let application = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .shutdown_timeout(Duration::from_secs(5));
     let token = application
         .directory()
         .secret_file("mcp-token", "synthetic-mcp-token")
         .unwrap();
     // HTTP MCP needs Bearer identity rather than anonymous callers.
-    let document = fake_document(application.directory(), "TEST").replace(
-        "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n",
-        &format!(
-            "[identity]\nmode = \"optional\"\nauthority = \"toml\"\n\
-             [[identity.sources]]\nname = \"mcp\"\ntype = \"static_principals\"\n\
-             header = \"Authorization\"\nscheme = \"Bearer\"\n\
-             [[identity.sources.principals]]\nprincipal = \"mcp-user\"\ntoken_refs = [{}]\n",
-            quoted(&PathBuf::from(format!("file:{}", token.display())))
-        ),
-    );
+    let document = fake_document(application.directory(), "TEST")
+        .replace(
+            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n",
+            &format!(
+                "[identity]\nmode = \"optional\"\nauthority = \"toml\"\n\
+                 [[identity.sources]]\nname = \"mcp\"\ntype = \"static_principals\"\n\
+                 header = \"Authorization\"\nscheme = \"Bearer\"\n\
+                 [[identity.sources.principals]]\nprincipal = \"mcp-user\"\ntoken_refs = [{}]\n",
+                quoted(&PathBuf::from(format!("file:{}", token.display())))
+            ),
+        )
+        .replace(
+            "subjects = [\"group:anonymous\"]",
+            "subjects = [\"group:anonymous\", \"user:mcp-user\"]",
+        );
     let mcp_url = format!("{}/mcp", application.public_url());
     let document = format!(
         "{document}\n[mcp]\nenabled = true\npublic_url = {}\n",
         serde_json::to_string(&mcp_url).unwrap()
     );
+    let entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let fixture = ProviderFixture::factory({
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        move |context| {
+            ServiceProvider::new(
+                context.descriptor().clone(),
+                Arc::new(GatedFake {
+                    entered: Arc::clone(&entered),
+                    release: Arc::clone(&release),
+                }),
+            )
+        }
+    });
     let broker = application
         .config_document(document)
+        .provider_fixture("fake", fixture)
         .start()
         .await
         .unwrap_or_else(|error| panic!("{error:#}"));
-    let initialized = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .post(&mcp_url)
-        .header("x-agent-access-request-id", "join-open-session")
-        .bearer_auth("synthetic-mcp-token")
-        .header("accept", "application/json, text/event-stream")
-        .json(&json!({
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let initialized = mcp_post(
+        &client,
+        &mcp_url,
+        None,
+        json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {"name": "join-test", "version": "1"}
+                "clientInfo": {"name": "shutdown-test", "version": "1"}
             }
-        }))
-        .send()
-        .await
-        .unwrap();
+        }),
+    )
+    .await;
     assert!(initialized.status().is_success(), "{initialized:?}");
-    assert!(initialized.headers().contains_key("mcp-session-id"));
-    drop(initialized);
-    broker.shutdown();
-    let report = tokio::time::timeout(Duration::from_secs(10), broker.join())
+    let session = initialized.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    initialized.bytes().await.unwrap();
+    let notified = mcp_post(
+        &client,
+        &mcp_url,
+        Some(&session),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
+    assert_eq!(notified.status(), 202);
+    let call = tokio::spawn({
+        let (client, url, session) = (client.clone(), mcp_url.clone(), session.clone());
+        async move {
+            let response = mcp_post(
+                &client,
+                &url,
+                Some(&session),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": agent_access_core::mcp::tool_name("fake", "echo"),
+                        "arguments": {"inputs": {"project": "TEST", "message": "in flight"}}
+                    }
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), 200);
+            response.text().await.unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.acquire())
         .await
-        .expect("an open MCP session must not hold the state locks")
+        .expect("the MCP call did not reach its provider")
+        .unwrap()
+        .forget();
+
+    // The listener closes once the drain begins; only then does the provider
+    // finish, so the result is delivered through the still-open session.
+    broker.shutdown();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while tokio::net::TcpStream::connect(broker.public_addr())
+            .await
+            .is_ok()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the public listener stays open after shutdown");
+    release.add_permits(1);
+    let events = tokio::time::timeout(Duration::from_secs(10), call)
+        .await
+        .expect("the in-flight MCP result was not delivered")
         .unwrap();
+    let result = events
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        .find(|message| message["id"] == 2)
+        .unwrap_or_else(|| panic!("no result in {events}"));
+    assert_eq!(
+        result["result"]["structuredContent"]["decision"], "allow",
+        "{result}"
+    );
+
+    // The drain ends the session left open, which held the broker state, so
+    // the state locks are released and a restart on the same state starts.
+    let directory = broker.directory().clone();
+    let config_path = broker.config_path().to_path_buf();
+    let report = tokio::time::timeout(Duration::from_secs(20), broker.join())
+        .await
+        .expect("join outlived its lock-release budget")
+        .unwrap_or_else(|error| panic!("{error:#}"));
     assert!(report.is_clean(), "{report:?}");
+    let restarted = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .in_directory(directory)
+        .config_path(config_path)
+        .start()
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    assert_eq!(
+        echo(&restarted, "mcp-shutdown-restarted", "TEST").await.0,
+        200
+    );
+    restarted.shutdown();
+    assert!(restarted.join().await.unwrap().is_clean());
 }
 
 #[tokio::test]

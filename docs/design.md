@@ -281,8 +281,8 @@ provider is built for it), then binds the listeners and starts serving. A
 [reload](#dynamic-config-reload) validates a candidate configuration and builds
 a new generation within the same composition; operations keep the generation
 that admitted them. Changing what is linked requires a new build and a restart.
-[Shutdown](#process-shutdown) drains listeners, operations, command-import
-processes and audit within a bounded budget.
+[Shutdown](#process-shutdown) drains listeners, closes HTTP MCP sessions, then
+drains operations, command-import processes and audit within a bounded budget.
 
 ### Core vs provider responsibilities
 
@@ -2145,6 +2145,15 @@ permit, reporting those that have not. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.
+
+HTTP MCP sessions outlive the connections that use them, and each holds the
+broker state. Once the listeners have ended, so in-flight MCP responses have been
+delivered or cut off, shutdown closes every session still open within the
+remaining budget (at least 100 ms), before it waits for operations; a close that
+does not finish is logged as `mcp_session_shutdown_unfinished`. Closing a
+session never cancels an admitted operation. An MCP response body holds only its
+capacity lease and delivery deadline, never a runtime generation, so a response
+a client has not read cannot keep that generation or its state locks alive.
 
 Startup rejects a zero shutdown timeout or a timeout above 300 seconds, and
 admin config status reports the active `shutdownTimeoutMs`.

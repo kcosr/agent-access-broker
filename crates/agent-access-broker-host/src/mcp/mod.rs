@@ -166,9 +166,9 @@ struct ProtocolPermits {
 }
 tokio::task_local! { static CURRENT_REQUEST: Admitted; }
 impl Endpoint {
-    /// Closes every open session, releasing the broker state each holds, as
-    /// process exit does after `serve` returns.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Closes every open session. A session's protocol worker holds the
+    /// broker state until it ends, so the shutdown drain closes them once the
+    /// listeners have ended. Closing never cancels admitted operations.
     pub(crate) async fn close_sessions(&self) {
         self.0.sessions.close_all().await;
     }
@@ -1167,48 +1167,58 @@ pub(crate) async fn handle(
     response_parts
         .headers
         .insert("cache-control", HeaderValue::from_static("no-store"));
-    // A separate delivery lease keeps queued/stalled responses bounded after
-    // execution permits have been released by the operation owner.
+    let delivery = Delivery {
+        _lease: admitted._permits.clone(),
+        result_ready: admitted.delivery_started.clone(),
+        opened: Instant::now(),
+        sent: 0,
+    };
+    let delivery_timeout = Duration::from_millis(config.protocol_timeout_ms);
+    let pending_timeout = Duration::from_millis(
+        config
+            .operation_timeout_ms
+            .saturating_add(config.protocol_timeout_ms.saturating_mul(3)),
+    );
+    let max_response_bytes = config.max_response_bytes;
     let stream = futures_util::stream::unfold(
-        (body, admitted, 0usize, Instant::now()),
-        move |(mut body, admitted, total, opened)| {
-            let config = config.clone();
-            async move {
-                let completed = *admitted.delivery_started.lock().unwrap();
-                let deadline = completed
-                    .map(|at| at + Duration::from_millis(config.protocol_timeout_ms))
-                    .unwrap_or(
-                        opened
-                            + Duration::from_millis(
-                                config
-                                    .operation_timeout_ms
-                                    .saturating_add(config.protocol_timeout_ms.saturating_mul(3)),
-                            ),
-                    );
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    return None;
-                }
-                let frame = tokio::time::timeout(left.min(idle), body.frame()).await;
-                match frame {
-                    Ok(Some(Ok(frame))) => match frame.into_data() {
-                        Ok(data)
-                            if total.saturating_add(data.len()) <= config.max_response_bytes =>
-                        {
-                            let len = data.len();
-                            Some((
-                                Ok::<_, std::io::Error>(data),
-                                (body, admitted, total + len, opened),
-                            ))
-                        }
-                        _ => None,
-                    },
+        (body, delivery),
+        move |(mut body, mut delivery)| async move {
+            let deadline = match *delivery.result_ready.lock().unwrap() {
+                Some(ready) => ready + delivery_timeout,
+                None => delivery.opened + pending_timeout,
+            };
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            let frame = tokio::time::timeout(left.min(idle), body.frame()).await;
+            match frame {
+                Ok(Some(Ok(frame))) => match frame.into_data() {
+                    Ok(data) if delivery.sent.saturating_add(data.len()) <= max_response_bytes => {
+                        delivery.sent += data.len();
+                        Some((Ok::<_, std::io::Error>(data), (body, delivery)))
+                    }
                     _ => None,
-                }
+                },
+                _ => None,
             }
         },
     );
     Response::from_parts(response_parts, Body::from_stream(stream))
+}
+
+/// What delivering one response body needs, and nothing else: no runtime
+/// snapshot, so an unread or stalled response cannot keep a generation or
+/// its state locks alive. The operation owner holds its own admission and
+/// finalizes audit before its result is ready.
+struct Delivery {
+    /// The MCP capacity lease, which keeps queued or stalled responses
+    /// bounded after the operation owner has released its execution permits.
+    _lease: Arc<ProtocolPermits>,
+    /// When the result was ready; the delivery deadline runs from then.
+    result_ready: Arc<Mutex<Option<Instant>>>,
+    opened: Instant,
+    sent: usize,
 }
 enum BodyReadFailure {
     Response(Response),
