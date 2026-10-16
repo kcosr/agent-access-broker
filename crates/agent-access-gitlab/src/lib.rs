@@ -7223,12 +7223,16 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
     actions.extend(PROVISIONING_ACTIONS.iter().map(|action| {
         let schema = provisioning::provisioning_schema(action, config);
         if issues_token(action) {
+            // GitLab documents project token creation and rotation as
+            // personal-access-token only; service-account tokens are
+            // treated alike. OAuth access never reaches them.
             gitlab_action(
                 action,
                 "Manage a GitLab project bot credential; returns a newly issued secret in result.issuedToken",
                 schema,
             )
             .sensitive_output("/result/issuedToken")
+            .token_only()
         } else if matches!(*action, "project.access_token.list" | "project.access_token.view" | "service_account.list" | "service_account.view" | "service_account.token.list") {
             gitlab_read_action(
                 action,

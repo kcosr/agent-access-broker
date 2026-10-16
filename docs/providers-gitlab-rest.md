@@ -1330,3 +1330,12 @@ A later request that fails after a write applied, such as a readback or the
 Project access-token and project service-account provisioning is separately
 grantable and disabled by default. The complete action, policy, token delivery,
 version, and lifecycle contract is in [GitLab bot provisioning](gitlab-bot-provisioning.md).
+
+`project.access_token.create`, `project.access_token.rotate`,
+`service_account.token.create` and `service_account.token.rotate` are
+[token-only](provider-sdk.md#token-only-actions). GitLab documents project
+access-token creation and rotation as requiring a personal access token, and
+the Broker treats service-account tokens the same way. They run with the service
+credential or a principal's stored GitLab token, never with delegated (OAuth)
+access: where a principal's winning grant is `per_user` and their connection
+selects OAuth, the Broker hides and denies them rather than using a lower grant.

@@ -754,7 +754,9 @@ All notable changes to this project are documented in this file.
   a winning `per_user` grant after a shared pre-scope lookup is denied by final
   policy as `scope_unresolved`. The command-enforced planner omits such grants
   like any unsupported mode. Imported descriptors never carry the marker. The
-  conformance backend's `item.upload` uses it.
+  conformance backend's `item.upload` uses it. GitLab's
+  `project.access_token.create`/`rotate` and
+  `service_account.token.create`/`rotate` are token-only.
 
 ### Changed
 

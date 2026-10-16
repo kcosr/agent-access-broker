@@ -42,6 +42,15 @@ the separate read-only lookup credential to resolve the canonical repository;
 per-user-only paths use the principal's selected credential. The execution
 credential performs provisioning requests and must resolve that same project ID.
 
+Token creation and rotation (`project.access_token.create` and `rotate`,
+`service_account.token.create` and `rotate`) are
+[token-only](provider-sdk.md#token-only-actions). GitLab documents project
+access-token creation and rotation as requiring a personal access token, and the
+Broker treats service-account tokens the same way. They run with the service
+credential or the principal's stored GitLab token, never with delegated (OAuth)
+access: where a principal's winning grant is `per_user` and their connection
+selects OAuth, the Broker hides and denies them rather than using a lower grant.
+
 Example grant for TOML policy authority, referencing an existing project resource.
 For managed policy, create the equivalent grant in the portal or management CLI;
 inline TOML grants are rejected. Include the intended configured execution contexts:

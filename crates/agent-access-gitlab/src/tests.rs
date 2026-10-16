@@ -1952,6 +1952,15 @@ fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
         assert!(descriptor.action(action).is_some(), "{action}");
         assert_eq!(sensitive.contains(action), issues_token(action), "{action}");
     }
+    // Issuing and rotating tokens needs a token upstream; no other action
+    // is token-only.
+    let token_only = descriptor
+        .actions
+        .iter()
+        .filter(|action| action.token_only)
+        .map(|action| action.action.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(token_only, sensitive);
 
     let raw_downloads = [
         "file.raw.download",
