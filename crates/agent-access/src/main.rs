@@ -1450,8 +1450,10 @@ fn admin_token_action_path(token_id: &str, action: BrokerTokenAction) -> String 
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum AdminCredentialsCommand {
-    /// List stored credentials, active and retained, with their stored service and name.
-    List {
+    /// List a principal's credential connections and retained stored credentials.
+    List { principal: String },
+    /// List stored credentials by ID, active and retained, with their stored service and name.
+    ListStored {
         #[arg(long)]
         principal: Option<String>,
     },
@@ -12902,6 +12904,17 @@ async fn run_admin_credentials_command(
 ) -> Result<()> {
     match command {
         AdminCredentialsCommand::List { principal } => {
+            run_broker_get(
+                ctx,
+                &format!(
+                    "/v1/admin/principals/{}/credentials",
+                    encoded_path_segment(principal)
+                ),
+                ResponseShape::Object,
+            )
+            .await
+        }
+        AdminCredentialsCommand::ListStored { principal } => {
             let path = match principal {
                 Some(principal) => {
                     let query = form_urlencoded::Serializer::new(String::new())

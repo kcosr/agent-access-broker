@@ -785,16 +785,21 @@ the same effective group.
   token-boundary JSON file flag.
   Pause and resume likewise accept only `agent_invoke`; authentication,
   management, and browser-session backing tokens cannot be paused.
-- `admin credentials list [--principal <PRINCIPAL>] | targets <principal> | inspect <principal> <connection> | put <principal> <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>] | delete <principal> <connection> | verify <principal> <connection> [--service <SERVICE>] [--repository <REPO>] | inspect-by-id <credential-id> | delete-by-id <credential-id> | rewrap --from-key <ID> --to-key <ID>`.
+- `admin credentials list <principal> | list-stored [--principal <PRINCIPAL>] | targets <principal> | inspect <principal> <connection> | put <principal> <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>] | delete <principal> <connection> | verify <principal> <connection> [--service <SERVICE>] [--repository <REPO>] | inspect-by-id <credential-id> | delete-by-id <credential-id> | rewrap --from-key <ID> --to-key <ID>`.
   `admin credentials put` mirrors the self-service `credentials put` field-source
   set and `--verify` follow-up, with a leading `<principal>` positional, and uses
   the `/v1/admin/principals/{principal}/credentials/connections/{connection}`
   routes. These apply only when the connection selects a token for the
   principal, such as a service account's administrator-provisioned token.
   Verification probes as the principal, so an administrator needs no invocation
-  grants of its own. `list` returns every stored row, active and retained, with
-  its stored `service` and `name`; `inspect-by-id` and `delete-by-id` use
-  `/v1/admin/credentials/{credential_id}` for cleanup of any row.
+  grants of its own. `list <principal>` uses
+  `GET /v1/admin/principals/{principal}/credentials`, the principal's
+  connections and retained rows in the shape of its own `credentials list`; an
+  active token whose owner lost every grant stays listed with no entitled
+  consumers. `list-stored` uses `GET /v1/admin/credentials`, every stored row,
+  active and retained, with its stored `service` and `name`; `inspect-by-id`
+  and `delete-by-id` use `/v1/admin/credentials/{credential_id}` for cleanup of
+  any row.
 - `admin policy status | catalog | grants list [--subject ...] [--service ...] [--execution-context ...] [--status ...] | grants inspect <grant_ref> | grants create [--grant-id <ID>] --subject <SUBJECT> [--subject <SUBJECT> ...] --service <SERVICE> --action <ACTION> ... --execution-context <CONTEXT> [--execution-context <CONTEXT> ...] --credential-mode <MODE> [--resource-id <ID> ...] [--resource-group-id <ID> ...] [--resources-json <JSON> | --resources-file <PATH>] | grants update <grant_ref> --expected-version <N> [field flags] | grants validate [--grant-id <ID>] [--expected-version <N>] [field flags] | grants subjects add <grant_ref> --subject <SUBJECT> --expected-version <N> | grants subjects remove <grant_ref> --subject <SUBJECT> --expected-version <N> [--last-subject-behavior reject|disable_grant] | grants enable|disable|delete <grant_ref> --expected-version <N> | grants export`.
   Policy grant create requires one or more repeatable `--subject` flags. Update
   and validate accept repeated `--subject` flags as a full replacement list when

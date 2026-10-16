@@ -336,7 +336,11 @@ All notable changes to this project are documented in this file.
   /v1/credentials/connections/{connection}` with `/verify` and
   `/input-schema` replace the `{service}/{name}` routes; the administrator
   routes move to `/v1/admin/principals/{principal}/credentials/connections/{connection}`
-  and apply only when the connection selects a token for that principal.
+  and apply only when the connection selects a token for that principal, and
+  `GET /v1/admin/principals/{principal}/credentials` lists a principal's
+  connections and retained rows in the personal list's shape. A classless
+  self-service caller needs its managed principal row, whose kind selects each
+  connection's method.
   Verification takes an optional `service` beside `repository`, probes as the
   credential owner and returns `probeService`. `DELETE
   /v1/credentials/retained/{credentialId}` removes a retained row, and
@@ -346,14 +350,19 @@ All notable changes to this project are documented in this file.
   discovery), `DELETE /v1/oauth/connections/{registration}` disconnects, and
   `GET /v1/oauth/connections` returns one row per registration with its
   `consumers` and `otherConsumers` instead of `service` and
-  `serviceDisplayName`. Management audit targets name `{principal,
-  connection}`, `{principal, credentialId}` for retained-row deletes, and
-  `{registration}` for OAuth. The CLI follows: `credentials
+  `serviceDisplayName`. Consent is admitted for the registration as a whole,
+  through any consuming service the user holds a `per_user` grant on, and
+  consent flows left pending by an earlier version are discarded. Management
+  audit targets name `{principal, connection}`, `{principal, credentialId}` for
+  retained-row deletes, and `{registration}` for OAuth; connection records list
+  the consuming services in `providerAudit.management.targetServices`, and only a
+  connection with a single consumer sets `targetService`. The CLI follows: `credentials
   inspect|put|delete|verify <connection>` drop the credential-name positional,
   `credentials targets` and `credentials delete-retained <credential-id>` are
   added, verification takes `--service` (`--verify-service` on `put`), and
-  `admin credentials` adds `targets`, `list --principal`, `inspect-by-id` and
-  `delete-by-id`. The portal's Credentials list has one row per connection and
+  `admin credentials list <principal>` lists a principal's connections, while
+  `list-stored [--principal]`, `targets`, `inspect-by-id` and `delete-by-id`
+  are added. The portal's Credentials list has one row per connection and
   per OAuth registration, merging the separate Connected accounts section, and
   lists retained rows for deletion.
 
