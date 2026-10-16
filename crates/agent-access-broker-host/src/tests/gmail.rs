@@ -65,7 +65,7 @@ async fn gmail_browser_connect_read_refresh_disconnect_and_denied_effects() {
     let response = fixture
         .browser(
             Method::DELETE,
-            "/v1/oauth/connections/gmail",
+            "/v1/oauth/connections/google",
             "disconnect",
             None,
         )
@@ -123,7 +123,7 @@ async fn gmail_callback_validates_optional_issuer_and_rejects_duplicates_before_
             Method::POST,
             "/v1/oauth/connect",
             "begin",
-            Some(json!({"service":"gmail","intent":"connect"})),
+            Some(json!({"registration": "google","intent":"connect"})),
         )
         .await;
     let start = body_json(response).await;
@@ -261,7 +261,7 @@ async fn gmail_partial_consent_missing_refresh_and_callback_replay_fail_closed()
                 Method::POST,
                 "/v1/oauth/connect",
                 "start",
-                Some(json!({"service":"gmail","intent":"connect"})),
+                Some(json!({"registration": "google","intent":"connect"})),
             )
             .await;
         let start = body_json(start).await;
@@ -553,7 +553,7 @@ async fn gmail_search_continuations_survive_refresh_but_not_reconnect() {
             Method::POST,
             "/v1/oauth/connect",
             "reconnect",
-            Some(json!({"service":"gmail","intent":"reconnect"})),
+            Some(json!({"registration": "google","intent":"reconnect"})),
         )
         .await;
     let start = body_json(start).await;

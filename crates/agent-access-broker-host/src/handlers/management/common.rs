@@ -8,7 +8,7 @@ use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     AgentInvokeTokenCaveats, AgentTokenOptions, AuditRecord, BrokerConfig, BrokerRuntime,
-    BrokerTokenClass, CredentialInputSchema, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS,
+    BrokerTokenClass, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS,
     EffectiveServicePolicyManagementAuthority, ManagedManagementAuthority, PolicyReadScope,
     PolicyWriteScope, PrincipalRole, ResourceSelection, RuntimeError, SourceContext,
     broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
@@ -152,20 +152,6 @@ where
 pub(super) struct AgentTokenListQuery {
     pub(super) include_revoked: bool,
     pub(super) include_expired: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct CredentialTarget {
-    pub(super) service: String,
-    pub(super) display_name: String,
-    /// Inputs verifying this credential needs besides the credential itself,
-    /// such as `repository` for Git. Empty when verification needs none.
-    pub(super) credential_verification_inputs: Vec<String>,
-    pub(super) credential_name: String,
-    pub(super) profile: String,
-    pub(super) credential_kind: String,
-    pub(super) input_schema: CredentialInputSchema,
 }
 
 fn self_service_max_agent_token_ttl_seconds(config: &BrokerConfig) -> u64 {
@@ -494,54 +480,6 @@ pub(super) fn agent_token_list_query(
         }
     }
     Ok(query)
-}
-
-pub(super) fn visible_per_user_services(
-    runtime: &BrokerRuntime,
-    identity: &agent_access_core::IdentityContext,
-) -> BTreeSet<String> {
-    runtime
-        .visible_services_for_management(identity)
-        .into_iter()
-        .filter(|service| runtime.has_any_per_user_policy_for_service(identity, &service.service))
-        .map(|service| service.service)
-        .collect()
-}
-
-pub(super) fn credential_targets(
-    runtime: &BrokerRuntime,
-    allowed_services: Option<&BTreeSet<String>>,
-) -> Vec<CredentialTarget> {
-    runtime
-        .effective_credentials()
-        .per_user
-        .iter()
-        .filter_map(|(service, credential)| {
-            if let Some(allowed_services) = allowed_services
-                && !allowed_services.contains(service)
-            {
-                return None;
-            }
-            if credential.kind != "connection" {
-                return None;
-            }
-            let (profile, credential_kind) = runtime.personal_token_profile(service)?;
-            let credential_name = agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string();
-            let profile = profile.to_string();
-            let input_schema =
-                runtime.credential_input_schema(service, &profile, credential_kind)?;
-            let descriptor = runtime.service_descriptor(service)?;
-            Some(CredentialTarget {
-                service: service.clone(),
-                display_name: descriptor.display_name.clone(),
-                credential_verification_inputs: descriptor.credential_verification_inputs(),
-                credential_name,
-                profile,
-                credential_kind: credential_kind.to_string(),
-                input_schema,
-            })
-        })
-        .collect()
 }
 
 pub(super) async fn run_managed_store_blocking<T, F>(
@@ -1252,7 +1190,6 @@ pub(crate) const READ_ONLY_POST_CATALOG_OPERATIONS: &[&str] = &[
     "admin.principals.identity_token.reveal",
     "admin.policy.resources.attribute.reveal",
     "credentials.verify",
-    "admin.credentials.verify",
     "admin.principals.credentials.verify",
 ];
 
@@ -2249,52 +2186,6 @@ mod tests {
             }],
             mcp: None,
         }
-    }
-
-    #[test]
-    fn credential_target_serializes_service_metadata_in_camel_case() {
-        let target = |credential_verification_inputs: Vec<String>| CredentialTarget {
-            service: "gitlab_git".to_string(),
-            display_name: "GitLab Git".to_string(),
-            credential_verification_inputs,
-            credential_name: "default".to_string(),
-            profile: "git-bearer-token".to_string(),
-            credential_kind: "bearer_token".to_string(),
-            input_schema: agent_access_core::CredentialInputSchema {
-                service: "gitlab_git".to_string(),
-                profile: "git-bearer-token".to_string(),
-                credential_kind: "bearer_token".to_string(),
-                fields: vec![],
-            },
-        };
-        let with_inputs = serde_json::to_value(target(vec!["repository".to_string()])).unwrap();
-        assert_eq!(with_inputs["displayName"], "GitLab Git");
-        assert_eq!(
-            with_inputs["credentialVerificationInputs"],
-            json!(["repository"])
-        );
-        // Always serialized, even when verification needs no input.
-        let without_inputs = serde_json::to_value(target(vec![])).unwrap();
-        assert_eq!(without_inputs["credentialVerificationInputs"], json!([]));
-        let mut keys = without_inputs
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "credentialKind",
-                "credentialName",
-                "credentialVerificationInputs",
-                "displayName",
-                "inputSchema",
-                "profile",
-                "service"
-            ]
-        );
     }
 
     #[test]

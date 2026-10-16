@@ -253,17 +253,23 @@ fn assert_token_option_metadata(options: &Value) {
 
 fn assert_credential_target_metadata(targets: &Value) {
     assert_eq!(targets.as_array().unwrap().len(), 2, "{targets}");
-    let git = entry(targets, "service", "gitlab_git");
+    let git = entry(targets, "connection", "gitlab_git");
     assert_eq!(git["displayName"], "GitLab Git");
-    assert_eq!(git["credentialVerificationInputs"], json!(["repository"]));
-    // Existing fields are unchanged.
-    assert_eq!(git["credentialName"], "default");
+    assert_eq!(
+        git["consumers"],
+        json!([{"service": "gitlab_git", "displayName": "GitLab Git",
+            "credentialVerificationInputs": ["repository"]}])
+    );
+    assert_eq!(git["otherConsumers"], 0);
     assert_eq!(git["profile"], "git-bearer-token");
-    let jira = entry(targets, "service", "jira");
+    assert_eq!(git["inputSchema"]["connection"], "gitlab_git");
+    let jira = entry(targets, "connection", "jira");
     assert_eq!(jira["displayName"], "Jira");
     // Always serialized, empty when verification needs no input.
-    assert_eq!(jira["credentialVerificationInputs"], json!([]));
-    assert_eq!(jira["credentialName"], "default");
+    assert_eq!(
+        jira["consumers"][0]["credentialVerificationInputs"],
+        json!([])
+    );
     assert_eq!(jira["profile"], "jira-cloud-api-token");
 }
 

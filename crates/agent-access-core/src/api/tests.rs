@@ -905,7 +905,7 @@ fn generated_http_send_schema_exposes_secret_sources_only_for_sensitive_routes()
         ),
         body_route(
             "PUT",
-            "/v1/credentials/{service}/{name}",
+            "/v1/credentials/connections/{connection}",
             "credentials.put",
             RouteAccess::UserManagement,
             ResponseKind::ManagementEnvelope,
@@ -924,7 +924,7 @@ fn generated_http_send_schema_exposes_secret_sources_only_for_sensitive_routes()
     let sensitive = variants
         .iter()
         .find(|variant| {
-            variant["properties"]["route"]["const"] == "/v1/credentials/{service}/{name}"
+            variant["properties"]["route"]["const"] == "/v1/credentials/connections/{connection}"
         })
         .unwrap();
     assert!(sensitive["properties"].get("secretSources").is_some());

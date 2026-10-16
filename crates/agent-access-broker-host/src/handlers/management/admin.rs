@@ -2,18 +2,19 @@ use crate::handlers::management::common::{
     AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
     admin_agent_token_issue_expires_at, agent_token_boundary_audit, agent_token_issue_scopes,
     agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
-    credential_targets, default_token_ttl_seconds, management_audit_unavailable_response,
+    default_token_ttl_seconds, management_audit_unavailable_response,
     management_committed_write_audit_completion, management_context,
     management_context_error_response, management_pre_audited_success_response,
     management_response, management_store_call, management_store_error_response,
     management_success_envelope, management_success_response, management_token_store_call,
     management_write_audit_preflight, parse_and_validate_agent_token_issue_scopes,
-    timestamp_after_seconds_checked, visible_per_user_services,
+    timestamp_after_seconds_checked,
 };
+use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
-    PrincipalCredentialTarget, credential_input_schema_for_principal, credential_target,
-    credential_verification_input_from_body, delete_credential_for_principal,
-    get_credential_for_principal, put_credential_for_principal, verify_credential_for_principal,
+    ConnectionCredentialRequest, CredentialAccess, connection_input_schema, connection_verify_body,
+    delete_connection_credential, get_connection_credential, put_connection_credential,
+    verify_connection_credential,
 };
 use crate::state::AppState;
 use agent_access_core::{
@@ -1620,10 +1621,20 @@ pub(crate) async fn admin_principal_credential_targets(
             return management_store_error_response(&context, operation, target, error).await;
         }
     };
-    let identity =
-        managed_principal_identity(&context.snapshot.runtime, principal_record, policy_groups);
-    let allowed_services = visible_per_user_services(&context.snapshot.runtime, &identity);
-    let targets = credential_targets(&context.snapshot.runtime, Some(&allowed_services));
+    let runtime = &context.snapshot.runtime;
+    let identity = managed_principal_identity(runtime, principal_record, policy_groups);
+    // The principal's setup targets: connections selecting the token method
+    // for its kind, with a consumer it holds a per_user grant on.
+    let targets = connections::connection_ids(runtime)
+        .into_iter()
+        .filter_map(|connection| {
+            let entitled = connections::entitled_consumers(runtime, &identity, &connection);
+            if entitled.is_empty() {
+                return None;
+            }
+            connections::target(runtime, &connection, identity.principal_kind, &entitled)
+        })
+        .collect::<Vec<_>>();
     management_success_response(&context, operation, target, json!(targets)).await
 }
 
@@ -3252,9 +3263,13 @@ pub(crate) async fn admin_token_resume(
     }
 }
 
+fn admin_request(principal: String, connection: String) -> ConnectionCredentialRequest {
+    ConnectionCredentialRequest::new(principal, connection, CredentialAccess::Administrator)
+}
+
 pub(crate) async fn admin_principal_credential_get(
     State(state): State<AppState>,
-    Path((principal, service, name)): Path<(String, String, String)>,
+    Path((principal, connection)): Path<(String, String)>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -3271,18 +3286,12 @@ pub(crate) async fn admin_principal_credential_get(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    get_credential_for_principal(
-        context,
-        operation,
-        PrincipalCredentialTarget::new(principal, service, name),
-        "",
-    )
-    .await
+    get_connection_credential(context, operation, admin_request(principal, connection)).await
 }
 
 pub(crate) async fn admin_principal_credential_put(
     State(state): State<AppState>,
-    Path((principal, service, name)): Path<(String, String, String)>,
+    Path((principal, connection)): Path<(String, String)>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<CredentialPutBody>,
@@ -3300,10 +3309,10 @@ pub(crate) async fn admin_principal_credential_put(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    put_credential_for_principal(
+    put_connection_credential(
         context,
         operation,
-        PrincipalCredentialTarget::new(principal, service, name),
+        admin_request(principal, connection),
         body,
     )
     .await
@@ -3311,7 +3320,7 @@ pub(crate) async fn admin_principal_credential_put(
 
 pub(crate) async fn admin_principal_credential_input_schema(
     State(state): State<AppState>,
-    Path((principal, service, name)): Path<(String, String, String)>,
+    Path((principal, connection)): Path<(String, String)>,
     RawQuery(raw_query): RawQuery,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -3332,7 +3341,7 @@ pub(crate) async fn admin_principal_credential_input_schema(
     let query = match credential_input_schema_query(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => {
-            let target = Some(credential_target(&principal, &service, &name));
+            let target = Some(connections::audit_target(&principal, &connection));
             return management_context_error_response(
                 &context,
                 StatusCode::BAD_REQUEST,
@@ -3344,10 +3353,10 @@ pub(crate) async fn admin_principal_credential_input_schema(
             .await;
         }
     };
-    credential_input_schema_for_principal(
+    connection_input_schema(
         context,
         operation,
-        PrincipalCredentialTarget::new(principal, service, name),
+        admin_request(principal, connection),
         query,
     )
     .await
@@ -3355,7 +3364,7 @@ pub(crate) async fn admin_principal_credential_input_schema(
 
 pub(crate) async fn admin_principal_credential_delete(
     State(state): State<AppState>,
-    Path((principal, service, name)): Path<(String, String, String)>,
+    Path((principal, connection)): Path<(String, String)>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -3372,17 +3381,12 @@ pub(crate) async fn admin_principal_credential_delete(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    delete_credential_for_principal(
-        context,
-        operation,
-        PrincipalCredentialTarget::new(principal, service, name),
-    )
-    .await
+    delete_connection_credential(context, operation, admin_request(principal, connection)).await
 }
 
 pub(crate) async fn admin_principal_credential_verify(
     State(state): State<AppState>,
-    Path((principal, service, name)): Path<(String, String, String)>,
+    Path((principal, connection)): Path<(String, String)>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
@@ -3400,10 +3404,10 @@ pub(crate) async fn admin_principal_credential_verify(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let target = Some(credential_target(&principal, &service, &name));
-    let input = match credential_verification_input_from_body(body) {
-        Ok(input) => input,
+    let body = match connection_verify_body(body) {
+        Ok(body) => body,
         Err(message) => {
+            let target = Some(connections::audit_target(&principal, &connection));
             return management_context_error_response(
                 &context,
                 StatusCode::BAD_REQUEST,
@@ -3415,11 +3419,11 @@ pub(crate) async fn admin_principal_credential_verify(
             .await;
         }
     };
-    verify_credential_for_principal(
+    verify_connection_credential(
         context,
         operation,
-        PrincipalCredentialTarget::new(principal, service, name),
-        input,
+        admin_request(principal, connection),
+        body,
     )
     .await
 }
@@ -3502,47 +3506,6 @@ pub(crate) async fn admin_credential_get(
     }
 }
 
-pub(crate) async fn admin_credential_put(
-    State(state): State<AppState>,
-    Path(credential_id): Path<String>,
-    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(body): Json<CredentialPutBody>,
-) -> impl IntoResponse {
-    let operation = crate::handlers::management::audit_actions::ADMIN_CREDENTIALS_PUT;
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::AdminWrite,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(response) => return *response,
-    };
-    let target = Some(json!({"credentialId": credential_id}));
-    let credential_id_for_store = credential_id.clone();
-    let (principal, service, name) = match management_store_call(&context, move |store| {
-        store.credential_tuple_by_id(&credential_id_for_store)
-    })
-    .await
-    {
-        Ok(tuple) => tuple,
-        Err(error) => {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
-    };
-    put_credential_for_principal(
-        context,
-        operation,
-        PrincipalCredentialTarget::new(principal, service, name),
-        body,
-    )
-    .await
-}
-
 pub(crate) async fn admin_credential_delete(
     State(state): State<AppState>,
     Path(credential_id): Path<String>,
@@ -3582,61 +3545,6 @@ pub(crate) async fn admin_credential_delete(
         }
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
-}
-
-pub(crate) async fn admin_credential_verify(
-    State(state): State<AppState>,
-    Path(credential_id): Path<String>,
-    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    let operation = crate::handlers::management::audit_actions::ADMIN_CREDENTIALS_VERIFY;
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::AdminWrite,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(response) => return *response,
-    };
-    let target = Some(json!({"credentialId": credential_id}));
-    let input = match credential_verification_input_from_body(body) {
-        Ok(input) => input,
-        Err(message) => {
-            return management_context_error_response(
-                &context,
-                StatusCode::BAD_REQUEST,
-                operation,
-                ReasonCode::InputInvalid,
-                &message,
-                target,
-            )
-            .await;
-        }
-    };
-    let credential_id_for_store = credential_id.clone();
-    let (principal, service, name) = match management_store_call(&context, move |store| {
-        store.credential_tuple_by_id(&credential_id_for_store)
-    })
-    .await
-    {
-        Ok(tuple) => tuple,
-        Err(error) => {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
-    };
-    verify_credential_for_principal(
-        context,
-        operation,
-        PrincipalCredentialTarget::new(principal, service, name),
-        input,
-    )
-    .await
 }
 
 pub(crate) async fn admin_credentials_rewrap(

@@ -1,195 +1,141 @@
+//! Management of a principal's credential connection token: inspect, put,
+//! verify, input schema and delete through `{connection}` routes, for the
+//! owner and for administrators, plus the owner's retained-row cleanup.
+//!
+//! Every connection operation requires the connection to select the token
+//! method for the owner's principal kind; OAuth connections are managed
+//! through the OAuth routes and a connection that offers the owner no method
+//! has nothing to manage. Authorization depends on who asks
+//! ([`CredentialAccess`]); verification separately runs its probe as the
+//! owner, through a consumer the owner holds a `per_user` grant on.
 use crate::handlers::management::common::{
     CredentialInputSchemaQuery, CredentialPutBody, ManagementContext, VerificationAudit,
-    is_broker_user_manage_context, management_context_error_response,
-    management_pre_audited_success_response, management_provider_error_response,
-    management_store_call, management_store_error_response, management_success_response,
-    management_verification_error_response, management_write_audit_preflight,
-    management_write_audit_upstream_verification,
+    management_context_error_response, management_pre_audited_success_response,
+    management_provider_error_response, management_store_call, management_store_error_response,
+    management_success_response, management_verification_error_response,
+    management_write_audit_preflight, management_write_audit_upstream_verification,
 };
+use crate::handlers::management::connections::{self, audit_target, connection_credential};
 use agent_access_core::{
-    BrokerRuntime, CredentialVerificationInput, CredentialWriteRequest, IdentityContext,
-    ManagedStoreError,
+    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialVerificationInput, CredentialWriteRequest,
+    IdentityContext, ManagedStoreError,
 };
-use agent_access_provider::{ProviderError, ReasonCode, is_action_name, is_service_name};
+use agent_access_provider::{ProviderError, ReasonCode, is_service_name};
 use axum::body::Bytes;
 use axum::http::StatusCode;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub(super) fn credential_target(principal: &str, service: &str, name: &str) -> Value {
-    json!({
-        "principal": principal,
-        "service": service,
-        "credential": name
-    })
+/// Who manages a credential connection, which decides authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CredentialAccess {
+    /// The owner through a Broker-issued `user_manage` token or browser
+    /// session: an active `per_user` grant on a consuming service entitles
+    /// setup, and the owner may always read and delete its own token.
+    Owner,
+    /// The owner as a classless self-service identity: credential rights on
+    /// `(connection, default)` authorize each operation.
+    ClasslessOwner,
+    /// An administrator, or an auditor for reads, acting on a principal.
+    Administrator,
 }
 
+/// One management operation on `principal`'s token for `connection`.
 #[derive(Debug)]
-pub(super) struct PrincipalCredentialTarget {
+pub(super) struct ConnectionCredentialRequest {
     principal: String,
-    service: String,
-    name: String,
-    enforce_right: bool,
-    enforce_configured_target: bool,
+    connection: String,
+    access: CredentialAccess,
 }
 
-impl PrincipalCredentialTarget {
-    pub(super) fn new(principal: String, service: String, name: String) -> Self {
+impl ConnectionCredentialRequest {
+    pub(super) fn new(principal: String, connection: String, access: CredentialAccess) -> Self {
         Self {
             principal,
-            service,
-            name,
-            enforce_right: false,
-            enforce_configured_target: false,
+            connection,
+            access,
         }
     }
 
-    pub(super) fn enforce_right(mut self, enforce: bool) -> Self {
-        self.enforce_right = enforce;
-        self
-    }
-
-    pub(super) fn enforce_configured_target(mut self, enforce: bool) -> Self {
-        self.enforce_configured_target = enforce;
-        self
-    }
-
     fn audit_target(&self) -> Option<Value> {
-        Some(credential_target(
-            &self.principal,
-            &self.service,
-            &self.name,
-        ))
-    }
-
-    /// The stored `service` column this target addresses: the ID of the
-    /// credential connection the service consumes, or the route's service
-    /// when it consumes none.
-    fn store_service(&self, runtime: &BrokerRuntime) -> String {
-        runtime
-            .personal_credential_key(&self.service)
-            .unwrap_or(&self.service)
-            .to_owned()
+        Some(audit_target(&self.principal, &self.connection))
     }
 }
 
-/// Whether `profile` is the service's own declared profile or its credential
-/// connection's token profile.
-fn profile_supported(runtime: &BrokerRuntime, service: &str, profile: &str) -> bool {
-    runtime.credential_profile_kind(service, profile).is_some()
-        || runtime
-            .personal_token_profile(service)
-            .is_some_and(|(configured, _)| configured == profile)
+/// What each operation needs: a classless owner's credential right, and
+/// whether a grant-entitled owner needs a current grant on a consumer.
+#[derive(Debug, Clone, Copy)]
+enum Operation {
+    Inspect,
+    InputSchema,
+    Put,
+    Verify,
+    Delete,
 }
 
-fn validate_management_service_name(service: &str) -> bool {
-    is_service_name(service)
+impl Operation {
+    fn classless_right(self) -> &'static str {
+        match self {
+            Self::Inspect => "credentials:self:read_metadata",
+            Self::InputSchema | Self::Put => "credentials:self:write",
+            Self::Verify => "credentials:self:verify",
+            Self::Delete => "credentials:self:delete",
+        }
+    }
+
+    /// Setup needs current entitlement; reading and deleting one's own
+    /// token stay available after grant loss, for cleanup.
+    fn requires_entitlement(self) -> bool {
+        matches!(self, Self::InputSchema | Self::Put | Self::Verify)
+    }
 }
 
-fn validate_management_name(name: &str) -> bool {
-    is_action_name(name)
+/// The body of a verify route.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ConnectionVerifyBody {
+    /// The consuming service whose probe verifies the token.
+    #[serde(default)]
+    service: Option<String>,
+    /// The repository a Git gateway probe fetches.
+    #[serde(default)]
+    repository: Option<String>,
 }
 
-pub(super) fn credential_verification_input_from_body(
-    body: Bytes,
-) -> Result<CredentialVerificationInput, String> {
+pub(super) fn connection_verify_body(body: Bytes) -> Result<ConnectionVerifyBody, String> {
     if body.iter().all(u8::is_ascii_whitespace) {
-        return Ok(CredentialVerificationInput::default());
+        return Ok(ConnectionVerifyBody::default());
     }
     serde_json::from_slice(&body)
         .map_err(|error| format!("credential verification body is invalid: {error}"))
 }
 
-fn credential_profile_for_put(
-    runtime: &BrokerRuntime,
-    service: &str,
-    body: &CredentialPutBody,
-) -> Result<(String, String), &'static str> {
-    credential_profile_for_service(runtime, service, body.profile.as_deref())
+/// The token method's selected profile and kind for the owner.
+struct Admitted {
+    owner: IdentityContext,
+    profile: String,
+    credential_kind: String,
 }
 
-fn credential_profile_for_service(
-    runtime: &BrokerRuntime,
-    service: &str,
-    profile: Option<&str>,
-) -> Result<(String, String), &'static str> {
-    let (configured_profile, kind) = runtime
-        .personal_token_profile(service)
-        .ok_or("managed per_user credentials are not configured for service")?;
-    if profile.is_some_and(|profile| profile != configured_profile) {
-        return Err("credential profile does not match configured managed profile");
-    }
-    Ok((configured_profile.to_string(), kind.to_string()))
-}
-
-fn configured_managed_credential_name(
-    runtime: &BrokerRuntime,
-    service: &str,
-) -> Result<String, &'static str> {
-    runtime
-        .personal_token_profile(service)
-        .map(|_| agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string())
-        .ok_or("managed per_user credentials are not configured for service")
-}
-
-async fn enforce_user_configured_target(
+async fn deny(
     context: &ManagementContext,
     operation: &str,
-    service: &str,
-    name: &str,
+    status: StatusCode,
+    reason: ReasonCode,
+    message: &str,
     target: Option<Value>,
-) -> Result<(), Box<axum::response::Response>> {
-    let configured_name =
-        match configured_managed_credential_name(&context.snapshot.runtime, service) {
-            Ok(name) => name,
-            Err(message) => {
-                return Err(Box::new(
-                    management_context_error_response(
-                        context,
-                        StatusCode::BAD_REQUEST,
-                        operation,
-                        ReasonCode::InputInvalid,
-                        message,
-                        target,
-                    )
-                    .await,
-                ));
-            }
-        };
-    if configured_name != name {
-        return Err(Box::new(
-            management_context_error_response(
-                context,
-                StatusCode::BAD_REQUEST,
-                operation,
-                ReasonCode::InputInvalid,
-                "credential name does not match the configured managed target",
-                target,
-            )
+) -> Box<axum::response::Response> {
+    Box::new(
+        management_context_error_response(context, status, operation, reason, message, target)
             .await,
-        ));
-    }
-    if is_broker_user_manage_context(context)
-        && !context
-            .snapshot
-            .runtime
-            .has_any_per_user_policy_for_service(&context.identity, service)
-    {
-        return Err(Box::new(
-            management_context_error_response(
-                context,
-                StatusCode::FORBIDDEN,
-                operation,
-                ReasonCode::ServiceActionDenied,
-                "credential target is not visible to the principal",
-                target,
-            )
-            .await,
-        ));
-    }
-    Ok(())
+    )
 }
 
-async fn credential_owner_identity(
+/// The owner's identity with its stored principal kind, from which the
+/// connection's method is selected and verification probes run. A disabled
+/// owner still has an identity, so an administrator can read and delete its
+/// token; the store refuses writes and verification for it.
+pub(super) async fn credential_owner_identity(
     context: &ManagementContext,
     operation: &str,
     principal: &str,
@@ -199,7 +145,7 @@ async fn credential_owner_identity(
         let principal_for_store = principal.to_string();
         let owner =
             match management_store_call(context, move |store| {
-                let record = store.active_principal(&principal_for_store)?;
+                let record = store.principal(&principal_for_store)?;
                 let policy_groups = store.policy_groups(&principal_for_store)?;
                 Ok((record, policy_groups))
             })
@@ -240,6 +186,257 @@ async fn credential_owner_identity(
     ))
 }
 
+/// Checks the connection, its token method for the owner, and the caller's
+/// authority for `operation`.
+async fn admit(
+    context: &ManagementContext,
+    operation_name: &str,
+    request: &ConnectionCredentialRequest,
+    operation: Operation,
+) -> Result<Admitted, Box<axum::response::Response>> {
+    let target = request.audit_target();
+    if !is_service_name(&request.connection) {
+        return Err(deny(
+            context,
+            operation_name,
+            StatusCode::BAD_REQUEST,
+            ReasonCode::InputInvalid,
+            "credential connection ID is invalid",
+            target,
+        )
+        .await);
+    }
+    let runtime = &context.snapshot.runtime;
+    if !runtime
+        .effective_credentials()
+        .connections
+        .contains_key(&request.connection)
+    {
+        return Err(deny(
+            context,
+            operation_name,
+            StatusCode::BAD_REQUEST,
+            ReasonCode::InputInvalid,
+            "credential connection is not configured",
+            target,
+        )
+        .await);
+    }
+    let owner = match request.access {
+        CredentialAccess::Administrator => {
+            credential_owner_identity(context, operation_name, &request.principal, target.clone())
+                .await?
+        }
+        CredentialAccess::Owner | CredentialAccess::ClasslessOwner => context.identity.clone(),
+    };
+    let Some((profile, credential_kind)) =
+        connections::token_selection(runtime, &request.connection, owner.principal_kind)
+    else {
+        return Err(deny(
+            context,
+            operation_name,
+            StatusCode::BAD_REQUEST,
+            ReasonCode::InputInvalid,
+            "credential connection does not use a stored token for this principal",
+            target,
+        )
+        .await);
+    };
+    match request.access {
+        CredentialAccess::Owner => {
+            if operation.requires_entitlement()
+                && connections::entitled_consumers(runtime, &owner, &request.connection).is_empty()
+            {
+                return Err(deny(
+                    context,
+                    operation_name,
+                    StatusCode::FORBIDDEN,
+                    ReasonCode::ServiceActionDenied,
+                    "credential connection is not visible to the principal",
+                    target,
+                )
+                .await);
+            }
+        }
+        CredentialAccess::ClasslessOwner => {
+            let principal = request.principal.clone();
+            let connection = request.connection.clone();
+            let right = operation.classless_right();
+            if let Err(error) = management_store_call(context, move |store| {
+                store.require_credential_right(
+                    &principal,
+                    right,
+                    &connection,
+                    CONNECTION_CREDENTIAL_NAME,
+                )
+            })
+            .await
+            {
+                return Err(Box::new(
+                    management_store_error_response(context, operation_name, target, error).await,
+                ));
+            }
+        }
+        CredentialAccess::Administrator => {}
+    }
+    Ok(Admitted {
+        owner,
+        profile,
+        credential_kind,
+    })
+}
+
+pub(super) async fn get_connection_credential(
+    context: ManagementContext,
+    operation: &str,
+    request: ConnectionCredentialRequest,
+) -> axum::response::Response {
+    let target = request.audit_target();
+    let admitted = match admit(&context, operation, &request, Operation::Inspect).await {
+        Ok(admitted) => admitted,
+        Err(response) => return *response,
+    };
+    let principal = request.principal.clone();
+    let connection = request.connection.clone();
+    match management_store_call(&context, move |store| {
+        let credential =
+            store.credential_by_tuple(&principal, &connection, CONNECTION_CREDENTIAL_NAME)?;
+        // A row with another profile is retained, not this connection's token.
+        if credential.profile != admitted.profile {
+            return Err(ManagedStoreError::CredentialNotFound);
+        }
+        Ok(credential)
+    })
+    .await
+    {
+        Ok(credential) => {
+            management_success_response(
+                &context,
+                operation,
+                target,
+                connection_credential(credential),
+            )
+            .await
+        }
+        Err(error) => management_store_error_response(&context, operation, target, error).await,
+    }
+}
+
+pub(super) async fn connection_input_schema(
+    context: ManagementContext,
+    operation: &str,
+    request: ConnectionCredentialRequest,
+    query: CredentialInputSchemaQuery,
+) -> axum::response::Response {
+    let target = request.audit_target();
+    let admitted = match admit(&context, operation, &request, Operation::InputSchema).await {
+        Ok(admitted) => admitted,
+        Err(response) => return *response,
+    };
+    if query
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile != admitted.profile)
+    {
+        return management_context_error_response(
+            &context,
+            StatusCode::BAD_REQUEST,
+            operation,
+            ReasonCode::InputInvalid,
+            "credential profile does not match the connection's token profile",
+            target,
+        )
+        .await;
+    }
+    let Some(schema) = connections::input_schema(&context.snapshot.runtime, &request.connection)
+    else {
+        return management_context_error_response(
+            &context,
+            StatusCode::BAD_REQUEST,
+            operation,
+            ReasonCode::CredentialInvalid,
+            "credential input schema is not supported",
+            target,
+        )
+        .await;
+    };
+    management_success_response(&context, operation, target, json!(schema)).await
+}
+
+pub(super) async fn put_connection_credential(
+    context: ManagementContext,
+    operation: &str,
+    request: ConnectionCredentialRequest,
+    body: CredentialPutBody,
+) -> axum::response::Response {
+    let purpose = context.credential_purpose;
+    let target = request.audit_target();
+    let admitted = match admit(&context, operation, &request, Operation::Put).await {
+        Ok(admitted) => admitted,
+        Err(response) => return *response,
+    };
+    if body
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile != admitted.profile)
+    {
+        return management_context_error_response(
+            &context,
+            StatusCode::BAD_REQUEST,
+            operation,
+            ReasonCode::InputInvalid,
+            "credential profile does not match the connection's token profile",
+            target,
+        )
+        .await;
+    }
+    let Some(key_ring) = context.snapshot.runtime.credential_key_ring().cloned() else {
+        return management_context_error_response(
+            &context,
+            StatusCode::SERVICE_UNAVAILABLE,
+            operation,
+            ReasonCode::EncryptionKeyMissing,
+            "credential encryption key ring is not configured",
+            target,
+        )
+        .await;
+    };
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return *response;
+    }
+    let actor = context.identity.principal.clone();
+    let owner_principal_id = request.principal.clone();
+    let connection = request.connection.clone();
+    match management_store_call(&context, move |store| {
+        store.upsert_user_credential(
+            &key_ring,
+            CredentialWriteRequest {
+                owner_principal_id,
+                service: connection,
+                name: CONNECTION_CREDENTIAL_NAME.to_string(),
+                profile: admitted.profile,
+                credential_kind: admitted.credential_kind,
+                secret: body.secret,
+                metadata: body.metadata,
+                actor,
+            },
+            purpose,
+        )
+    })
+    .await
+    {
+        Ok(credential) => management_pre_audited_success_response(
+            &context,
+            operation,
+            target,
+            connection_credential(credential),
+        ),
+        Err(error) => management_store_error_response(&context, operation, target, error).await,
+    }
+}
+
 /// Whether a failed verification reached the upstream and found the
 /// credential unusable there, so the credential records
 /// `verification_failed`: the standard upstream failures, and a domain
@@ -264,346 +461,119 @@ fn verification_error_records_failure(error: &ProviderError) -> bool {
     )
 }
 
-pub(super) async fn get_credential_for_principal(
-    context: ManagementContext,
-    operation: &str,
-    request: PrincipalCredentialTarget,
-    right: &str,
-) -> axum::response::Response {
-    let target = request.audit_target();
-    if !validate_management_service_name(&request.service)
-        || !validate_management_name(&request.name)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "service or credential name is invalid",
-            target,
-        )
-        .await;
-    }
-    if request.enforce_configured_target
-        && let Err(response) = enforce_user_configured_target(
-            &context,
-            operation,
-            &request.service,
-            &request.name,
-            target.clone(),
-        )
-        .await
-    {
-        return *response;
-    }
-    let principal_for_store = request.principal.clone();
-    let service_for_store = request.store_service(&context.snapshot.runtime);
-    let name_for_store = request.name.clone();
-    let right_for_store = right.to_string();
-    let enforce_right = request.enforce_right;
-    match management_store_call(&context, move |store| {
-        if enforce_right {
-            store.require_credential_right(
-                &principal_for_store,
-                &right_for_store,
-                &service_for_store,
-                &name_for_store,
-            )?;
-        }
-        store.credential_by_tuple(&principal_for_store, &service_for_store, &name_for_store)
-    })
-    .await
-    {
-        Ok(credential) => {
-            management_success_response(&context, operation, target, json!(credential)).await
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
-}
-
-pub(super) async fn credential_input_schema_for_principal(
-    context: ManagementContext,
-    operation: &str,
-    request: PrincipalCredentialTarget,
-    query: CredentialInputSchemaQuery,
-) -> axum::response::Response {
-    let target = request.audit_target();
-    if !validate_management_service_name(&request.service)
-        || !validate_management_name(&request.name)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "service or credential name is invalid",
-            target,
-        )
-        .await;
-    }
-    if request.enforce_configured_target
-        && let Err(response) = enforce_user_configured_target(
-            &context,
-            operation,
-            &request.service,
-            &request.name,
-            target.clone(),
-        )
-        .await
-    {
-        return *response;
-    }
-    if request.enforce_right {
-        let principal_for_store = request.principal.clone();
-        let service_for_store = request.store_service(&context.snapshot.runtime);
-        let name_for_store = request.name.clone();
-        if let Err(error) = management_store_call(&context, move |store| {
-            store.require_credential_right(
-                &principal_for_store,
-                "credentials:self:write",
-                &service_for_store,
-                &name_for_store,
-            )
-        })
-        .await
+/// The consumers a verification probes, in order, as the owner: the
+/// requested consumer, or by default the owner's entitled consumers that
+/// take the supplied inputs (a `repository` selects Git gateways, its
+/// absence the other consumers).
+fn probe_candidates(
+    runtime: &BrokerRuntime,
+    connection: &str,
+    owner: &IdentityContext,
+    body: &ConnectionVerifyBody,
+) -> Result<Vec<String>, ProviderError> {
+    let entitled = connections::entitled_consumers(runtime, owner, connection);
+    if let Some(service) = body.service.as_deref() {
+        if !connections::consumers(runtime, connection)
+            .iter()
+            .any(|consumer| consumer == service)
         {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
-    }
-    let (profile, credential_kind) = match credential_profile_for_service(
-        &context.snapshot.runtime,
-        &request.service,
-        query.profile.as_deref(),
-    ) {
-        Ok(value) => value,
-        Err(message) => {
-            return management_context_error_response(
-                &context,
-                StatusCode::BAD_REQUEST,
-                operation,
+            return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
-                message,
-                target,
-            )
-            .await;
+                "verification service does not consume the credential connection",
+            ));
         }
+        if !entitled.iter().any(|consumer| consumer == service) {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "verification requires the owner's per_user grant on the service",
+            ));
+        }
+        return Ok(vec![service.to_string()]);
+    }
+    if entitled.is_empty() {
+        return Err(ProviderError::deny(
+            ReasonCode::ServiceActionDenied,
+            "verification requires the owner's per_user grant on a consuming service",
+        ));
+    }
+    let takes_repository = |service: &str| {
+        runtime
+            .service_descriptor(service)
+            .is_some_and(|descriptor| {
+                descriptor
+                    .credential_verification_inputs()
+                    .iter()
+                    .any(|input| input == "repository")
+            })
     };
-    let Some(schema) = context.snapshot.runtime.credential_input_schema(
-        &request.service,
-        &profile,
-        &credential_kind,
-    ) else {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::CredentialInvalid,
-            "credential input schema is not supported",
-            target,
-        )
-        .await;
-    };
-    management_success_response(&context, operation, target, json!(schema)).await
-}
-
-pub(super) async fn put_credential_for_principal(
-    context: ManagementContext,
-    operation: &str,
-    request: PrincipalCredentialTarget,
-    body: CredentialPutBody,
-) -> axum::response::Response {
-    let purpose = context.credential_purpose;
-    let target = request.audit_target();
-    if !validate_management_service_name(&request.service)
-        || !validate_management_name(&request.name)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
+    let wanted = body.repository.is_some();
+    let candidates = entitled
+        .iter()
+        .filter(|service| takes_repository(service) == wanted)
+        .cloned()
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "service or credential name is invalid",
-            target,
-        )
-        .await;
-    }
-    if request.enforce_configured_target
-        && let Err(response) = enforce_user_configured_target(
-            &context,
-            operation,
-            &request.service,
-            &request.name,
-            target.clone(),
-        )
-        .await
-    {
-        return *response;
-    }
-    if request.enforce_right {
-        let principal_for_store = request.principal.clone();
-        let service_for_store = request.store_service(&context.snapshot.runtime);
-        let name_for_store = request.name.clone();
-        if let Err(error) = management_store_call(&context, move |store| {
-            store.require_credential_right(
-                &principal_for_store,
-                "credentials:self:write",
-                &service_for_store,
-                &name_for_store,
-            )
-        })
-        .await
-        {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
-    }
-    let Some(key_ring) = context.snapshot.runtime.credential_key_ring().cloned() else {
-        return management_context_error_response(
-            &context,
-            StatusCode::SERVICE_UNAVAILABLE,
-            operation,
-            ReasonCode::EncryptionKeyMissing,
-            "credential encryption key ring is not configured",
-            target,
-        )
-        .await;
-    };
-    let (profile, credential_kind) =
-        match credential_profile_for_put(&context.snapshot.runtime, &request.service, &body) {
-            Ok(value) => value,
-            Err(message) => {
-                return management_context_error_response(
-                    &context,
-                    StatusCode::BAD_REQUEST,
-                    operation,
-                    ReasonCode::InputInvalid,
-                    message,
-                    target,
-                )
-                .await;
-            }
-        };
-    if let Err(response) =
-        management_write_audit_preflight(&context, operation, target.clone()).await
-    {
-        return *response;
-    }
-    let actor = context.identity.principal.clone();
-    let owner_principal_id = request.principal.clone();
-    let service = request.store_service(&context.snapshot.runtime);
-    let name = request.name.clone();
-    match management_store_call(&context, move |store| {
-        store.upsert_user_credential(
-            &key_ring,
-            CredentialWriteRequest {
-                owner_principal_id,
-                service,
-                name,
-                profile,
-                credential_kind,
-                secret: body.secret,
-                metadata: body.metadata,
-                actor,
+            if wanted {
+                "no consuming service the owner can verify through takes a repository"
+            } else {
+                "verification through this connection requires service and repository"
             },
-            purpose,
-        )
-    })
-    .await
-    {
-        Ok(credential) => {
-            management_pre_audited_success_response(&context, operation, target, json!(credential))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
+        ));
     }
+    Ok(candidates)
 }
 
-pub(super) async fn verify_credential_for_principal(
+pub(super) async fn verify_connection_credential(
     context: ManagementContext,
     operation: &str,
-    request: PrincipalCredentialTarget,
-    input: CredentialVerificationInput,
+    request: ConnectionCredentialRequest,
+    body: ConnectionVerifyBody,
 ) -> axum::response::Response {
     let purpose = context.credential_purpose;
-    let target = request.audit_target();
-    if !validate_management_service_name(&request.service)
-        || !validate_management_name(&request.name)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "service or credential name is invalid",
-            target,
-        )
-        .await;
+    let mut target = request.audit_target();
+    if let (Some(Value::Object(object)), Some(service)) = (target.as_mut(), body.service.as_ref()) {
+        object.insert("probeService".to_string(), json!(service));
     }
-    if request.enforce_configured_target
-        && let Err(response) = enforce_user_configured_target(
-            &context,
-            operation,
-            &request.service,
-            &request.name,
-            target.clone(),
-        )
-        .await
-    {
-        return *response;
-    }
-    let principal_for_store = request.principal.clone();
-    let service_for_store = request.store_service(&context.snapshot.runtime);
-    let name_for_store = request.name.clone();
-    let enforce_right = request.enforce_right;
-    let metadata = match management_store_call(&context, move |store| {
-        if enforce_right {
-            store.require_credential_right(
-                &principal_for_store,
-                "credentials:self:verify",
-                &service_for_store,
-                &name_for_store,
-            )?;
-        }
-        store.credential_by_tuple(&principal_for_store, &service_for_store, &name_for_store)
-    })
-    .await
-    {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
+    let admitted = match admit(&context, operation, &request, Operation::Verify).await {
+        Ok(admitted) => admitted,
+        Err(response) => return *response,
     };
-    if !profile_supported(
-        &context.snapshot.runtime,
-        &request.service,
-        &metadata.profile,
-    ) {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::CredentialInvalid,
-            "credential profile is not supported for service",
-            target,
-        )
-        .await;
-    }
-    let owner_identity =
-        match credential_owner_identity(&context, operation, &request.principal, target.clone())
-            .await
-        {
-            Ok(identity) => identity,
-            Err(response) => return *response,
-        };
-    let input = match context
-        .snapshot
-        .runtime
-        .preflight_execution_credential_verification(&request.service, &owner_identity, input)
-    {
-        Ok(input) => input,
+    let runtime = &context.snapshot.runtime;
+    // The probe always runs as the owner: an administrator's own grants
+    // never authorize it.
+    let candidates = match probe_candidates(runtime, &request.connection, &admitted.owner, &body) {
+        Ok(candidates) => candidates,
         Err(error) => {
             return management_provider_error_response(&context, operation, target, error).await;
         }
     };
-    let Some(key_ring) = context.snapshot.runtime.credential_key_ring().cloned() else {
+    let input = CredentialVerificationInput {
+        repository: body.repository.clone(),
+    };
+    // Gateways check their inputs, including the owner's repo.fetch policy
+    // on the repository, before any secret is read.
+    let mut inputs = Vec::with_capacity(candidates.len());
+    for service in &candidates {
+        let checked = if runtime.command_provider(service).is_some() {
+            Ok(input.clone())
+        } else {
+            runtime.preflight_execution_credential_verification(
+                service,
+                &admitted.owner,
+                input.clone(),
+            )
+        };
+        match checked {
+            Ok(checked) => inputs.push(checked),
+            Err(error) => {
+                return management_provider_error_response(&context, operation, target, error)
+                    .await;
+            }
+        }
+    }
+    let Some(key_ring) = runtime.credential_key_ring().cloned() else {
         return management_context_error_response(
             &context,
             StatusCode::SERVICE_UNAVAILABLE,
@@ -619,23 +589,22 @@ pub(super) async fn verify_credential_for_principal(
     {
         return *response;
     }
-    let principal_for_store = request.principal.clone();
-    let service_for_store = request.store_service(&context.snapshot.runtime);
-    let name_for_store = request.name.clone();
-    let profile = metadata.profile.clone();
-    let verification_candidate = match management_store_call(&context, move |store| {
+    let principal = request.principal.clone();
+    let connection = request.connection.clone();
+    let profile = admitted.profile.clone();
+    let candidate = match management_store_call(&context, move |store| {
         store.resolve_user_credential_for_verification(
             &key_ring,
-            &principal_for_store,
-            &service_for_store,
-            &name_for_store,
+            &principal,
+            &connection,
+            CONNECTION_CREDENTIAL_NAME,
             &profile,
             purpose,
         )
     })
     .await
     {
-        Ok(credential) => credential,
+        Ok(candidate) => candidate,
         Err(error) => {
             return management_store_error_response(&context, operation, target, error).await;
         }
@@ -644,36 +613,51 @@ pub(super) async fn verify_credential_for_principal(
         context.request_id.clone(),
         context.broker_request_id.clone(),
     );
-    let runtime = &context.snapshot.runtime;
-    // A command import receives the credential's plaintext on its stdin, so
-    // core rereads exactly the material resolved here rather than taking it
-    // from the opaque credential.
-    let command = runtime.command_provider(&request.service).is_some();
-    let verification = if command {
-        runtime
-            .verify_command_credential(
-                &request.service,
-                &owner_identity,
-                &verification_candidate.target,
-                correlation,
-            )
-            .await
-    } else {
-        runtime
-            .verify_execution_credential(
-                &request.service,
-                &verification_candidate.credential,
-                &owner_identity,
-                input,
-                correlation,
-            )
-            .await
-    };
-    let verification = match verification {
+    // The first consumer whose probe answers verifies the token; a backend
+    // without a probe passes to the next, and none answering leaves a local
+    // check.
+    let mut outcome = Ok(None);
+    let mut probe_service = None;
+    let mut command = false;
+    for (service, input) in candidates.iter().zip(inputs) {
+        command = runtime.command_provider(service).is_some();
+        // A command import receives the credential's plaintext on its
+        // stdin, so core rereads exactly the material resolved here rather
+        // than taking it from the opaque credential.
+        outcome = if command {
+            runtime
+                .verify_command_credential(
+                    service,
+                    &admitted.owner,
+                    &candidate.target,
+                    correlation.clone(),
+                )
+                .await
+        } else {
+            runtime
+                .verify_execution_credential(
+                    service,
+                    &candidate.credential,
+                    &admitted.owner,
+                    input,
+                    correlation.clone(),
+                )
+                .await
+        };
+        if !matches!(outcome, Ok(None)) || command {
+            probe_service = Some(service.clone());
+            break;
+        }
+    }
+    if let (Some(Value::Object(object)), Some(service)) = (target.as_mut(), probe_service.as_ref())
+    {
+        object.insert("probeService".to_string(), json!(service));
+    }
+    let verification = match outcome {
         Ok(verification) => verification,
         Err(error) => {
             if verification_error_records_failure(&error) {
-                let failure_target = verification_candidate.target.clone();
+                let failure_target = candidate.target.clone();
                 let provider_reason_code = error.reason_code().as_str();
                 let error_code = error.reason_code().as_str().to_string();
                 match management_store_call(&context, move |store| {
@@ -693,8 +677,7 @@ pub(super) async fn verify_credential_for_principal(
                             agentRequestId = context.request_id.as_str(),
                             brokerRequestId = context.broker_request_id.as_str(),
                             principal = request.principal.as_str(),
-                            service = request.service.as_str(),
-                            credential = request.name.as_str(),
+                            connection = request.connection.as_str(),
                             providerReasonCode = provider_reason_code,
                             reasonCode = store_error.reason_code().as_str(),
                             error = %store_error,
@@ -725,7 +708,7 @@ pub(super) async fn verify_credential_for_principal(
     } else {
         "local_verified"
     };
-    let verification_target = verification_candidate.target;
+    let verification_target = candidate.target;
     match management_store_call(&context, move |store| {
         store.mark_user_credential_verified_if_current(
             &verification_target,
@@ -736,82 +719,45 @@ pub(super) async fn verify_credential_for_principal(
     .await
     {
         Ok(credential) => {
-            management_pre_audited_success_response(&context, operation, target, json!(credential))
+            let mut result = connection_credential(credential);
+            if let Value::Object(object) = &mut result {
+                object.insert("probeService".to_string(), json!(probe_service));
+            }
+            management_pre_audited_success_response(&context, operation, target, result)
         }
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
 }
 
-pub(super) async fn delete_credential_for_principal(
+pub(super) async fn delete_connection_credential(
     context: ManagementContext,
     operation: &str,
-    request: PrincipalCredentialTarget,
+    request: ConnectionCredentialRequest,
 ) -> axum::response::Response {
     let purpose = context.credential_purpose;
     let target = request.audit_target();
-    if !validate_management_service_name(&request.service)
-        || !validate_management_name(&request.name)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "service or credential name is invalid",
-            target,
-        )
-        .await;
-    }
-    if request.enforce_configured_target
-        && let Err(response) = enforce_user_configured_target(
-            &context,
-            operation,
-            &request.service,
-            &request.name,
-            target.clone(),
-        )
-        .await
-    {
-        return *response;
-    }
-    if request.enforce_right {
-        let principal_for_store = request.principal.clone();
-        let service_for_store = request.store_service(&context.snapshot.runtime);
-        let name_for_store = request.name.clone();
-        if let Err(error) = management_store_call(&context, move |store| {
-            store.require_credential_right(
-                &principal_for_store,
-                "credentials:self:delete",
-                &service_for_store,
-                &name_for_store,
-            )
-        })
-        .await
-        {
-            return management_store_error_response(&context, operation, target, error).await;
-        }
-    }
+    let admitted = match admit(&context, operation, &request, Operation::Delete).await {
+        Ok(admitted) => admitted,
+        Err(response) => return *response,
+    };
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
         return *response;
     }
-    let principal_for_store = request.principal.clone();
-    let service_for_store = request.store_service(&context.snapshot.runtime);
-    let name_for_store = request.name.clone();
+    let principal = request.principal.clone();
+    let connection = request.connection.clone();
     match management_store_call(&context, move |store| {
-        store.delete_user_credential(
-            &principal_for_store,
-            &service_for_store,
-            &name_for_store,
-            purpose,
-        )
+        store.delete_connection_credential(&principal, &connection, &admitted.profile, purpose)
     })
     .await
     {
-        Ok(credential) => {
-            management_pre_audited_success_response(&context, operation, target, json!(credential))
-        }
+        Ok(credential) => management_pre_audited_success_response(
+            &context,
+            operation,
+            target,
+            connection_credential(credential),
+        ),
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
 }
@@ -844,5 +790,17 @@ mod tests {
             .with_upstream(Some(404), Some(1));
 
         assert!(!verification_error_records_failure(&error));
+    }
+
+    #[test]
+    fn verify_body_accepts_service_and_repository_only() {
+        let body = connection_verify_body(Bytes::from_static(
+            br#"{"service":"gitlab_git","repository":"team/project"}"#,
+        ))
+        .unwrap();
+        assert_eq!(body.service.as_deref(), Some("gitlab_git"));
+        assert_eq!(body.repository.as_deref(), Some("team/project"));
+        assert!(connection_verify_body(Bytes::from_static(b"  ")).is_ok());
+        assert!(connection_verify_body(Bytes::from_static(br#"{"name":"default"}"#)).is_err());
     }
 }

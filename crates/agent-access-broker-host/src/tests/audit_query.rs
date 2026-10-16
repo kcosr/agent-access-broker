@@ -1376,7 +1376,7 @@ async fn service_managers_see_admin_actions_on_their_services() {
         .request(
             Method::GET,
             &fixture.alice,
-            "/v1/credentials/fake/default",
+            "/v1/credentials/connections/fake",
             None,
             "audit-self-credential",
         )
@@ -1409,7 +1409,7 @@ async fn service_managers_see_admin_actions_on_their_services() {
     );
     let own_record = record(&own);
     assert_eq!(
-        own_record["providerAudit"]["management"]["target"]["service"],
+        own_record["providerAudit"]["management"]["target"]["connection"],
         "fake"
     );
     assert!(

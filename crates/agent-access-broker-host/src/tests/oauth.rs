@@ -381,7 +381,7 @@ impl OAuthFixture {
                 Method::POST,
                 "/v1/oauth/connect",
                 request_id,
-                Some(json!({"service": "oauth_stub", "intent": "connect"})),
+                Some(json!({"registration": "stub", "intent": "connect"})),
             )
             .await;
         let status = connect.status();
@@ -476,7 +476,7 @@ async fn callback_errors_have_safe_distinct_completions_and_replay_is_rejected()
                 Method::POST,
                 "/v1/oauth/connect",
                 "start-cancel",
-                Some(json!({"service":"oauth_stub", "intent":"connect"})),
+                Some(json!({"registration": "stub", "intent":"connect"})),
             )
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -784,7 +784,7 @@ async fn pending_consent_blocks_delegated_invocations() {
             Method::POST,
             "/v1/oauth/connect",
             "oauth-reconnect",
-            Some(json!({"service": "oauth_stub", "intent": "reconnect"})),
+            Some(json!({"registration": "stub", "intent": "reconnect"})),
         )
         .await;
     assert_eq!(reconnect.status(), StatusCode::OK);
@@ -831,7 +831,7 @@ async fn dispatch_rechecks_access_lent_at_preparation() {
     let disconnect = fixture
         .browser(
             Method::DELETE,
-            "/v1/oauth/connections/oauth_stub",
+            "/v1/oauth/connections/stub",
             "oauth-disconnect",
             None,
         )
@@ -881,8 +881,9 @@ async fn callbacks_are_audited_and_connection_lists_are_not() {
     );
 }
 
-/// The portal names no service: each connection row carries the service's
-/// display name and the description its backend declares.
+/// One row per registration names the consumers the user may set up
+/// through, with their display names, and the description the backend
+/// declares.
 #[tokio::test]
 async fn connection_rows_describe_services_from_their_descriptors() {
     let fixture = oauth_fixture().await;
@@ -894,8 +895,14 @@ async fn connection_rows_describe_services_from_their_descriptors() {
     let descriptor = fixture.runtime.service_descriptor("oauth_stub").unwrap();
     let connection = descriptor.credentials.delegated.as_ref().unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["service"], "oauth_stub");
-    assert_eq!(rows[0]["serviceDisplayName"], descriptor.display_name);
+    assert_eq!(rows[0]["registration"], "stub");
+    assert_eq!(rows[0]["displayName"], descriptor.display_name);
+    assert_eq!(
+        rows[0]["consumers"],
+        json!([{"service": "oauth_stub", "displayName": descriptor.display_name,
+            "credentialVerificationInputs": []}])
+    );
+    assert_eq!(rows[0]["otherConsumers"], 0);
     assert_eq!(rows[0]["connectionDescription"], connection.description);
     assert_eq!(rows[0]["canConnect"], true);
     assert_eq!(rows[0]["connectUnavailableReason"], Value::Null);
@@ -929,7 +936,7 @@ async fn oauth_setup_accepts_direct_and_current_group_grants_without_rights() {
                     Method::POST,
                     "/v1/oauth/connect",
                     "group-lost",
-                    Some(json!({"service":"oauth_stub","intent":"reconnect"})),
+                    Some(json!({"registration": "stub","intent":"reconnect"})),
                 )
                 .await;
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -975,7 +982,7 @@ async fn oauth_rights_without_personal_grants_do_not_allow_setup_or_expose_empty
                 Method::POST,
                 "/v1/oauth/connect",
                 "rights-connect",
-                Some(json!({"service":"oauth_stub","intent":"connect"})),
+                Some(json!({"registration": "stub","intent":"connect"})),
             )
             .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1057,7 +1064,7 @@ async fn oauth_owned_connection_remains_visible_and_disconnectable_after_grant_l
             Method::POST,
             "/v1/oauth/connect",
             "cleanup-no-reconnect",
-            Some(json!({"service":"oauth_stub","intent":"reconnect"})),
+            Some(json!({"registration": "stub","intent":"reconnect"})),
         )
         .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1067,7 +1074,7 @@ async fn oauth_owned_connection_remains_visible_and_disconnectable_after_grant_l
     let response = fixture
         .browser(
             Method::DELETE,
-            "/v1/oauth/connections/oauth_stub",
+            "/v1/oauth/connections/stub",
             "cleanup-disconnect",
             None,
         )
@@ -1080,7 +1087,7 @@ async fn oauth_owned_connection_remains_visible_and_disconnectable_after_grant_l
     let response = fixture
         .browser(
             Method::DELETE,
-            "/v1/oauth/connections/oauth_stub",
+            "/v1/oauth/connections/stub",
             "cleanup-disconnect-again",
             None,
         )
@@ -1110,7 +1117,7 @@ async fn oauth_callback_after_grant_loss_is_forbidden_and_does_not_block_new_con
             Method::POST,
             "/v1/oauth/connect",
             "consent-start",
-            Some(json!({"service":"oauth_stub","intent":"connect"})),
+            Some(json!({"registration": "stub","intent":"connect"})),
         )
         .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1160,7 +1167,7 @@ async fn oauth_callback_after_grant_loss_is_forbidden_and_does_not_block_new_con
             Method::POST,
             "/v1/oauth/connect",
             "consent-retry",
-            Some(json!({"service":"oauth_stub","intent":"connect"})),
+            Some(json!({"registration": "stub","intent":"connect"})),
         )
         .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1216,7 +1223,7 @@ async fn oauth_disconnect_without_a_connection_preserves_pending_consent() {
     let response = fixture
         .browser(
             Method::DELETE,
-            "/v1/oauth/connections/oauth_stub",
+            "/v1/oauth/connections/stub",
             "empty-disconnect",
             None,
         )

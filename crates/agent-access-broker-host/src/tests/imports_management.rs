@@ -1004,9 +1004,13 @@ async fn imported_service_metadata_follows_the_reviewed_definition() {
     assert_eq!(service["actions"][0]["action"], "inspect");
     assert_eq!(service["actions"][0]["readOnly"], true);
     assert_eq!(targets.as_array().unwrap().len(), 1, "{targets}");
-    assert_eq!(targets[0]["service"], "observability");
+    assert_eq!(targets[0]["connection"], "observability");
     assert_eq!(targets[0]["displayName"], "Imported observations");
-    assert_eq!(targets[0]["credentialVerificationInputs"], json!([]));
+    assert_eq!(
+        targets[0]["consumers"],
+        json!([{"service": "observability", "displayName": "Imported observations",
+            "credentialVerificationInputs": []}])
+    );
 
     // An administrator's reviewed classification and name replace the old ones.
     let mut reviewed = update(

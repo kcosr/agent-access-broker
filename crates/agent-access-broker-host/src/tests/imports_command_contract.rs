@@ -589,6 +589,24 @@ fn grants(runtime: &BrokerRuntime) {
     }
 }
 
+/// Avery's per_user grant on each service, through which verifying
+/// Avery's personal credential probes as Avery.
+fn verify_grants(runtime: &BrokerRuntime, services: &[&str]) {
+    for service in services {
+        runtime
+            .create_managed_policy_grant(grant(
+                &format!("verify-{service}"),
+                "user:avery",
+                service,
+                "server.info",
+                "per_user",
+                0,
+                select(&[], &[]),
+            ))
+            .unwrap();
+    }
+}
+
 fn sorted_grants(authorization: &Value) -> Vec<Value> {
     let mut grants = authorization["grants"].as_array().unwrap().clone();
     grants.sort_by_key(|grant| grant.to_string());
@@ -1355,6 +1373,7 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
     import(&app, &token, "notes", "notes", &["per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets", "notes"]);
     let verify = |service: &'static str| {
         let (app, token) = (app.clone(), token.clone());
         async move {
@@ -1362,7 +1381,7 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
                 &app,
                 &token,
                 Method::POST,
-                &format!("/v1/admin/principals/avery/credentials/{service}/default/verify"),
+                &format!("/v1/admin/principals/avery/credentials/connections/{service}/verify"),
                 None,
             )
             .await
@@ -1672,7 +1691,7 @@ async fn inherited_network_settings_follow_the_trust_mode() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;
@@ -2313,6 +2332,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
     import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets"]);
     let registry = runtime.command_registry().clone();
 
     let held = registry.acquire("tickets", 1, far()).await.unwrap();
@@ -2323,7 +2343,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
                 &app,
                 &token,
                 Method::POST,
-                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                "/v1/admin/principals/avery/credentials/connections/tickets/verify",
                 None,
             )
             .await
@@ -2356,7 +2376,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;
@@ -2488,6 +2508,7 @@ async fn failed_verifications_keep_their_process_facts() {
     import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets"]);
     let verify = || {
         let (app, token) = (app.clone(), token.clone());
         async move {
@@ -2495,7 +2516,7 @@ async fn failed_verifications_keep_their_process_facts() {
                 &app,
                 &token,
                 Method::POST,
-                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                "/v1/admin/principals/avery/credentials/connections/tickets/verify",
                 None,
             )
             .await
@@ -2703,7 +2724,7 @@ async fn replies_may_name_private_attribute_values() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;

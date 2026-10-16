@@ -1285,7 +1285,7 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
         ),
         no_body_route(
             "DELETE",
-            "/v1/oauth/connections/{service}",
+            "/v1/oauth/connections/{registration}",
             "oauth.connections.disconnect",
             RouteAccess::BrowserManagement,
             ResponseKind::ManagementEnvelope,
@@ -1297,8 +1297,13 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
         "POST",
         "/v1/oauth/connect",
         json!({
-            "type":"object", "required":["service"], "additionalProperties":false,
-            "properties":{"service":{"type":"string"},"intent":{"type":"string","enum":["connect","reconnect","replace_account"]},"returnPath":{"type":"string","enum":["/ui/credentials","/ui/admin/catalog"]}}
+            "type":"object", "required":["registration"], "additionalProperties":false,
+            "properties":{
+                "registration":{"type":"string"},
+                "importedService":{"type":"string","description":"The imported service whose administrator discovery or catalog page the connection serves; required with returnPath /ui/admin/catalog."},
+                "intent":{"type":"string","enum":["connect","reconnect","replace_account"]},
+                "returnPath":{"type":"string","enum":["/ui/credentials","/ui/admin/catalog"]}
+            }
         }),
     );
     let connection_schema = json!({
@@ -1324,15 +1329,16 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
     });
     routes[0].result_schema = Some(json!({
         "type":"array",
-        "description":"Configured personal OAuth targets available for setup, plus existing owned connections available for local disconnect. Setup requires self-service and a matching per-user grant or the administrator import-discovery exception; it does not authorize invocation.",
+        "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
         "items":{
             "type":"object","additionalProperties":false,
-            "required":["service","serviceDisplayName","connectionDescription","registration","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","connection"],
+            "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","connection"],
             "properties":{
-                "service":{"type":"string"},
-                "serviceDisplayName":{"type":"string"},
-                "connectionDescription":{"type":["string","null"]},
                 "registration":{"type":"string"},
+                "displayName":{"type":"string"},
+                "connectionDescription":{"type":["string","null"]},
+                "consumers":connection_consumers_schema(),
+                "otherConsumers":{"type":"integer","minimum":0,"description":"Consuming services the caller is not entitled to; the connection serves them too."},
                 "permissionProfile":{"type":"string"},
                 "scopeMode":{"enum":["explicit","server_default"]},
                 "requestedScopes":{"type":"array","items":{"type":"string"}},
@@ -1363,13 +1369,13 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
             RouteAccess::UserManagement,
         ),
         get_management_route(
-            "/v1/credentials/{service}/{name}",
+            "/v1/credentials/connections/{connection}",
             "credentials.inspect",
             RouteAccess::UserManagement,
         ),
         body_route(
             "PUT",
-            "/v1/credentials/{service}/{name}",
+            "/v1/credentials/connections/{connection}",
             "credentials.put",
             RouteAccess::UserManagement,
             ResponseKind::ManagementEnvelope,
@@ -1378,7 +1384,7 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
         ),
         no_body_route(
             "DELETE",
-            "/v1/credentials/{service}/{name}",
+            "/v1/credentials/connections/{connection}",
             "credentials.delete",
             RouteAccess::UserManagement,
             ResponseKind::ManagementEnvelope,
@@ -1386,7 +1392,7 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
         ),
         body_route(
             "POST",
-            "/v1/credentials/{service}/{name}/verify",
+            "/v1/credentials/connections/{connection}/verify",
             "credentials.verify",
             RouteAccess::UserManagement,
             ResponseKind::ManagementEnvelope,
@@ -1394,9 +1400,17 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
             Vec::new(),
         ),
         get_management_route(
-            "/v1/credentials/{service}/{name}/input-schema",
+            "/v1/credentials/connections/{connection}/input-schema",
             "credentials.input_schema",
             RouteAccess::UserManagement,
+        ),
+        no_body_route(
+            "DELETE",
+            "/v1/credentials/retained/{credential_id}",
+            "credentials.retained.delete",
+            RouteAccess::UserManagement,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
         ),
         get_management_route(
             "/v1/tokens/options",
@@ -1450,8 +1464,32 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
     add_query_params(
         &mut routes,
         "GET",
-        "/v1/credentials/{service}/{name}/input-schema",
+        "/v1/credentials/connections/{connection}/input-schema",
         &["profile"],
+    );
+    set_request_body_schema(
+        &mut routes,
+        "PUT",
+        "/v1/credentials/connections/{connection}",
+        credential_put_body_schema(),
+    );
+    set_request_body_schema(
+        &mut routes,
+        "POST",
+        "/v1/credentials/connections/{connection}/verify",
+        credential_verify_body_schema(),
+    );
+    set_result_schema(
+        &mut routes,
+        "GET",
+        "/v1/credentials",
+        personal_credentials_result_schema(),
+    );
+    set_result_schema(
+        &mut routes,
+        "GET",
+        "/v1/credentials/targets",
+        credential_targets_result_schema(),
     );
     add_query_params(
         &mut routes,
@@ -2527,13 +2565,13 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
             Vec::new(),
         ),
         get_management_route(
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}",
             "admin.principals.credentials.inspect",
             RouteAccess::AdminRead,
         ),
         body_route(
             "PUT",
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}",
             "admin.principals.credentials.put",
             RouteAccess::AdminWrite,
             ResponseKind::ManagementEnvelope,
@@ -2542,7 +2580,7 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
         ),
         no_body_route(
             "DELETE",
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}",
             "admin.principals.credentials.delete",
             RouteAccess::AdminWrite,
             ResponseKind::ManagementEnvelope,
@@ -2550,7 +2588,7 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
         ),
         body_route(
             "POST",
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}/verify",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}/verify",
             "admin.principals.credentials.verify",
             RouteAccess::AdminWrite,
             ResponseKind::ManagementEnvelope,
@@ -2558,7 +2596,7 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
             Vec::new(),
         ),
         get_management_route(
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}/input-schema",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}/input-schema",
             "admin.principals.credentials.input_schema",
             RouteAccess::AdminRead,
         ),
@@ -2637,15 +2675,6 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
             "admin.credentials.inspect",
             RouteAccess::AdminRead,
         ),
-        body_route(
-            "PUT",
-            "/v1/admin/credentials/{credential_id}",
-            "admin.credentials.put",
-            RouteAccess::AdminWrite,
-            ResponseKind::ManagementEnvelope,
-            ExitPolicy::ManagementOk,
-            vec!["/body/secret".to_string()],
-        ),
         no_body_route(
             "DELETE",
             "/v1/admin/credentials/{credential_id}",
@@ -2653,15 +2682,6 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
             RouteAccess::AdminWrite,
             ResponseKind::ManagementEnvelope,
             ExitPolicy::ManagementOk,
-        ),
-        body_route(
-            "POST",
-            "/v1/admin/credentials/{credential_id}/verify",
-            "admin.credentials.verify",
-            RouteAccess::AdminWrite,
-            ResponseKind::ManagementEnvelope,
-            ExitPolicy::ManagementOk,
-            Vec::new(),
         ),
     ];
     add_query_params(
@@ -2673,8 +2693,26 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
     add_query_params(
         &mut routes,
         "GET",
-        "/v1/admin/principals/{principal}/credentials/{service}/{name}/input-schema",
+        "/v1/admin/principals/{principal}/credentials/connections/{connection}/input-schema",
         &["profile"],
+    );
+    set_request_body_schema(
+        &mut routes,
+        "PUT",
+        "/v1/admin/principals/{principal}/credentials/connections/{connection}",
+        credential_put_body_schema(),
+    );
+    set_request_body_schema(
+        &mut routes,
+        "POST",
+        "/v1/admin/principals/{principal}/credentials/connections/{connection}/verify",
+        credential_verify_body_schema(),
+    );
+    set_result_schema(
+        &mut routes,
+        "GET",
+        "/v1/admin/principals/{principal}/credentials/targets",
+        credential_targets_result_schema(),
     );
     add_query_params(&mut routes, "GET", "/v1/admin/tokens", &["principal"]);
     add_query_params(&mut routes, "GET", "/v1/admin/credentials", &["principal"]);
@@ -2754,6 +2792,123 @@ fn set_request_body_schema(routes: &mut [HttpRouteSpec], method: &str, route: &s
     {
         spec.request_body_schema = Some(schema);
     }
+}
+
+fn set_result_schema(routes: &mut [HttpRouteSpec], method: &str, route: &str, schema: Value) {
+    if let Some(spec) = routes
+        .iter_mut()
+        .find(|spec| spec.method == method && spec.route == route)
+    {
+        spec.result_schema = Some(schema);
+    }
+}
+
+/// The consuming services of a credential connection the caller is
+/// entitled to.
+fn connection_consumers_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "Consuming services the caller (or, on administrator routes, the principal) holds a per_user grant on, in configured order.",
+        "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["service", "displayName", "credentialVerificationInputs"],
+            "properties": {
+                "service": {"type": "string"},
+                "displayName": {"type": "string"},
+                "credentialVerificationInputs": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Inputs verifying through this service needs besides the credential, such as repository for a Git gateway."
+                }
+            }
+        }
+    })
+}
+
+fn credential_put_body_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["secret"],
+        "properties": {
+            "profile": {"type": "string", "description": "Optional; must equal the connection's token profile."},
+            "secret": {"type": "object", "description": "The fields of the connection's input schema."},
+            "metadata": {"type": "object"}
+        }
+    })
+}
+
+fn credential_verify_body_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "properties": {
+            "service": {"type": "string", "description": "The consuming service whose probe verifies the token, run as the credential owner; by default the first one the owner holds a per_user grant on that has a probe."},
+            "repository": {"type": "string", "description": "The repository a Git gateway probe fetches under the owner's repo.fetch policy."}
+        }
+    })
+}
+
+fn credential_input_schema_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["connection", "profile", "credentialKind", "fields"],
+        "properties": {
+            "connection": {"type": "string"},
+            "profile": {"type": "string"},
+            "credentialKind": {"type": "string"},
+            "fields": {"type": "array", "items": {"type": "object"}}
+        }
+    })
+}
+
+fn credential_targets_result_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "Credential connections whose token can be stored now: the connection selects the token method for the principal's kind and, for Broker-issued callers, the principal holds a per_user grant on a consuming service.",
+        "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["connection", "displayName", "consumers", "otherConsumers", "profile", "credentialKind", "inputSchema"],
+            "properties": {
+                "connection": {"type": "string"},
+                "displayName": {"type": "string"},
+                "consumers": connection_consumers_schema(),
+                "otherConsumers": {"type": "integer", "minimum": 0},
+                "profile": {"type": "string"},
+                "credentialKind": {"type": "string"},
+                "inputSchema": credential_input_schema_schema()
+            }
+        }
+    })
+}
+
+fn personal_credentials_result_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["connections", "retained"],
+        "properties": {
+            "connections": {
+                "type": "array",
+                "description": "Credential connections the caller is entitled to through a consuming service, plus any connection whose active token the caller still owns.",
+                "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "credential"],
+                    "properties": {
+                        "connection": {"type": "string"},
+                        "displayName": {"type": "string"},
+                        "method": {"enum": ["token", "oauth", "unavailable"]},
+                        "consumers": connection_consumers_schema(),
+                        "otherConsumers": {"type": "integer", "minimum": 0},
+                        "profile": {"type": ["string", "null"]},
+                        "credentialKind": {"type": ["string", "null"]},
+                        "registration": {"type": ["string", "null"]},
+                        "credential": {"type": ["object", "null"], "description": "The active token's metadata, keyed by connection."}
+                    }
+                }
+            },
+            "retained": {
+                "type": "array",
+                "description": "Stored rows the current configuration does not select, read-only; delete them by credentialId.",
+                "items": {"type": "object"}
+            }
+        }
+    })
 }
 
 fn execution_contexts_schema() -> Value {

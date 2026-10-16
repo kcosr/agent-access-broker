@@ -376,7 +376,7 @@ impl GmailFixture {
                 Method::POST,
                 "/v1/oauth/connect",
                 "oauth-connect",
-                Some(json!({"service": "gmail", "intent": "connect"})),
+                Some(json!({"registration": "google", "intent": "connect"})),
             )
             .await;
         let status = connect.status();

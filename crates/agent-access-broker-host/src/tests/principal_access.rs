@@ -53,7 +53,7 @@ fn write_body(operation: &str) -> &'static str {
         }
         "admin.rights.grant" => r#"{"principalId":"alice","right":"credentials.write"}"#,
         "admin.principals.tokens.issue" => r#"{"name":"test","tokenClass":"user_manage"}"#,
-        "credentials.put" | "admin.credentials.put" | "admin.principals.credentials.put" => {
+        "credentials.put" | "admin.principals.credentials.put" => {
             r#"{"secret":{"token":"synthetic"}}"#
         }
         "admin.credentials.rewrap" => r#"{"fromKey":"k1","toKey":"k2"}"#,
@@ -180,7 +180,7 @@ async fn auditor_all_admin_reads_and_safe_previews_are_admitted_but_every_write_
         "admin.principals.access.patch",
         "admin.principals.identity_token.reveal",
         "admin.policy.resources.attribute.reveal",
-        "admin.credentials.verify",
+        "admin.principals.credentials.verify",
     ] {
         assert!(
             denials.contains(operation),
@@ -601,7 +601,7 @@ async fn administrator_can_delete_credentials_after_disabling_the_owner() {
     )
     .unwrap();
     let mut credential_ids = Vec::new();
-    for name in ["tuple", "id"] {
+    for name in ["default", "retained"] {
         let credential = store
             .upsert_user_credential(
                 &ring,
@@ -630,7 +630,7 @@ async fn administrator_can_delete_credentials_after_disabling_the_owner() {
         .unwrap();
     store.set_principal_enabled("alice", false).unwrap();
     for uri in [
-        "/v1/admin/principals/alice/credentials/jira/tuple".to_string(),
+        format!("/v1/admin/credentials/{}", credential_ids[0]),
         format!("/v1/admin/credentials/{}", credential_ids[1]),
     ] {
         let (status, deleted) = fixture

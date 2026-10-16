@@ -1,3 +1,4 @@
+mod connection_credentials;
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{

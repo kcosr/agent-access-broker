@@ -33,8 +33,8 @@ static VERIFIER_BACKEND: BackendRegistration = BackendRegistration::new(
 .with_domain_reasons(&[&MAINTENANCE, &ACCOUNT_LOCKED])
 .development_only();
 
-/// A backend with no actions whose credential verification fails with the
-/// domain reason the stored token names.
+/// A backend whose credential verification fails with the domain reason
+/// the stored token names; its one action is never invoked.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct VerifierConfig {}
@@ -47,7 +47,12 @@ impl BackendConfig for VerifierConfig {
     fn validate(&self, _: &ValidationContext<'_>, _: &mut Vec<String>) {}
 
     fn descriptor(&self) -> ServiceDescriptor {
+        // One per_user action, which the owner's verification grant names.
         ServiceDescriptor::new(SERVICE, "Domain reason verifier")
+            .with_actions(vec![
+                ActionDescriptor::new("probe", "Never invoked", json!({"type": "object"}))
+                    .credential_modes(["per_user"]),
+            ])
             .with_credentials(CredentialDescriptor::default().profile(PROFILE, "bearer_token"))
     }
 
@@ -63,11 +68,11 @@ impl BackendConfig for VerifierConfig {
 #[async_trait::async_trait]
 impl Provider for VerifierConfig {
     async fn resolve_scopes(&self, _: ScopeRequest<'_>) -> Result<ScopeResolution, ProviderError> {
-        panic!("the verifier serves no actions")
+        panic!("the verifier's action is never invoked")
     }
 
     async fn invoke(&self, _: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        panic!("the verifier serves no actions")
+        panic!("the verifier's action is never invoked")
     }
 
     async fn verify_execution_credential(
@@ -99,7 +104,20 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
     std::fs::write(&key_path, URL_SAFE_NO_PAD.encode([9_u8; 32])).unwrap();
     let mut config =
         managed_jira_verify_config(&admin_token_path, &key_path, &store_path, &audit_path);
+    // The verifier replaces Jira.
     config.credentials.per_user.clear();
+    config.credentials.connections.clear();
+    config.policy.grants.retain(|grant| grant.service != "jira");
+    super::use_token_connection(&mut config, SERVICE, PROFILE, &[SERVICE]);
+    config.policy.grants.push(PolicyGrantConfig {
+        subjects: vec!["user:alice".to_string()],
+        execution_contexts: None,
+        service: SERVICE.to_string(),
+        actions: vec!["probe".to_string()],
+        resources: ResourceSelection::default(),
+        credential_mode: "per_user".to_string(),
+        priority: None,
+    });
     let registry = BackendRegistry::new(
         crate::backend_registry()
             .registrations()
@@ -125,9 +143,28 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
             created_by: "admin".to_string(),
         })
         .unwrap();
-    for (name, token) in [
-        ("maintenance", "maintenance-token"),
-        ("locked", "locked-token"),
+    let app = broker.app();
+
+    // A domain failure with an upstream status (503) records a failed
+    // verification like the standard upstream failures; one with another
+    // status (403) leaves the credential's verification state alone.
+    for (name, token, status, decision, reason, recorded) in [
+        (
+            "maintenance",
+            "maintenance-token",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "error",
+            "verifier_maintenance",
+            true,
+        ),
+        (
+            "locked",
+            "locked-token",
+            StatusCode::FORBIDDEN,
+            "deny",
+            "verifier_account_locked",
+            false,
+        ),
     ] {
         store
             .upsert_user_credential(
@@ -135,7 +172,7 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
                 CredentialWriteRequest {
                     owner_principal_id: "alice".to_string(),
                     service: SERVICE.to_string(),
-                    name: name.to_string(),
+                    name: "default".to_string(),
                     profile: PROFILE.to_string(),
                     credential_kind: "bearer_token".to_string(),
                     secret: json!({"token": token}),
@@ -145,28 +182,11 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
                 CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-    }
-    let app = broker.app();
-
-    for (name, status, decision, reason) in [
-        (
-            "maintenance",
-            StatusCode::SERVICE_UNAVAILABLE,
-            "error",
-            "verifier_maintenance",
-        ),
-        (
-            "locked",
-            StatusCode::FORBIDDEN,
-            "deny",
-            "verifier_account_locked",
-        ),
-    ] {
         let request_id = format!("domain-reason-verify-{name}");
         let response = admin_request(
             app.clone(),
             Method::POST,
-            &format!("/v1/admin/principals/alice/credentials/{SERVICE}/{name}/verify"),
+            &format!("/v1/admin/principals/alice/credentials/connections/{SERVICE}/verify"),
             Some(&request_id),
             Some("admin-token"),
         )
@@ -199,27 +219,31 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
             record["providerAudit"]["management"]["reasonCode"], reason,
             "{record}"
         );
-    }
+        assert_eq!(
+            record["providerAudit"]["management"]["target"]["probeService"], SERVICE,
+            "{record}"
+        );
 
-    // A domain failure with an upstream status (503) records a failed
-    // verification like the standard upstream failures; one with another
-    // status (403) leaves the credential's verification state alone.
-    let maintenance = store
-        .credential_by_tuple("alice", SERVICE, "maintenance")
-        .unwrap();
-    assert_eq!(
-        maintenance.verification_status.as_deref(),
-        Some("verification_failed")
-    );
-    assert!(maintenance.last_verification_attempt_at.is_some());
-    assert_eq!(
-        maintenance.last_verification_error_code.as_deref(),
-        Some("verifier_maintenance")
-    );
-    let locked = store
-        .credential_by_tuple("alice", SERVICE, "locked")
-        .unwrap();
-    assert_eq!(locked.verification_status.as_deref(), Some("not_verified"));
-    assert!(locked.last_verification_attempt_at.is_none());
-    assert!(locked.last_verification_error_code.is_none());
+        let credential = store
+            .credential_by_tuple("alice", SERVICE, "default")
+            .unwrap();
+        if recorded {
+            assert_eq!(
+                credential.verification_status.as_deref(),
+                Some("verification_failed")
+            );
+            assert!(credential.last_verification_attempt_at.is_some());
+            assert_eq!(
+                credential.last_verification_error_code.as_deref(),
+                Some("verifier_maintenance")
+            );
+        } else {
+            assert_eq!(
+                credential.verification_status.as_deref(),
+                Some("not_verified")
+            );
+            assert!(credential.last_verification_attempt_at.is_none());
+            assert!(credential.last_verification_error_code.is_none());
+        }
+    }
 }
