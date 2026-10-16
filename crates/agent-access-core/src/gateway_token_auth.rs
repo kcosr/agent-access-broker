@@ -1,9 +1,10 @@
 //! How a Git gateway presents its upstream execution credential: the
 //! `[gateways.<name>].upstream_token_auth` setting and the one presentation
 //! that gateway forwarding and Git credential verification share.
-use agent_access_provider::host::{authorize_host_request, token_as_basic};
+use agent_access_provider::host::token_as_basic;
 use agent_access_provider::{
     CredentialPlacement, ExecutionCredential, ProviderError, ReasonCode, StaticCredentialKind,
+    UpstreamAuthorization,
 };
 use serde::Deserialize;
 
@@ -81,20 +82,28 @@ fn basic_username_problem(username: &str) -> Option<&'static str> {
     }
 }
 
-/// `request` with the gateway's upstream authorization for `credential`. Git
-/// forwarding and Git credential verification both present the gateway's
-/// credential through this function, so a verified credential is presented
-/// exactly as forwarded requests present it.
+/// Host-only: the opaque authorization a Git gateway presents upstream for
+/// `credential`. Git forwarding (in the Broker host) and Git credential
+/// verification (in the runtime) both obtain it here and attach it to their
+/// own request with the SDK's host-only
+/// [`authorize_host_request`](agent_access_provider::host::authorize_host_request),
+/// so a verified credential is presented exactly as forwarded requests
+/// present it.
 ///
 /// A `basic_api_token` credential presents its stored username and token as
 /// HTTP Basic. A `bearer_token` credential presents its token as
 /// `token_auth` selects: as a Bearer token, or as the password of HTTP Basic
-/// under the configured username. Any other kind fails closed.
-pub fn authorize_gateway_upstream_request(
-    request: reqwest::RequestBuilder,
+/// under the configured username through the SDK's host-only
+/// [`token_as_basic`] placement. Any other kind fails closed.
+///
+/// The result exposes no material, but it presents a credential the way only
+/// the host's own clients may. Native, adapter, reference and helper crates
+/// never call this, even where they depend on this crate:
+/// `scripts/check-crate-boundaries.mjs` rejects any use in their sources.
+pub fn gateway_upstream_authorization(
     token_auth: &GatewayUpstreamTokenAuth,
     credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ProviderError> {
+) -> Result<UpstreamAuthorization, ProviderError> {
     let authorization = match credential.kind() {
         StaticCredentialKind::BasicApiToken => credential.authorization(),
         StaticCredentialKind::BearerToken => match token_auth.token_placement() {
@@ -113,7 +122,7 @@ pub fn authorize_gateway_upstream_request(
             ));
         }
     };
-    Ok(authorize_host_request(request, &authorization))
+    Ok(authorization)
 }
 
 #[cfg(test)]
@@ -121,16 +130,15 @@ mod tests {
     use super::*;
     use agent_access_provider::test_support::{basic_credential, bearer_credential};
 
+    /// The `Authorization` header the host attaches for `credential`.
     fn authorization(
         token_auth: &GatewayUpstreamTokenAuth,
         credential: &ExecutionCredential,
     ) -> String {
-        let request = authorize_gateway_upstream_request(
+        let request = agent_access_provider::host::authorize_host_request(
             reqwest::Client::new().get("https://gitlab.example.com/team/project.git/info/refs"),
-            token_auth,
-            credential,
+            &gateway_upstream_authorization(token_auth, credential).unwrap(),
         )
-        .unwrap()
         .build()
         .unwrap();
         let value = &request.headers()[reqwest::header::AUTHORIZATION];
@@ -178,8 +186,7 @@ mod tests {
     /// A token Basic cannot carry fails before anything is sent.
     #[test]
     fn basic_presentation_rejects_unsuitable_tokens() {
-        let error = authorize_gateway_upstream_request(
-            reqwest::Client::new().get("https://gitlab.example.com/"),
+        let error = gateway_upstream_authorization(
             &basic("oauth2"),
             &bearer_credential("token with space"),
         )

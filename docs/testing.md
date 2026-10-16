@@ -247,10 +247,13 @@ these boundaries:
 
 It also scans the Rust sources (`src`, `tests`, `benches`, `examples` and
 `build.rs`) of native, adapter, reference, and helper crates and fails on any
-use of the SDK's host-only items: `host::authorize_host_request`, which returns
-a request carrying a credential, and `host::token_as_basic`, which presents a
-token as HTTP Basic under a host-configured username. Those crates present
-credentials only through the upstream client's send methods.
+use, under any import path or alias, of the host-only items: the SDK's
+`host::authorize_host_request`, which returns a request carrying a credential,
+and `host::token_as_basic`, which presents a token as HTTP Basic under a
+host-configured username, and core's `gateway_upstream_authorization`, which
+presents a Git gateway's credential and which adapters could otherwise reach
+through their core dependency. Those crates present credentials only through
+the upstream client's send methods.
 
 Its unit tests use synthetic metadata and sources and run with the other script
 tests.

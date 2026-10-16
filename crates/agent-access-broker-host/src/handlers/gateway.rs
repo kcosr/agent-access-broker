@@ -1006,12 +1006,13 @@ async fn forward_prepared_git_http(
                 prepared.correlation.broker_request_id.clone(),
             );
     }
-    builder = match agent_access_core::authorize_gateway_upstream_request(
-        builder,
+    builder = match agent_access_core::gateway_upstream_authorization(
         &gateway.upstream_token_auth,
         &prepared.credential,
     ) {
-        Ok(builder) => builder,
+        Ok(authorization) => {
+            agent_access_provider::host::authorize_host_request(builder, &authorization)
+        }
         Err(error) => {
             let response = runtime
                 .fail_prepared_gateway_operation(prepared, error)
@@ -3313,12 +3314,14 @@ mod tests {
                 Some(GitContentEncoding::Gzip),
             )
             .unwrap();
-            let request = agent_access_core::authorize_gateway_upstream_request(
+            let request = agent_access_provider::host::authorize_host_request(
                 builder,
-                &token_auth,
-                &agent_access_provider::test_support::bearer_credential("upstream-token"),
+                &agent_access_core::gateway_upstream_authorization(
+                    &token_auth,
+                    &agent_access_provider::test_support::bearer_credential("upstream-token"),
+                )
+                .unwrap(),
             )
-            .unwrap()
             .build()
             .unwrap();
 

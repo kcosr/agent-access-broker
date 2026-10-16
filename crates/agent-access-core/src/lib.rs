@@ -50,7 +50,7 @@ pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
 pub use command_imports_config::*;
 pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
-pub use gateway_token_auth::{GatewayUpstreamTokenAuth, authorize_gateway_upstream_request};
+pub use gateway_token_auth::{GatewayUpstreamTokenAuth, gateway_upstream_authorization};
 pub use import_names::*;
 pub use imports_config::*;
 pub use invocation_limits::*;

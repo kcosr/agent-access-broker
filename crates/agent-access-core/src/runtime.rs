@@ -62,7 +62,7 @@ use crate::{
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
     PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
     ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
-    authorize_gateway_upstream_request, credential_mode_available, is_safe_identifier,
+    credential_mode_available, gateway_upstream_authorization, is_safe_identifier,
     is_safe_principal, normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
@@ -4445,8 +4445,10 @@ impl BrokerRuntime {
                     correlation.broker_request_id.clone(),
                 );
         }
-        builder =
-            authorize_gateway_upstream_request(builder, &gateway.upstream_token_auth, credential)?;
+        builder = agent_access_provider::host::authorize_host_request(
+            builder,
+            &gateway_upstream_authorization(&gateway.upstream_token_auth, credential)?,
+        );
         let started = Instant::now();
         let verification_timeout = Duration::from_millis(
             gateway
