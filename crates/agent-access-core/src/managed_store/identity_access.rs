@@ -371,6 +371,56 @@ impl ManagedStore {
         tx.commit().map_err(sql_unavailable)?;
         Ok(current)
     }
+
+    /// What a command-import request names about its caller, read in one
+    /// transaction: the stored principal's kind, display name and email, the
+    /// label of the agent token the call used, and the namespace and name of
+    /// the trusted username binding it asserted.
+    pub(crate) fn command_caller(
+        &self,
+        principal_id: &str,
+        token_id: Option<&str>,
+        username_binding_id: Option<&str>,
+    ) -> Result<CommandCallerRecord, ManagedStoreError> {
+        validate_principal_id(principal_id)?;
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn.transaction().map_err(sql_unavailable)?;
+        let principal = principal_by_id_without_groups(&tx, principal_id)?;
+        let token_label = token_id
+            .map(|token_id| {
+                let token = broker_token_by_id(&tx, token_id)?;
+                if token.principal_id != principal_id {
+                    return Err(ManagedStoreError::BrokerTokenNotFound);
+                }
+                Ok(token.name)
+            })
+            .transpose()?;
+        let username = username_binding_id
+            .map(|binding_id| {
+                username_binding_conn(&tx, principal_id, binding_id)
+                    .map(|binding| (binding.namespace, binding.username))
+            })
+            .transpose()?;
+        tx.commit().map_err(sql_unavailable)?;
+        Ok(CommandCallerRecord {
+            kind: principal.kind,
+            display_name: principal.display_name,
+            email: principal.email,
+            token_label,
+            username,
+        })
+    }
+}
+
+/// The stored facts [`ManagedStore::command_caller`] reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommandCallerRecord {
+    pub kind: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub token_label: Option<String>,
+    /// The asserted username binding's namespace and username.
+    pub username: Option<(String, String)>,
 }
 
 fn validate_username_identity(namespace: &str, username: &str) -> Result<(), ManagedStoreError> {

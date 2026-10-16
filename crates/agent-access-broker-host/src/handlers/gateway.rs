@@ -3917,6 +3917,7 @@ mod tests {
                 },
                 Some(&agent_access_core::ManagedResourceCatalog {
                     attribute_bindings: Vec::new(),
+                    resource_fences: Default::default(),
                     resources: config.policy.resources.clone(),
                     resource_groups: config.policy.resource_groups.clone(),
                 }),

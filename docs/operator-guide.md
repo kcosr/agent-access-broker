@@ -543,8 +543,21 @@ streaming downloads are still open, those streams are canceled and their
 terminal audit records are queued through the audit writer before final writer
 drain. Unix `SIGUSR2` reloads continue to work before shutdown starts; once
 shutdown has started, reload signal handling exits and no new reload is
-admitted. The broker also gives Tokio blocking tasks up to another
-`--shutdown-timeout-ms` after the in-runtime drain completes. For systemd, set
+admitted. After in-flight operations drain, the broker stops command-import
+processes, which can outlive the call that started them: every command process
+group still running, including one whose call has already ended, is killed
+with `SIGKILL`. Calls waiting for a concurrency slot keep waiting during the
+operation drain; one its deadline stops reports the usual `unknown` outcome.
+`operation_cancelled` with nothing applied is only the backstop for a call that
+reaches its command after the command drain has begun. The broker waits within the
+remaining budget, and at least 100 ms, until each process is reaped and its
+concurrency slot released, then drains audit; processes still unreaped are logged as
+`command_process_shutdown_unfinished`. A descendant that left its command's
+process group is not killed. Command runs that fail log `command_import_failed`
+with the failure category and exit status or signal; set the command's
+`log_stderr` only while debugging, because the Broker cannot redact secrets a
+command prints. The broker also gives Tokio blocking tasks up to
+another `--shutdown-timeout-ms` after the in-runtime drain completes. For systemd, set
 `TimeoutStopSec` to at least `2 * --shutdown-timeout-ms` plus a small scheduler
 and process-exit margin so the broker can finish both bounded phases.
 

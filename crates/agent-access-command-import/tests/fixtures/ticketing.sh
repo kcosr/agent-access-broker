@@ -1,6 +1,6 @@
 #!/bin/sh
 # A ticketing command fixture. `describe` prints the manifest; every other
-# subcommand fails, because invocation is not wired yet.
+# subcommand exits 2.
 case "$1" in
 describe)
   cat <<'MANIFEST'

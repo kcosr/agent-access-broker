@@ -1,7 +1,8 @@
 //! Protocol-specific implementation seam for managed imported services.
 use super::{
-    CommandProvider, ImportEndpointForm, ImportedActionAuthority, ImportedActionDefinition,
-    ImportedDiscoveryCredential, ImportedServiceDefinition, ImportedServiceMetadata,
+    CommandProvider, CommandRegistry, ImportEndpointForm, ImportedActionAuthority,
+    ImportedActionDefinition, ImportedDiscoveryCredential, ImportedServiceDefinition,
+    ImportedServiceMetadata,
 };
 use crate::CommandImportConfig;
 use agent_access_provider::{
@@ -60,6 +61,10 @@ pub struct ImportedAdapterContext<'a> {
     /// `command:<name>` endpoint; `None` for every other endpoint form. Core
     /// supplies it only while the entry approves the import.
     pub command: Option<&'a CommandImportConfig>,
+    /// The Broker's command budgets, which a command's `describe` run draws
+    /// from like its `invoke` and `verify` runs. Core supplies it to
+    /// [`ImportedAdapter::discover`]; building never runs a command.
+    pub command_registry: Option<&'a CommandRegistry>,
 }
 
 impl<'a> ImportedAdapterContext<'a> {
@@ -70,7 +75,14 @@ impl<'a> ImportedAdapterContext<'a> {
         Self {
             accepted_metadata,
             command,
+            command_registry: None,
         }
+    }
+
+    /// This context with the Broker's command budgets, for discovery.
+    pub fn with_command_registry(mut self, registry: &'a CommandRegistry) -> Self {
+        self.command_registry = Some(registry);
+        self
     }
 }
 

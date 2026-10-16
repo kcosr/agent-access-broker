@@ -287,10 +287,7 @@ fn supported(
 pub(crate) struct CompiledAction {
     pub read_only: bool,
     pub input: BoundedImportSchema,
-    #[expect(
-        dead_code,
-        reason = "the response contract validates results against it"
-    )]
+    /// Results of `ok: true` responses must validate against it.
     pub output: Option<BoundedImportSchema>,
     pub authority: ImportedActionAuthority,
 }

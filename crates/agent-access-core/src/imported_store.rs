@@ -1253,14 +1253,9 @@ impl ManagedStore {
         expected_material_version: &str,
         ring: &CredentialKeyRing,
     ) -> Result<ExecutionCredential, ManagedStoreError> {
-        let conn = self.connection.lock().unwrap();
-        let row = secret_row(&conn, service, purpose.as_str())?
-            .ok_or(ManagedStoreError::CredentialNotFound)?;
-        if row.material_version != expected_material_version {
-            return Err(ManagedStoreError::VersionConflict);
-        }
-        let plaintext = decrypt(ring, &row)?;
-        match row.credential_kind.as_str() {
+        let (kind, plaintext) =
+            self.imported_secret_plaintext(service, purpose, expected_material_version, ring)?;
+        match kind.as_str() {
             // Bearer slots keep the raw token, as every earlier release wrote.
             "bearer_token" => Ok(agent_access_provider::host::bearer_credential(plaintext)),
             "basic_api_token" => {
@@ -1272,6 +1267,51 @@ impl ManagedStore {
                 "unsupported credential kind".to_string(),
             )),
         }
+    }
+
+    /// A service-owned slot as a command import receives it, decrypted at
+    /// `expected_material_version` exactly as [`Self::resolve_imported_secret`]
+    /// decrypts it for execution. The plaintext stays in zeroizing storage.
+    pub(crate) fn resolve_imported_command_credential(
+        &self,
+        service: &str,
+        purpose: ImportedCredentialPurpose,
+        expected_material_version: &str,
+        ring: &CredentialKeyRing,
+    ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
+        let (kind, plaintext) =
+            self.imported_secret_plaintext(service, purpose, expected_material_version, ring)?;
+        match kind.as_str() {
+            "bearer_token" => Ok(crate::imports::CommandCredential::token(plaintext)),
+            "basic_api_token" => {
+                let plaintext = zeroize::Zeroizing::new(plaintext);
+                let secret = serde_json::from_str(&plaintext)
+                    .map_err(|_| ManagedStoreError::CredentialDecryptFailed)?;
+                super::command_credential_from_secret("basic_api_token", secret)
+            }
+            _ => Err(ManagedStoreError::CredentialInvalid(
+                "unsupported credential kind".to_string(),
+            )),
+        }
+    }
+
+    /// The stored kind and decrypted plaintext of a slot at
+    /// `expected_material_version`.
+    fn imported_secret_plaintext(
+        &self,
+        service: &str,
+        purpose: ImportedCredentialPurpose,
+        expected_material_version: &str,
+        ring: &CredentialKeyRing,
+    ) -> Result<(String, String), ManagedStoreError> {
+        let conn = self.connection.lock().unwrap();
+        let row = secret_row(&conn, service, purpose.as_str())?
+            .ok_or(ManagedStoreError::CredentialNotFound)?;
+        if row.material_version != expected_material_version {
+            return Err(ManagedStoreError::VersionConflict);
+        }
+        let plaintext = decrypt(ring, &row)?;
+        Ok((row.credential_kind, plaintext))
     }
 }
 fn secret_row(

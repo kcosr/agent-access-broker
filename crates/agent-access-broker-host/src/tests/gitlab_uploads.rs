@@ -242,14 +242,14 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
         scopes: json!({"allowedServices": ["gitlab"], "allowedExecutionContexts": ["default"],
             "serviceRestrictions": {"gitlab": {"actions": ["project.upload"], "resources":{"resourceIds":["repository-other-project"],"resourceGroupIds":[]}}}}),
         expires_at: None, created_by: "test".to_string(),
-    }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
+    }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resource_fences: Default::default(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
     let allowed = store.issue_broker_token_with_catalog(&hasher, agent_access_core::BrokerTokenIssueRequest {
         principal_id: "upload-user".to_string(), name: "allowed upload".to_string(),
         token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
         scopes: json!({"allowedServices": ["gitlab"], "allowedExecutionContexts": ["default"],
             "serviceRestrictions": {"gitlab": {"actions": ["project.upload"], "resources":{"resourceIds":["repository-sip-service"],"resourceGroupIds":[]}}}}),
         expires_at: None, created_by: "test".to_string(),
-    }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
+    }, Some(&agent_access_core::ManagedResourceCatalog { attribute_bindings: Vec::new(), resource_fences: Default::default(), resources: config.policy.resources.clone(), resource_groups: config.policy.resource_groups.clone() })).unwrap();
     drop(store);
     let broker = TestBroker::start_config(&config).await;
     let app = broker.app();

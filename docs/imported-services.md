@@ -174,8 +174,10 @@ MCP budget does not change the fixed storage and runtime-spec ceilings.
 Execution credential ownership and authentication mechanism are separate. Static
 token execution supports bearer or an administrator-configured raw
 header. A service binding uses its encrypted execution slot. A personal binding uses
-the caller's managed `default` credential with profile `token`. The selected personal
-credential never falls back to a shared service or discovery token.
+the caller's managed `default` credential with profile `token`, or `username-token`
+for a command import whose credential kind is `username_token`. The selected personal
+credential never falls back to a shared service or discovery token. Command imports
+deliver credentials on the command's stdin (`stdin` delivery).
 
 The broker still authenticates the invoking user and enforces their agent token,
 context, grant, rate limit, and audit identity when upstream uses a shared token.
@@ -457,6 +459,90 @@ effects, not a restriction on saving a local response file.
 In the legacy protocol, disconnecting does not prove cancellation: a timed-out
 call may continue upstream. Its uncertain write outcome remains `unknown` with
 `retrySafe: false`.
+
+### Command import calls
+
+A command import's call takes a slot from its command's concurrency budget,
+then runs its final checks: the import's dispatch fence, the resource entries
+the request names, and the credentials. A resource entry changed (any change
+advances its version), deleted and recreated, or disabled while the call
+waited fails `scope_unresolved`, with or without private attributes. Each
+entry is compared on its version, creation time (to the second), display
+name, type and selector, so an entry deleted and recreated within the same
+second with identical fields counts as the same entry. A rotated service
+slot, a disabled or quarantined action, or a changed or removed command entry
+fails `service_action_denied`; a removed personal credential fails
+`credential_not_provisioned`. The dispatch fence is checked again once the
+request is built, immediately before the process starts, so a change made
+while the call resolved its resources, credentials and caller also fails
+`service_action_denied`. None of these starts a process or supplies a
+credential, and a write reports `not_applied`. A personal credential rotated
+during the wait is read as it is now; a service slot is read only at the
+version admitted with the call.
+
+The Broker then starts one `<path> invoke` process and writes one JSON request
+to its stdin: the manifest's action name, the execution context, the Broker
+request ID and the deadline; the `caller` (principal, kind, display name and
+email, the asserted username, the agent token's ID and label, and the policy
+groups); the validated `inputs`; the admitted `authorization`; the
+`credentials` it uses, keyed by wire mode `service` or `user`; and, with
+`network = "inherit"`, the egress `network` settings. Credentials and
+decrypted private attributes travel only on stdin, never in arguments, the
+environment, responses, logs or audit.
+
+- **Broker-enforced** actions get `{"mode": "broker", "credential",
+  "resourceType", "resources"}`: each value the inputs name, with the ID,
+  display name and private attributes of its enabled exact entry in the call's
+  context (a value without one carries only `value`), and the one selected
+  credential.
+- **Command-enforced** actions get `{"mode": "command", "resourceType"?,
+  "grants"}`: the caller's top-band grants, each with its own `credential` and
+  `"resources": [...]` or `"resources": "any"` with the excluded values in
+  `except`. An action without a resource type has only `"any"` grants.
+- A command without a credential receives no `credentials` and no `credential`
+  members.
+
+A successful response's `result` is returned as `result.upstreamCommand`,
+marked sensitive like other imported payloads. Command error codes map to
+Broker reasons with the command's message: `input_invalid`,
+`resource_not_found`, `resource_forbidden` (`service_action_denied`),
+`conflict` (`version_conflict`), `upstream_unauthorized`, `upstream_forbidden`,
+`upstream_rate_limited` (with the command's `retryAfterSeconds` as the
+upstream rate-limit result), `upstream_unreachable`
+(`upstream_connection_failed`), `upstream_timeout` and `upstream_failed`. Write
+receipts follow [mutation receipts](http-api.md#mutation-receipts), with
+`operationDispatched` saying whether the process started. A response that
+breaks the command contract, such as invalid JSON, an unknown field or code, a
+message over 1,024 bytes or with control characters, a receipt on a read, an
+invalid locator, an echoed secret (below), or a result its output schema
+rejects, fails `operation_failed` with an `unknown` write receipt and never
+exposes the output. The command timeout fails `upstream_timeout`.
+
+Error messages, verification stages and `safeLocators` keys and values leave
+the sensitive result, so none may contain, anywhere, a credential or proxy
+secret the request supplied: a credential token or the Basic `username:token`
+form of a `username_token` credential, the proxy password, its
+percent-encoded form or the credentialed proxy URL. Private resource attribute
+values are not checked: they are stored privately, but many, such as an issue
+key or a region, legitimately appear in replies, so a command must not repeat
+an attribute value it treats as a secret in these fields. A verification
+response is checked against the credential it verified and the proxy secrets.
+
+Invocation audit adds `providerAudit.command` (the command `name`, `spawned`,
+`exitCode`, `signal`, `durationMs`, `contractViolation` and
+`operationDispatched`) and `providerAudit.commandAuthorization` (the admitted
+plan: grant IDs, versions and subjects, credential modes, and the resolved
+values or boundaries, never attributes). Both are captured from admission, so
+a call the Broker interrupts at the HTTP MCP deadline or at shutdown keeps
+them; facts not yet known are `null`. `contractViolation` is `true` for
+oversized output, pipes held open or an invalid response, `false` once a
+response was read and kept the contract or the process failed on its own with
+a non-zero exit or signal, and `null` when the process never started or the
+Broker stopped it (command timeout, HTTP MCP deadline, shutdown) before reading
+a response. A client disconnect or MCP cancellation does not stop a running
+command. A command verification records the same `command` facts under
+`providerAudit.verification`, for a failed verification too, and leaves
+`upstreamStatus` `null`, since a command has no upstream status.
 
 ## Connecting one imported service
 

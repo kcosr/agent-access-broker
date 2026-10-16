@@ -93,6 +93,7 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let catalog = ManagedResourceCatalog {
         attribute_bindings: Vec::new(),
+        resource_fences: Default::default(),
         resources: config.policy.resources.clone(),
         resource_groups: config.policy.resource_groups.clone(),
     };

@@ -14,7 +14,9 @@ async-trait.workspace = true
 libc.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tracing.workspace = true
 
 [dev-dependencies]
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+futures-util.workspace = true

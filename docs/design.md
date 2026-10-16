@@ -153,7 +153,12 @@ also includes a same-origin browser portal frontend:
   use `command:<name>` endpoints approved in `[command_imports]`; core passes the
   approved entry and the accepted service metadata to the adapter, and runs a
   command import's calls through its command hook with a core-built request
-  instead of `Provider::invoke`.
+  instead of `Provider::invoke`. Every `describe`, `invoke` and `verify` run
+  starts one process under a supervisor holding a slot of the command's
+  concurrency budget. Core keeps the budgets in a command registry that each
+  runtime generation inherits, as it does import dispatch fences, so every
+  import and generation of a command shares one budget; the fence also
+  changes when the command's `[command_imports]` entry does.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.
@@ -276,8 +281,8 @@ provider is built for it), then binds the listeners and starts serving. A
 [reload](#dynamic-config-reload) validates a candidate configuration and builds
 a new generation within the same composition; operations keep the generation
 that admitted them. Changing what is linked requires a new build and a restart.
-[Shutdown](#process-shutdown) drains listeners, operations and audit within a
-bounded budget.
+[Shutdown](#process-shutdown) drains listeners, operations, command-import
+processes and audit within a bounded budget.
 
 ### Core vs provider responsibilities
 
@@ -919,7 +924,15 @@ sequenceDiagram
 13. **Provider invoke**, then **finalize/audit**. The final invocation is built
    only after staging: the body is consumed, the revision fences run, and only
    the admitted resource's private attributes are decrypted. Its fields are
-   private and read through accessors, and it never serializes.
+   private and read through accessors, and it never serializes. A command
+   import's call first waits, until its command deadline (the earlier of
+   admission plus the command's `timeout` and the host operation deadline),
+   for a slot of its command's concurrency budget, then runs these final checks
+   and calls the command hook, which hands the slot to the supervisor of the
+   one process it starts. A call that gets no slot fails `upstream_timeout`,
+   and one that finds the budget closed by shutdown fails
+   `operation_cancelled`; a write that never started a process reports
+   `not_applied`.
 
 The lookup credential is never returned to the caller; the execution credential
 is placed only into the `ProviderInvocation`.
@@ -2109,8 +2122,14 @@ reaches its reserved final phase (the final quarter, capped at one second). That
 phase bounds forced-stop unknown-outcome finalization without extending the hard
 shutdown deadline. Disconnected operations
 remain tracked and keep permits until finalization; shutdown does not overlook
-them merely because their response connection disappeared. The audit writer shuts
-down after operation draining. Unfinished finalization is reported explicitly;
+them merely because their response connection disappeared. Command-import
+processes can outlive their operation, so after operation draining the shared
+command registry closes: a call that reaches its command afterwards fails
+without starting a process, every live process supervisor is asked to kill its
+process group and leader, and shutdown waits within the remaining budget (at
+least 100 ms) until each has reaped its process and returned its concurrency
+permit, reporting those that have not. The audit writer shuts
+down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.
 

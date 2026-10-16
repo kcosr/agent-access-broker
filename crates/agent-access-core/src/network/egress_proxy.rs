@@ -1,14 +1,25 @@
 //! Egress proxy selection: the process proxy environment captured at startup,
 //! configured service and global proxies, `NO_PROXY` matching, and proxy
 //! credential resolution. Secret-bearing values stay inside this module; the
-//! rest of the host sees sanitized [`EgressRoute`]s.
+//! rest of the host sees sanitized [`EgressRoute`]s. The one exception is
+//! [`ExportedProxy`], the route command imports inherit: only the `network`
+//! module reads its credentials, and hands them to commands only through the
+//! command network's request field and environment.
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
 use agent_access_provider::{EgressProxyConfig, EgressProxySource, EgressRoute};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
 use url::Url;
+
+/// Userinfo characters a credentialed proxy URL keeps literal: the RFC 3986
+/// unreserved set. Every other byte is percent-encoded.
+const USERINFO_LITERAL: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct EgressProxyEnvironment {
@@ -59,6 +70,11 @@ impl EgressProxyEnvironment {
             "http" => self.http_proxy.clone(),
             _ => None,
         }
+    }
+
+    /// The `NO_PROXY` entries as given, in order, without empty entries.
+    pub(super) fn no_proxy_entries(&self) -> &[String] {
+        &self.no_proxy.entries
     }
 }
 
@@ -122,6 +138,76 @@ impl EgressProxyResolver {
                 .map(|target| EgressProxySelection::proxied(EgressProxySource::Global, target));
         }
         Ok(EgressProxySelection::direct())
+    }
+
+    /// The route a command import's HTTPS requests outside `NO_PROXY` take:
+    /// the environment proxy for HTTPS, then the global proxy, and otherwise
+    /// direct. Imports have no service proxy. Resolves the global proxy's
+    /// credential references.
+    pub(super) fn command_proxy(&self) -> Result<Option<ExportedProxy>, HostConfigError> {
+        if let Some(proxy) = self.environment.proxy_for_scheme("https") {
+            return Ok(Some(ExportedProxy(proxy)));
+        }
+        self.global_proxy
+            .as_ref()
+            .map(|config| {
+                ProxyTarget::from_application_config("network.egress_proxy", config)
+                    .map(ExportedProxy)
+            })
+            .transpose()
+    }
+}
+
+/// A proxy route exported to command imports, with its resolved credentials.
+/// Only the `network` module reads the credentials; `Debug` redacts them.
+pub(super) struct ExportedProxy(ProxyTarget);
+
+impl ExportedProxy {
+    /// The proxy origin without credentials, such as
+    /// `https://proxy.example:8443`.
+    pub(super) fn origin(&self) -> String {
+        self.0.sanitized_origin()
+    }
+
+    /// The proxy's username and password, when it needs them.
+    pub(super) fn credentials(&self) -> Option<(&str, &str)> {
+        self.0
+            .credentials
+            .as_ref()
+            .map(|credentials| (credentials.username.as_str(), credentials.password.as_str()))
+    }
+
+    /// The proxy password percent-encoded as [`Self::credentialed_url`]
+    /// carries it, when the proxy needs credentials.
+    pub(super) fn encoded_password(&self) -> Option<String> {
+        self.credentials()
+            .map(|(_, password)| utf8_percent_encode(password, USERINFO_LITERAL).to_string())
+    }
+
+    /// The proxy origin with its credentials, if any, percent-encoded in the
+    /// userinfo: the form proxy environment variables carry.
+    pub(super) fn credentialed_url(&self) -> String {
+        let origin = self.origin();
+        let Some((username, password)) = self.credentials() else {
+            return origin;
+        };
+        // The origin is `<scheme>://<authority>`.
+        let authority = &origin[self.0.url.scheme().len() + "://".len()..];
+        format!(
+            "{}://{}:{}@{authority}",
+            self.0.url.scheme(),
+            utf8_percent_encode(username, USERINFO_LITERAL),
+            utf8_percent_encode(password, USERINFO_LITERAL),
+        )
+    }
+}
+
+impl fmt::Debug for ExportedProxy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ExportedProxy")
+            .field(&self.0)
+            .finish()
     }
 }
 
@@ -422,6 +508,8 @@ fn config_error(errors: Vec<String>) -> ConfigError {
 struct NoProxyMatcher {
     match_all: bool,
     rules: Vec<NoProxyRule>,
+    /// The entries as given, trimmed, for command imports to inherit.
+    entries: Vec<String>,
 }
 
 impl NoProxyMatcher {
@@ -438,6 +526,7 @@ impl NoProxyMatcher {
                 Ok(rule) => matcher.rules.push(rule),
                 Err(error) => errors.push(format!("{label} token {token} is invalid: {error}")),
             }
+            matcher.entries.push(token.to_owned());
         }
         if errors.is_empty() {
             Ok(matcher)
@@ -460,6 +549,7 @@ impl fmt::Debug for NoProxyMatcher {
             .debug_struct("NoProxyMatcher")
             .field("match_all", &self.match_all)
             .field("rules", &self.rules)
+            .field("entries", &self.entries)
             .finish()
     }
 }
@@ -812,6 +902,185 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("user"));
         assert!(!debug.contains("pass"));
+    }
+
+    fn exported(url: &str, credentials: Option<(&str, &str)>) -> ExportedProxy {
+        ExportedProxy(ProxyTarget {
+            url: Url::parse(url).unwrap(),
+            credentials: credentials.map(|(username, password)| {
+                ProxyCredentials::new(username.to_owned(), password.to_owned())
+            }),
+        })
+    }
+
+    fn command_proxy(
+        environment: &[(&str, &str)],
+        global_proxy: Option<EgressProxyConfig>,
+    ) -> Result<Option<ExportedProxy>, HostConfigError> {
+        EgressProxyResolver::new(Arc::new(env_from(environment).unwrap()), global_proxy)
+            .command_proxy()
+    }
+
+    #[test]
+    fn keeps_no_proxy_entries_as_given() {
+        let env = env_from(&[
+            (
+                "NO_PROXY",
+                " .internal.example, Localhost:8443 ,,*,[::1],10.0.0.1 ",
+            ),
+            ("no_proxy", "ignored.example"),
+        ])
+        .unwrap();
+        assert_eq!(
+            env.no_proxy_entries(),
+            [
+                ".internal.example",
+                "Localhost:8443",
+                "*",
+                "[::1]",
+                "10.0.0.1"
+            ]
+        );
+        // The parsed rules still match, case-insensitively.
+        assert!(
+            env.no_proxy
+                .matches(&Url::parse("https://localhost:8443/").unwrap())
+        );
+        // A blank upper-case variable defers to the lower-case one.
+        let env = env_from(&[("NO_PROXY", "  "), ("no_proxy", "Lower.Example")]).unwrap();
+        assert_eq!(env.no_proxy_entries(), ["Lower.Example"]);
+        assert!(env_from(&[]).unwrap().no_proxy_entries().is_empty());
+        assert!(
+            env_from(&[("NO_PROXY", " , ")])
+                .unwrap()
+                .no_proxy_entries()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn command_proxy_is_the_https_route_outside_no_proxy() {
+        let global = Some(EgressProxyConfig {
+            url: "http://global-proxy.example:3128".into(),
+            username_ref: None,
+            password_ref: None,
+        });
+        // The environment's HTTPS proxy wins, with its embedded credentials.
+        let proxy = command_proxy(
+            &[
+                (
+                    "HTTPS_PROXY",
+                    "https://env%20user:p%40ss@proxy.example:8443",
+                ),
+                ("HTTP_PROXY", "http://http-only.example:3128"),
+                ("NO_PROXY", "*"),
+            ],
+            global.clone(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(proxy.origin(), "https://proxy.example:8443");
+        assert_eq!(proxy.credentials(), Some(("env user", "p@ss")));
+        let debug = format!("{proxy:?}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert!(
+            !debug.contains("env user") && !debug.contains("p@ss"),
+            "{debug}"
+        );
+        // An environment proxy for plain HTTP only does not apply: the global
+        // proxy does. No service proxy exists for imports.
+        let proxy = command_proxy(
+            &[("http_proxy", "http://http-only.example:3128")],
+            global.clone(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(proxy.origin(), "http://global-proxy.example:3128");
+        assert_eq!(proxy.credentials(), None);
+        // The lower-case HTTPS variable counts too.
+        let proxy = command_proxy(&[("https_proxy", "http://lower.example:3128")], global)
+            .unwrap()
+            .unwrap();
+        assert_eq!(proxy.origin(), "http://lower.example:3128");
+        assert!(command_proxy(&[], None).unwrap().is_none());
+        assert!(
+            command_proxy(&[("HTTP_PROXY", "http://http-only.example:3128")], None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn command_proxy_resolves_global_credential_references() {
+        let username_path = temp_proxy_secret("global-user");
+        let password_path = temp_proxy_secret("global-password");
+        let proxy = command_proxy(
+            &[],
+            Some(EgressProxyConfig {
+                url: "https://global-proxy.example:8443".into(),
+                username_ref: Some(format!("file:{}", username_path.display())),
+                password_ref: Some(format!("file:{}", password_path.display())),
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(proxy.origin(), "https://global-proxy.example:8443");
+        assert_eq!(
+            proxy.credentials(),
+            Some(("global-user", "global-password"))
+        );
+        let _ = std::fs::remove_file(username_path);
+        let _ = std::fs::remove_file(password_path);
+
+        let missing = command_proxy(
+            &[],
+            Some(EgressProxyConfig {
+                url: "https://global-proxy.example:8443".into(),
+                username_ref: Some("env:AGENT_ACCESS_COMMAND_PROXY_TEST_MISSING_USER".into()),
+                password_ref: Some("env:AGENT_ACCESS_COMMAND_PROXY_TEST_MISSING_PASSWORD".into()),
+            }),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            missing,
+            HostConfigError::MissingEnv { label, name }
+                if label == "network.egress_proxy.username_ref"
+                    && name == "AGENT_ACCESS_COMMAND_PROXY_TEST_MISSING_USER"
+        ));
+    }
+
+    #[test]
+    fn credentialed_urls_round_trip_through_the_environment_parser() {
+        for (origin, username, password) in [
+            ("https://proxy.example:8443", "user", "pass"),
+            (
+                "https://proxy.example:8443",
+                "proxy user",
+                "p@ss:w/rd%41?#[]&=+",
+            ),
+            ("https://proxy.example", "\u{fc}ser", "p\u{e4}ss"),
+            ("https://[::1]:8443", "user", "pa$$"),
+            ("https://proxy.example:8443", "user", ""),
+        ] {
+            let url = exported(origin, Some((username, password))).credentialed_url();
+            let authority = origin.strip_prefix("https://").unwrap();
+            assert!(url.ends_with(&format!("@{authority}")), "{url}");
+            let reparsed = command_proxy(&[("HTTPS_PROXY", &url)], None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(reparsed.origin(), origin);
+            assert_eq!(reparsed.credentials(), Some((username, password)), "{url}");
+        }
+        // Unreserved characters stay literal; everything else is encoded.
+        assert_eq!(
+            exported("https://proxy.example:8443", Some(("a-b.c_d~e", "%:@/"))).credentialed_url(),
+            "https://a-b.c_d~e:%25%3A%40%2F@proxy.example:8443"
+        );
+        // Without credentials it is the origin, without a default port.
+        assert_eq!(
+            exported("http://proxy.example:80/", None).credentialed_url(),
+            "http://proxy.example"
+        );
     }
 
     #[tokio::test]

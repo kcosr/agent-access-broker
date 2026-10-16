@@ -518,7 +518,7 @@ async fn prepare(
 
 /// The command-enforced grants an admitted call passes.
 fn passed(prepared: &PreparedInvocation) -> Vec<(String, SearchAuthorizationScope, Option<i32>)> {
-    match prepared.command_authorization.as_ref().unwrap() {
+    match prepared.command_authorization().unwrap() {
         CommandAuthorization::Command { grants, .. } => grants
             .iter()
             .map(|grant| {
@@ -705,7 +705,7 @@ async fn command_enforced_calls_pass_the_top_band_with_per_grant_credentials_and
             ("service".into(), finite(&["OPS"]), Some(10)),
         ]
     );
-    let plan = prepared.command_authorization.as_ref().unwrap();
+    let plan = prepared.command_authorization().unwrap();
     assert_eq!(
         plan.credential_modes(),
         BTreeSet::from(["per_user", "service"])
@@ -987,7 +987,7 @@ async fn untyped_command_actions_pass_action_grants_reaching_any_value() {
         ]
     );
     let CommandAuthorization::Command { resource_type, .. } =
-        prepared.command_authorization.as_ref().unwrap()
+        prepared.command_authorization().unwrap()
     else {
         unreachable!()
     };
@@ -995,7 +995,7 @@ async fn untyped_command_actions_pass_action_grants_reaching_any_value() {
     assert!(prepared.finalize_context.resource_scopes.is_empty());
     assert!(prepared.request.authority().resources().is_none());
     assert!(
-        serde_json::to_value(prepared.command_authorization.as_ref().unwrap())
+        serde_json::to_value(prepared.command_authorization().unwrap())
             .unwrap()
             .get("resourceType")
             .is_none()
@@ -1063,7 +1063,7 @@ async fn broker_enforced_calls_select_one_grant_covering_the_named_resources() {
         credential_mode,
         values,
         grant,
-    }) = prepared.command_authorization.as_ref()
+    }) = prepared.command_authorization()
     else {
         panic!("expected a Broker-enforced plan")
     };
@@ -1357,8 +1357,8 @@ async fn grants_in_modes_an_action_no_longer_supports_are_never_passed() {
     .await
     .unwrap();
     assert!(matches!(
-        admitted.command_authorization,
-        Some(CommandAuthorization::Broker { ref credential_mode, .. }) if credential_mode == "service"
+        admitted.command_authorization(),
+        Some(CommandAuthorization::Broker { credential_mode, .. }) if credential_mode == "service"
     ));
     // Discovery agrees: only values the service grant wins are reachable.
     assert_eq!(
@@ -1425,7 +1425,7 @@ async fn broker_enforced_arrays_need_one_grant_covering_every_value() {
         values,
         grant,
         ..
-    }) = prepared.command_authorization.as_ref()
+    }) = prepared.command_authorization()
     else {
         panic!("expected a Broker-enforced plan")
     };

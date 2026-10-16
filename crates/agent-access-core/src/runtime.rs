@@ -14,8 +14,11 @@ pub(crate) use command_authority::command_enforced_action;
 pub use command_authority::{
     CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
 };
+mod command_dispatch;
 mod discovery;
 mod import_control;
+#[cfg(test)]
+mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 mod mcp_views;
@@ -44,7 +47,8 @@ use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
 use crate::network::{
-    ClientCaller, EgressProxyEnvironment, HostNetwork, PreparedOutboundTls, preflight_egress_proxy,
+    ClientCaller, EgressProxyEnvironment, HostNetwork, InheritedNetwork, PreparedOutboundTls,
+    preflight_egress_proxy,
 };
 use crate::{
     AgentInvokeTokenCaveats, ApiServiceSpec, AuditDurability, BrokerConfig, BrokerTokenClass,
@@ -1447,6 +1451,7 @@ impl PolicySnapshot {
             generation,
             resource_catalog: ManagedResourceCatalog {
                 attribute_bindings: Vec::new(),
+                resource_fences: Default::default(),
                 resources: config.policy.resources.clone(),
                 resource_groups: config.policy.resource_groups.clone(),
             },
@@ -1634,6 +1639,9 @@ pub struct BrokerRuntime {
     imported_catalog: Arc<crate::ImportedCatalog>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
+    /// Command-import budgets and live process supervisors, carried from
+    /// each generation to the next, as import dispatch fences are.
+    command_registry: crate::imports::CommandRegistry,
     scoped_mcp: Arc<BTreeMap<String, crate::mcp::ScopedMcpReadiness>>,
     /// Validated descriptors for providers and gateways, fixed per generation.
     services: Arc<BTreeMap<String, Arc<ServiceDescriptor>>>,
@@ -1655,6 +1663,9 @@ pub struct BrokerRuntime {
     /// This generation's outbound network: limits, TLS trust and egress
     /// proxy selection over the proxy environment captured at startup.
     network: HostNetwork,
+    /// The network settings this generation's command imports inherit: its
+    /// proxy route and its `[network.outbound_tls]` trust mode and path.
+    inherited_network: Arc<InheritedNetwork>,
     audit: AuditSink,
     audit_registry: Arc<AuditRuntimeRegistry>,
     /// The effective node ID; see [`crate::resolve_node_id`].
@@ -1748,13 +1759,6 @@ pub struct PreparedInvocation {
     state: Option<ProviderState>,
     response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
-    /// The admitted authority of a command import's call, for its request
-    /// `authorization` block and audit; `None` for every other service.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the command request builder consumes it")
-    )]
-    command_authorization: Option<CommandAuthorization>,
     finalize_context: FinalizeContext,
 }
 
@@ -1786,6 +1790,15 @@ impl PreparedInvocation {
     pub fn body_part_specs(&self) -> &[BrokerBodyPartSpec] {
         &self.body_part_specs
     }
+
+    /// The authority admitted for a command import's call.
+    #[cfg(test)]
+    fn command_authorization(&self) -> Option<&CommandAuthorization> {
+        self.finalize_context
+            .command
+            .as_ref()
+            .map(command_dispatch::AdmittedCommand::authorization)
+    }
 }
 
 impl PreparedGatewayOperation {
@@ -1812,6 +1825,10 @@ enum AuditAppendMode {
 #[derive(Clone)]
 struct FinalizeContext {
     search_authorization: Option<SearchAuthorizationPlan>,
+    /// A command-import call from admission on: its authority, the resources
+    /// its request names and its process facts, which finalization audits
+    /// after any outcome, including a host interruption.
+    command: Option<command_dispatch::AdmittedCommand>,
     agent_request_id: String,
     broker_request_id: String,
     policy_generation: u64,
@@ -2012,6 +2029,8 @@ impl BrokerRuntime {
             .into();
         preflight_configured_egress_proxies(&config)?;
         prepare_upload_spool(&config.limits)?;
+        let inherited_network =
+            Arc::new(network.export_inherited_network(&config.network.outbound_tls)?);
         let mut provider_map = BTreeMap::new();
         for provider in providers {
             register_service_provider(&mut provider_map, &config, provider)?;
@@ -2180,6 +2199,9 @@ impl BrokerRuntime {
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
             import_dispatch: Arc::new(BTreeMap::new()),
+            command_registry: previous
+                .map(|previous| previous.command_registry.clone())
+                .unwrap_or_default(),
             scoped_mcp: Arc::new(BTreeMap::new()),
             invocation_limits,
             resource_types: Arc::new(resource_types),
@@ -2194,6 +2216,7 @@ impl BrokerRuntime {
             browser_csrf_key,
             microsoft_oidc,
             network,
+            inherited_network,
             audit_registry,
             node_id,
             config_generation: None,
@@ -2311,6 +2334,12 @@ impl BrokerRuntime {
 
     pub fn audit_registry(&self) -> Arc<AuditRuntimeRegistry> {
         Arc::clone(&self.audit_registry)
+    }
+
+    /// The command-import budgets and live process supervisors this
+    /// generation shares with every generation of the same Broker.
+    pub fn command_registry(&self) -> &crate::imports::CommandRegistry {
+        &self.command_registry
     }
 
     pub fn cancel_terminal_audits(&self) -> usize {
@@ -2756,6 +2785,11 @@ impl BrokerRuntime {
         self.network.outbound_tls()
     }
 
+    /// The network settings this generation's command imports inherit.
+    pub(crate) fn inherited_network(&self) -> &Arc<InheritedNetwork> {
+        &self.inherited_network
+    }
+
     pub fn microsoft_oidc(&self) -> Option<&MicrosoftOidcRuntimeConfig> {
         self.microsoft_oidc.as_ref()
     }
@@ -3003,6 +3037,7 @@ impl BrokerRuntime {
         self.finalize(
             FinalizeContext {
                 search_authorization: None,
+                command: None,
                 agent_request_id: context.agent_request_id,
                 broker_request_id: context.broker_request_id,
                 policy_generation,
@@ -3051,6 +3086,7 @@ impl BrokerRuntime {
         self.finalize(
             FinalizeContext {
                 search_authorization: None,
+                command: None,
                 agent_request_id: operation.agent_request_id,
                 broker_request_id: operation.broker_request_id,
                 policy_generation,
@@ -3689,6 +3725,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3717,6 +3754,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3746,6 +3784,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3775,6 +3814,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3810,6 +3850,7 @@ impl BrokerRuntime {
                     self.finalize_pre_dispatch(
                         FinalizeContext {
                             search_authorization: None,
+                            command: None,
                             agent_request_id,
                             broker_request_id,
                             policy_generation,
@@ -3845,6 +3886,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3881,6 +3923,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3916,6 +3959,7 @@ impl BrokerRuntime {
                     self.finalize_pre_dispatch(
                         FinalizeContext {
                             search_authorization: None,
+                            command: None,
                             agent_request_id,
                             broker_request_id,
                             policy_generation,
@@ -3946,6 +3990,7 @@ impl BrokerRuntime {
                 self.finalize_pre_dispatch(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -3977,6 +4022,7 @@ impl BrokerRuntime {
             matched_grant: policy.matched_grant.clone(),
             finalize_context: FinalizeContext {
                 search_authorization: None,
+                command: None,
                 agent_request_id,
                 broker_request_id,
                 policy_generation,
@@ -4499,6 +4545,7 @@ impl BrokerRuntime {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
+                    command: None,
                     agent_request_id,
                     broker_request_id,
                     policy_generation,
@@ -4524,6 +4571,7 @@ impl BrokerRuntime {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
+                    command: None,
                     agent_request_id,
                     broker_request_id,
                     policy_generation,
@@ -4556,6 +4604,7 @@ impl BrokerRuntime {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -4587,6 +4636,7 @@ impl BrokerRuntime {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
+                    command: None,
                     agent_request_id,
                     broker_request_id,
                     policy_generation,
@@ -4618,6 +4668,7 @@ impl BrokerRuntime {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
+                    command: None,
                     agent_request_id,
                     broker_request_id,
                     policy_generation,
@@ -4655,6 +4706,7 @@ impl BrokerRuntime {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
                         search_authorization: None,
+                        command: None,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -4707,6 +4759,7 @@ impl BrokerRuntime {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 search_authorization: None,
+                                command: None,
                                 agent_request_id,
                                 broker_request_id,
                                 policy_generation,
@@ -4739,6 +4792,7 @@ impl BrokerRuntime {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 search_authorization: None,
+                                command: None,
                                 agent_request_id,
                                 broker_request_id,
                                 policy_generation,
@@ -4769,6 +4823,7 @@ impl BrokerRuntime {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
                             search_authorization: None,
+                            command: None,
                             agent_request_id,
                             broker_request_id,
                             policy_generation,
@@ -4834,6 +4889,7 @@ impl BrokerRuntime {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 search_authorization: None,
+                                command: None,
                                 agent_request_id,
                                 broker_request_id,
                                 policy_generation,
@@ -4877,6 +4933,7 @@ impl BrokerRuntime {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
                             search_authorization: None,
+                            command: None,
                             agent_request_id,
                             broker_request_id,
                             policy_generation,
@@ -4909,6 +4966,7 @@ impl BrokerRuntime {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 search_authorization: None,
+                                command: None,
                                 agent_request_id,
                                 broker_request_id,
                                 policy_generation,
@@ -4936,34 +4994,51 @@ impl BrokerRuntime {
                     self.broker_command_authorization(&service, &action, &scopes, &policy);
                 (scopes, policy, provider_state, None)
             };
+        // A command import's admission is recorded for every later outcome.
         // A command-enforced call may pass several grants' credentials and
         // reports one mode only when its grants share it.
+        let command = command_authorization.and_then(|authorization| {
+            self.admitted_command(
+                &service,
+                authorization,
+                &policy_snapshot,
+                &execution_context,
+            )
+        });
         let command_enforced = matches!(
-            command_authorization,
+            command
+                .as_ref()
+                .map(command_dispatch::AdmittedCommand::authorization),
             Some(CommandAuthorization::Command { .. })
         );
-        let audit_credential_mode = match &command_authorization {
-            Some(plan) if command_enforced => plan.credential_mode(),
+        let audit_credential_mode = match &command {
+            Some(command) if command_enforced => command.authorization().credential_mode(),
             _ => Some(policy.credential_mode.clone()),
         };
 
-        // The command request builder resolves command-enforced credentials
-        // after the concurrency permit; the plan checked their availability.
-        let credentials = if command_enforced {
-            Ok(ExecutionAccess::None)
-        } else {
-            self.resolve_execution_credential_after_policy(
-                service_descriptor
-                    .as_ref()
-                    .map(|descriptor| &descriptor.credentials),
-                &service,
-                &action,
-                &policy.credential_mode,
-                &identity,
-                &correlation,
-                &pre_scope_lookup,
-            )
-            .await
+        // The command request builder resolves a command import's credentials
+        // after the concurrency permit; admission checks only that they are
+        // present (the command-enforced plan already checked its grants').
+        let credentials = match &command {
+            Some(_) if command_enforced => Ok(ExecutionAccess::None),
+            Some(_) => self
+                .command_credential_admitted(&service, &policy.credential_mode, &identity)
+                .await
+                .map(|()| ExecutionAccess::None),
+            None => {
+                self.resolve_execution_credential_after_policy(
+                    service_descriptor
+                        .as_ref()
+                        .map(|descriptor| &descriptor.credentials),
+                    &service,
+                    &action,
+                    &policy.credential_mode,
+                    &identity,
+                    &correlation,
+                    &pre_scope_lookup,
+                )
+                .await
+            }
         };
         let credentials = match credentials {
             Ok(credentials) => credentials,
@@ -4971,6 +5046,7 @@ impl BrokerRuntime {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
                         search_authorization: audit_search_authorization,
+                        command,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -5012,6 +5088,7 @@ impl BrokerRuntime {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
                         search_authorization: audit_search_authorization,
+                        command,
                         agent_request_id,
                         broker_request_id,
                         policy_generation,
@@ -5083,9 +5160,9 @@ impl BrokerRuntime {
             state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
-            command_authorization,
             finalize_context: FinalizeContext {
                 search_authorization: audit_search_authorization,
+                command,
                 agent_request_id,
                 broker_request_id,
                 policy_generation,
@@ -5183,17 +5260,24 @@ impl BrokerRuntime {
             state,
             response_options,
             body_part_specs: _,
-            command_authorization: _,
             finalize_context,
         } = prepared;
         let correlation = request.correlation().clone();
         let service = request.service().to_owned();
         let action = request.action().to_owned();
         let execution_context = finalize_context.execution_context.clone();
+        // A command import runs through its command hook, and its call waits
+        // for a budget permit before the final checks; until its hook is
+        // called, no process has started.
+        let command_call = self.command_provider(&service).is_some();
+        let mut command_started = false;
         // Staging happens before the final invocation exists: the body is
         // already consumed, then the revision fences run and only the admitted
         // resource's attributes are decrypted.
         let result = with_provider_context(correlation, service.clone(), action.clone(), async {
+            let command = self
+                .command_dispatch(&service, finalize_context.started)
+                .await?;
             let mut resource_attributes = ResourceAttributes::default();
             if self
                 .action_descriptor(&service, &action)
@@ -5245,19 +5329,54 @@ impl BrokerRuntime {
                 HookPhase::Invocation,
                 domain_reasons,
             );
-            let result = run_provider_hook(
-                hook.clone(),
-                provider.invoke(agent_access_provider::host::invocation(
-                    request,
-                    body_parts,
-                    resource_attributes,
-                    state,
-                )),
-            )
-            .await?;
+            let result = match command {
+                Some(command_dispatch::CommandDispatch {
+                    provider: command_provider,
+                    permit,
+                    deadline,
+                }) => {
+                    let invocation = self
+                        .command_invocation(permit, deadline, &request, &finalize_context)
+                        .await?;
+                    #[cfg(any(test, feature = "test-support"))]
+                    crate::test_support::pause_command_dispatch(&service).await;
+                    // Building the request awaited the store; the import must
+                    // still dispatch before its credentials reach the command.
+                    // Dropping the invocation zeroizes its request and returns
+                    // its slot.
+                    if !self.imported_action_available(&service, &action) {
+                        return Err(ProviderError::deny(
+                            ReasonCode::ServiceActionDenied,
+                            "imported service changed or is unavailable; repeat discovery",
+                        ));
+                    }
+                    command_started = true;
+                    run_provider_hook(hook.clone(), command_provider.invoke_command(invocation))
+                        .await?
+                }
+                None => {
+                    run_provider_hook(
+                        hook.clone(),
+                        provider.invoke(agent_access_provider::host::invocation(
+                            request,
+                            body_parts,
+                            resource_attributes,
+                            state,
+                        )),
+                    )
+                    .await?
+                }
+            };
             Ok(checked_result_stream(result, hook))
         })
         .await;
+        let result = result.map_err(|error| {
+            if command_call {
+                self.command_failure(&service, &action, error, command_started, &finalize_context)
+            } else {
+                error
+            }
+        });
         let result = result.and_then(|result| {
             if !require_stream
                 || result
@@ -6174,6 +6293,7 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let FinalizeContext {
             search_authorization,
+            command,
             agent_request_id,
             broker_request_id,
             policy_generation,
@@ -6270,7 +6390,9 @@ impl BrokerRuntime {
         };
 
         // Revisions belong to the admitted host snapshot, not upstream tool metadata
-        // or a later store read. Apply them after either provider outcome.
+        // or a later store read. Apply them after either provider outcome, with
+        // a command import's process facts and admitted authority, which a host
+        // interruption must not discard either.
         let provider_audit = if let Some(imported) = self.imported_catalog.service(&service) {
             let revisions = json!({
                 "catalogRevision": self.imported_catalog.revision,
@@ -6280,10 +6402,15 @@ impl BrokerRuntime {
                     .map(|record| record.version),
             });
             let mut audit = provider_audit.unwrap_or_else(|| json!({}));
+            if !audit.is_object() {
+                audit = json!({"providerAudit": audit});
+            }
             if let Some(fields) = audit.as_object_mut() {
                 fields.insert("importedService".into(), revisions);
-            } else {
-                audit = json!({"providerAudit": audit, "importedService": revisions});
+                if let Some(command) = &command {
+                    fields.insert("command".into(), command.audit());
+                    fields.insert("commandAuthorization".into(), command.authorization_audit());
+                }
             }
             Some(audit)
         } else {

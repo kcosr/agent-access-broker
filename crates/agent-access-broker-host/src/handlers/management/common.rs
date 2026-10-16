@@ -1515,11 +1515,37 @@ async fn append_management_write_completion(
     .await
 }
 
+/// What a credential verification adds to its audit record: the provider's
+/// `providerAudit.verification` details and the upstream status and
+/// duration, which a command import, having no upstream status, leaves
+/// `null`.
+#[derive(Clone, Copy)]
+pub(super) struct VerificationAudit<'a> {
+    pub(super) audit: &'a Value,
+    pub(super) upstream_status: Option<u16>,
+    pub(super) upstream_duration_ms: Option<u64>,
+}
+
+impl<'a> VerificationAudit<'a> {
+    /// A successful verification's audit; `command` marks a command
+    /// import's, whose status is not an upstream one.
+    pub(super) fn verified(
+        verification: &'a ProviderCredentialVerification,
+        command: bool,
+    ) -> Self {
+        Self {
+            audit: &verification.audit,
+            upstream_status: (!command).then_some(verification.upstream_status),
+            upstream_duration_ms: Some(verification.upstream_duration_ms),
+        }
+    }
+}
+
 pub(super) async fn management_write_audit_upstream_verification(
     context: &ManagementContext,
     operation: &str,
     target: Option<Value>,
-    verification: &ProviderCredentialVerification,
+    verification: VerificationAudit<'_>,
 ) -> Result<(), Box<axum::response::Response>> {
     let envelope = management_success_envelope(context, operation, target, Value::Null);
     append_management_audit_with_details(
@@ -1660,7 +1686,7 @@ pub(super) async fn append_management_audit(
 pub(super) struct ManagementAuditExtra<'a> {
     pub(super) catalog_change: Option<&'a Value>,
     pub(super) phase: Option<&'a str>,
-    pub(super) verification: Option<&'a ProviderCredentialVerification>,
+    pub(super) verification: Option<VerificationAudit<'a>>,
 }
 
 pub(super) async fn append_management_audit_with_phase(
@@ -1771,10 +1797,10 @@ async fn append_management_audit_with_details(
         reason_code: envelope.reason_code.clone(),
         upstream_status: extra
             .verification
-            .map(|verification| verification.upstream_status),
+            .and_then(|verification| verification.upstream_status),
         upstream_duration_ms: extra
             .verification
-            .map(|verification| verification.upstream_duration_ms),
+            .and_then(|verification| verification.upstream_duration_ms),
         object_ids: None,
         identity_source: identity.source.clone(),
         source: source.clone(),
@@ -2027,6 +2053,65 @@ pub(super) async fn management_provider_error_response(
     target: Option<Value>,
     error: ProviderError,
 ) -> axum::response::Response {
+    let (status, envelope) = provider_error_envelope(context, operation, target, &error);
+    management_audited_response(context, status, envelope).await
+}
+
+/// A failed credential verification's response, whose audit record keeps
+/// what the verification reported, such as a command's process facts, under
+/// `providerAudit.verification`, with its upstream status and duration.
+pub(super) async fn management_verification_error_response(
+    context: &ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    error: ProviderError,
+) -> axum::response::Response {
+    let (status, envelope) = provider_error_envelope(context, operation, target, &error);
+    let Some(audit) = error.audit.as_deref() else {
+        return management_audited_response(context, status, envelope).await;
+    };
+    let verification = VerificationAudit {
+        audit,
+        upstream_status: error.upstream_status,
+        upstream_duration_ms: error.upstream_duration_ms,
+    };
+    match append_management_audit_with_details(
+        ManagementAuditContext {
+            snapshot: &context.snapshot,
+            request_id: &context.request_id,
+            broker_request_id: &context.broker_request_id,
+            identity: &context.identity,
+            source: &context.source,
+        },
+        &envelope,
+        ManagementAuditExtra {
+            catalog_change: None,
+            phase: None,
+            verification: Some(verification),
+        },
+        context.policy_management_scope.as_ref(),
+        context.principal_role,
+        &context.policy_management_authorities,
+    )
+    .await
+    {
+        Ok(()) => management_response(status, envelope),
+        Err(error) => management_audit_unavailable_response(
+            &context.request_id,
+            &context.broker_request_id,
+            &envelope.operation,
+            &context.identity.principal,
+            error,
+        ),
+    }
+}
+
+fn provider_error_envelope(
+    context: &ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    error: &ProviderError,
+) -> (StatusCode, ManagementEnvelope) {
     let reason_code = error.reason_code();
     let status = StatusCode::from_u16(reason_code.http_status())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -2042,7 +2127,7 @@ pub(super) async fn management_provider_error_response(
         &error.message,
         target,
     );
-    management_audited_response(context, status, envelope).await
+    (status, envelope)
 }
 
 pub(super) fn default_token_ttl_seconds(

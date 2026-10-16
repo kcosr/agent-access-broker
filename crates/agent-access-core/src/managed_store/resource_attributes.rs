@@ -77,6 +77,94 @@ impl ManagedStore {
     }
 }
 
+/// One resource entry a command-import call admitted: the enabled exact
+/// entry holding `selector_value` in the call's context, as the admission
+/// snapshot published it, with the identity fence of its stored row and its
+/// attribute binding when it had private attributes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdmittedResourceEntry {
+    pub resource_id: String,
+    pub resource_type: ResourceType,
+    pub selector_value: String,
+    pub display_name: Option<String>,
+    pub fence: ResourceFence,
+    pub binding: Option<ResourceAttributeBinding>,
+}
+
+/// The decrypted private attributes of one command resource, zeroized on
+/// drop.
+pub(crate) type CommandResourceAttributes = BTreeMap<String, zeroize::Zeroizing<String>>;
+
+impl ManagedStore {
+    /// Revalidates every entry a command-import call admitted, in one
+    /// transaction, and decrypts the attributes of those that had any: each
+    /// entry must still be the same stored row (its version, which every
+    /// change advances, and its creation time, so a row recreated in a later
+    /// second is a different entry), with the admitted display name, the
+    /// same enabled exact entry in `context`, and its private attributes
+    /// exactly the admitted versions, or still none. A row recreated within
+    /// the same second identical in every field the request passes is the
+    /// same entry to the request. A replaced or changed entry
+    /// fails `VersionConflict` or `InputInvalid`; nothing is refreshed onto a
+    /// replacement. Values are decrypted straight into zeroizing storage.
+    pub(crate) fn resolve_command_resources(
+        &self,
+        entries: &[AdmittedResourceEntry],
+        context: &str,
+        ring: &CredentialKeyRing,
+    ) -> Result<Vec<CommandResourceAttributes>, ManagedStoreError> {
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn.transaction().map_err(sql_unavailable)?;
+        let mut resolved = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let record = resources::resource_metadata_by_id(&tx, &entry.resource_id)?;
+            let definition = &record.definition;
+            if record.version != entry.fence.version
+                || record.created_at != entry.fence.created_at
+                || definition.display_name != entry.display_name
+                || definition.resource_type != entry.resource_type
+                || definition.selector
+                    != (ResourceSelector::Exact {
+                        value: entry.selector_value.clone(),
+                    })
+            {
+                return Err(ManagedStoreError::VersionConflict);
+            }
+            if !definition.enabled
+                || !definition
+                    .allowed_execution_contexts
+                    .iter()
+                    .any(|value| value == context)
+            {
+                return Err(input_invalid("resource is unavailable in this context"));
+            }
+            let material = rows(&tx, Some(&entry.resource_id))?;
+            let material_versions = material
+                .iter()
+                .map(|row| (row.name.clone(), row.material_version.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let admitted = entry
+                .binding
+                .as_ref()
+                .map(|binding| binding.material_versions.clone())
+                .unwrap_or_default();
+            if material_versions != admitted {
+                return Err(ManagedStoreError::VersionConflict);
+            }
+            let mut values = CommandResourceAttributes::new();
+            for row in material {
+                values.insert(
+                    row.name.clone(),
+                    zeroize::Zeroizing::new(decrypt(ring, &row)?),
+                );
+            }
+            resolved.push(values);
+        }
+        tx.commit().map_err(sql_unavailable)?;
+        Ok(resolved)
+    }
+}
+
 pub(super) fn versions(
     conn: &Connection,
     resource_id: &str,

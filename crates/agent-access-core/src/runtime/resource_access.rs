@@ -196,6 +196,7 @@ impl BrokerRuntime {
             .collect();
         ManagedResourceCatalog {
             attribute_bindings: Vec::new(),
+            resource_fences: Default::default(),
             resources,
             resource_groups,
         }

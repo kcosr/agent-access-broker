@@ -1,16 +1,21 @@
 //! Host network construction for one runtime generation: outbound TLS trust,
 //! egress proxy selection and the upstream client factories that providers,
-//! import adapters and the OAuth manager build their clients through.
+//! import adapters and the OAuth manager build their clients through, plus the
+//! network settings command imports inherit.
 //!
 //! Each factory serves one caller category, captured when core constructs it.
 //! Only the host's OAuth clients and enabled development-only native
 //! registrations may receive the direct literal-loopback route; every other
 //! caller, and every other URL, uses ordinary proxy selection.
 mod egress_proxy;
+mod inherited_network;
 mod outbound_tls;
 
 pub use egress_proxy::EgressProxyEnvironment;
 pub(crate) use egress_proxy::preflight_egress_proxy;
+pub(crate) use inherited_network::{
+    InheritedNetwork, InheritedNetworkWire, is_inherited_network_variable,
+};
 pub use outbound_tls::{
     OutboundTlsConfig, OutboundTlsTrustMode, PreparedOutboundTls,
     parse_strict_certificate_pem_bundle,
@@ -110,6 +115,21 @@ impl HostNetwork {
     /// The proxy environment captured at startup; reloads keep it.
     pub(crate) fn environment(&self) -> &Arc<EgressProxyEnvironment> {
         self.egress.environment()
+    }
+
+    /// The network settings command imports inherit from this generation:
+    /// the HTTPS proxy route with its resolved credentials, the `NO_PROXY`
+    /// entries, and `outbound_tls`'s trust mode and `ca_certificate` path as
+    /// configured. Reads no certificate file.
+    pub(crate) fn export_inherited_network(
+        &self,
+        outbound_tls: &OutboundTlsConfig,
+    ) -> Result<InheritedNetwork, HostConfigError> {
+        Ok(InheritedNetwork::new(
+            self.egress.command_proxy()?,
+            self.environment().no_proxy_entries().to_vec(),
+            outbound_tls,
+        ))
     }
 
     /// The client factory serving `caller`.

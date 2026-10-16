@@ -391,6 +391,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         effective_credentials: Arc::new(config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         import_dispatch: runtime.import_dispatch.clone(),
+        command_registry: runtime.command_registry.clone(),
         scoped_mcp: runtime.scoped_mcp.clone(),
         oauth: runtime.oauth.clone(),
         invocation_limits: Arc::new(crate::ConfiguredInvocationLimits::from_config(&config)),
@@ -410,6 +411,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         browser_csrf_key: runtime.browser_csrf_key.clone(),
         microsoft_oidc: runtime.microsoft_oidc.clone(),
         network: runtime.network.clone(),
+        inherited_network: Arc::clone(&runtime.inherited_network),
         audit: runtime.audit.clone(),
         audit_registry: Arc::clone(&runtime.audit_registry),
         node_id: Arc::clone(&runtime.node_id),
@@ -1345,6 +1347,24 @@ fn runtime_uses_the_configured_node_id_or_the_host_name() {
     assert_eq!(
         Ok(runtime.node_id().to_string()),
         crate::resolve_node_id(&DeploymentConfig::default())
+    );
+}
+
+#[test]
+fn command_registry_is_shared_across_generations_but_not_brokers() {
+    let runtime = BrokerRuntime::new(base_fake_config()).unwrap();
+    let reloaded = BrokerRuntime::new_for_reload(base_fake_config(), &runtime).unwrap();
+    assert!(
+        runtime
+            .command_registry()
+            .ptr_eq(reloaded.command_registry())
+    );
+
+    let another_broker = BrokerRuntime::new(base_fake_config()).unwrap();
+    assert!(
+        !runtime
+            .command_registry()
+            .ptr_eq(another_broker.command_registry())
     );
 }
 
@@ -7513,6 +7533,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         effective_credentials: Arc::new(invalid_config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         import_dispatch: runtime.import_dispatch.clone(),
+        command_registry: runtime.command_registry.clone(),
         scoped_mcp: runtime.scoped_mcp.clone(),
         oauth: runtime.oauth.clone(),
         invocation_limits: runtime.invocation_limits.clone(),
@@ -7532,6 +7553,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         browser_csrf_key: None,
         microsoft_oidc: None,
         network: runtime.network.clone(),
+        inherited_network: Arc::clone(&runtime.inherited_network),
         audit,
         audit_registry,
         node_id: Arc::clone(&runtime.node_id),

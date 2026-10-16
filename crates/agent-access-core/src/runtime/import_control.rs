@@ -224,7 +224,8 @@ impl BrokerRuntime {
                 &record.definition,
                 &execution,
                 transport,
-                &super::imports::adapter_context(&self.config, &record),
+                &super::imports::adapter_context(&self.config, &record)
+                    .with_command_registry(&self.command_registry),
                 &host,
             ),
         )

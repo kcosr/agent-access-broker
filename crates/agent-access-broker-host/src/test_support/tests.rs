@@ -168,6 +168,86 @@ async fn an_isolated_broker_serves_reloads_and_releases_its_locks_on_join() {
     restarted.join().await.unwrap();
 }
 
+/// A command supervisor stand-in that ignores kill requests, holding its
+/// permit until the test releases it.
+#[derive(Default)]
+struct StuckCommandProcess {
+    kills: AtomicUsize,
+}
+
+impl agent_access_core::imports::CommandProcessControl for StuckCommandProcess {
+    fn request_kill(&self) {
+        self.kills.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn shutdown_reports_unreaped_command_processes_and_a_restart_has_full_budgets() {
+    let application = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .shutdown_timeout(Duration::from_millis(500));
+    let document = fake_document(application.directory(), "TEST");
+    let broker = application.config_document(document).start().await.unwrap();
+    let registry = broker
+        .reloadable_state()
+        .current()
+        .runtime
+        .command_registry()
+        .clone();
+    assert!(broker.reload().await.unwrap().is_success());
+    assert!(
+        registry.ptr_eq(
+            broker
+                .reloadable_state()
+                .current()
+                .runtime
+                .command_registry()
+        ),
+        "a reload keeps the command budgets"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let stuck = Arc::new(StuckCommandProcess::default());
+    let live = registry
+        .acquire("ticketing", 1, deadline)
+        .await
+        .unwrap()
+        .register(stuck.clone())
+        .unwrap();
+
+    let directory = broker.directory().clone();
+    let config_path = broker.config_path().to_path_buf();
+    broker.shutdown();
+    let report = broker.join().await.unwrap();
+    assert_eq!(report.unfinished_command_processes(), 1);
+    assert!(!report.is_clean(), "{report:?}");
+    assert_eq!(stuck.kills.load(Ordering::SeqCst), 1);
+    assert!(registry.is_closed());
+    drop(live);
+    assert_eq!(registry.in_use("ticketing"), 0);
+
+    // Another broker on the same runtime starts with its own, full budgets.
+    let restarted = IsolatedBroker::new(composition(), IDENTITY)
+        .unwrap()
+        .in_directory(directory)
+        .config_path(config_path)
+        .start()
+        .await
+        .unwrap();
+    let fresh = restarted
+        .reloadable_state()
+        .current()
+        .runtime
+        .command_registry()
+        .clone();
+    assert!(!fresh.ptr_eq(&registry));
+    assert!(!fresh.is_closed());
+    drop(fresh.acquire("ticketing", 1, deadline).await.unwrap());
+    restarted.shutdown();
+    let report = restarted.join().await.unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.unfinished_command_processes(), 0);
+}
+
 #[tokio::test]
 async fn reload_and_shutdown_fail_once_the_broker_has_stopped() {
     let application = IsolatedBroker::new(composition(), IDENTITY).unwrap();

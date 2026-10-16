@@ -1,9 +1,10 @@
 use crate::handlers::management::common::{
-    CredentialInputSchemaQuery, CredentialPutBody, ManagementContext,
+    CredentialInputSchemaQuery, CredentialPutBody, ManagementContext, VerificationAudit,
     is_broker_user_manage_context, management_context_error_response,
     management_pre_audited_success_response, management_provider_error_response,
     management_store_call, management_store_error_response, management_success_response,
-    management_write_audit_preflight, management_write_audit_upstream_verification,
+    management_verification_error_response, management_write_audit_preflight,
+    management_write_audit_upstream_verification,
 };
 use agent_access_core::{
     BrokerRuntime, CredentialVerificationInput, CredentialWriteRequest, IdentityContext,
@@ -639,21 +640,37 @@ pub(super) async fn verify_credential_for_principal(
             return management_store_error_response(&context, operation, target, error).await;
         }
     };
-    let verification = match context
-        .snapshot
-        .runtime
-        .verify_execution_credential(
-            &request.service,
-            &verification_candidate.credential,
-            &owner_identity,
-            input,
-            agent_access_provider::CorrelationContext::new(
-                context.request_id.clone(),
-                context.broker_request_id.clone(),
-            ),
-        )
-        .await
-    {
+    let correlation = agent_access_provider::CorrelationContext::new(
+        context.request_id.clone(),
+        context.broker_request_id.clone(),
+    );
+    let runtime = &context.snapshot.runtime;
+    // A command import receives the credential's plaintext on its stdin, so
+    // core rereads exactly the material resolved here rather than taking it
+    // from the opaque credential.
+    let command = runtime.command_provider(&request.service).is_some();
+    let verification = if command {
+        runtime
+            .verify_command_credential(
+                &request.service,
+                &owner_identity,
+                &request.name,
+                &verification_candidate.target,
+                correlation,
+            )
+            .await
+    } else {
+        runtime
+            .verify_execution_credential(
+                &request.service,
+                &verification_candidate.credential,
+                &owner_identity,
+                input,
+                correlation,
+            )
+            .await
+    };
+    let verification = match verification {
         Ok(verification) => verification,
         Err(error) => {
             if verification_error_records_failure(&error) {
@@ -686,7 +703,12 @@ pub(super) async fn verify_credential_for_principal(
                     }
                 }
             }
-            return management_provider_error_response(&context, operation, target, error).await;
+            // A command's failed run keeps its process facts in audit.
+            return if command {
+                management_verification_error_response(&context, operation, target, error).await
+            } else {
+                management_provider_error_response(&context, operation, target, error).await
+            };
         }
     };
     let verification_status = if let Some(verification) = &verification {
@@ -694,7 +716,7 @@ pub(super) async fn verify_credential_for_principal(
             &context,
             operation,
             target.clone(),
-            verification,
+            VerificationAudit::verified(verification, command),
         )
         .await
         {

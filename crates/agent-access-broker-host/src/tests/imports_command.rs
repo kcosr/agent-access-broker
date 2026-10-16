@@ -18,7 +18,7 @@ cat "$MANIFEST"
 "#;
 
 pub(super) struct CommandFixture {
-    imports: Fixture,
+    pub(super) imports: Fixture,
     directory: tempfile::TempDir,
     pub(super) config: BrokerConfig,
 }
@@ -26,10 +26,15 @@ pub(super) struct CommandFixture {
 impl CommandFixture {
     /// The import fixture with `command` allowed and `name` approved.
     pub(super) fn new(name: &str, manifest: &Value) -> Self {
+        Self::with_script(name, manifest, RECORDING_COMMAND)
+    }
+
+    /// [`Self::new`] running `script`, which gets `$MARKER` and `$MANIFEST`.
+    pub(super) fn with_script(name: &str, manifest: &Value, script_text: &str) -> Self {
         let imports = fixture();
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("command.sh");
-        std::fs::write(&script, RECORDING_COMMAND).unwrap();
+        std::fs::write(&script, script_text).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -73,12 +78,12 @@ impl CommandFixture {
         std::fs::write(self.path("manifest.json"), manifest.to_string()).unwrap();
     }
 
-    fn path(&self, name: &str) -> PathBuf {
+    pub(super) fn path(&self, name: &str) -> PathBuf {
         self.directory.path().join(name)
     }
 
     /// The subcommands the command ran, in order.
-    fn runs(&self) -> Vec<String> {
+    pub(super) fn runs(&self) -> Vec<String> {
         read_runs(&self.path("runs"))
     }
 
@@ -336,7 +341,8 @@ async fn credential_free_commands_import_enable_and_publish_without_running_offl
         .unwrap();
     assert_eq!(fixture.runs(), ["describe"]);
 
-    // The call is admitted and fails closed before any process starts.
+    // The call is admitted and runs its process, which the recording command
+    // fails.
     let agent = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
@@ -354,9 +360,10 @@ async fn credential_free_commands_import_enable_and_publish_without_running_offl
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{failed}");
     assert_eq!(failed["reasonCode"], "operation_failed", "{failed}");
+    assert_eq!(fixture.runs(), ["describe", "invoke"]);
     // A reload stays offline too.
     broker.reload_config(&fixture.config).await;
-    assert_eq!(fixture.runs(), ["describe"]);
+    assert_eq!(fixture.runs(), ["describe", "invoke"]);
 
     // Refresh: a changed action is quarantined, a missing one too, and a new
     // one stays unselected.
@@ -398,7 +405,7 @@ async fn credential_free_commands_import_enable_and_publish_without_running_offl
             ("time.zone".to_owned(), "quarantined".to_owned()),
         ])
     );
-    assert_eq!(fixture.runs(), ["describe", "describe"]);
+    assert_eq!(fixture.runs(), ["describe", "invoke", "describe"]);
 
     // Adding a credential, or an unknown format, fails discovery.
     for (manifest, expected) in [
@@ -843,8 +850,8 @@ pub(super) fn command_grant(
 /// own credential: personal and service grants of two groups together, the
 /// service grant alone while the personal credential is missing, and nothing
 /// from a lower band. Catalog and MCP discovery list exactly the callers
-/// invocation admits; admitted calls reach the dispatch step, which fails
-/// closed until processes run.
+/// invocation admits; admitted calls run their process, which the recording
+/// command fails.
 #[cfg(unix)]
 #[tokio::test]
 async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
@@ -1070,9 +1077,9 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
     }
     drop(app);
     broker.stop().await;
-    // Dispatch fails closed until processes run, so the passed grants are
-    // visible only in audit: alice's call passed both modes and records
-    // none; charlie's passed the service grant alone.
+    // The recording command fails every call, so the passed grants are
+    // visible in audit: alice's call passed both modes and records none;
+    // charlie's passed the service grant alone.
     let audit = fixture.config.audit.as_ref().unwrap().path.clone();
     let modes = read_audit_records(Path::new(&audit))
         .into_iter()
@@ -1396,7 +1403,8 @@ async fn admission_checks_inputs_bounds_resources_and_reports_credential_failure
         invoke("issue.stats", json!({"extra": 1})).await,
         "input_invalid"
     );
-    // The call is admitted and fails closed at dispatch.
+    // The call is admitted and runs its process, which the recording
+    // command fails.
     assert_eq!(invoke("issue.stats", json!({})).await, "operation_failed");
     let projects = |count: usize| json!({"projects": (0..count).map(|index| format!("P{index}")).collect::<Vec<_>>()});
     assert_eq!(invoke("issue.bulk", projects(1001)).await, "input_invalid");

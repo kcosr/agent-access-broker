@@ -105,6 +105,7 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let fallback = FinalizeContext {
             search_authorization: None,
+            command: None,
             agent_request_id: context.operation.agent_request_id.clone(),
             broker_request_id: context.operation.broker_request_id.clone(),
             policy_generation: self.policy_generation(),

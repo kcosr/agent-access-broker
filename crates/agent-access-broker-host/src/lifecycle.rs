@@ -261,6 +261,10 @@ pub(crate) struct Listening {
 pub(crate) struct DrainReport {
     /// Operations still unfinalized when the operation drain ended.
     pub(crate) unfinished_operations: usize,
+    /// Command-import process supervisors that had not reaped their
+    /// process and returned their budget permit when the command drain
+    /// ended.
+    pub(crate) unfinished_command_processes: usize,
     /// Whether listeners or lifecycle tasks were cut off at the shutdown
     /// deadline.
     pub(crate) forced: bool,
@@ -660,8 +664,20 @@ async fn drain_lifecycle(
             0
         }
     };
-    let remaining = remaining_shutdown_time(&coordinator, shutdown_timeout)
-        .unwrap_or_else(|| Duration::from_millis(100));
+    // Operation owners have finalized, but command processes can outlive
+    // their invocations. Stop starting new ones, kill those still live and
+    // wait for their supervisors to reap them before the audit drain. Like
+    // the audit drain, this gets a short floor even when a forced operation
+    // drain spent the whole budget, since killed processes are reaped at once.
+    let unfinished_command_processes = state
+        .shutdown_command_processes(
+            remaining_shutdown_time(&coordinator, shutdown_timeout)
+                .unwrap_or_default()
+                .max(SHUTDOWN_DRAIN_FLOOR),
+        )
+        .await;
+    let remaining =
+        remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
     let audit_error = match state.shutdown_audit(remaining).await {
         Ok(()) => None,
         Err(error) => {
@@ -675,6 +691,7 @@ async fn drain_lifecycle(
     }
     Ok(DrainReport {
         unfinished_operations,
+        unfinished_command_processes,
         forced: timed_out || lifecycle_timed_out,
         audit_error,
     })
@@ -744,6 +761,10 @@ async fn drain_lifecycle_handle(
         }
     }
 }
+
+/// The least time the command and audit drains get once the shutdown budget
+/// is spent.
+const SHUTDOWN_DRAIN_FLOOR: Duration = Duration::from_millis(100);
 
 fn remaining_shutdown_time(
     coordinator: &ShutdownCoordinator,
@@ -1582,6 +1603,139 @@ path="{}"
         tokio::time::timeout(Duration::from_millis(25), observed_shutdown.notified())
             .await
             .unwrap();
+    }
+
+    /// A command supervisor stand-in: it returns its permit when killed,
+    /// unless it ignores kills.
+    struct FakeCommandProcess {
+        live: Arc<Mutex<Option<agent_access_core::imports::LiveCommandProcess>>>,
+        ignores_kills: bool,
+        /// How long reaping takes after a kill, if not at once.
+        reaping: Option<Duration>,
+        kills: std::sync::atomic::AtomicUsize,
+    }
+
+    impl agent_access_core::imports::CommandProcessControl for FakeCommandProcess {
+        fn request_kill(&self) {
+            self.kills.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.ignores_kills {
+                return;
+            }
+            match self.reaping {
+                None => {
+                    self.live.lock().unwrap().take();
+                }
+                Some(reaping) => {
+                    let live = Arc::clone(&self.live);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(reaping).await;
+                        live.lock().unwrap().take();
+                    });
+                }
+            }
+        }
+    }
+
+    async fn fake_command_process(
+        registry: &agent_access_core::imports::CommandRegistry,
+        ignores_kills: bool,
+    ) -> Arc<FakeCommandProcess> {
+        fake_command_process_reaped_after(registry, ignores_kills, None).await
+    }
+
+    async fn fake_command_process_reaped_after(
+        registry: &agent_access_core::imports::CommandRegistry,
+        ignores_kills: bool,
+        reaping: Option<Duration>,
+    ) -> Arc<FakeCommandProcess> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let permit = registry.acquire("fixture", 2, deadline).await.unwrap();
+        let process = Arc::new(FakeCommandProcess {
+            live: Arc::new(Mutex::new(None)),
+            ignores_kills,
+            reaping,
+            kills: Default::default(),
+        });
+        let live = permit.register(process.clone()).unwrap();
+        *process.live.lock().unwrap() = Some(live);
+        process
+    }
+
+    async fn drain_after_shutdown(
+        state: Arc<ReloadableState>,
+        shutdown_timeout: Duration,
+    ) -> DrainReport {
+        let coordinator = ShutdownCoordinator::new();
+        coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
+        drain_lifecycle(
+            state,
+            coordinator,
+            Servers::new(),
+            tokio::spawn(async {}),
+            tokio::spawn(async {}),
+            Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            shutdown_timeout,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shutdown_kills_live_command_processes_and_waits_for_their_permits() {
+        let state = test_reloadable_state().await;
+        let registry = state.current().runtime.command_registry().clone();
+        let first = fake_command_process(&registry, false).await;
+        let second = fake_command_process(&registry, false).await;
+
+        let report = drain_after_shutdown(state, Duration::from_secs(5)).await;
+
+        assert_eq!(report.unfinished_command_processes, 0);
+        assert_eq!(report.unfinished_operations, 0);
+        assert!(!report.forced);
+        for process in [first, second] {
+            assert_eq!(process.kills.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+        assert_eq!(registry.in_use("fixture"), 0);
+        assert_eq!(registry.live_processes(), 0);
+        assert_eq!(
+            registry
+                .acquire("fixture", 2, tokio::time::Instant::now())
+                .await
+                .unwrap_err(),
+            agent_access_core::imports::CommandAcquireError::Closed
+        );
+    }
+
+    #[tokio::test]
+    async fn command_processes_get_time_to_be_reaped_after_the_shutdown_budget_is_spent() {
+        let state = test_reloadable_state().await;
+        let registry = state.current().runtime.command_registry().clone();
+        let process =
+            fake_command_process_reaped_after(&registry, false, Some(Duration::from_millis(20)))
+                .await;
+
+        let report = drain_after_shutdown(state, Duration::ZERO).await;
+
+        assert_eq!(process.kills.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(report.unfinished_command_processes, 0);
+        assert_eq!(registry.in_use("fixture"), 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_command_processes_still_live_at_its_deadline() {
+        let state = test_reloadable_state().await;
+        let registry = state.current().runtime.command_registry().clone();
+        let stuck = fake_command_process(&registry, true).await;
+        let released = fake_command_process(&registry, false).await;
+
+        let report = drain_after_shutdown(state, Duration::from_millis(300)).await;
+
+        assert_eq!(report.unfinished_command_processes, 1);
+        assert_eq!(stuck.kills.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(released.kills.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(registry.in_use("fixture"), 1);
+        stuck.live.lock().unwrap().take();
+        assert_eq!(registry.in_use("fixture"), 0);
     }
 
     #[tokio::test]

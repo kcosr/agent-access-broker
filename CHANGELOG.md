@@ -492,8 +492,7 @@ All notable changes to this project are documented in this file.
   manifest's service metadata, and a command without a credential enables with
   service-mode grants and no credential. Import list responses include
   `commandImports` (approved names only) and command import results
-  `commandVersion`. Command invocations fail closed before any process starts
-  in this build.
+  `commandVersion`.
 - Command imports register the resource types their manifests declare under
   Broker type IDs proposed as `<service>_<id>`. Accepted types are listed by
   `GET /v1/resource-types`, stay registered while the import is disabled or
@@ -525,6 +524,48 @@ All notable changes to this project are documented in this file.
   `resourceTypes`) name a command import's types' `importedService` and mark a
   removed type `removed: true`. The SDK's `ResourceTypeMetadata` gains the
   `removed` and `imported_service` fields.
+- Command import runs (`describe` now, `invoke` and `verify` through the
+  command hook) start one process in its own process group, with an empty
+  environment plus the configured `env` and request data only on stdin, under
+  a supervisor that caps stdout, keeps 4 KiB of stderr, kills the group at the
+  command deadline and reaps it before releasing its slot. Each command name
+  has one concurrency budget of `max_concurrent` slots, shared by its imports,
+  runs and runtime generations; calls wait for a slot before their final
+  checks and fail `upstream_timeout` when none frees by their deadline, and a
+  reload that changes the command's entry fences calls still waiting. Failures
+  log `command_import_failed`. Shutdown kills and reaps command processes
+  after the operation drain, including those whose call already ended, and
+  reports any it could not reap.
+- Command import calls run their command. After the slot and the final checks
+  (dispatch fence, the named resource entries revalidated and decrypted, and
+  credentials: a service slot at its admitted version, a personal credential
+  as it is now), the Broker writes one `agent-access-command/1` request to the
+  command's stdin with the caller, the inputs, the admitted `authorization`
+  (`broker` with the named resources' IDs, names and private attributes, or
+  `command` with the top band's grants, each with its credential and boundary),
+  the `token` or `username_token` credentials those grants use, and, with
+  `network = "inherit"`, the egress proxy route with its credentials, the
+  `NO_PROXY` entries, the trust mode and the configured `ca_certificate` path,
+  also set as environment variables per trust mode. A queued call whose
+  resource entry changed fails `scope_unresolved`, one whose service slot
+  rotated fails `service_action_denied`, and one whose personal credential was
+  removed fails `credential_not_provisioned`, all without starting a process.
+  Responses return `result.upstreamCommand`, map command error codes to Broker
+  reasons with the command's message and `retryAfterSeconds`, and report the
+  command's write receipt with `operationDispatched`; a response that breaks
+  the contract, including a message, verification stage or locator
+  containing a supplied credential or proxy secret in any form the command
+  receives it, fails `operation_failed`; private attribute values are not
+  checked. Every admitted exact resource is fenced by its row version,
+  creation time (to the second), display name, type and selector, and the
+  import's dispatch fence is checked again immediately before the process
+  starts. Invocation audit adds
+  `providerAudit.command` (process facts, with `contractViolation` `null`
+  until a verdict) and `providerAudit.commandAuthorization` (the admitted
+  grants), kept for interrupted calls. Verifying a personal credential runs
+  the command's `verify` when its manifest declares it, fenced like a call,
+  and stays local otherwise; its audit, failed or not, keeps the process facts
+  with no upstream status.
 
 ### Changed
 

@@ -1,11 +1,16 @@
+//! Commands run on Unix only, so most cases and their helpers are Unix-only.
 use super::*;
+#[cfg(unix)]
+use agent_access_core::imports::{CommandRegistry, CommandRequest, ImportedCredentialKind};
 use agent_access_core::imports::{
-    CommandRequest, ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialKind,
-    ImportedCredentialMode,
+    ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
 };
+#[cfg(unix)]
 use agent_access_provider::test_support::{InvocationBuilder, TestHost, bearer_credential};
+#[cfg(unix)]
 use serde_json::json;
 
+#[cfg(unix)]
 fn command(fixture: &str) -> CommandImportConfig {
     CommandImportConfig {
         path: format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")),
@@ -36,10 +41,21 @@ fn definition(modes: &[ImportedCredentialMode]) -> ImportedServiceDefinition {
     }
 }
 
+#[cfg(unix)]
 async fn discover(
     definition: &ImportedServiceDefinition,
     command: Option<&CommandImportConfig>,
     accepted: Option<&ImportedServiceMetadata>,
+) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
+    discover_with(definition, command, accepted, &CommandRegistry::new()).await
+}
+
+#[cfg(unix)]
+async fn discover_with(
+    definition: &ImportedServiceDefinition,
+    command: Option<&CommandImportConfig>,
+    accepted: Option<&ImportedServiceMetadata>,
+    registry: &CommandRegistry,
 ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
     let host = TestHost::default();
     CommandAdapter
@@ -47,12 +63,13 @@ async fn discover(
             definition,
             &ImportedDiscoveryAuthentication::Anonymous,
             None,
-            &ImportedAdapterContext::new(accepted, command),
+            &ImportedAdapterContext::new(accepted, command).with_command_registry(registry),
             &host.context(),
         )
         .await
 }
 
+#[cfg(unix)]
 fn failed_reason(error: AdapterDiscoveryError) -> agent_access_provider::ProviderReason {
     match error {
         AdapterDiscoveryError::Failed(error) => error.reason_code(),
@@ -220,8 +237,10 @@ async fn discovery_failures_never_expose_output_or_paths() {
     }
     let mut slow = command("sleep.sh");
     slow.timeout = "1s".into();
+    let started = std::time::Instant::now();
     let error = discover(&service, Some(&slow), None).await.unwrap_err();
     assert_eq!(failed_reason(error), ReasonCode::UpstreamTimeout);
+    assert!(started.elapsed() < Duration::from_secs(5));
     // An unapproved command and a credentialed discovery never run.
     assert!(matches!(
         discover(&service, None, None).await.unwrap_err(),
@@ -244,10 +263,73 @@ async fn discovery_failures_never_expose_output_or_paths() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn built_providers_expose_the_command_hook_and_fail_closed() {
-    let command = command("ticketing.sh");
+async fn describe_draws_from_the_command_budget() {
+    let service = definition(&[]);
+    let mut clock = command("clock.sh");
+    clock.timeout = "1s".into();
+    clock.max_concurrent = 1;
+    let host = TestHost::default();
+    let error = CommandAdapter
+        .discover(
+            &service,
+            &ImportedDiscoveryAuthentication::Anonymous,
+            None,
+            &ImportedAdapterContext::new(None, Some(&clock)),
+            &host.context(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, AdapterDiscoveryError::Configuration(_)));
+
+    // Another run of the command holds the only permit until the deadline.
+    let registry = CommandRegistry::new();
+    let held = registry
+        .acquire(
+            "ticketing",
+            1,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let error = discover_with(&service, Some(&clock), None, &registry)
+        .await
+        .unwrap_err();
+    assert_eq!(failed_reason(error), ReasonCode::UpstreamTimeout);
+    assert!(started.elapsed() >= Duration::from_millis(900));
+    assert_eq!(registry.in_use("ticketing"), 1);
+    assert_eq!(registry.waiting("ticketing"), 0);
+
+    drop(held);
+    discover_with(&service, Some(&clock), None, &registry)
+        .await
+        .unwrap();
+    assert_eq!(registry.in_use("ticketing"), 0);
+    assert_eq!(registry.live_processes(), 0);
+
+    assert_eq!(registry.close_and_drain(Duration::ZERO).await, 0);
+    let error = discover_with(&service, Some(&clock), None, &registry)
+        .await
+        .unwrap_err();
+    assert_eq!(failed_reason(error), ReasonCode::OperationCancelled);
+}
+
+/// The command hook of `command`'s import, built from its accepted
+/// discovery, with the first action reviewed as a read and the rest as
+/// writes.
+#[cfg(unix)]
+async fn command_hook(
+    command: &CommandImportConfig,
+) -> (
+    Arc<dyn CommandProvider>,
+    Arc<dyn Provider>,
+    ImportedServiceMetadata,
+    Vec<ImportedActionDefinition>,
+) {
     let service = definition(&[ImportedCredentialMode::Service]);
-    let discovery = discover(&service, Some(&command), None).await.unwrap();
+    let discovery = discover(&service, Some(&command_at("ticketing.sh", command)), None)
+        .await
+        .unwrap();
     let metadata = discovery.service_metadata.clone().unwrap();
     let mut actions = discovery
         .tools
@@ -257,17 +339,60 @@ async fn built_providers_expose_the_command_hook_and_fail_closed() {
         .collect::<Vec<_>>();
     actions[0].read_only = true;
     let host = TestHost::default();
+    let built = CommandAdapter
+        .build(
+            &service,
+            &actions,
+            None,
+            &ImportedAdapterContext::new(Some(&metadata), Some(command)),
+            &host.context(),
+        )
+        .unwrap();
+    let hook = built
+        .command()
+        .cloned()
+        .expect("command imports build a command hook");
+    (hook, built.provider(), metadata, actions)
+}
+
+/// `command` running the fixture `fixture` instead.
+#[cfg(unix)]
+fn command_at(fixture: &str, command: &CommandImportConfig) -> CommandImportConfig {
+    CommandImportConfig {
+        path: format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")),
+        ..command.clone()
+    }
+}
+
+#[cfg(unix)]
+fn request() -> CommandRequest {
+    CommandRequest::encode(&json!({"format": "agent-access-command/1"})).unwrap()
+}
+
+#[cfg(unix)]
+async fn permit(registry: &CommandRegistry) -> agent_access_core::imports::CommandPermit {
+    registry
+        .acquire(
+            "ticketing",
+            4,
+            tokio::time::Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn built_providers_need_the_approved_command_and_accepted_metadata() {
+    let command = command("ticketing.sh");
+    let (_, provider, metadata, actions) = command_hook(&command).await;
+    let service = definition(&[ImportedCredentialMode::Service]);
+    let host = TestHost::default();
     let build = |context: ImportedAdapterContext<'_>| {
         CommandAdapter.build(&service, &actions, None, &context, &host.context())
     };
     assert!(build(ImportedAdapterContext::new(Some(&metadata), None)).is_err());
     assert!(build(ImportedAdapterContext::new(None, Some(&command))).is_err());
-    let built = build(ImportedAdapterContext::new(Some(&metadata), Some(&command))).unwrap();
-    let hook = built
-        .command()
-        .cloned()
-        .expect("command imports build a command hook");
-    let provider = built.provider();
 
     let scope = agent_access_provider::test_support::ScopeRequestFixture::new(
         "ticketing",
@@ -350,41 +475,218 @@ async fn built_providers_expose_the_command_hook_and_fail_closed() {
     );
     assert!(provider.resolve_scopes(unknown.request()).await.is_err());
 
-    // Nothing runs yet: reads fail without a receipt, writes report not_applied.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    let request = || CommandRequest::encode(&json!({"format": "agent-access-command/1"})).unwrap();
-    let error = hook
-        .invoke_command(CommandInvocation::new(
-            "issue.view".into(),
-            true,
-            request(),
-            deadline,
-        ))
-        .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
-    assert!(error.result.is_none());
-    let error = hook
-        .invoke_command(CommandInvocation::new(
-            "issue.search".into(),
-            false,
-            request(),
-            deadline,
-        ))
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.result.as_deref(),
-        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
-    );
-    assert!(
-        hook.verify_command(CommandVerification::new(request(), deadline))
-            .await
-            .is_err()
-    );
+    // Core never calls Provider::invoke on a command import; it fails closed.
     let error = provider
         .invoke(InvocationBuilder::new("ticketing", "issue.search").build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_hook_runs_invoke_and_verify_under_the_permit_it_is_handed() {
+    let registry = CommandRegistry::new();
+    let deadline = || tokio::time::Instant::now() + Duration::from_secs(10);
+    // The fixture answers only `describe`; every other run exits 2.
+    let (hook, _, _, _) = command_hook(&command("ticketing.sh")).await;
+
+    let facts = CommandProcessFacts::new();
+    let error = hook
+        .invoke_command(
+            CommandInvocation::new(
+                "issue.view".into(),
+                true,
+                request(),
+                deadline(),
+                permit(&registry).await,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+    assert_eq!(error.message, "The tool failed.");
+    assert!(error.result.is_none());
+    let recorded = facts.snapshot();
+    assert!(recorded.spawned);
+    assert_eq!(recorded.exit_code, Some(2));
+    assert_eq!(recorded.contract_violation, Some(false));
+    assert_eq!(registry.in_use("ticketing"), 0);
+    assert_eq!(registry.live_processes(), 0);
+
+    // After the spawn, a write's outcome is unknown.
+    let error = hook
+        .invoke_command(CommandInvocation::new(
+            "issue.search".into(),
+            false,
+            request(),
+            deadline(),
+            permit(&registry).await,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "unknown", "retrySafe": false}))
+    );
+    let error = hook
+        .verify_command(CommandVerification::new(
+            request(),
+            deadline(),
+            permit(&registry).await,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+    assert!(error.result.is_none());
+
+    // A command that answers has its document read: a write it confirms is
+    // applied but unverified.
+    let (answering, _, _, _) = command_hook(&command("process/echo.sh")).await;
+    let facts = CommandProcessFacts::new();
+    let result = answering
+        .invoke_command(
+            CommandInvocation::new(
+                "issue.search".into(),
+                false,
+                request(),
+                deadline(),
+                permit(&registry).await,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.result,
+        json!({"upstreamCommand": {"bytes": request().stdin().len()},
+            "mutationStatus": "applied_unverified", "retrySafe": false})
+    );
+    assert_eq!(facts.snapshot().exit_code, Some(0));
+    assert_eq!(facts.snapshot().contract_violation, Some(false));
+    let verified = answering
+        .verify_command(CommandVerification::new(
+            request(),
+            deadline(),
+            permit(&registry).await,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(verified.upstream_status, 0);
+    assert_eq!(registry.in_use("ticketing"), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_missing_binary_fails_before_dispatch_without_applying_anything() {
+    let registry = CommandRegistry::new();
+    let (hook, _, _, _) = command_hook(&command("missing.sh")).await;
+    let facts = CommandProcessFacts::new();
+    let error = hook
+        .invoke_command(
+            CommandInvocation::new(
+                "issue.search".into(),
+                false,
+                request(),
+                tokio::time::Instant::now() + Duration::from_secs(10),
+                permit(&registry).await,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+    assert_eq!(error.message, "The tool could not be started.");
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+    );
+    assert!(!facts.snapshot().spawned);
+    assert!(!format!("{error:?}").contains("missing.sh"));
+    assert_eq!(registry.in_use("ticketing"), 0);
+    assert_eq!(registry.live_processes(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_call_whose_broker_is_shutting_down_never_starts() {
+    let registry = CommandRegistry::new();
+    let (hook, _, _, _) = command_hook(&command("process/echo.sh")).await;
+    let permit = permit(&registry).await;
+    assert_eq!(registry.close_and_drain(Duration::ZERO).await, 0);
+    let facts = CommandProcessFacts::new();
+    let error = hook
+        .invoke_command(
+            CommandInvocation::new(
+                "issue.search".into(),
+                false,
+                request(),
+                tokio::time::Instant::now() + Duration::from_secs(10),
+                permit,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.reason_code(), ReasonCode::OperationCancelled);
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
+    );
+    assert!(!facts.snapshot().spawned);
+    assert_eq!(registry.in_use("ticketing"), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn invoke_processes_get_the_request_only_on_stdin_and_the_network_variables() {
+    let registry = CommandRegistry::new();
+    let mut command = command("process/environment.sh");
+    command.env.insert("LANG".into(), "C.UTF-8".into());
+    let completed = run::execute(run::Run {
+        service: "ticketing",
+        command: &command,
+        operation: CommandOperation::Invoke,
+        permit: permit(&registry).await,
+        request: Some(
+            CommandRequest::encode(
+                &json!({"credentials": {"service": {"token": "secret-example"}}}),
+            )
+            .unwrap(),
+        ),
+        deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+        max_output_bytes: 64 * 1024,
+        environment: vec![(
+            "HTTPS_PROXY",
+            std::ffi::OsString::from("http://proxy.example.net:3128"),
+        )],
+        facts: CommandProcessFacts::new(),
+    })
+    .await
+    .unwrap_or_else(|failure| panic!("{failure:?}"));
+
+    let mut environment = completed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        .collect::<Vec<_>>();
+    environment.sort();
+    assert_eq!(
+        environment,
+        [
+            "HTTPS_PROXY=http://proxy.example.net:3128",
+            "LANG=C.UTF-8",
+            "PATH=/usr/bin:/bin"
+        ]
+    );
+    assert!(!String::from_utf8_lossy(&completed.stdout).contains("secret-example"));
+    assert_eq!(registry.in_use("ticketing"), 0);
 }
