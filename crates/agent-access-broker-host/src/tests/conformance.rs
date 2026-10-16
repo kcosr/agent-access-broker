@@ -260,6 +260,7 @@ fn conformance_backend_configures_through_its_registration_alone() {
             CredentialConfig {
                 kind: "managed_store".into(),
                 profile: Some(profile.into()),
+                connection: None,
                 username_ref: None,
                 token_ref: None,
                 provider: None,
@@ -621,6 +622,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
                 read_only: None,
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config.policy.resources.push(ResourceDefinition {

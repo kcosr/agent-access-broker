@@ -456,6 +456,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     } else {
                         Some(execution_credential_kind(record).personal_profile().into())
                     },
+                    connection: None,
                 },
             );
         }

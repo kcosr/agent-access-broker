@@ -5060,6 +5060,7 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
         kind: "oauth".into(),
         provider: Some("stub".into()),
         profile: Some("read".into()),
+        connection: None,
         username_ref: None,
         token_ref: None,
         path: None,
@@ -5223,6 +5224,7 @@ async fn readiness_accepts_configured_secret_store_references() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -8421,6 +8423,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         },
         credentials: CredentialsConfig {
             imported_modes: Default::default(),
+            connections: BTreeMap::new(),
             service: BTreeMap::from([(
                 "fake".to_string(),
                 fake_service_credential("env:FAKE_SERVICE_TOKEN"),
@@ -8927,6 +8930,7 @@ fn lookup_trace_basic_credential(token: &str, read_only: bool) -> CredentialConf
         read_only: read_only.then_some(true),
         credential_name: None,
         profile: None,
+        connection: None,
     }
 }
 
@@ -9129,6 +9133,7 @@ fn fake_per_user_credential(path: &str) -> CredentialConfig {
         read_only: None,
         credential_name: None,
         profile: None,
+        connection: None,
     }
 }
 

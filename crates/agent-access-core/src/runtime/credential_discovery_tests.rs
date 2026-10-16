@@ -271,6 +271,7 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         CredentialConfig {
             kind: "managed_store".into(),
             profile: Some("jira-cloud-api-token".into()),
+            connection: None,
             credential_name: None,
             provider: None,
             path: None,

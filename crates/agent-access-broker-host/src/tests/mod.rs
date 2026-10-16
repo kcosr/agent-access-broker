@@ -1318,6 +1318,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -1331,6 +1332,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -1426,6 +1428,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -1439,6 +1442,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -2387,6 +2391,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -2530,6 +2535,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -6156,6 +6162,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     let mut mixed_gateway = test_git_gateway_config();
@@ -6174,6 +6181,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.per_user.insert(
@@ -6187,6 +6195,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             read_only: None,
             credential_name: Some("default".to_string()),
             profile: Some("gitlab-access-token".to_string()),
+            connection: None,
         },
     );
     config.credentials.per_user.insert(
@@ -6200,6 +6209,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             read_only: None,
             credential_name: Some("default".to_string()),
             profile: Some("git-bearer-token".to_string()),
+            connection: None,
         },
     );
     config.credentials.per_user.insert(
@@ -6213,6 +6223,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             read_only: None,
             credential_name: Some("default".to_string()),
             profile: Some("jira-cloud-api-token".to_string()),
+            connection: None,
         },
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -13729,6 +13740,7 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -13882,6 +13894,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -13895,6 +13908,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -14056,6 +14070,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14069,6 +14084,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -14292,6 +14308,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14305,6 +14322,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -14407,6 +14425,7 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14420,6 +14439,7 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -14999,6 +15019,7 @@ fn managed_jira_verify_config(
             read_only: None,
             credential_name: Some("default".to_string()),
             profile: Some("jira-cloud-api-token".to_string()),
+            connection: None,
         },
     );
     config
@@ -16306,6 +16327,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -16319,6 +16341,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -16363,6 +16386,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
         },
         credentials: CredentialsConfig {
             imported_modes: Default::default(),
+            connections: BTreeMap::new(),
             service: BTreeMap::from([(
                 "fake".to_string(),
                 CredentialConfig {
@@ -16374,6 +16398,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
                     read_only: None,
                     credential_name: None,
                     profile: None,
+                    connection: None,
                 },
             )]),
             per_user: BTreeMap::new(),
@@ -16446,6 +16471,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -16459,6 +16485,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             read_only: Some(true),
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     config
@@ -16695,6 +16722,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: None,
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config.policy.grants.push(PolicyGrantConfig {
@@ -16719,6 +16747,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: None,
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16732,6 +16761,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: Some(true),
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config
@@ -16793,6 +16823,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: None,
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16806,6 +16837,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: Some(true),
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config
@@ -16857,6 +16889,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: None,
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16870,6 +16903,7 @@ async fn spec_token_fixture_with_restrictions(
                 read_only: Some(true),
                 credential_name: None,
                 profile: None,
+                connection: None,
             },
         );
         config
@@ -17458,6 +17492,7 @@ async fn service_policy_management_fixture_with_policy_authority(
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
 
@@ -17660,6 +17695,7 @@ where
             read_only: None,
             credential_name: None,
             profile: None,
+            connection: None,
         },
     );
     let mut gateway = test_git_gateway_config();

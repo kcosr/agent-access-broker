@@ -5943,6 +5943,7 @@ mod tests {
                 read_only: None,
                 credential_name: Some("default".to_string()),
                 profile: Some("git-bearer-token".to_string()),
+                connection: None,
             },
         );
         config
@@ -6123,6 +6124,7 @@ mod tests {
             },
             credentials: CredentialsConfig {
                 imported_modes: Default::default(),
+                connections: BTreeMap::new(),
                 service: BTreeMap::from([(
                     "gitlab_git".to_string(),
                     CredentialConfig {
@@ -6134,6 +6136,7 @@ mod tests {
                         read_only: None,
                         credential_name: None,
                         profile: None,
+                        connection: None,
                     },
                 )]),
                 per_user: BTreeMap::new(),

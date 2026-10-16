@@ -141,6 +141,7 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
             kind: "oauth".into(),
             provider: Some("stub".into()),
             profile: Some("read".into()),
+            connection: None,
             username_ref: None,
             token_ref: None,
             path: None,

@@ -89,6 +89,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
                 read_only: None,
                 credential_name: Some("default".to_string()),
                 profile: Some(profile.to_string()),
+                connection: None,
             },
         );
     }

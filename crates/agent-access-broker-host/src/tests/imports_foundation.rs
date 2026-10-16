@@ -760,6 +760,75 @@ fn retained_unavailable_oauth_binding_does_not_block_other_import_administration
 }
 
 #[test]
+fn configured_connection_ids_collide_with_imports_on_startup_reload_and_write() {
+    let connection = || agent_access_core::ConnectionConfig {
+        display_name: None,
+        token_profile: Some("token".into()),
+        oauth: None,
+    };
+    let fixture = fixture();
+    // A configured connection holding a retained import's ID.
+    let mut colliding = fixture.config.clone();
+    colliding
+        .credentials
+        .connections
+        .insert("observability".into(), connection());
+    let expected = "retained imported service observability collides with credentials.connections.observability";
+    let rejection = |result: Result<BrokerRuntime, agent_access_core::RuntimeError>| match result {
+        Ok(_) => panic!("a colliding connection must not start"),
+        Err(error) => error.to_string(),
+    };
+    let startup = rejection(BrokerRuntime::new(colliding.clone()));
+    assert!(startup.contains(expected), "{startup}");
+    let reload = rejection(BrokerRuntime::new_for_reload(colliding, &fixture.runtime));
+    assert!(reload.contains(expected), "{reload}");
+
+    // Creating an import under a configured connection's ID.
+    let mut config = fixture.config.clone();
+    config
+        .credentials
+        .connections
+        .insert("tickets".into(), connection());
+    let runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
+    let mut definition = definition();
+    definition.service = "tickets".into();
+    let record = agent_access_core::ImportedServiceRecord {
+        definition: definition.clone(),
+        status: ImportedServiceStatus::Draft,
+        version: 1,
+        actions: vec![],
+        slot_versions: Default::default(),
+        accepted_metadata: None,
+        created_at: String::new(),
+        created_by: "admin".into(),
+        updated_at: String::new(),
+        updated_by: "admin".into(),
+    };
+    let prepared = runtime
+        .prepare_imported_service_change(&record, None)
+        .unwrap();
+    let Err(error) =
+        runtime
+            .managed_store()
+            .unwrap()
+            .create_imported_service(definition, "admin", |catalog| {
+                runtime.with_imported_catalog(catalog.clone(), prepared)
+            })
+    else {
+        panic!("an import must not take a configured connection's ID");
+    };
+    assert!(
+        matches!(
+            &error,
+            ManagedStoreError::InputInvalid(message)
+                if message == "imported service tickets collides with credentials.connections.tickets"
+        ),
+        "{error:?}"
+    );
+    assert!(runtime.imported_catalog().service("tickets").is_none());
+}
+
+#[test]
 fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
     // A native kind selected without a provider table still owns its name.
     static OBSERVABILITY_KIND: agent_access_provider::BackendRegistration =

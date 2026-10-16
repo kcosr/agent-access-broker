@@ -8,16 +8,16 @@ use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig}
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
     AttributionConfig, AuditConfig, AuditDurability, BrokerConfig, BrokerTokenTtlOption,
-    BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, CredentialConfig,
-    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
-    ExecutionContextConfig, GatewayConfig, GatewayGitConfig, GatewayUpstreamTokenAuth,
-    IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, ImportsConfig, InitialAdminConfig,
-    InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig,
-    ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig,
-    OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
-    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
-    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
-    TrustedCallerConfig, TrustedCallerContextMode,
+    BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, ConnectionConfig,
+    ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
+    CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
+    GatewayConfig, GatewayGitConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
+    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
+    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
+    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
+    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
+    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
+    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -325,6 +325,7 @@ fn identity_group_value(group: &IdentityGroupConfig) -> Value {
 fn credentials_value(credentials: &CredentialsConfig) -> Value {
     let CredentialsConfig {
         imported_modes,
+        connections,
         service,
         per_user,
         lookup,
@@ -334,6 +335,7 @@ fn credentials_value(credentials: &CredentialsConfig) -> Value {
         "credentials.imported_modes come from the managed store, never TOML"
     );
     Fields::default()
+        .put("connections", keyed(connections, connection_value))
         .put("service", keyed(service, credential_value))
         .put("per_user", keyed(per_user, credential_value))
         .put("lookup", keyed(lookup, credential_value))
@@ -350,6 +352,7 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         read_only,
         credential_name,
         profile,
+        connection,
     } = credential;
     Fields::default()
         .put("type", kind.as_str())
@@ -360,6 +363,32 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         .opt("read_only", *read_only)
         .opt("credential_name", credential_name.clone())
         .opt("profile", profile.clone())
+        .opt("connection", connection.clone())
+        .value()
+}
+
+fn connection_value(connection: &ConnectionConfig) -> Value {
+    let ConnectionConfig {
+        display_name,
+        token_profile,
+        oauth,
+    } = connection;
+    Fields::default()
+        .opt("display_name", display_name.clone())
+        .opt("token_profile", token_profile.clone())
+        .opt(
+            "oauth",
+            oauth.as_ref().map(|oauth| {
+                let ConnectionOAuthConfig {
+                    registration,
+                    profile,
+                } = oauth;
+                Fields::default()
+                    .put("registration", registration.as_str())
+                    .put("profile", profile.as_str())
+                    .value()
+            }),
+        )
         .value()
 }
 

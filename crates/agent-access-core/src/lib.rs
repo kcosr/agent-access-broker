@@ -51,7 +51,10 @@ pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
 pub use command_imports_config::*;
 pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
-pub use connections::PrincipalKind;
+pub use connections::{
+    CONNECTION_CREDENTIAL_NAME, ConnectionConfig, ConnectionOAuthConfig, PersonalConnection,
+    PrincipalKind, Selection, select,
+};
 pub use gateway_token_auth::{GatewayUpstreamTokenAuth, gateway_upstream_authorization};
 pub use import_names::*;
 pub use imports_config::*;
@@ -726,6 +729,10 @@ pub struct CredentialsConfig {
     /// derives these from the managed imported-service catalog.
     #[serde(skip)]
     pub imported_modes: BTreeMap<String, Vec<String>>,
+    /// `[credentials.connections.<id>]`; runtime publication adds one per
+    /// imported service with a supported, allowed personal binding.
+    #[serde(default)]
+    pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default)]
     pub service: BTreeMap<String, CredentialConfig>,
     #[serde(default)]
@@ -746,6 +753,9 @@ pub struct CredentialConfig {
     pub read_only: Option<bool>,
     pub credential_name: Option<String>,
     pub profile: Option<String>,
+    /// The credential connection a `type = "connection"` per-user entry
+    /// names.
+    pub connection: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1759,6 +1769,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_service_descriptors(&services, resource_types, &mut errors);
     validate_private_resource_consumers(config, &services, &effective_types, &mut errors);
     validate_credentials(config, &services, &mut errors);
+    connections::validate_connections(config, &services, &mut errors);
     validate_backends(config, &mut errors);
     validate_gateways(config, &mut errors);
     validate_policy(config, &services, resource_types, &mut errors);
@@ -2254,6 +2265,7 @@ fn validate_managed_sections(config: &BrokerConfig, errors: &mut Vec<String>) {
         .per_user
         .values()
         .any(|credential| credential.kind == "managed_store");
+    let has_connections = !config.credentials.connections.is_empty();
 
     if has_broker_tokens_source && config.broker_tokens.is_none() {
         errors.push(
@@ -2280,6 +2292,12 @@ fn validate_managed_sections(config: &BrokerConfig, errors: &mut Vec<String>) {
     if has_managed_per_user && config.credential_encryption.is_none() {
         errors
             .push("credentials.per_user managed_store requires credential_encryption".to_string());
+    }
+    if has_connections && config.managed_store.is_none() {
+        errors.push("credentials.connections requires managed_store".to_string());
+    }
+    if has_connections && config.credential_encryption.is_none() {
+        errors.push("credentials.connections requires credential_encryption".to_string());
     }
 
     if config.identity.authority == "managed" && config.managed_store.is_none() {
@@ -3079,14 +3097,51 @@ fn validate_credential(
 ) {
     if mode == "credentials.per_user"
         && credential.kind != "secret_store"
+        && credential.kind != "connection"
         && credential.kind != "managed_store"
         && credential.kind != "oauth"
     {
         errors.push(format!(
-            "{mode}.{service}.type must be secret_store, managed_store, or oauth for per_user credentials"
+            "{mode}.{service}.type must be connection or secret_store for per_user credentials"
+        ));
+    }
+    if credential.kind != "connection" && credential.connection.is_some() {
+        errors.push(format!(
+            "{mode}.{service}.connection is supported only for type connection"
         ));
     }
     match credential.kind.as_str() {
+        "connection" => {
+            if mode != "credentials.per_user" {
+                errors.push(format!(
+                    "{mode}.{service}.type connection is supported only for credentials.per_user"
+                ));
+            }
+            if credential.username_ref.is_some()
+                || credential.token_ref.is_some()
+                || credential.provider.is_some()
+                || credential.path.is_some()
+                || credential.read_only.is_some()
+                || credential.credential_name.is_some()
+                || credential.profile.is_some()
+            {
+                errors.push(format!(
+                    "{mode}.{service}.type connection sets only connection"
+                ));
+            }
+            match credential.connection.as_deref() {
+                Some(connection) if config.credentials.connections.contains_key(connection) => {}
+                Some(connection) => errors.push(format!(
+                    "{mode}.{service}.connection {connection} must name a configured credentials.connections entry"
+                )),
+                None => errors.push(format!("{mode}.{service}.connection is required")),
+            }
+            if mode == "credentials.per_user" && !services.contains_key(service) {
+                errors.push(format!(
+                    "{mode}.{service} uses a credential connection, but {service} is not a configured service"
+                ));
+            }
+        }
         "oauth" => {
             match services.get(service) {
                 Some(descriptor) if mode == "credentials.per_user" && descriptor.credentials.delegated.is_some() => {
@@ -4403,16 +4458,16 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
             &config.policy.authority,
             &limits,
             ServiceCredentialKinds::new(
-                config
-                    .credentials
-                    .service
-                    .get(kind)
-                    .and_then(|credential| resolved_credential_kind(credential, &descriptor)),
+                config.credentials.service.get(kind).and_then(|credential| {
+                    resolved_credential_kind(&config.credentials, credential, &descriptor)
+                }),
                 config
                     .credentials
                     .per_user
                     .get(kind)
-                    .and_then(|credential| resolved_credential_kind(credential, &descriptor)),
+                    .and_then(|credential| {
+                        resolved_credential_kind(&config.credentials, credential, &descriptor)
+                    }),
             ),
         );
         backend.validate(&context, errors);
@@ -4420,15 +4475,27 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
 }
 
 /// The credential kind backend validation sees for a configured credential:
-/// a `managed_store` entry resolves to its profile's kind; every other type
-/// (`basic_api_token`, `bearer_token`, `secret_store`, `oauth`) is passed as
-/// written. An unsupported profile resolves to nothing; credential validation
-/// reports it.
+/// a `connection` entry resolves to its token profile's kind, or `oauth` for
+/// a connection with only OAuth; a `managed_store` entry resolves to its
+/// profile's kind; every other type (`basic_api_token`, `bearer_token`,
+/// `secret_store`, `oauth`) is passed as written. An unsupported profile or
+/// unknown connection resolves to nothing; credential validation reports it.
 fn resolved_credential_kind<'a>(
+    credentials: &'a CredentialsConfig,
     credential: &'a CredentialConfig,
     descriptor: &ServiceDescriptor,
 ) -> Option<&'a str> {
     match credential.kind.as_str() {
+        "connection" => {
+            let connection = credentials
+                .connections
+                .get(credential.connection.as_deref()?)?;
+            match (&connection.token_profile, &connection.oauth) {
+                (Some(profile), _) => descriptor.credential_profile_kind(profile),
+                (None, Some(_)) => Some("oauth"),
+                (None, None) => None,
+            }
+        }
         "managed_store" => credential
             .profile
             .as_deref()

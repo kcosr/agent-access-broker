@@ -6928,9 +6928,10 @@ fn register_service_provider(
 /// discovery, and catalog projection.
 /// The other owner of an imported service identity, if any, named for a
 /// diagnostic: the reserved control-plane namespace, a selected native kind
-/// (configured or not), a gateway, another configured service or a
-/// configured credential. Every retained import is checked, whatever its
-/// status or adapter availability.
+/// (configured or not), a gateway, another configured service, a configured
+/// credential or a configured credential connection, whose ID shares the
+/// namespace of token rows and credential rights. Every retained import is
+/// checked, whatever its status or adapter availability.
 pub(crate) fn imported_service_collision(
     config: &BrokerConfig,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
@@ -6947,6 +6948,9 @@ pub(crate) fn imported_service_collision(
     }
     if services.contains_key(name) {
         return Some(format!("the configured service {name}"));
+    }
+    if config.credentials.connections.contains_key(name) {
+        return Some(format!("credentials.connections.{name}"));
     }
     [
         ("credentials.service", &config.credentials.service),
@@ -10269,6 +10273,7 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
         read_only: None,
         credential_name: None,
         profile: None,
+        connection: None,
     }
 }
 
