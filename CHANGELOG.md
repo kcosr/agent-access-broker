@@ -302,6 +302,31 @@ All notable changes to this project are documented in this file.
   resolve against the working directory. `LimitsConfig` no longer implements
   `Default`; construct it with `LimitsConfig::new(upload_spool_dir)`, which
   applies the built-in default for every other limit.
+- Personal credentials are configured as credential connections.
+  `[credentials.connections.<id>]` (`display_name`, `token_profile`, and
+  `oauth = { registration, profile }`) defines one per-principal credential,
+  and every service whose `[credentials.per_user.<service>]` entry is
+  `type = "connection"` with `connection = "<id>"` uses it. Services that reach
+  the same upstream account can share one connection, such as GitLab REST and
+  a GitLab Git gateway with one stored GitLab token, while keeping separate
+  grants. The per-user types `managed_store` and `oauth` and the `credential_name`
+  and `profile` keys are removed without a fallback parser; a per-user `type` is
+  `connection` or `secret_store`. A principal's kind selects the method from
+  configuration alone, with no fallback between methods: people use OAuth when
+  the connection sets it and a token they store otherwise; service accounts use
+  tokens administrators provision and `system` principals tokens they store,
+  never OAuth; configured static principals and anonymous callers have no
+  connection method. A connection's tokens are stored under its ID with the
+  name `default`, so a connection with the same ID and profile as an earlier
+  per-service credential reads its tokens unchanged; tokens under another name
+  stay stored but unread. Credential rights apply to the connection and
+  `default`; rights on other names have no effect. Connection IDs share the
+  service namespace: a connection may not be named `broker`, or after a
+  configured service, gateway or imported service that does not use it.
+  Imports with a personal binding publish their own connection under their
+  service ID and need no configuration change. There is no schema migration;
+  rewrite the configuration before upgrading, following the credential
+  connections steps under the operator guide's upgrade and rollback section.
 
 ### Added
 

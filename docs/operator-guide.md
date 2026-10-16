@@ -1276,6 +1276,76 @@ down-migration contract, and deleting migration-ledger rows or editing tables is
 not a supported rollback. Reconcile writes made after the backup and inspect
 uncertain upstream outcomes before retrying operations.
 
+### Credential connections
+
+Personal credentials are configured as
+[credential connections](configuration.md#credential-connections), which
+replace the per-service personal credential settings. The change has no
+managed-store migration: stored tokens, OAuth connections and credential rights
+keep their rows, and only how the Broker selects them changes. The new binary
+rejects the removed per-user types `managed_store` and `oauth` and the
+`credential_name` and `profile` keys, so rewrite the configuration before
+deploying it:
+
+| Before | After | Stored data | Action |
+| --- | --- | --- | --- |
+| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profile = P`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
+| `type = "managed_store"` with another `credential_name` | As above | Tokens under the other name are not read | People store their token again; administrators re-provision service accounts' |
+| `type = "oauth"` with `provider = R` and `profile = Q` | `[credentials.connections.<svc>]` with `oauth = { registration = "R", profile = "Q" }` | OAuth connections unchanged, because the registration is unchanged | None |
+| Separate `gitlab` and `gitlab_git` per-user credentials | One `gitlab` connection both name, with the gateway's `upstream_token_auth = { scheme = "basic", username = "oauth2" }` | `gitlab` tokens read; `gitlab_git` tokens not read | People who stored only a Git token store a GitLab token; administrators re-provision service accounts that had only Git tokens |
+| Credential rights on a service and credential name | Rights on the connection and `default` | Rights on other names, or on services that no longer name a connection, have no effect | Administrators grant them again on the connection |
+| Personal credential routes and CLI commands keyed by service and credential name | Keyed by connection; OAuth connect and disconnect keyed by registration | None | Update scripts and automation against the [HTTP API](http-api.md) and [CLI](cli.md) |
+
+Imported services need no configuration change. Each import with a personal
+binding publishes its own connection under its service ID and keeps reading the
+tokens and OAuth connections its users already have. A connection ID must not
+equal an imported service ID or a configured service or gateway that does not
+use it, so choose new IDs accordingly.
+
+A principal's kind now selects each connection's method. A connection with only
+`token_profile` behaves as the per-service token did, for every kind of
+principal. Adding `oauth` to a connection later moves people to OAuth: their
+stored tokens for it stay stored but are no longer read, and remain listed for
+deletion, while service accounts and `system` principals keep using tokens.
+Stored tokens are not bound to an upstream: changing the base URL of a
+connection's services sends the existing tokens to the new host, as changing a
+provider's base URL always has.
+
+To upgrade:
+
+1. Take the matched backup described above, including the managed store and
+   its encryption keys.
+2. Rewrite the configuration following the table and validate it with the new
+   binary's `config validate`.
+3. Record existing credential rights with `agent-access admin rights list`.
+   Note rights whose credential name is not `default`, or whose service will not
+   name a connection, so you can grant them again on the connection.
+4. Deploy the new binary, configuration and matching portal and CLI, following
+   the procedure above.
+5. Have people store or reconnect the credentials the portal shows as missing,
+   and re-provision service accounts' tokens.
+6. Optionally review and delete stored tokens the configuration no longer
+   selects. They remain listed for their owners and administrators until
+   deleted.
+
+Rolling back follows the store-version rule above. The previous binary must
+already run schema `027_command_imports`: the store refuses a binary whose
+schema predates the database's, so rolling back across `027` or any later
+migration needs the backup taken before that migration.
+
+- **Immediate rollback**, before anything is written under the new version, is
+  the previous binary with its previous configuration. Tokens the new
+  configuration did not read become active again as stored, tokens stored under
+  new connection IDs are ignored, and credential rights keep their stored keys.
+- **Rollback after writes is not lossless.** Saving a connection's token
+  replaces the principal's row for that connection in place, including its
+  profile and secret. Deleting unselected tokens removes them, and reconnecting
+  replaces an OAuth connection's tokens. Restore the backup, or have people store
+  their tokens again.
+- When a connection needs a different token profile than the tokens stored
+  under its service, introduce it under a new connection ID. The old tokens then
+  stay untouched until you delete them, which keeps rollback cheap.
+
 ## Common failures
 
 For HTTP 429 responses, distinguish `rate_limited` from `concurrency_limited`,
