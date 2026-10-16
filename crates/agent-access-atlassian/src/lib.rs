@@ -54,8 +54,9 @@ pub fn validate_atlassian_gateway_credential(
             ));
         }
     }
-    // A per-user connection offering only OAuth reports `oauth`; its access
-    // is the delegated credential checked above.
+    // Beside OAuth, the per-user kind is `oauth` for a connection without a
+    // token profile, whose access is the delegated credential checked above,
+    // or a basic profile, already rejected above.
     let per_user_static = credentials
         .per_user
         .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
