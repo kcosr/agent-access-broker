@@ -7,7 +7,7 @@ Use this guide to connect your account, store an upstream credential, and give a
 agent a Broker invocation token. Your administrator must first configure the
 integration, create your account, and grant access. Ask them for the broker HTTPS
 URL, your login method or finite setup token, the available execution contexts,
-the services/resources you may use, and your configured personal credential targets.
+the services/resources you may use, and the credential connections you set up.
 Administrator setup is in the
 [administrator guide](administrator-guide.md).
 
@@ -48,24 +48,35 @@ remain independent. Microsoft-only users change their password at Microsoft.
 
 ## Store a credential or connect OAuth
 
-In **My access > Credentials**, select the configured target for your service,
-enter the requested fields, save, and verify when supported. Use the profile and
-credential name offered by the broker. Storing a credential does not create a
-grant. Service-mode actions use the configured shared identity and may not require
-a personal credential. Teams destination URLs are managed by administrators.
+Your personal upstream credentials are organized as **credential
+connections**. A connection is one credential that one or more services use:
+for example, one GitLab token can serve both GitLab REST and Git. Your
+administrator decides how each connection authenticates. When it uses OAuth,
+you connect your upstream account; otherwise you store a token. You do not
+choose between them, and a stored token is never used in place of a connection
+that uses OAuth.
+
+In **My access > Credentials**, select the connection, enter the requested
+fields, save, and verify when supported. Use the token form the broker offers.
+Storing a credential does not create a grant: each service that uses the
+connection still needs its own grant. Service-mode actions use the configured
+shared identity and may not require a personal credential. Teams destination
+URLs are managed by administrators.
 
 For Gmail and other supported OAuth-backed services, your administrator enables
-self-service, configures the service's personal OAuth binding, and grants you or
-one of your current groups an active `per_user` action grant. No separate
+self-service, configures the connection's OAuth registration, and grants you or
+one of your current groups an active `per_user` action grant on a service that
+uses it. No separate
 credential rights are required. Choose **Connect account**, complete upstream
 consent, and confirm the connection status. You can prepare an account even when
 its resources or execution contexts are not currently available; each invocation
 still needs its own authorization.
 
 An existing connection stays visible and disconnectable after you lose its grant,
-while self-service remains enabled and the registration is still bound to a
-service. Connect/reconnect remains unavailable until you have a matching grant.
-Disconnecting a shared connection affects every service using that registration.
+while self-service remains enabled and a credential connection still uses the
+registration. Connect/reconnect remains unavailable until you have a matching
+grant. Disconnecting a shared connection affects every service using that
+registration.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
 Do not paste an OAuth access token into a generic API-token field. OAuth consent requires a
 signed-in browser session; the CLI setup token alone cannot authorize it. See
@@ -361,7 +372,8 @@ report.
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant and the configured OAuth binding; an existing owned connection can still be disconnected after grant loss |
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right, credential name, expiry, and revocation; these rights do not govern OAuth |
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
-| `credential_not_found` | Store the credential matching the configured service/name/profile, or reconnect OAuth |
+| `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |
+| `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; ask the administrator |
 | `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |
