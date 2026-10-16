@@ -1030,6 +1030,11 @@ dependency_inward = "is blocked by"
   later pattern segments to match. Including `api.atlassian.com` enables the
   gateway and requires a `bearer_token` execution credential (and vice versa: a
   `bearer_token` credential requires `api.atlassian.com` in the allowlist).
+  With the gateway enabled, each configured `credentials.service` and
+  `credentials.per_user` entry must resolve to `bearer_token`: a static
+  `bearer_token`, or a `managed_store` bearer profile such as
+  `jira-bearer-token`. A `basic_api_token`, a basic `managed_store` profile and
+  a `secret_store` (whose records carry their own kinds) are rejected.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in
