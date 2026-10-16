@@ -657,7 +657,6 @@ pub(super) async fn verify_credential_for_principal(
             .verify_command_credential(
                 &request.service,
                 &owner_identity,
-                &request.name,
                 &verification_candidate.target,
                 correlation,
             )
