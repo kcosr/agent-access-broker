@@ -2171,6 +2171,95 @@ pub(crate) mod tests {
             "e77c185f9dc0231eeefbeb48cccc745033fc8bd172fa06a9af13a983d4a7e1fb"
         );
     }
+
+    /// The sample registration of each dialect the Broker binary selects,
+    /// as `agent-access-broker.sample.toml` documents it, keeps the
+    /// fingerprint it had before registrations could set `login_binding`.
+    /// A changed digest would discard every stored connection at activation.
+    #[test]
+    fn sample_registration_fingerprints_survive_added_registration_keys() {
+        let samples = [
+            (
+                r#"
+                adapter = "gitlab"
+                base_url = "https://gitlab.example.com"
+                redirect_uri = "https://broker.example.com/v1/oauth/callback/gitlab"
+                client_id = "YOUR_GITLAB_APPLICATION_ID"
+                client_secret_ref = "env:GITLAB_OAUTH_CLIENT_SECRET"
+                client_auth = "client_secret_post"
+                rotation = "rotate_both"
+                [permission_profiles.default]
+                scopes = ["api", "write_repository"]
+                audience = "gitlab"
+                target = "https://gitlab.example.com"
+                "#,
+                "d11c02781d5768a3b87793792b940453b12faf457979621c595b76cb8873765d",
+            ),
+            (
+                r#"
+                adapter = "stub"
+                base_url = "http://127.0.0.1:8099"
+                redirect_uri = "http://127.0.0.1:8080/v1/oauth/callback/stub"
+                client_id = "broker-local"
+                client_secret_ref = "env:OAUTH_STUB_CLIENT_SECRET"
+                allow_insecure_loopback = true
+                [permission_profiles.read]
+                scopes = ["records.read", "offline_access"]
+                audience = "records-api"
+                target = "workspace-one"
+                "#,
+                "eb91a1126b88020df9993fe938a7a0ec65916b80d92c0f3a1f3f5ae85b2b3732",
+            ),
+            (
+                r#"
+                adapter = "mcp_oauth"
+                base_url = "https://login.example.com/issuer"
+                redirect_uri = "https://broker.example.com/v1/oauth/callback/internal_tools"
+                client_id = "registered-broker-client"
+                client_auth = "none"
+                rotation = "preserve_old"
+                [adapter_settings]
+                resource = "https://tools.example.com/mcp"
+                protected_resource_metadata_url = "https://tools.example.com/.well-known/oauth-protected-resource/mcp"
+                authorization_server_metadata_url = "https://login.example.com/.well-known/oauth-authorization-server/issuer"
+                authorization_endpoint = "https://login.example.com/authorize"
+                token_endpoint = "https://login.example.com/token"
+                [permission_profiles.default]
+                scope_mode = "server_default"
+                audience = "https://tools.example.com/mcp"
+                target = "https://tools.example.com/mcp"
+                "#,
+                "dbb0bd4450a6e16fe1ef6a4d0f6f1ce22b59420bb04e828ece786053768faeb5",
+            ),
+            (
+                r#"
+                adapter = "google"
+                base_url = "https://accounts.google.com"
+                redirect_uri = "http://127.0.0.1:8787/v1/oauth/callback/google"
+                client_id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+                client_secret_ref = "env:GOOGLE_CLIENT_SECRET"
+                client_auth = "client_secret_post"
+                encoding = "form"
+                rotation = "preserve_old"
+                allow_insecure_loopback = true
+                [permission_profiles.mail]
+                scopes = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+                audience = "https://gmail.googleapis.com/"
+                target = "me"
+                "#,
+                "73d9a234167662c0506d55e4843d857e94cde76d1e0468c4219afb5e400a337f",
+            ),
+        ];
+        for (sample, fingerprint) in samples {
+            let registration: OAuthRegistrationConfig = toml::from_str(sample).unwrap();
+            assert_eq!(
+                registration_fingerprint(&registration).unwrap(),
+                fingerprint,
+                "{}",
+                registration.adapter.as_str()
+            );
+        }
+    }
     fn binding() -> OAuthBinding {
         OAuthBinding {
             registration: "stub".into(),
