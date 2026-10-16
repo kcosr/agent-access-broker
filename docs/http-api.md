@@ -634,32 +634,151 @@ Self-service credential management:
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/v1/credentials/targets` |
 | `GET` | `/v1/credentials` |
-| `GET` `PUT` `DELETE` | `/v1/credentials/{service}/{name}` |
-| `POST` | `/v1/credentials/{service}/{name}/verify` |
-| `GET` | `/v1/credentials/{service}/{name}/input-schema` |
+| `GET` | `/v1/credentials/targets` |
+| `GET` `PUT` `DELETE` | `/v1/credentials/connections/{connection}` |
+| `POST` | `/v1/credentials/connections/{connection}/verify` |
+| `GET` | `/v1/credentials/connections/{connection}/input-schema` |
+| `DELETE` | `/v1/credentials/retained/{credentialId}` |
 
-`GET /v1/credentials/targets` returns the configured managed-store per-user
-credential targets visible to the portal: `service`, `displayName`,
-`credentialName`, `profile`, `credentialKind`, `credentialVerificationInputs`,
-and the schema-driven `inputSchema`. `displayName` is the service's configured
-display name (built-in or imported). `credentialVerificationInputs` lists the
-inputs verifying that service's credential needs besides the credential, such as
-`["repository"]` for Git gateway credentials; it is always present and is `[]`
-when verification needs none. Both are properties of the configured service and
-do not depend on the caller's execution context or grants. It is a
-read-only management route, so cookie-authenticated browser sessions may call it
-without a CSRF header. Broker-issued `user_manage` callers see targets only for
-services where their policy-visible actions include `per_user`; classless
-self-service callers see targets only when they hold a matching
-`credentials:self:write` right.
-`GET /v1/admin/principals/{principal}/credentials/targets` returns the same
-target shape for the target principal.
+Personal credentials are managed per credential connection, the
+`[credentials.connections.<id>]` slot that one or more services consume (see
+[configuration](configuration.md)). The fixed `connections/` and `retained/`
+segments keep a connection ID such as `targets` from shadowing the collection
+routes. A connection's method for the caller comes from configuration and the
+caller's principal kind: `token` (a stored token), `oauth` (an OAuth connection,
+managed through the [OAuth routes](#upstream-oauth-browser-connections)), or
+`unavailable` (no personal method for this kind of principal). The
+`connections/{connection}` routes manage only the `token` method; any other
+method returns HTTP 400 `input_invalid`.
 
-Credential metadata responses from self-service and admin credential routes
-include `verificationStatus`, `lastVerificationAttemptAt`, `lastVerifiedAt`,
-and `lastVerificationErrorCode`. A newly saved or replaced credential reports
+A connection lists its *consumers*: the consuming services the caller holds an
+active `per_user` grant on, each with `service`, `displayName`, and
+`credentialVerificationInputs` (inputs verifying through that service needs
+besides the credential, such as `["repository"]` for a Git gateway; `[]` when it
+needs none). `otherConsumers` counts the consuming services the caller is not
+entitled to, which the connection serves too.
+
+`GET /v1/credentials` returns the caller's connections and retained rows:
+
+```json
+{
+  "connections": [
+    {
+      "connection": "gitlab",
+      "displayName": "GitLab",
+      "method": "token",
+      "consumers": [
+        {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []},
+        {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationInputs": ["repository"]}
+      ],
+      "otherConsumers": 0,
+      "profile": "gitlab-access-token",
+      "credentialKind": "bearer_token",
+      "registration": null,
+      "credential": {
+        "credentialId": "6f1c…",
+        "connection": "gitlab",
+        "ownerPrincipal": "alice",
+        "ownerKind": "user",
+        "profile": "gitlab-access-token",
+        "credentialKind": "bearer_token",
+        "metadata": {},
+        "status": "active",
+        "verificationStatus": "upstream_verified",
+        "…": "…"
+      }
+    },
+    {
+      "connection": "gmail",
+      "displayName": "Gmail",
+      "method": "oauth",
+      "consumers": [{"service": "gmail", "displayName": "Gmail", "credentialVerificationInputs": []}],
+      "otherConsumers": 0,
+      "profile": null,
+      "credentialKind": null,
+      "registration": "google",
+      "credential": null
+    }
+  ],
+  "retained": [
+    {
+      "credentialId": "0b9e…",
+      "ownerPrincipal": "alice",
+      "ownerKind": "user",
+      "service": "gitlab_git",
+      "name": "default",
+      "profile": "git-basic-api-token",
+      "credentialKind": "basic_api_token",
+      "…": "…"
+    }
+  ]
+}
+```
+
+`connections` lists every connection the caller is entitled to through a
+consumer, whatever its method and whether or not a token is stored, plus any
+connection whose active token the caller still owns after losing its grants, so
+the owner can delete it. `credential` is the active token's metadata, keyed by
+`connection` instead of a stored service and name, or `null` until a token is
+stored. `retained` lists the caller's stored rows the current configuration does
+not select, read-only, with their stored `service` value, `name` and `profile`:
+for example a row with a non-default name, a retired profile, a row of a service
+that no longer has its own connection, or a token row of a connection that now
+uses OAuth for the caller. `DELETE /v1/credentials/retained/{credentialId}`
+deletes one of them; it returns HTTP 404 `credential_not_found` for another
+owner's row and HTTP 400 `credential_invalid` for a connection's active token,
+which is deleted through its connection.
+
+`GET /v1/credentials/targets` returns the connections whose token the caller can
+store now, with the schema-driven input form:
+
+```json
+[
+  {
+    "connection": "gitlab",
+    "displayName": "GitLab",
+    "consumers": [{"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []}],
+    "otherConsumers": 1,
+    "profile": "gitlab-access-token",
+    "credentialKind": "bearer_token",
+    "inputSchema": {
+      "connection": "gitlab",
+      "profile": "gitlab-access-token",
+      "credentialKind": "bearer_token",
+      "fields": [{"name": "token", "required": true, "secret": true, "prompt": "GitLab bearer token", "inputMethods": ["prompt", "env", "file", "stdin"]}]
+    }
+  }
+]
+```
+
+`displayName` is the connection's configured `display_name`, or its first
+consumer's display name. A target needs the token method for the caller's
+principal kind. Broker-issued `user_manage` callers and browser sessions see
+targets for connections where they hold an active `per_user` grant on a
+consumer; classless self-service callers see targets where they hold the
+`credentials:self:write` right on `(connection, default)`. These are read-only
+management routes, so cookie-authenticated browser sessions may call them
+without a CSRF header. `GET /v1/admin/principals/{principal}/credentials/targets`
+returns the same target shape for the target principal: connections selecting
+the token method for its kind with a consumer it holds a `per_user` grant on.
+
+`GET`, `PUT` and `DELETE /v1/credentials/connections/{connection}` read, store
+and delete the caller's active token, and return its connection-keyed metadata.
+`PUT` takes `{"secret": {…}, "metadata": {…}}` with the fields of
+`GET …/input-schema`; an optional `profile`, in the body or the input-schema
+query, must equal the connection's token profile. Storing and reading the input
+schema need a current `per_user` grant on a consumer (or, for classless callers,
+`credentials:self:write`); reading metadata and deleting stay available to the
+owner after grant loss (classless callers need `credentials:self:read_metadata`
+and `credentials:self:delete`). Every personal route also requires self-service
+to be enabled. Credential rights are read as `(connection, default)`: a right on
+another credential name, or on a service that no longer names its own
+connection, no longer applies.
+
+Credential metadata responses include `verificationStatus`,
+`lastVerificationAttemptAt`, `lastVerifiedAt`, and
+`lastVerificationErrorCode`. A newly saved or replaced credential reports
 `verificationStatus = not_verified`. A successful verify reports
 `local_verified` or `upstream_verified`, sets both verification timestamps, and
 clears the failure code. A failed verify returns the provider failure's own
@@ -672,26 +791,37 @@ returned. A failed upstream verify is one reporting `upstream_unauthorized`,
 `upstream_connection_failed`, or `upstream_timeout`, or a provider domain reason
 with HTTP status 424, 502, 503, or 504.
 
-Credential verify routes accept an optional JSON body. A service lists the
-inputs its verification needs in `credentialVerificationInputs` on its
-`/v1/services` entry, its admin policy catalog entry, and its
-`/v1/credentials/targets` entry (the portal reads the last); services without
-that list, such as Jira, Confluence, and GitLab REST, use `{}` or no body. Git
-gateway credentials list `repository` and require
-`{"repository":"namespace/repository"}`; the broker authorizes that repository
-against the credential owner's `repo.fetch` policy before issuing a minimal
-read-only Git smart-HTTP discovery request upstream.
+`POST /v1/credentials/connections/{connection}/verify` accepts an optional JSON
+body `{"service": "…", "repository": "…"}`. Verification is authorized like
+storing the token, and its probe always runs as the credential owner, through a
+consumer the owner holds a `per_user` grant on; an administrator's own grants
+never authorize a probe. `service` names the consumer to probe. Without it, the
+broker probes the owner's entitled consumers in configured order, other than
+those needing a `repository`, until one whose backend has an identity probe
+answers (GitLab REST `/user`, Jira `myself`, Confluence `user/current`); when
+none has a probe, the token is checked locally only (`local_verified`). A
+`repository` selects a Git gateway consumer: the broker authorizes that
+repository against the owner's `repo.fetch` policy before issuing a minimal
+read-only Git smart-HTTP discovery request upstream, for example
+`{"service": "gitlab_git", "repository": "team/project"}`. The verified
+credential's response adds `probeService`, the consumer whose probe answered
+(`null` for a local check), which the audit target records too.
 
-Verifying a personal credential of a command import whose accepted manifest
-declares `verify` runs the command's `verify` operation with that credential
-under the command's concurrency budget: `{"ok": true}` reports
-`upstream_verified`, and a command error fails with its mapped reason. Without
-`verify`, the credential is checked locally only (`local_verified`). The
-verification audit, of a failed verification too, records the command's
-process facts under `providerAudit.verification.command`, with `upstreamStatus`
-`null`. A verification queued for the command's concurrency slot is rejected
-with `service_action_denied`, without running the command, when a change or
-reload retired the import or its command entry in the meantime.
+An imported service's connection has the import as its only consumer. Verifying
+it through a command import whose accepted manifest declares `verify` runs the
+command's `verify` operation with that credential under the command's
+concurrency budget: `{"ok": true}` reports `upstream_verified`, and a command
+error fails with its mapped reason. Without `verify`, the credential is checked
+locally only (`local_verified`). The verification audit, of a failed
+verification too, records the command's process facts under
+`providerAudit.verification.command`, with `upstreamStatus` `null`. A
+verification queued for the command's concurrency slot is rejected with
+`service_action_denied`, without running the command, when a change or reload
+retired the import or its command entry in the meantime.
+
+Credential management audit targets name `{"principal": …, "connection": …}`
+(verification adds `probeService`); retained-row deletes name
+`{"principal": …, "credentialId": …}`.
 
 Self-service token management:
 
@@ -837,9 +967,9 @@ Admin management (also on the public listener):
 | `POST` | `/v1/admin/principals/{principal}/agent-tokens/{token_id}/pause` |
 | `POST` | `/v1/admin/principals/{principal}/agent-tokens/{token_id}/resume` |
 | `POST` | `/v1/admin/principals/{principal}/tokens` |
-| `GET` `PUT` `DELETE` | `/v1/admin/principals/{principal}/credentials/{service}/{name}` |
-| `POST` | `/v1/admin/principals/{principal}/credentials/{service}/{name}/verify` |
-| `GET` | `/v1/admin/principals/{principal}/credentials/{service}/{name}/input-schema` |
+| `GET` `PUT` `DELETE` | `/v1/admin/principals/{principal}/credentials/connections/{connection}` |
+| `POST` | `/v1/admin/principals/{principal}/credentials/connections/{connection}/verify` |
+| `GET` | `/v1/admin/principals/{principal}/credentials/connections/{connection}/input-schema` |
 | `GET` `POST` | `/v1/admin/rights` |
 | `DELETE` | `/v1/admin/rights/{right_id}` |
 | `GET` | `/v1/admin/tokens` or `/v1/admin/tokens?principal={principal}` |
@@ -848,11 +978,23 @@ Admin management (also on the public listener):
 | `POST` | `/v1/admin/tokens/{token_id}/resume` |
 | `GET` | `/v1/admin/credentials` or `/v1/admin/credentials?principal={principal}` |
 | `POST` | `/v1/admin/credentials/rewrap` |
-| `GET` `PUT` `DELETE` | `/v1/admin/credentials/{credential_id}` |
-| `POST` | `/v1/admin/credentials/{credential_id}/verify` |
+| `GET` `DELETE` | `/v1/admin/credentials/{credential_id}` |
 | `GET` | `/v1/admin/audit/options` |
 | `GET` | `/v1/admin/audit/events` |
 | `GET` | `/v1/admin/audit/requests/{brokerRequestId}` |
+
+The per-principal credential routes manage a principal's active token for a
+credential connection, with the request, response and verification shapes of the
+self-service routes. They apply only when the connection selects the token method
+for the principal's kind, such as a service account's administrator-provisioned
+token; for a user whose connection uses OAuth they return HTTP 400
+`input_invalid`. Auditors may read metadata and input schemas but never store,
+verify or delete. Verification probes as the principal, through a consumer it
+holds a `per_user` grant on, so an administrator without invocation grants can
+verify a service account. `GET /v1/admin/credentials` lists stored rows, active
+and retained alike, with their stored `service` and `name`;
+`GET` and `DELETE /v1/admin/credentials/{credential_id}` inspect and delete any
+row by ID, for cleanup.
 
 `POST /v1/admin/principals` accepts the managed-store principal kinds `user`,
 `service_account`, and `system`; the portal exposes creation of users and
@@ -2949,30 +3091,75 @@ Connect accepts an optional `returnPath` of `/ui/credentials` or
 links to the initiating imported service's Import tab in the portal Catalog.
 The broker binds the destination to the pending flow and rejects other paths.
 
-Personal OAuth setup requires self-service enabled, a configured personal binding
-and a matching active `per_user` action grant for the user or their current groups.
-Credential rights do not authorize these routes. Owners retain metadata and local
-disconnect for existing bound connections after grant loss. Connect/Reconnect
-without current Broker setup authority returns HTTP 403 with
-`reasonCode: "service_action_denied"` and `error.message: "oauth_setup_denied"`.
-Upstream permission or scope rejection remains HTTP 400 with
-`reasonCode: "credential_invalid"` and `error.message: "oauth_permission_denied"`. Setup does not
-require an invocable resource/context or change invocation authorization.
+`POST /v1/oauth/connect` takes
+`{"registration": "gitlab", "intent": "connect", "returnPath": "/ui/credentials"}`.
+`registration` names an OAuth registration one of the caller's credential
+connections selects. Consent is admitted for the registration as a whole: the
+caller needs self-service enabled and an active `per_user` action grant, for the
+user or their current groups, on at least one consuming service whose connection
+selects OAuth for the user. The broker rechecks this against current runtime
+policy and group membership when the flow starts, when the callback claims it,
+and inside the transaction installing the tokens. Credential rights do not
+authorize these routes. An administrator discovering an imported MCP service
+connects with `importedService` naming it, for example
+`{"registration": "tickets-oauth", "importedService": "tickets", "returnPath": "/ui/admin/catalog"}`;
+the import's administrator-discovery admission then applies to that service, and
+`importedService` is required with `returnPath` `/ui/admin/catalog`. Imported
+consumers keep their imported-version fence. Connect/Reconnect without current
+Broker setup authority returns HTTP 403 with `reasonCode: "service_action_denied"`
+and `error.message: "oauth_setup_denied"`. Upstream permission or scope rejection
+remains HTTP 400 with `reasonCode: "credential_invalid"` and
+`error.message: "oauth_permission_denied"`. Setup does not require an invocable
+resource/context or change invocation authorization. Audit targets name
+`{"registration": …}`, with `importedService` when supplied.
 
-`DELETE /v1/oauth/connections/{service}` is idempotent for a configured binding:
-it returns HTTP 200 with `disconnected: true` and
-`remoteRevocation: "not_requested"` even when the owner has no remaining connection.
-Without an owned connection, the request is a no-op and leaves pending consent
-unchanged. Browser, self-service and CSRF gates still apply; no setup grant is
-required for local cleanup.
+`DELETE /v1/oauth/connections/{registration}` is idempotent for a configured
+registration: it returns HTTP 200 with `disconnected: true` and
+`remoteRevocation: "not_requested"` even when the owner has no remaining
+connection. Without an owned connection, the request is a no-op and leaves
+pending consent unchanged. Browser, self-service and CSRF gates still apply; no
+setup grant is required for local cleanup. Disconnecting affects every service
+whose connection uses the registration.
 
-Each target returned by `GET /v1/oauth/connections` includes `canConnect`,
-`canDisconnect`, and required nullable `connectUnavailableReason`: `null` when
-setup is available, `no_personal_access` for missing grant authority, or
-`service_unavailable` for a service that cannot currently accept setup. Target
-rows and flags follow the [OAuth ownership rules](oauth.md#browser-management-api).
+`GET /v1/oauth/connections` returns one row per registration the caller's
+connections select:
 
-Each target also includes `scopeMode` with value `explicit` or `server_default`. `requestedScopes` remains an array and is empty
+```json
+[
+  {
+    "registration": "gitlab",
+    "displayName": "GitLab",
+    "connectionDescription": "Read and change GitLab projects as you",
+    "consumers": [
+      {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []},
+      {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationInputs": ["repository"]}
+    ],
+    "otherConsumers": 0,
+    "permissionProfile": "default",
+    "scopeMode": "explicit",
+    "requestedScopes": ["api", "write_repository"],
+    "target": "https://gitlab.example.com",
+    "canConnect": true,
+    "connectUnavailableReason": null,
+    "canDisconnect": false,
+    "connection": null
+  }
+]
+```
+
+`consumers` lists the consuming services the caller may set up through (an
+active `per_user` grant, or administrator discovery of an imported service);
+`otherConsumers` counts the rest, which the connection serves too. A row appears
+when the caller may set up at least one consumer, and an owned connection stays
+listed after grant loss for local disconnect, with `consumers: []`.
+`canConnect`, `canDisconnect` and required nullable `connectUnavailableReason`
+are as follows: `connectUnavailableReason` is `null` when setup is available,
+`no_personal_access` for missing grant authority, or `service_unavailable` for an
+imported service that cannot currently accept setup. Owners retain metadata and
+local disconnect for existing connections after grant loss. Rows and flags follow
+the [OAuth ownership rules](oauth.md#browser-management-api).
+
+Each row also includes `scopeMode` with value `explicit` or `server_default`. `requestedScopes` remains an array and is empty
 for server-default targets. `connection.targets[].scopes` contains current known
 scope evidence from token responses or the adapter's documented rules for omitted
 `scope`; see [MCP permission modes](imported-oauth.md#permission-modes) and
