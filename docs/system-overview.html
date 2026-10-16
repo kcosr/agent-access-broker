@@ -1069,7 +1069,7 @@
         </div>
         <div>
           <h3>Backend credentials</h3>
-          <p>Users can paste a supported upstream token or connect an account through OAuth. Gmail has a Google OAuth adapter; GitLab REST and GitLab Git gateways share one GitLab OAuth connection per instance; imported MCP services can use the standard MCP OAuth adapter described below. Browser sign-in with Microsoft does not itself provide an upstream API credential.</p>
+          <p>Users can paste a supported upstream token or connect an account through OAuth. Gmail has a Google OAuth adapter; GitLab REST and GitLab Git gateways share one GitLab OAuth connection per instance; Jira and Confluence use an Atlassian adapter through the Atlassian gateway; imported MCP services can use the standard MCP OAuth adapter described below. Browser sign-in with Microsoft does not itself provide an upstream API credential.</p>
           <ul class="list">
             <li><b>Token permissions.</b> Users can limit a token to specific projects or read-only access. Agent requests must be allowed by both the token's permissions and the broker's grants.</li>
             <li><b>Personal credentials.</b> The broker selects the invoking user's token or OAuth connection for the configured service binding.</li>

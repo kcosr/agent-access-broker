@@ -831,9 +831,49 @@ All notable changes to this project are documented in this file.
   erase the Broker token. Gateway audit records of a personal connection add
   `providerAudit.gateway.credentialMethod` (`oauth` or `token`). See
   [Git gateway OAuth connections](docs/git-http-gateway.md#oauth-connections).
+- The production `atlassian` OAuth dialect (`adapter = "atlassian"`,
+  `agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT`, selected by the Broker
+  binary) connects a person's Atlassian account for Jira and Confluence
+  through an OAuth 2.0 integration from Atlassian's developer console.
+  Registrations use `base_url = "https://auth.atlassian.com"`,
+  `client_secret_post`, `encoding = "json"`, `rotation = "rotate_refresh"` and
+  exactly one explicit permission profile requesting `read:me` and
+  `offline_access`, whose `audience` is `api.atlassian.com` and whose `target`
+  is the site's cloud ID. Authorization always asks for
+  `audience=api.atlassian.com` and `prompt=consent`, with the host's PKCE
+  challenge. The connected account is `/me`'s `account_id`. Granted scopes come
+  from the token response: a code exchange without `scope` fails and stores
+  nothing, and a refresh without it keeps the originally granted scopes.
+  Targets are the sites `accessible-resources` lists, with each site's product
+  entries merged into one target with the union of their scopes plus the
+  granted `read:me`; connecting requires the profile's site with every
+  requested scope. Refresh material is consuming, and Atlassian's HTTP 403
+  `invalid_grant` requires reconnect. Only consumers acting through the
+  Atlassian gateway on the profile's cloud ID pass offline validation.
+  Disconnect stays local (`remoteRevocation: "not_requested"`). The docs cover
+  the integration's setup, scopes, per-product registrations for people with
+  only one product, the shared 65,000-point hourly quota and the 90-day
+  inactivity expiry. See [Atlassian OAuth](docs/oauth.md#atlassian).
 
 ### Changed
 
+- Jira and Confluence validation accepts OAuth connections through the
+  Atlassian gateway: a per-user connection with `oauth` alone, or with the
+  `atlassian-bearer-token` profile, is valid when the provider allows
+  `api.atlassian.com`, and counts as the gateway's execution credential. An
+  `oauth` connection without the gateway fails with
+  `credentials.per_user.<service> offers delegated (OAuth) access, which
+  requires providers.<service>.allowed_upstream_hosts to include
+  api.atlassian.com`, and a connection combining `atlassian-api-token` with
+  `oauth` is rejected with `credentials.per_user.<service> combines OAuth with
+  a basic_api_token profile; ...`. A gateway without either credential now
+  reports `no bearer_token or OAuth execution credential is configured`.
+  `credentials.service` entries must still be `bearer_token` on the gateway.
+- `agent-access-atlassian` is a `native` module crate: it registers the
+  `atlassian` OAuth dialect, the assembly links it directly, its build status
+  module is listed with release provenance, and `api/agent-access-atlassian.txt`
+  inventories its selection entry point. Its Jira and Confluence helpers stay
+  unsupported outside the first-party providers.
 - Git gateway error responses are labeled `Content-Type: text/plain;
   charset=utf-8`, so Git shows their one-line reason as `remote:` output when
   ref discovery fails. Their status, reason code header and body are unchanged.

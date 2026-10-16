@@ -49,6 +49,7 @@ uuid.workspace = true
 [dev-dependencies]
 # The host's own integration tests use its test support.
 agent-access-broker-host = { path = ".", features = ["test-support"] }
+agent-access-atlassian = { path = "../agent-access-atlassian", features = ["test-support"] }
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
 agent-access-command-import = { path = "../agent-access-command-import" }
 agent-access-confluence = { path = "../agent-access-confluence" }

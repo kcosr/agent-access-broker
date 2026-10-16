@@ -97,8 +97,9 @@ The following are not supported provider interfaces:
 
 - The Rust API of `agent-access-core`. It is host implementation, even where a
   supported signature exposes one of its types.
-- Helper crates such as `agent-access-content` and `agent-access-atlassian`.
-  They are ordinary libraries for the first-party providers, not SDK contracts.
+- Helper crates such as `agent-access-content`, and the Jira and Confluence
+  helpers in `agent-access-atlassian` beside its dialect registration. They are
+  ordinary libraries for the first-party providers, not SDK contracts.
 - Custom imported-protocol adapters. The MCP and OpenAPI adapters are shipped
   selections only; their construction contract is internal to core.
 - Typed CLI wrappers and provider-specific portal plugins. A provider without

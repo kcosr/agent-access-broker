@@ -2241,9 +2241,11 @@ pub(crate) mod tests {
     }
 
     /// The sample registration of each dialect the Broker binary selects,
-    /// as `agent-access-broker.sample.toml` documents it, keeps the
-    /// fingerprint it had before registrations could set `login_binding`.
-    /// A changed digest would discard every stored connection at activation.
+    /// as `agent-access-broker.sample.toml` documents it, keeps its pinned
+    /// fingerprint: the one it had before registrations could set
+    /// `login_binding`, or, for the later `atlassian` dialect, the one it
+    /// had when added. A changed digest would discard every stored
+    /// connection at activation.
     #[test]
     fn sample_registration_fingerprints_survive_added_registration_keys() {
         let samples = [
@@ -2262,6 +2264,25 @@ pub(crate) mod tests {
                 target = "https://gitlab.example.com"
                 "#,
                 "d11c02781d5768a3b87793792b940453b12faf457979621c595b76cb8873765d",
+            ),
+            (
+                r#"
+                adapter = "atlassian"
+                base_url = "https://auth.atlassian.com"
+                redirect_uri = "https://broker.example.com/v1/oauth/callback/atlassian"
+                client_id = "YOUR_ATLASSIAN_CLIENT_ID"
+                client_secret_ref = "env:ATLASSIAN_OAUTH_CLIENT_SECRET"
+                client_auth = "client_secret_post"
+                encoding = "json"
+                rotation = "rotate_refresh"
+                [permission_profiles.default]
+                scopes = ["read:me", "offline_access", "read:jira-work", "write:jira-work", "read:jira-user",
+                          "search:confluence", "read:confluence-content.all", "read:confluence-space.summary",
+                          "write:confluence-content"]
+                audience = "api.atlassian.com"
+                target = "00000000-0000-0000-0000-000000000000"
+                "#,
+                "9d6de326c68a10c087953147cf69bebd0f43a51b3b8cc03d82e1ffba23aaf049",
             ),
             (
                 r#"

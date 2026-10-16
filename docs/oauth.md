@@ -2,11 +2,12 @@
 
 The Broker can hold a user's delegated upstream OAuth connection and obtain a
 short-lived access token when an authorized action needs it. [Gmail](providers-gmail.md)
-provides a production Google dialect and typed mailbox actions, and the
-production [GitLab dialect](#gitlab) connects one GitLab instance's accounts.
-The development-only `stub` dialect and `oauth_stub` records provider use the
-separate `oauth-provider-stub` repository. Microsoft Graph and Atlassian
-delegated adapters are not enabled.
+provides a production Google dialect and typed mailbox actions, the
+production [GitLab dialect](#gitlab) connects one GitLab instance's accounts,
+and the production [Atlassian dialect](#atlassian) connects Atlassian accounts
+for Jira and Confluence on one site. The development-only `stub` dialect and
+`oauth_stub` records provider use the separate `oauth-provider-stub`
+repository. Microsoft Graph delegated adapters are not enabled.
 
 This is separate from `[browser_auth.oidc.microsoft]`, which signs a person into
 the Broker. A Broker browser session identifies the connection owner; connecting
@@ -20,11 +21,11 @@ access tokens, refresh tokens, client secrets or authorization codes.
 | --- | --- | --- |
 | `google` | Production Gmail account connection | [Gmail operator setup](providers-gmail.md#setup) |
 | `gitlab` | Production GitLab account connection for GitLab REST and Git | [GitLab](#gitlab) |
+| `atlassian` | Production Atlassian account connection for Jira and Confluence through the Atlassian gateway | [Atlassian](#atlassian) |
 | `mcp_oauth` | Personal OAuth for reviewed imported MCP services | [Imported MCP OAuth](imported-oauth.md) |
 | `stub` | Development records provider and lifecycle fault tests; forbidden in production | [Test-provider configuration](#development-test-provider-configuration) |
 
-The linked production adapters do not enable Microsoft Graph or Atlassian
-delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
+The linked production adapters do not enable Microsoft Graph delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
 Microsoft OIDC remains a separate browser-login feature.
 
 ## Credential connections and shared registrations
@@ -89,8 +90,8 @@ for request, token-response and permission-boundary semantics.
 4. The Broker checks issuer, state and browser ownership, exchanges the code
    using the configured client authentication plus PKCE. The dialect determines
    identity and target evidence: the test provider uses `/me` and `/targets`,
-   Google and GitLab identify the connected account, and imported MCP OAuth may
-   provide no upstream account identity. The Broker rechecks the active session,
+   Google, GitLab and Atlassian identify the connected account, and imported
+   MCP OAuth may provide no upstream account identity. The Broker rechecks the active session,
    self-service setting, current grant/group authority and exact service binding
    before exchange and again before committing the connection.
 5. Encrypted connection state contains any refresh family, available subject
@@ -378,6 +379,232 @@ reconnects; a registration without it keeps its connections. Only the `gitlab`
 dialect reports linked identities, and validation rejects `login_binding` on
 any other registration.
 
+## Atlassian
+
+The `atlassian` dialect connects a person's Atlassian account for Jira and
+Confluence on one Atlassian Cloud site. Its grants act through the Atlassian
+API gateway, `api.atlassian.com`, on the site's cloud ID, so Jira and
+Confluence reach the site through the gateway for every OAuth connection. One
+registration can serve both products, so a person connects once, and each
+service's own grants still decide what it may do.
+
+### Atlassian administrator setup
+
+1. In the Atlassian developer console, create an **OAuth 2.0 integration**.
+   Own it with a team account and add several app admins, so it does not
+   depend on one person.
+2. Under **Authorization**, set the callback URL to the Broker's exact callback
+   for the registration, `<browser_auth.public_origin>/v1/oauth/callback/<registration>`,
+   such as `https://broker.example.com/v1/oauth/callback/atlassian`.
+3. Under **Permissions**, add the Jira API, the Confluence API and the User
+   Identity API, with the [scopes](#atlassian-scopes) the Broker profile
+   requests.
+4. Prefer a resource-restricted grant when the console offers it. It has been
+   an option when creating an integration since 2026-06-18, and Atlassian then
+   reports only the sites people selected.
+5. Under **Distribution**, enable sharing. A new integration is private to its
+   creator, so sharing is required even for colleagues in the same
+   organization. Atlassian documents only the toggle; check the form for vendor
+   and privacy fields when you enable it.
+6. Hand the client ID and secret to the Broker administrator, who stores the
+   secret in a file or environment variable the Broker reads.
+
+Until Atlassian reviews the integration, people see a warning that the app has
+not yet been reviewed by Atlassian, and accept it to connect. Install the app
+through whichever path the organization's app policy permits. With **Block
+user apps**, only administrators install apps, and they can still install a
+private app from its distribution link; whether people can then consent is not
+documented, so verify it with a test account. Do not allow user installation
+across the organization unless it is necessary.
+
+### Atlassian registration
+
+```toml
+[oauth.registrations.atlassian]
+adapter = "atlassian"
+base_url = "https://auth.atlassian.com"
+redirect_uri = "https://broker.example.com/v1/oauth/callback/atlassian"
+client_id = "YOUR_ATLASSIAN_CLIENT_ID"
+client_secret_ref = "file:/etc/agent-access-broker/secrets/atlassian-oauth-client-secret"
+client_auth = "client_secret_post"
+encoding = "json"
+rotation = "rotate_refresh"
+
+[oauth.registrations.atlassian.permission_profiles.default]
+scopes = ["read:me", "offline_access", "read:jira-work", "write:jira-work", "read:jira-user",
+          "search:confluence", "read:confluence-content.all", "read:confluence-space.summary",
+          "write:confluence-content"]
+audience = "api.atlassian.com"
+target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
+
+# People connect through OAuth; service accounts keep each product's
+# administrator-provisioned scoped token.
+[credentials.connections.jira]
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.connections.confluence]
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "jira"
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "confluence"
+```
+
+Both providers set `cloud_id` to the profile's `target` and include
+`api.atlassian.com` in `allowed_upstream_hosts` (see
+[`[providers.jira]`](configuration.md#providersjira)). `config validate`,
+startup and reload check, without contacting Atlassian:
+
+- `base_url` is `https://auth.atlassian.com`, with
+  `client_auth = "client_secret_post"`, `encoding = "json"`, no
+  `adapter_settings`, and `rotation = "rotate_refresh"`, because every
+  Atlassian refresh replaces the refresh token.
+- The registration has exactly one permission profile. It requests explicit
+  `scopes` including `read:me` and `offline_access`, its `audience` is
+  `api.atlassian.com`, and its `target` is the site's cloud ID written as a
+  lowercase hyphenated UUID, exactly as the providers' `cloud_id`.
+- Every service using the connection acts through the gateway on that cloud
+  ID: Jira and Confluence whose `cloud_id` is the target and whose
+  `allowed_upstream_hosts` include `api.atlassian.com`. Any other consumer
+  fails with `credentials.connections.<id>.oauth: <service> does not act on
+  the upstream registration <registration> grants access to: <reason>`, such
+  as `it acts through the Atlassian gateway on cloud ID <cloud ID>, not cloud
+  ID <target>`.
+
+A connection's method and route follow this table:
+
+| Connection | Gateway | Result |
+| --- | --- | --- |
+| `token_profile = "atlassian-api-token"` only | Off | Valid: the site route |
+| `token_profile = "atlassian-bearer-token"` only | On | Valid: the gateway |
+| `oauth` only | On, required | Valid: the gateway |
+| `atlassian-bearer-token` and `oauth` | On | Valid: people use OAuth and service accounts bearer tokens, both through the gateway |
+| `atlassian-api-token` and `oauth` | Either | Rejected: `credentials.per_user.<service> combines OAuth with a basic_api_token profile; ...` |
+
+A `credentials.service` entry must also be a `bearer_token` when the gateway
+is on. An `oauth` connection on a provider without the gateway fails with
+`credentials.per_user.<service> offers delegated (OAuth) access, which
+requires providers.<service>.allowed_upstream_hosts to include
+api.atlassian.com`.
+
+People always use their OAuth connection and never store an Atlassian token
+through it. With `token_profile = "atlassian-bearer-token"`, service accounts
+keep the scoped tokens an administrator provisions, and `system` principals
+store their own. An OAuth-only connection, such as one `atlassian` connection
+that both products use, gives only people an Atlassian credential.
+
+### Atlassian scopes
+
+Scopes are deployment configuration: the integration's permissions allow them
+and the profile requests them.
+
+- `read:me` (User Identity API) lets the Broker identify the connected account,
+  and `offline_access` lets it refresh access. The profile must request both.
+- Add the Jira and Confluence scopes your granted actions need, such as
+  `read:jira-work`, `write:jira-work` and `read:jira-user` for Jira and
+  `search:confluence`, `read:confluence-content.all`,
+  `read:confluence-space.summary` and `write:confluence-content` for
+  Confluence. Request only scopes the integration's permissions include.
+
+Changing the profile's scopes changes the registration, so every person
+reconnects.
+
+### One registration or one per product
+
+The Broker checks the profile as a whole: a connection grants access only when
+the profile's site carries every requested scope, Jira's and Confluence's
+alike. A shared registration therefore suits deployments where everyone has
+both products on the site; a person with only Jira cannot connect it.
+
+For people with only one product, register one integration per product, each
+requesting `read:me`, `offline_access` and that product's scopes, and give each
+product connection its own registration:
+
+```toml
+[credentials.connections.jira]
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian_jira", profile = "default" }
+
+[credentials.connections.confluence]
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian_confluence", profile = "default" }
+```
+
+Each connection is then checked on its own, and a Jira-only person connects
+only Jira. People with both products connect twice, each integration is
+registered and shared separately, and each has its own
+[rate-limit quota](#atlassian-capacity-and-lifecycle).
+
+### Atlassian protocol
+
+- The authorization page is `https://auth.atlassian.com/authorize`, requested
+  with `audience=api.atlassian.com`, the profile's scopes, the flow's state,
+  `prompt=consent` and a PKCE S256 challenge. Atlassian shows its consent screen
+  and site picker every time; the person picks the profile's site. Atlassian
+  does not document PKCE for these integrations, so whether it enforces the
+  challenge is unverified; the client secret is always sent.
+- Code exchange and refresh are JSON POSTs to
+  `https://auth.atlassian.com/oauth/token` carrying the client ID and secret.
+  Each response states its access token's lifetime, about one hour; a response
+  without it is invalid.
+- The connected account's `account_id` at `https://api.atlassian.com/me` is its
+  stable subject, and the portal shows its email address, or else its name.
+  Reconnecting rejects a different account unless the person chooses to
+  replace it. `/me` reports no linked sign-ins, so Atlassian registrations
+  cannot set [login binding](#gitlab-login-binding).
+- Granted scopes come from the token response's `scope`. A code exchange
+  without it fails and stores nothing: `/me` would establish only the account,
+  not the product scopes. A refresh without it keeps the scopes originally
+  granted, and the Broker sends nothing else between the refresh and storing
+  its result. Requested scopes are never taken as granted.
+- The connection's targets are the sites
+  `https://api.atlassian.com/oauth/token/accessible-resources` lists, each
+  with audience `api.atlassian.com`. Atlassian lists a site once per product,
+  so entries with one cloud ID merge into one target with the union of their
+  scopes, and every target also carries the granted `read:me`, which applies
+  to the account rather than a site. Connecting fails with
+  `oauth_permission_denied` and stores nothing unless the profile's site is
+  among them and both the token and that site carry every requested scope
+  other than `offline_access`. Extra scopes and other sites are kept without
+  effect. The sites are read again after every refresh, and access is denied
+  while the profile's site does not qualify.
+- Refresh material is consuming. Atlassian replaces the refresh token on every
+  refresh; its ten-minute leeway for reusing the previous token is not relied
+  on. A refresh whose outcome is unknown, such as a lost response or a 5xx
+  answer, leaves the connection needing reconnect, for Jira and Confluence
+  together. Atlassian answers a revoked, expired or reused refresh token with
+  HTTP 403 `invalid_grant`, which also requires reconnect, and HTTP 429 holds
+  refresh until its `Retry-After` wait.
+- Leases carry the profile's cloud ID and the `api.atlassian.com` audience,
+  which Jira and Confluence pin before each gateway request.
+
+### Atlassian capacity and lifecycle
+
+- **Rate limits.** Since 2026-03-02, Atlassian applies points-based rate
+  limits to OAuth integrations. In Atlassian's words, "Your app shares a single
+  65,000 point hourly quota across all tenants. This is the default tier for
+  all apps." The quota resets each UTC hour, and every person's traffic through
+  one integration counts against it. API-token traffic is exempt from points
+  but has its own burst limits.
+- **Inactivity.** A refresh token expires after 90 days without use, and every
+  refresh starts that period again; a person whose connection stays unused
+  longer reconnects. Atlassian documents no absolute lifetime.
+- **No remote revocation.** Atlassian documents no revocation endpoint, so
+  disconnecting removes only the Broker's copy and reports
+  `remoteRevocation: "not_requested"`. The person revokes the integration on
+  the [Connected apps](https://id.atlassian.com/manage-profile/apps) page of
+  their Atlassian account, which ends its access to every site. Organization
+  administrators can only uninstall the integration, which revokes everyone's
+  access.
+- **Stored tokens.** Service accounts' scoped tokens expire within 1 to 365
+  days, as chosen when created, and an administrator replaces them.
+
 ## Development test-provider configuration
 
 A registration describes the upstream application and its token behavior. A
@@ -429,7 +656,7 @@ one family of authorization servers. Dialects register with the Broker binary
 alongside its backends; configuration validation rejects an adapter that no
 registered dialect claims and applies the dialect's own registration checks.
 The Broker core provides no dialect of its own. The binary selects `google`,
-`mcp_oauth` and the development-only `stub` dialect. The `stub` dialect and the
+`gitlab`, `atlassian`, `mcp_oauth` and the development-only `stub` dialect. The `stub` dialect and the
 `oauth_stub` records backend are independent development selections; a build
 that omits them has no test dialect, service or `oauth_collection` resource type.
 Production configuration and deployments without
@@ -738,7 +965,7 @@ version. The Broker supports **one connection and refresh family
 per owner/registration**. Separate independent grant families under one
 registration, adding permission profiles without reconnecting existing grants,
 interactive target selection, delegated OIDC ID-token/claims validation, client assertions,
-provider revocation orchestration and Microsoft/Jira/Confluence delegated adapters are
+provider revocation orchestration and Microsoft delegated adapters are
 not supported. Changing the stub base URL does not provide a production adapter.
 
 The stub's identity endpoint and fault controls are test protocols, not a

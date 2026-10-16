@@ -379,6 +379,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "agent-access-atlassian",
                 "agent-access-cloudbees-ci",
                 "agent-access-command-import",
                 "agent-access-confluence",
@@ -412,6 +413,10 @@ mod tests {
                 {"role": "native", "id": "gmail"},
                 {"role": "oauth", "id": "google"}
             ])
+        );
+        assert_eq!(
+            module(&status, "agent-access-atlassian")["roles"],
+            json!([{"role": "oauth", "id": "atlassian"}])
         );
     }
 

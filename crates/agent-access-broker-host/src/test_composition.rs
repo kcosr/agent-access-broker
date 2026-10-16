@@ -2,6 +2,7 @@
 //! and a composition mirroring the upstream selection, and the build status
 //! of an unstamped test assembly.
 use super::{AssemblyIdentity, BrokerApplication, BrokerBuildStatus, BrokerComposition};
+use agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT;
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
 use agent_access_core::BackendRegistry;
@@ -25,9 +26,10 @@ static NATIVES: [&BackendRegistration; 8] = [
     // Last, so its resource type keeps the bundled listing order.
     &OAUTH_STUB_BACKEND,
 ];
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 4] = [
     &GOOGLE_OAUTH_DIALECT,
     &GITLAB_OAUTH_DIALECT,
+    &ATLASSIAN_OAUTH_DIALECT,
     &STUB_OAUTH_DIALECT,
 ];
 

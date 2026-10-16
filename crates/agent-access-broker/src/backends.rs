@@ -1,4 +1,5 @@
 //! The modules this broker distribution links.
+use agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT;
 use agent_access_broker_host::ImportedAdapterRegistration;
 use agent_access_broker_host::{BrokerComposition, CompositionError};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
@@ -25,9 +26,10 @@ static NATIVES: [&BackendRegistration; 8] = [
 ];
 /// OAuth dialects selected on their own. The MCP import selection
 /// contributes its `mcp_oauth` companion, so it is not listed here.
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 4] = [
     &GOOGLE_OAUTH_DIALECT,
     &GITLAB_OAUTH_DIALECT,
+    &ATLASSIAN_OAUTH_DIALECT,
     &STUB_OAUTH_DIALECT,
 ];
 
@@ -85,6 +87,7 @@ mod tests {
         );
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "gitlab"));
+        assert!(composition.oauth_dialect_ids().any(|id| id == "atlassian"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "mcp_oauth"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
         assert_eq!(
@@ -137,6 +140,7 @@ mod tests {
         assert_eq!(
             packages,
             [
+                "agent-access-atlassian: oauth atlassian",
                 "agent-access-cloudbees-ci: native cloudbees_ci",
                 "agent-access-command-import: import command",
                 "agent-access-confluence: native confluence",

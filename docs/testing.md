@@ -235,9 +235,10 @@ role = "native"
 
 The roles are `sdk` (`agent-access-provider`), `core`, `host`
 (`agent-access-broker-host`), `assembly` (`agent-access-broker`), `cli`
-(`agent-access`), `native` (backend crates), `reference`
-(`agent-access-conformance`), `adapter` (the MCP and OpenAPI import adapters),
-and `helper` (`agent-access-atlassian`, `agent-access-content`).
+(`agent-access`), `native` (backend and OAuth dialect crates, including
+`agent-access-atlassian`, whose helpers Jira and Confluence also use),
+`reference` (`agent-access-conformance`), `adapter` (the MCP and OpenAPI
+import adapters), and `helper` (`agent-access-content`).
 `node scripts/check-crate-boundaries.mjs` reads
 `cargo metadata --locked --format-version 1 --all-features` and fails when a
 workspace member has no known role or when a resolved dependency edge crosses

@@ -2890,7 +2890,7 @@ fn rejects_atlassian_gateway_without_bearer_execution_credentials() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "no bearer_token execution credential is configured",
+        "no bearer_token or OAuth execution credential is configured",
     );
 }
 
@@ -3455,10 +3455,26 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
 
     let errors = validation_errors(validate_broker_config(&config));
     // The backend sees the bearer token profile and the delegated access
-    // beside it; the Atlassian backends accept only bearer tokens.
+    // beside it, which the Atlassian gateway accepts together.
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.starts_with("providers.jira")
+                || error.starts_with("credentials.per_user.jira")),
+        "{errors:?}"
+    );
+
+    // A basic site token beside OAuth is rejected.
+    config
+        .credentials
+        .connections
+        .get_mut("jira")
+        .unwrap()
+        .token_profile = Some("atlassian-api-token".to_string());
+    let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept",
+        "credentials.per_user.jira combines OAuth with a basic_api_token profile",
     );
     assert!(
         !errors

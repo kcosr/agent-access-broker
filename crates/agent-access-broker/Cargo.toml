@@ -9,6 +9,7 @@ role = "assembly"
 
 [dependencies]
 agent-access-broker-host = { path = "../agent-access-broker-host" }
+agent-access-atlassian = { path = "../agent-access-atlassian" }
 agent-access-teams = { path = "../agent-access-teams" }
 agent-access-gmail = { path = "../agent-access-gmail" }
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }

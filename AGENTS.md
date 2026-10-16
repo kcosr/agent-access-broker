@@ -311,9 +311,15 @@ binary and needs `python3`, whose absence fails it.
   `provisioning.rs`, `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`:
   one instance's target and `gitlab` audience, token-info scope evidence at
   code exchange, and the account's linked sign-ins for `login_binding`).
-- `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
-  (gateway credential rules, request authorization, tenant/gateway client
-  routes and their route fingerprint, the credential binding of their
+- `crates/agent-access-atlassian`: a `native` module crate holding the
+  `atlassian` OAuth dialect (`oauth.rs`: `auth.atlassian.com` consent with
+  `audience=api.atlassian.com` and `prompt=consent`, JSON token requests,
+  token-response scope evidence, `accessible-resources` sites merged per cloud
+  ID with the granted `read:me`, a cloud-ID target and `api.atlassian.com`
+  audience, and the consumer check that requires the gateway on that cloud ID)
+  and the helpers shared by the Atlassian backends (gateway credential rules
+  with the OAuth connection table, request authorization, tenant/gateway
+  client routes and their route fingerprint, the credential binding of their
   continuations and draft handles, and the vendor-level token profiles
   `atlassian-api-token` and `atlassian-bearer-token` that Jira and Confluence
   both declare, so one credential connection can serve both).
@@ -485,9 +491,10 @@ binary and needs `python3`, whose absence fails it.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
-- `docs/oauth.md`: delegated OAuth, production Google and GitLab dialects
-  (including GitLab administrator setup and scopes), separate test provider,
-  consent, refresh recovery, and connection boundaries.
+- `docs/oauth.md`: delegated OAuth, production Google, GitLab and Atlassian
+  dialects (including their administrator setup and scopes, and Atlassian's
+  connection table, per-product registrations, quota and lifecycle), separate
+  test provider, consent, refresh recovery, and connection boundaries.
 - `docs/database.md`: managed-store database schema, token hashing, credential
   encryption, key readiness, rewrap, lifecycle, and backup/recovery model, plus
   the separate SQLite audit database.

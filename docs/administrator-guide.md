@@ -114,6 +114,14 @@ deployment that routes Atlassian through its API gateway gives service accounts
 scoped bearer tokens instead, usually with one connection per product; see the
 [token profiles](configuration.md#connection-token-profiles).
 
+Through the gateway, people can instead connect their Atlassian account with
+[Atlassian OAuth](oauth.md#atlassian), once for both products when one
+registration serves both. That registration's scopes are checked as a whole, so
+it suits sites where everyone has both Jira and Confluence. Where some people
+have only one product, register one Atlassian integration per product and give
+each product connection its own registration; see
+[one registration or one per product](oauth.md#one-registration-or-one-per-product).
+
 You decide each connection's method; principals never choose, and the Broker
 never falls back from one method to the other:
 
