@@ -962,6 +962,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.tokens.list_principal_agent"
             | "admin.tokens.inspect_principal_agent"
             | "admin.credentials.list"
+            | "admin.credentials.list_principal"
             | "admin.credentials.inspect"
             | "admin.credentials.input_schema"
             | "admin.credentials.targets"
@@ -1152,6 +1153,7 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.tokens.options_principal_agent",
     "admin.tokens.effective_access_principal_agent",
     "admin.credentials.list",
+    "admin.credentials.list_principal",
     "admin.credentials.inspect",
     "admin.credentials.targets",
     "admin.credentials.input_schema",

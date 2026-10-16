@@ -2503,6 +2503,11 @@ fn microsoft_oidc_link_body_schema() -> Value {
 fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
     let mut routes = vec![
         get_management_route(
+            "/v1/admin/principals/{principal}/credentials",
+            "admin.principals.credentials.list",
+            RouteAccess::AdminRead,
+        ),
+        get_management_route(
             "/v1/admin/principals/{principal}/credentials/targets",
             "admin.principals.credentials.targets",
             RouteAccess::AdminRead,
@@ -2711,6 +2716,12 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
     set_result_schema(
         &mut routes,
         "GET",
+        "/v1/admin/principals/{principal}/credentials",
+        personal_credentials_result_schema(),
+    );
+    set_result_schema(
+        &mut routes,
+        "GET",
         "/v1/admin/principals/{principal}/credentials/targets",
         credential_targets_result_schema(),
     );
@@ -2885,7 +2896,7 @@ fn personal_credentials_result_schema() -> Value {
         "properties": {
             "connections": {
                 "type": "array",
-                "description": "Credential connections the caller is entitled to through a consuming service, plus any connection whose active token the caller still owns.",
+                "description": "Credential connections the principal is entitled to through a consuming service, plus any connection whose active token the principal still owns.",
                 "items": {
                     "type": "object", "additionalProperties": false,
                     "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "credential"],

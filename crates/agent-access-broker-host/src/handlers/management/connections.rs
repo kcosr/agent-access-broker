@@ -265,3 +265,71 @@ pub(super) fn audit_target(principal: &str, connection: &str) -> Value {
         "connection": connection,
     })
 }
+
+/// A principal's credential connections and the retained rows it owns.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CredentialList {
+    pub(super) connections: Vec<ConnectionRow>,
+    pub(super) retained: Vec<CredentialMetadata>,
+}
+
+/// `identity`'s credential list from its stored `rows`: every connection
+/// it is entitled to through a consumer, whatever the method, and every
+/// connection whose active token it still owns, then its retained rows.
+/// `readable` restricts a classless caller to the token connections its
+/// rights cover.
+pub(super) fn credential_list(
+    runtime: &BrokerRuntime,
+    identity: &IdentityContext,
+    rows: Vec<CredentialMetadata>,
+    readable: Option<&BTreeSet<String>>,
+) -> CredentialList {
+    let kind = identity.principal_kind;
+    let active = active_token_rows(runtime, kind);
+    let (active_rows, retained): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|row| is_active_row(&active, row));
+    let mut listed = Vec::new();
+    for connection in connection_ids(runtime) {
+        let Some(selection) = selection(runtime, &connection, kind) else {
+            continue;
+        };
+        let method = ConnectionMethod::of(selection);
+        let entitled = entitled_consumers(runtime, identity, &connection);
+        let credential = active_rows
+            .iter()
+            .find(|row| row.service == connection)
+            .cloned();
+        let include = match readable {
+            Some(readable) => readable.contains(&connection),
+            None => !entitled.is_empty() || credential.is_some(),
+        };
+        if !include {
+            continue;
+        }
+        let (consumers, other_consumers) = consumer_view(runtime, &connection, &entitled);
+        let token = (method == ConnectionMethod::Token)
+            .then(|| token_selection(runtime, &connection, kind))
+            .flatten();
+        let registration = match selection {
+            Selection::OAuth(oauth) => Some(oauth.registration.clone()),
+            _ => None,
+        };
+        listed.push(ConnectionRow {
+            display_name: display_name(runtime, &connection),
+            connection,
+            method,
+            consumers,
+            other_consumers,
+            profile: token.as_ref().map(|(profile, _)| profile.clone()),
+            credential_kind: token.map(|(_, credential_kind)| credential_kind),
+            registration,
+            credential: credential.map(connection_credential),
+        });
+    }
+    CredentialList {
+        connections: listed,
+        retained,
+    }
+}

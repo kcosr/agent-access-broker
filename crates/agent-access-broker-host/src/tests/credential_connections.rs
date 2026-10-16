@@ -890,6 +890,122 @@ async fn connection_records_name_their_consumers_and_admin_records_a_sole_consum
     }
 }
 
+#[tokio::test]
+async fn administrators_and_auditors_list_a_principals_connections_as_the_principal_would() {
+    let fixture = fixture("jira").await;
+    // Bob holds no grant: the token an administrator stored for him stays
+    // listed as his active token, with no entitled consumer.
+    let stored = fixture
+        .ok(
+            &fixture.admin,
+            Method::PUT,
+            &fixture.admin_connection("bob"),
+            Some(jira_secret("bob-token")),
+        )
+        .await;
+    let bob = fixture
+        .ok(
+            &fixture.admin,
+            Method::GET,
+            "/v1/admin/principals/bob/credentials",
+            None,
+        )
+        .await;
+    let jira = connection_row(&bob, "jira");
+    assert_eq!(jira["method"], "token");
+    assert_eq!(jira["consumers"], json!([]));
+    assert_eq!(jira["otherConsumers"], 1);
+    assert_eq!(jira["credential"]["credentialId"], stored["credentialId"]);
+    assert_eq!(jira["credential"]["connection"], "jira");
+    assert_eq!(bob["connections"].as_array().unwrap().len(), 1, "{bob}");
+    assert_eq!(bob["retained"], json!([]));
+    // The same list bob reads for himself.
+    assert_eq!(
+        fixture
+            .ok(&fixture.bob, Method::GET, "/v1/credentials", None)
+            .await,
+        bob
+    );
+
+    // Alice: entitled connections without tokens, and a retained row.
+    let retained = fixture.store_row("alice", "jira", "secondary", JIRA_PROFILE);
+    let alice = fixture
+        .ok(
+            &fixture.auditor,
+            Method::GET,
+            "/v1/admin/principals/alice/credentials",
+            None,
+        )
+        .await;
+    assert_eq!(connection_row(&alice, "jira")["credential"], Value::Null);
+    assert_eq!(
+        connection_row(&alice, "jira")["consumers"][0]["service"],
+        "jira"
+    );
+    assert_eq!(
+        connection_row(&alice, "gitlab")["consumers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(alice["retained"][0]["credentialId"], retained.as_str());
+    assert_eq!(alice["retained"][0]["name"], "secondary");
+
+    // The service account's kind selects its token method.
+    let robot = fixture
+        .ok(
+            &fixture.admin,
+            Method::GET,
+            "/v1/admin/principals/robot/credentials",
+            None,
+        )
+        .await;
+    assert_eq!(connection_row(&robot, "jira")["method"], "token");
+
+    // Auditors read but never change a principal's token.
+    let (status, denied) = fixture
+        .request(
+            &fixture.auditor,
+            Method::DELETE,
+            &fixture.admin_connection("bob"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["reasonCode"], "management_denied");
+    // Users cannot read another principal's list.
+    let (status, denied) = fixture
+        .request(
+            &fixture.alice,
+            Method::GET,
+            "/v1/admin/principals/bob/credentials",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, missing) = fixture
+        .request(
+            &fixture.admin,
+            Method::GET,
+            "/v1/admin/principals/nobody/credentials",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    // Successful reads are not audited; the denial is.
+    let records = read_audit_records(&fixture.audit_path);
+    let listed = records
+        .iter()
+        .filter(|record| record["action"] == "admin.credentials.list_principal")
+        .collect::<Vec<_>>();
+    assert!(
+        listed.iter().all(|record| record["decision"] != "allow"),
+        "{listed:?}"
+    );
+    assert!(!listed.is_empty());
+}
+
 struct ClasslessFixture {
     _broker: TestBroker,
     app: Router,

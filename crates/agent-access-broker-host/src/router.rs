@@ -17,7 +17,7 @@ use crate::handlers::management::admin::{
     admin_principal_credential_delete, admin_principal_credential_get,
     admin_principal_credential_input_schema, admin_principal_credential_put,
     admin_principal_credential_targets, admin_principal_credential_verify,
-    admin_principal_group_add, admin_principal_group_delete,
+    admin_principal_credentials_list, admin_principal_group_add, admin_principal_group_delete,
     admin_principal_local_password_disable, admin_principal_local_password_enable,
     admin_principal_local_password_reset, admin_principal_local_password_unlock,
     admin_principal_login_methods_list, admin_principal_microsoft_oidc_link,
@@ -392,6 +392,10 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .route(
             "/v1/admin/principals/{principal}/service-limits/{service}",
             put(service_limits::set).delete(service_limits::clear),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/credentials",
+            get(admin_principal_credentials_list),
         )
         .route(
             "/v1/admin/principals/{principal}/credentials/targets",

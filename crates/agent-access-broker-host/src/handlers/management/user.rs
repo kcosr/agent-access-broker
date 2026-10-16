@@ -8,21 +8,20 @@ use crate::handlers::management::common::{
     management_success_envelope, management_success_response, management_write_audit_preflight,
     self_agent_token_issue_expires_at,
 };
-use crate::handlers::management::connections::{self, ConnectionMethod, ConnectionRow};
+use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
     ConnectionCredentialRequest, CredentialAccess, connection_input_schema, connection_verify_body,
     delete_connection_credential, get_connection_credential, put_connection_credential,
     verify_connection_credential,
 };
 use crate::state::AppState;
-use agent_access_core::{CredentialMetadata, SelfAgentTokenIssueRequest};
+use agent_access_core::SelfAgentTokenIssueRequest;
 use agent_access_provider::ReasonCode;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -519,14 +518,6 @@ fn personal_access(context: &ManagementContext) -> CredentialAccess {
     }
 }
 
-/// The caller's credential connections and the retained rows it owns.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PersonalCredentials {
-    connections: Vec<ConnectionRow>,
-    retained: Vec<CredentialMetadata>,
-}
-
 pub(crate) async fn user_credentials_list(
     State(state): State<AppState>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -590,53 +581,12 @@ pub(crate) async fn user_credentials_list(
         }
     };
     let (rows, readable_connections) = stored;
-    let (active_rows, retained): (Vec<_>, Vec<_>) = rows
-        .into_iter()
-        .partition(|row| connections::is_active_row(&active, row));
-    let mut listed = Vec::new();
-    for connection in connections::connection_ids(runtime) {
-        let Some(selection) = connections::selection(runtime, &connection, kind) else {
-            continue;
-        };
-        let method = ConnectionMethod::of(selection);
-        let entitled = connections::entitled_consumers(runtime, &context.identity, &connection);
-        let credential = active_rows
-            .iter()
-            .find(|row| row.service == connection)
-            .cloned();
-        let include = match &readable_connections {
-            // A classless caller manages only token connections its rights cover.
-            Some(readable) => readable.contains(&connection),
-            None => !entitled.is_empty() || credential.is_some(),
-        };
-        if !include {
-            continue;
-        }
-        let (consumers, other_consumers) =
-            connections::consumer_view(runtime, &connection, &entitled);
-        let token = (method == ConnectionMethod::Token)
-            .then(|| connections::token_selection(runtime, &connection, kind))
-            .flatten();
-        let registration = match selection {
-            agent_access_core::Selection::OAuth(oauth) => Some(oauth.registration.clone()),
-            _ => None,
-        };
-        listed.push(ConnectionRow {
-            display_name: connections::display_name(runtime, &connection),
-            connection,
-            method,
-            consumers,
-            other_consumers,
-            profile: token.as_ref().map(|(profile, _)| profile.clone()),
-            credential_kind: token.map(|(_, credential_kind)| credential_kind),
-            registration,
-            credential: credential.map(connections::connection_credential),
-        });
-    }
-    let result = PersonalCredentials {
-        connections: listed,
-        retained,
-    };
+    let result = connections::credential_list(
+        runtime,
+        &context.identity,
+        rows,
+        readable_connections.as_ref(),
+    );
     management_success_response(&context, operation, None, json!(result)).await
 }
 

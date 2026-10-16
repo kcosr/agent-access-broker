@@ -976,6 +976,7 @@ Admin management (also on the public listener):
 | `GET` | `/v1/admin/principals/{principal}/services` |
 | `GET` | `/v1/admin/principals/{principal}/service-limits` |
 | `PUT` `DELETE` | `/v1/admin/principals/{principal}/service-limits/{service}` |
+| `GET` | `/v1/admin/principals/{principal}/credentials` |
 | `GET` | `/v1/admin/principals/{principal}/credentials/targets` |
 | `GET` | `/v1/admin/principals/{principal}/agent-token-options` |
 | `GET` `POST` | `/v1/admin/principals/{principal}/agent-tokens` |
@@ -998,6 +999,51 @@ Admin management (also on the public listener):
 | `GET` | `/v1/admin/audit/options` |
 | `GET` | `/v1/admin/audit/events` |
 | `GET` | `/v1/admin/audit/requests/{brokerRequestId}` |
+
+`GET /v1/admin/principals/{principal}/credentials` returns the principal's
+credential list in the shape of its own `GET /v1/credentials`, evaluated for
+the principal's kind, `per_user` grants and stored rows. An active token whose
+owner lost every grant on its connection stays listed as the connection's
+`credential`, with empty `consumers`:
+
+```json
+{
+  "connections": [
+    {
+      "connection": "jira",
+      "displayName": "Jira",
+      "method": "token",
+      "consumers": [],
+      "otherConsumers": 1,
+      "profile": "jira-cloud-api-token",
+      "credentialKind": "basic_api_token",
+      "registration": null,
+      "credential": {
+        "credentialId": "5d0e…",
+        "connection": "jira",
+        "ownerPrincipal": "bob",
+        "ownerKind": "user",
+        "profile": "jira-cloud-api-token",
+        "credentialKind": "basic_api_token",
+        "metadata": {},
+        "status": "active",
+        "createdAt": "2026-10-16T09:00:00Z",
+        "updatedAt": "2026-10-16T09:00:00Z",
+        "createdBy": "admin",
+        "updatedBy": "admin",
+        "lastUsedAt": null,
+        "lastVerifiedAt": null,
+        "verificationStatus": "not_verified",
+        "lastVerificationAttemptAt": null,
+        "lastVerificationErrorCode": null
+      }
+    }
+  ],
+  "retained": []
+}
+```
+
+Administrators and auditors may read it; its success is not audited.
 
 The per-principal credential routes manage a principal's active token for a
 credential connection, with the request, response and verification shapes of the
@@ -2359,7 +2405,7 @@ These operations are not audited when they succeed:
 | Area | Operations |
 | --- | --- |
 | Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
-| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
+| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
 | Imports | `admin.imports.list`, `admin.imports.inspect`, `admin.imports.preview` (saved previews only; discovery remains a write operation) |
 | Policy | `admin.policy.status`, `admin.policy.catalog`, `admin.policy.grants.list`, `admin.policy.grants.inspect`, `admin.policy.service_managers.list`, `admin.policy.resources.list`, `admin.policy.resources.get`, `admin.policy.resources.used_by`, `admin.policy.resource_groups.list`, `admin.policy.resource_groups.get`, `admin.policy.resource_groups.used_by`, `admin.audit.options`, `admin.audit.events.list`, `admin.audit.requests.inspect`, and the POST dry runs `admin.policy.effective_access` and `admin.policy.grants.validate` (a `valid: false` result is a successful response) |
 
@@ -2369,7 +2415,8 @@ answers as `config.status`, `POST /v1/admin/config/reload` as `config.reload`,
 and `POST /v1/admin/principals/{principal}/tokens` as `admin.tokens.issue`.
 The per-principal agent-token routes answer as
 `admin.tokens.*_principal_agent`, and the per-principal credential routes as
-`admin.credentials.*`.
+`admin.credentials.*`, with `GET /v1/admin/principals/{principal}/credentials`
+answering as `admin.credentials.list_principal`.
 
 Some reads stay audited when they succeed:
 `admin.principals.identity_token.reveal` and

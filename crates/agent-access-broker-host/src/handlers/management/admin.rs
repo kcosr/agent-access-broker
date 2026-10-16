@@ -1588,6 +1588,51 @@ pub(crate) async fn admin_principal_services(
     management_success_response(&context, operation, target, json!(services)).await
 }
 
+/// The principal's credential connections and retained rows, as its own
+/// `GET /v1/credentials` lists them: evaluated for its kind, grants and
+/// stored rows, so an active token whose owner lost every grant on the
+/// connection still shows as active.
+pub(crate) async fn admin_principal_credentials_list(
+    State(state): State<AppState>,
+    Path(principal): Path<String>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let operation = crate::handlers::management::audit_actions::ADMIN_CREDENTIALS_LIST_PRINCIPAL;
+    let context = match management_context(
+        &state,
+        remote_addr,
+        &headers,
+        operation,
+        ManagementAccess::AdminRead,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let target = Some(json!({"principal": principal}));
+    let principal_for_store = principal.clone();
+    let (principal_record, policy_groups, rows) =
+        match management_store_call(&context, move |store| {
+            let principal = store.principal(&principal_for_store)?;
+            let policy_groups = store.policy_groups(&principal_for_store)?;
+            let rows = store.list_credentials(Some(&principal_for_store))?;
+            Ok((principal, policy_groups, rows))
+        })
+        .await
+        {
+            Ok(stored) => stored,
+            Err(error) => {
+                return management_store_error_response(&context, operation, target, error).await;
+            }
+        };
+    let runtime = &context.snapshot.runtime;
+    let identity = managed_principal_identity(runtime, principal_record, policy_groups);
+    let result = connections::credential_list(runtime, &identity, rows, None);
+    management_success_response(&context, operation, target, json!(result)).await
+}
+
 pub(crate) async fn admin_principal_credential_targets(
     State(state): State<AppState>,
     Path(principal): Path<String>,
