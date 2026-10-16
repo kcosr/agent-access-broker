@@ -6274,8 +6274,11 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
     assert_eq!(prepared.service, "gitlab_git");
     assert_eq!(prepared.action, "repo.fetch");
     assert_eq!(prepared.credential_mode, "service");
-    assert_eq!(prepared.credential.kind().as_str(), "bearer_token");
-    assert_eq!(prepared.credential, bearer_credential("git-token"));
+    let super::gateway_access::GatewayAccess::Static(credential) = &prepared.access else {
+        panic!("a service credential is presented as stored");
+    };
+    assert_eq!(credential.kind().as_str(), "bearer_token");
+    assert_eq!(*credential, bearer_credential("git-token"));
     assert_eq!(prepared.matched_grant.subject, "user:agent-one");
 
     runtime

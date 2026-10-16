@@ -279,7 +279,11 @@ binary and needs `python3`, whose absence fails it.
   upstream client factories) and the Git gateway's upstream credential
   presentation (`gateway_token_auth.rs`: `upstream_token_auth` and the
   host-only `gateway_upstream_authorization` that forwarding and Git
-  verification share) and credential connections (`connections.rs`: the
+  verification share; `runtime/gateway_access.rs`: each gateway request's
+  static credential or OAuth lease, revalidated and pinned to the gateway's
+  `upstream_base_url` before every upstream attempt, with ref discovery's one
+  401 recovery, no pack POST replay, and the 403 naming the portal reconnect)
+  and credential connections (`connections.rs`: the
   `[credentials.connections]` model, its validation and authority checks,
   `PrincipalKind` and `select`, which every personal-credential consumer
   uses; `runtime/personal_credentials.rs` reads the selected token rows;

@@ -17,6 +17,7 @@ pub use command_authority::{
 };
 mod command_dispatch;
 mod discovery;
+mod gateway_access;
 mod import_control;
 #[cfg(test)]
 mod inherited_network_tests;
@@ -85,6 +86,7 @@ pub use discovery::{
     ServiceDiscovery,
 };
 use futures_util::Stream;
+pub use gateway_access::{GatewayUpstreamPresentation, GatewayUpstreamRejection};
 use http::HeaderMap;
 use lookup_access::{PreScopeLookup, PreScopeLookupPlan};
 pub use resource_access::{
@@ -1848,7 +1850,9 @@ pub struct PreparedGatewayOperation {
     pub correlation: CorrelationContext,
     pub resource_scopes: ResourceScopes,
     pub credential_mode: String,
-    pub credential: ExecutionCredential,
+    /// What the request presents upstream, through
+    /// [`Self::upstream_presentation`].
+    access: gateway_access::GatewayAccess,
     pub matched_grant: MatchedGrantAudit,
     terminal_audit: Option<GatewayTerminalAuditGuard>,
     finalize_context: FinalizeContext,
@@ -1890,7 +1894,7 @@ impl PreparedGatewayOperation {
 
     pub fn observe_gateway_response_progress(&self, upstream_status: u16, audit: Value) {
         if let Some(terminal) = &self.terminal_audit {
-            terminal.observe_progress(upstream_status, audit);
+            terminal.observe_progress(upstream_status, self.with_credential_method(audit));
         }
     }
 }
@@ -3741,11 +3745,11 @@ impl BrokerRuntime {
             finalize_context,
         } = plan;
 
-        let credential = match self
-            .resolve_execution_credential(&service, &credential_mode, &identity)
+        let access = match self
+            .resolve_gateway_access(&service, &action, &credential_mode, &identity, &correlation)
             .await
         {
-            Ok(credential) => credential,
+            Ok(access) => access,
             Err(error) => {
                 return Err(Box::new(self.finalize(finalize_context, Err(error)).await));
             }
@@ -3758,7 +3762,7 @@ impl BrokerRuntime {
             correlation,
             resource_scopes,
             credential_mode,
-            credential,
+            access,
             matched_grant,
             terminal_audit: None,
             finalize_context,
@@ -4136,6 +4140,7 @@ impl BrokerRuntime {
         mut prepared: PreparedGatewayOperation,
         error: ProviderError,
     ) -> BrokerResponse<Value> {
+        let error = prepared.with_error_credential_method(error);
         let append_mode = prepared.take_gateway_audit_append_mode();
         self.finalize_with_append_mode(prepared.finalize_context, Err(error), append_mode)
             .await
@@ -4146,6 +4151,7 @@ impl BrokerRuntime {
         prepared: &mut PreparedGatewayOperation,
         audit: Value,
     ) -> Result<(), Box<BrokerResponse<Value>>> {
+        let audit = prepared.with_credential_method(audit);
         let context = &prepared.finalize_context;
         let identity = &context.identity;
         let audit_record = AuditRecord {
@@ -4247,6 +4253,7 @@ impl BrokerRuntime {
         upstream_duration_ms: u64,
         audit: Value,
     ) -> Result<(), Box<BrokerResponse<Value>>> {
+        let audit = prepared.with_credential_method(audit);
         let append_mode = prepared.take_gateway_audit_append_mode();
         let result = if upstream_status == 429 {
             Err(
@@ -6910,12 +6917,19 @@ pub(crate) fn gateway_service_descriptor(
         .credential_modes
         .iter()
         .any(|mode| mode == "per_user");
-    // Verifying a Git credential reads one repository's refs.
+    // Verifying a Git credential reads one repository's refs. A personal
+    // credential connection may also select OAuth, whose access the gateway
+    // presents like a token.
     let credentials = if per_user {
         CredentialDescriptor::default()
             .verification_input("repository")
             .profile("git-basic-api-token", "basic_api_token")
             .profile("git-bearer-token", "bearer_token")
+            .delegated(if gateway.git.as_ref().is_some_and(|git| git.allow_push) {
+                "Lets agents fetch and push Git repositories as your account."
+            } else {
+                "Lets agents fetch Git repositories as your account."
+            })
     } else {
         CredentialDescriptor::default().verification_input("repository")
     };

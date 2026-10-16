@@ -3,19 +3,19 @@
 //! that gateway forwarding and Git credential verification share.
 use agent_access_provider::host::token_as_basic;
 use agent_access_provider::{
-    CredentialPlacement, ExecutionCredential, ProviderError, ReasonCode, StaticCredentialKind,
-    UpstreamAuthorization,
+    CredentialPlacement, DelegatedAccess, ExecutionCredential, ProviderError, ReasonCode,
+    StaticCredentialKind, UpstreamAuthorization,
 };
 use serde::Deserialize;
 
 /// The longest `upstream_token_auth.username`, in characters.
 const BASIC_USERNAME_MAX_CHARS: usize = 64;
 
-/// `[gateways.<name>].upstream_token_auth`: how a gateway presents a
-/// token-kind (`bearer_token`) upstream credential. One table shape, tagged by
-/// `scheme`: `{ scheme = "bearer" }`, the default when the setting is absent,
-/// or `{ scheme = "basic", username = "<name>" }`. A `basic_api_token`
-/// credential always presents its own stored username.
+/// `[gateways.<name>].upstream_token_auth`: how a gateway presents token
+/// material: a `bearer_token` credential or an OAuth access token. One table
+/// shape, tagged by `scheme`: `{ scheme = "bearer" }`, the default when the
+/// setting is absent, or `{ scheme = "basic", username = "<name>" }`. A
+/// `basic_api_token` credential always presents its own stored username.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "scheme", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GatewayUpstreamTokenAuth {
@@ -125,6 +125,25 @@ pub fn gateway_upstream_authorization(
     Ok(authorization)
 }
 
+/// The authorization a Git gateway presents for delegated (OAuth) `access`,
+/// which is token material: a Bearer token, or the password of HTTP Basic
+/// under the configured username, as for a `bearer_token` credential. The
+/// caller has revalidated `access` and pinned it to the gateway's upstream.
+pub(crate) fn gateway_delegated_authorization(
+    token_auth: &GatewayUpstreamTokenAuth,
+    access: &DelegatedAccess,
+) -> Result<UpstreamAuthorization, ProviderError> {
+    match token_auth.token_placement() {
+        None => Ok(access.authorization()),
+        Some(placement) => access.authorization_as(&placement).map_err(|_| {
+            ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "the Git gateway cannot present this OAuth access token as HTTP Basic",
+            )
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,15 +154,51 @@ mod tests {
         token_auth: &GatewayUpstreamTokenAuth,
         credential: &ExecutionCredential,
     ) -> String {
+        header(&gateway_upstream_authorization(token_auth, credential).unwrap())
+    }
+
+    /// The `Authorization` header the host attaches for `authorization`.
+    fn header(authorization: &UpstreamAuthorization) -> String {
         let request = agent_access_provider::host::authorize_host_request(
             reqwest::Client::new().get("https://gitlab.example.com/team/project.git/info/refs"),
-            &gateway_upstream_authorization(token_auth, credential).unwrap(),
+            authorization,
         )
         .build()
         .unwrap();
         let value = &request.headers()[reqwest::header::AUTHORIZATION];
         assert!(value.is_sensitive());
         value.to_str().unwrap().to_owned()
+    }
+
+    fn delegated(token: &str) -> DelegatedAccess {
+        DelegatedAccess::new(
+            token,
+            "https://gitlab.example.com",
+            "gitlab",
+            "v1",
+            i64::MAX,
+        )
+    }
+
+    /// OAuth access is token material: Bearer by default, and the password
+    /// of HTTP Basic under the configured username.
+    #[test]
+    fn delegated_access_is_presented_as_configured_for_tokens() {
+        let access = delegated("oauth-access");
+        assert_eq!(
+            header(
+                &gateway_delegated_authorization(&GatewayUpstreamTokenAuth::default(), &access)
+                    .unwrap()
+            ),
+            "Bearer oauth-access"
+        );
+        assert_eq!(
+            header(&gateway_delegated_authorization(&basic("oauth2"), &access).unwrap()),
+            "Basic b2F1dGgyOm9hdXRoLWFjY2Vzcw=="
+        );
+        let error = gateway_delegated_authorization(&basic("oauth2"), &delegated("with space"))
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     }
 
     fn basic(username: &str) -> GatewayUpstreamTokenAuth {

@@ -343,7 +343,9 @@ read_only = true
 # redirect URI and scopes below, and may mark it trusted to skip consent.
 # Requires managed identity/store/encryption, browser auth and management; the
 # redirect URI is the exact browser_auth.public_origin callback. The target is
-# the normalized instance base. See docs/oauth.md#gitlab.
+# the normalized instance base. See docs/oauth.md#gitlab. The Git gateway
+# presents a person's OAuth access through its upstream_token_auth, as Basic
+# oauth2:<access token>; see docs/git-http-gateway.md#oauth-connections.
 # [oauth.registrations.gitlab]
 # adapter = "gitlab"
 # base_url = "https://gitlab.example.com"

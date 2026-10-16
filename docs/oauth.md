@@ -292,6 +292,23 @@ but does not revoke the grant in GitLab: the person revokes the application
 under their GitLab **Applications** settings, or a GitLab administrator revokes
 the application's tokens.
 
+### GitLab Git through the gateway
+
+A GitLab [Git gateway](git-http-gateway.md#oauth-connections) on the
+connection presents each person's OAuth access to GitLab's Git HTTP endpoint,
+which accepts tokens only as HTTP Basic. Set the gateway's
+`upstream_token_auth = { scheme = "basic", username = "oauth2" }`; `oauth2` is
+GitLab's convention for access tokens. The gateway's `upstream_base_url`
+names the profile's `target` instance, and the profile requests a repository
+scope (see [GitLab scopes](#gitlab-scopes)).
+
+Each Git HTTP request holds its own lease. Ref discovery recovers once from a
+401; pack POSTs are never replayed. When GitLab rejects the access, or the
+connection needs reconnecting, the gateway answers HTTP 403 with a plain-text
+message naming the portal reconnect, never 401, so Git neither prompts nor has
+its credential helper erase the Broker token. Service accounts present their
+stored token as Basic `oauth2:<token>` through the same setting.
+
 ### GitLab login binding
 
 Where people sign in to both the Broker and GitLab through Microsoft Entra ID,

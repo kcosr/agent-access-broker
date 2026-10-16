@@ -105,7 +105,8 @@ settings as described in [Jira setup](providers-jira.md) and
 
 Services that reach the same upstream account can share one connection, as Jira
 and Confluence do above. GitLab REST and a GitLab Git gateway can both name a
-`gitlab` connection, so each principal stores one GitLab token for both; see the
+`gitlab` connection, so each principal stores one GitLab token, or connects one
+GitLab account through [OAuth](oauth.md#gitlab), for both; see the
 [Git gateway](git-http-gateway.md#credentials-limits-and-audit). Grants stay
 per service, so a principal with only GitLab REST grants still cannot fetch
 through the gateway, and one with only Jira grants cannot read Confluence. A

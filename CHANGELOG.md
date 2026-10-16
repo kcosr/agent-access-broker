@@ -812,9 +812,28 @@ All notable changes to this project are documented in this file.
   `ConnectedIdentity::linked_identities` with `with_linked_identities`, and the
   default `OAuthDialect::supports_login_binding`. See
   [GitLab login binding](docs/oauth.md#gitlab-login-binding).
+- Git gateways present OAuth connections. A gateway whose `credential_modes`
+  include `per_user` accepts delegated credentials, so its credential
+  connection may set `oauth`; for GitLab, people connect once for GitLab REST
+  and Git. Each Git HTTP request acquires the caller's lease after policy and
+  revalidates it immediately before sending, pinned to the gateway's own
+  `upstream_base_url` instance, and presents the access token through
+  `upstream_token_auth` (GitLab: `{ scheme = "basic", username = "oauth2" }`).
+  Ref discovery recovers once from an upstream 401; `git-upload-pack` and
+  `git-receive-pack` POSTs mark the presented access rejected and fail without
+  replay. Upstream rejection and a connection needing reconnect (never
+  connected, `invalid_grant`, or a refresh with an unknown outcome) answer HTTP
+  403 `credential_invalid` with a plain-text message naming the portal
+  reconnect, never 401, so Git neither prompts nor has its credential helper
+  erase the Broker token. Gateway audit records of a personal connection add
+  `providerAudit.gateway.credentialMethod` (`oauth` or `token`). See
+  [Git gateway OAuth connections](docs/git-http-gateway.md#oauth-connections).
 
 ### Changed
 
+- Git gateway error responses are labeled `Content-Type: text/plain;
+  charset=utf-8`, so Git shows their one-line reason as `remote:` output when
+  ref discovery fails. Their status, reason code header and body are unchanged.
 - Existing Confluence `all` resources used by grants, groups, and token
   restrictions now cover personal spaces visible to the selected upstream
   credential; those keys were previously rejected. Review this coverage before

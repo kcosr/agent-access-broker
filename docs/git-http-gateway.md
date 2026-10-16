@@ -217,14 +217,17 @@ Any gateway request with a `Trailer` header is rejected before forwarding.
 
 Credential mode comes from the matched grant, as with providers. A `service`
 gateway credential is shared for the gateway service. A `per_user` gateway
-credential is the calling principal's token for the gateway's
-[credential connection](configuration.md#credential-connections). The gateway
-can have its own connection, with the profile `git-basic-api-token` or
-`git-bearer-token`, or share another service's, such as the `gitlab`
-connection of GitLab REST, so that one stored token serves both. The
-self-service credential verifier requires a repository that the principal can
-fetch and uses `streaming_idle_timeout_ms` for stalled upstream discovery
-headers or body reads.
+credential is what the gateway's
+[credential connection](configuration.md#credential-connections) selects for
+the calling principal: their stored token, or their OAuth connection when the
+connection uses OAuth for them (see [OAuth connections](#oauth-connections)).
+The gateway can have its own connection, with the profile
+`git-basic-api-token` or `git-bearer-token`, or share another service's, such
+as the `gitlab` connection of GitLab REST, so that one stored token or one
+OAuth connection serves both. The self-service credential verifier checks
+stored tokens; it requires a repository that the principal can fetch and uses
+`streaming_idle_timeout_ms` for stalled upstream discovery headers or body
+reads.
 
 The gateway presents a `basic_api_token` credential (a service credential, or a
 basic-kind profile such as `git-basic-api-token`) as HTTP Basic with its own
@@ -237,8 +240,9 @@ as the gateway's `upstream_token_auth` setting selects:
 | Absent, or `{ scheme = "bearer" }` | `Authorization: Bearer <token>` |
 | `{ scheme = "basic", username = "<name>" }` | `Authorization: Basic <base64 of name:token>` |
 
-The setting applies to service and per-user bearer-kind credentials alike; a
-basic credential keeps its stored username under either scheme. `username` is
+The setting applies to service and per-user bearer-kind credentials and to
+OAuth access tokens alike; a basic credential keeps its stored username under
+either scheme. `username` is
 required with `basic` and rejected with `bearer`, and must be 1 to 64 printable
 ASCII characters without a colon. Under `basic`, a token that is empty, longer
 than 32,768 characters, or contains a space or other character outside visible
@@ -289,8 +293,10 @@ Gateway responses are raw Git smart HTTP streams, not broker JSON envelopes.
 That protocol passthrough behavior is unchanged by the Jira, Confluence, and
 GitLab REST validation-message policy: upstream Git HTTP responses remain
 bounded protocol responses and are not parsed into sanitized REST validation
-messages. Broker-generated classifier and policy denials remain the plain-text
-gateway errors described in this document. An upstream HTTP 429 is passed through
+messages. Broker-generated classifier, policy and credential failures remain
+the plain-text gateway errors described in this document: one line with
+`Content-Type: text/plain; charset=utf-8`, which Git shows as `remote:` output
+when ref discovery fails. An upstream HTTP 429 is passed through
 with its status; the Broker forwards the upstream `Retry-After` only as bounded
 whole seconds (at most one day) and drops invalid values. The request's
 terminal audit record reports `decision = "error"`,
@@ -343,6 +349,85 @@ followed by a terminal audit record containing upstream status, duration, and
 response byte metadata. Classifier denials before a gateway action is known use
 the synthetic non-grantable action `gateway.classify`.
 
+## OAuth connections
+
+When the gateway's credential connection sets `oauth`, people (`user`
+principals) present their OAuth connection to that registration and never a
+stored token; service accounts and `system` principals keep the connection's
+token form, as [oauth.md](oauth.md#credential-connections-and-shared-registrations)
+describes. A gateway whose `credential_modes` include `per_user` accepts
+delegated credentials, so `config validate` accepts it on an OAuth connection
+whose registration grants access to the gateway's `upstream_base_url`
+instance; for a `gitlab` registration, that is the profile's `target`. For
+GitLab, people connect once for GitLab REST and Git:
+
+```toml
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"   # service accounts' tokens
+oauth = { registration = "gitlab", profile = "default" }
+
+[credentials.per_user.gitlab_git]
+type = "connection"
+connection = "gitlab"
+
+[gateways.gitlab_git]
+kind = "git_http"
+upstream_base_url = "https://gitlab.example.com"
+credential_modes = ["per_user"]
+upstream_token_auth = { scheme = "basic", username = "oauth2" }
+# ... broker_hosts and the other gateway keys
+```
+
+Each Git HTTP request, ref discovery (`GET .../info/refs`) or pack POST, is
+its own operation with its own OAuth lease and recovery budget. The gateway
+acquires the caller's access after policy admits the request, then, immediately
+before sending it, revalidates the access, renewing it when stale, and pins it
+to the gateway's own `upstream_base_url` instance and the permission profile's
+audience. It presents the access token as token material through
+`upstream_token_auth`: with `{ scheme = "basic", username = "oauth2" }`,
+GitLab receives `Authorization: Basic <base64 of oauth2:access-token>`.
+
+When the upstream answers OAuth access with HTTP 401:
+
+- **Ref discovery recovers once.** The gateway replaces the access, reusing a
+  successor another request already obtained or refreshing, and sends the
+  discovery request once more. A second 401 rejects the renewed access too.
+- **Pack POSTs are never replayed.** For `git-upload-pack` and
+  `git-receive-pack`, the gateway marks the access it presented as rejected,
+  so the next request renews it, and fails the request without resending its
+  body.
+
+The gateway then answers HTTP 403 with
+`X-Agent-Access-Reason-Code: credential_invalid` and a plain-text line naming
+the portal reconnect, for example `GitLab rejected the connected account's
+access and the Git request was not replayed; retry, and if it is rejected
+again, reconnect it under My access > Credentials in the Agent Access Broker
+portal`. It answers the same way when the connection needs reconnecting: the
+person has not connected the account, a refresh was rejected with
+`invalid_grant`, or a refresh's outcome is unknown, for example after a lost
+response. Once the connection needs reconnecting, requests fail without
+reaching the upstream Git endpoint, and the line reads `GitLab has no usable
+connected account; connect or reconnect it under My access > Credentials in
+the Agent Access Broker portal, then retry`, naming the connection's display
+name. The gateway never answers these cases with 401, so Git neither prompts
+again nor asks its credential helper to erase the Broker token; Git shows the
+line as `remote:` output when ref discovery fails. A refresh another Broker
+process is running (`concurrency_limited`) and a throttled refresh
+(`upstream_rate_limited`, with `Retry-After`) answer HTTP 429, so the request
+can be retried. A static credential's upstream 401 still passes through
+unchanged.
+
+GitLab invalidates both earlier tokens on every refresh, with no grace period,
+so a request in flight while another request refreshes can meet a revoked
+token. Ref discovery recovers with the successor; a pack POST fails with the
+403 above and succeeds when Git is run again.
+
+Audit records of a request on a personal credential connection carry
+`credentialConnection` and `providerAudit.gateway.credentialMethod`, `oauth`
+or `token`. Credential verification applies to stored tokens only; an OAuth
+connection shows its state in the portal and is exercised by use.
+
 ## Deployment validation
 
 Validate discovery and fetch against an authorized disposable repository through
@@ -350,7 +435,10 @@ the actual gateway ingress, using its URL-scoped credential helper. Check denial
 for another repository and, when configured, a token or context outside its grant.
 An authorized push test needs a throwaway branch: verify its ref changes, the
 configured protected/delete/tag restrictions and terminal audit outcome, then
-remove the branch through an authorized upstream cleanup path.
+remove the branch through an authorized upstream cleanup path. With an OAuth
+connection, fetch as a person who connected their account and as one who has
+not, and check the second gets the 403 naming the portal reconnect without Git
+prompting for credentials.
 
 Exercise the installed proxy/TLS chain and invocation limits with ordinary Git,
 since one command can issue multiple pack requests. A REST provider smoke cannot

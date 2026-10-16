@@ -1366,6 +1366,18 @@ awaiting new consent since preparation stops the invocation, and access
 superseded by another invocation's refresh moves to the current version.
 Providers never hold the OAuth manager or refresh material.
 
+The Git gateway is the host's own delegated consumer. A gateway that allows
+`per_user` declares delegated credentials; each Git HTTP request acquires the
+caller's lease after policy, then revalidates it and pins it to the gateway's
+own `upstream_base_url` instance and the profile's audience before every
+upstream attempt, and presents it through `upstream_token_auth`. Ref discovery
+recovers once from an upstream 401; pack POSTs reject the version they
+presented and fail without replaying their bodies. Upstream rejection and a
+connection needing reconnect answer HTTP 403 `credential_invalid` with a
+plain-text message naming the portal reconnect, never 401, so Git does not
+erase the Broker token from its credential helper. See
+[Git gateway OAuth connections](git-http-gateway.md#oauth-connections).
+
 **Token-only actions.** A native backend marks an action whose upstream
 accepts only a token, never delegated access, with
 `ActionDescriptor::token_only`; imported descriptors never carry it. The check

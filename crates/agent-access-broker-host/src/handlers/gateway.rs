@@ -1006,13 +1006,15 @@ async fn forward_prepared_git_http(
                 prepared.correlation.broker_request_id.clone(),
             );
     }
-    builder = match agent_access_core::gateway_upstream_authorization(
-        &gateway.upstream_token_auth,
-        &prepared.credential,
-    ) {
-        Ok(authorization) => {
-            agent_access_provider::host::authorize_host_request(builder, &authorization)
-        }
+    // Ref discovery has no body, so it can be sent once more after its OAuth
+    // access is replaced. Pack POSTs are never replayed.
+    let discovery_retry = if git_request_kind.is_pack_post() {
+        None
+    } else {
+        builder.try_clone()
+    };
+    let presentation = match prepared.upstream_presentation(&gateway).await {
+        Ok(presentation) => presentation,
         Err(error) => {
             let response = runtime
                 .fail_prepared_gateway_operation(prepared, error)
@@ -1020,97 +1022,75 @@ async fn forward_prepared_git_http(
             return gateway_runtime_response(response);
         }
     };
+    builder =
+        agent_access_provider::host::authorize_host_request(builder, presentation.authorization());
 
+    let attempt_audit = GatewayAttemptAudit {
+        method: &method,
+        upstream_url: &upstream_url,
+        egress_proxy: &egress_proxy_audit,
+        git: &git_audit,
+    };
     if let Err(response) = runtime
-        .start_prepared_gateway_operation(
-            &mut prepared,
-            gateway_forward_audit_with_git(
-                &method,
-                &upstream_url,
-                egress_proxy_audit.clone(),
-                0,
-                git_audit.clone(),
-            ),
-        )
+        .start_prepared_gateway_operation(&mut prepared, attempt_audit.value())
         .await
     {
         return gateway_runtime_response(*response);
     }
 
     let started = Instant::now();
-    let upstream_response = match gateway_send_with_upload_watchdog(
-        builder.send(),
+    let mut upstream_response = match send_git_upstream(
+        builder,
         upload_progress,
+        replay_failure.as_deref(),
         limits.idle_timeout,
+        &attempt_audit,
+        started,
     )
     .await
     {
         Ok(response) => response,
-        Err(GatewaySendError::Inner(error)) => {
-            let duration_ms = elapsed_millis(started);
-            let replay_failure = replay_failure
-                .as_ref()
-                .map(|failure| failure.load(Ordering::Relaxed))
-                .unwrap_or(REPLAY_FAILURE_NONE);
+        Err(error) => {
             let response = runtime
-                .fail_prepared_gateway_operation(
-                    prepared,
-                    reqwest_error_to_provider_error(
-                        error,
-                        &method,
-                        &upstream_url,
-                        egress_proxy_audit,
-                        git_audit,
-                        replay_failure,
-                    )
-                    .with_upstream(None, Some(duration_ms)),
-                )
-                .await;
-            return gateway_runtime_response(response);
-        }
-        Err(GatewaySendError::RequestUploadIdleTimeout) => {
-            let duration_ms = elapsed_millis(started);
-            let response = runtime
-                .fail_prepared_gateway_operation(
-                    prepared,
-                    ProviderError::error(
-                        ReasonCode::UpstreamTimeout,
-                        "gateway upstream request upload timed out",
-                    )
-                    .with_upstream(None, Some(duration_ms))
-                    .with_audit(gateway_forward_audit_with_git(
-                        &method,
-                        &upstream_url,
-                        egress_proxy_audit,
-                        0,
-                        git_audit,
-                    )),
-                )
-                .await;
-            return gateway_runtime_response(response);
-        }
-        Err(GatewaySendError::ResponseHeadersIdleTimeout) => {
-            let duration_ms = elapsed_millis(started);
-            let response = runtime
-                .fail_prepared_gateway_operation(
-                    prepared,
-                    ProviderError::error(
-                        ReasonCode::UpstreamTimeout,
-                        "gateway upstream response headers timed out",
-                    )
-                    .with_upstream(None, Some(duration_ms))
-                    .with_audit(gateway_forward_audit_with_git(
-                        &method,
-                        &upstream_url,
-                        egress_proxy_audit,
-                        0,
-                        git_audit,
-                    )),
-                )
+                .fail_prepared_gateway_operation(prepared, error)
                 .await;
             return gateway_runtime_response(response);
         }
     };
+    if upstream_response.status() == reqwest::StatusCode::UNAUTHORIZED
+        && presentation.is_delegated()
+    {
+        drop(upstream_response);
+        let outcome = match discovery_retry {
+            Some(retry) => {
+                retry_git_discovery(
+                    &prepared,
+                    &gateway,
+                    retry,
+                    limits.idle_timeout,
+                    &attempt_audit,
+                    started,
+                )
+                .await
+            }
+            None => Err(prepared
+                .reject_upstream_presentation(
+                    &presentation,
+                    agent_access_core::GatewayUpstreamRejection::NotReplayed,
+                )
+                .with_upstream(Some(401), Some(elapsed_millis(started)))
+                .with_audit(attempt_audit.value())),
+        };
+        upstream_response = match outcome {
+            Ok(response) => response,
+            Err(error) => {
+                let response = runtime
+                    .fail_prepared_gateway_operation(prepared, error)
+                    .await;
+                return gateway_runtime_response(response);
+            }
+        };
+    }
     let upstream_status = upstream_response.status().as_u16();
     let response_headers = upstream_response.headers().clone();
     if response_content_length_exceeds(&response_headers, limits.response_body_max_bytes) {
@@ -1167,6 +1147,107 @@ async fn forward_prepared_git_http(
         &response_headers,
         response_body,
     )
+}
+
+/// The facts every gateway audit value of one forwarded request repeats.
+struct GatewayAttemptAudit<'a> {
+    method: &'a Method,
+    upstream_url: &'a Url,
+    egress_proxy: &'a serde_json::Value,
+    git: &'a Option<serde_json::Value>,
+}
+
+impl GatewayAttemptAudit<'_> {
+    /// The gateway audit value before any response bytes.
+    fn value(&self) -> serde_json::Value {
+        gateway_forward_audit_with_git(
+            self.method,
+            self.upstream_url,
+            self.egress_proxy.clone(),
+            0,
+            self.git.clone(),
+        )
+    }
+}
+
+/// Sends one upstream attempt, failing as the operation's error when no
+/// response headers arrive.
+async fn send_git_upstream(
+    builder: reqwest::RequestBuilder,
+    upload_progress: Option<Arc<GatewayRequestUploadProgress>>,
+    replay_failure: Option<&AtomicU8>,
+    idle_timeout: Duration,
+    audit: &GatewayAttemptAudit<'_>,
+    started: Instant,
+) -> Result<reqwest::Response, ProviderError> {
+    let timed_out = |message: &'static str| {
+        ProviderError::error(ReasonCode::UpstreamTimeout, message)
+            .with_upstream(None, Some(elapsed_millis(started)))
+            .with_audit(audit.value())
+    };
+    match gateway_send_with_upload_watchdog(builder.send(), upload_progress, idle_timeout).await {
+        Ok(response) => Ok(response),
+        Err(GatewaySendError::Inner(error)) => {
+            let duration_ms = elapsed_millis(started);
+            let replay_failure = replay_failure
+                .map(|failure| failure.load(Ordering::Relaxed))
+                .unwrap_or(REPLAY_FAILURE_NONE);
+            Err(reqwest_error_to_provider_error(
+                error,
+                audit.method,
+                audit.upstream_url,
+                audit.egress_proxy.clone(),
+                audit.git.clone(),
+                replay_failure,
+            )
+            .with_upstream(None, Some(duration_ms)))
+        }
+        Err(GatewaySendError::RequestUploadIdleTimeout) => {
+            Err(timed_out("gateway upstream request upload timed out"))
+        }
+        Err(GatewaySendError::ResponseHeadersIdleTimeout) => {
+            Err(timed_out("gateway upstream response headers timed out"))
+        }
+    }
+}
+
+/// Ref discovery's one recovery after the upstream answered its OAuth access
+/// with 401: the access is replaced, reusing a successor another request
+/// already obtained, and the request is sent once more. A second 401 rejects
+/// the replacement too and fails the request.
+async fn retry_git_discovery(
+    prepared: &PreparedGatewayOperation,
+    gateway: &GatewayConfig,
+    retry: reqwest::RequestBuilder,
+    idle_timeout: Duration,
+    audit: &GatewayAttemptAudit<'_>,
+    started: Instant,
+) -> Result<reqwest::Response, ProviderError> {
+    let rejected = |error: ProviderError| {
+        error
+            .with_upstream(Some(401), Some(elapsed_millis(started)))
+            .with_audit(audit.value())
+    };
+    let presentation = prepared
+        .recover_upstream_presentation(gateway)
+        .await
+        .map_err(rejected)?;
+    let response = send_git_upstream(
+        agent_access_provider::host::authorize_host_request(retry, presentation.authorization()),
+        None,
+        None,
+        idle_timeout,
+        audit,
+        started,
+    )
+    .await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(rejected(prepared.reject_upstream_presentation(
+            &presentation,
+            agent_access_core::GatewayUpstreamRejection::AfterRecovery,
+        )));
+    }
+    Ok(response)
 }
 
 async fn gateway_send_with_upload_watchdog<F, T, E>(
@@ -2811,6 +2892,9 @@ fn gateway_runtime_response_with_basic_challenge(
     )
 }
 
+/// A gateway failure as Git sees it: the status, and the reason as a
+/// `text/plain` line, which Git shows as `remote:` output when ref discovery
+/// fails.
 fn gateway_error_response(
     status: StatusCode,
     broker_request_id: &str,
@@ -2820,6 +2904,10 @@ fn gateway_error_response(
 ) -> Response<Body> {
     let mut response = Response::new(Body::from(format!("{body}\n")));
     *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     if let Ok(value) = HeaderValue::from_str(broker_request_id) {
         response
             .headers_mut()

@@ -523,8 +523,10 @@ Validation rules:
   under [`upstream_token_auth`](#gateways).
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
-  Today these consumers are `gmail`, GitLab REST (`gitlab`) and the
-  development `oauth_stub` service; see [oauth.md](oauth.md).
+  Today these consumers are `gmail`, GitLab REST (`gitlab`), Git gateways
+  whose `credential_modes` include `per_user`, and the development
+  `oauth_stub` service; see [oauth.md](oauth.md) and
+  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections).
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or
@@ -1577,7 +1579,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/**"]
 auth_modes = ["basic_broker_token"]
 basic_broker_token_username = "agent-access" # default
 credential_modes = ["service"]               # service and/or per_user
-upstream_token_auth = { scheme = "bearer" }  # default; for bearer_token credentials
+upstream_token_auth = { scheme = "bearer" }  # default; for tokens and OAuth access
 redirect_policy = "none"                     # default; only supported value
 correlation_headers = true                   # default
 request_body_max_bytes = 536870912           # optional
@@ -1645,8 +1647,9 @@ Gateway keys (`[gateways.<name>]`):
 - `credential_modes` is required (non-empty); each value must be `service` or
   `per_user` and must have a matching configured credential for the gateway
   service.
-- `upstream_token_auth` selects how the gateway presents a `bearer_token`
-  upstream credential, service or per-user, as one table tagged by `scheme`:
+- `upstream_token_auth` selects how the gateway presents token material, a
+  `bearer_token` upstream credential (service or per-user) or a person's OAuth
+  access token, as one table tagged by `scheme`:
   `{ scheme = "bearer" }`, the default, sends `Authorization: Bearer <token>`,
   and `{ scheme = "basic", username = "<name>" }` sends the token as the HTTP
   Basic password under `username`, as GitLab requires. `scheme` is required in
@@ -1697,7 +1700,9 @@ For per-user Git gateway credentials, credential verification requires a
 repository input and performs a read-only `repo.fetch` authorization check before
 probing upstream with `git-upload-pack` discovery. The verification probe uses
 `streaming_idle_timeout_ms` for stalled response header waits and discovery body
-reads.
+reads. It verifies stored tokens only. A gateway whose connection selects OAuth
+for the caller presents their OAuth access instead; see
+[OAuth connections](git-http-gateway.md#oauth-connections).
 
 ## Egress proxy configuration
 

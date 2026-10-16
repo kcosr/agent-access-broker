@@ -490,18 +490,15 @@ fn validation_errors(raw: &str) -> Vec<String> {
 }
 
 /// GitLab REST and a GitLab Git gateway on the registration's instance pass
-/// the dialect's offline authority check, in production. GitLab REST accepts
-/// delegated credentials; the Git gateway does not yet, so validation still
-/// rejects the OAuth method for the shared connection.
+/// the dialect's offline authority check, in production, and both accept
+/// delegated credentials, so the shared OAuth connection validates.
 #[test]
 fn gitlab_rest_and_git_share_one_gitlab_oauth_connection_on_the_instance() {
-    let delegated = [
-        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab_git does not",
-    ];
+    let none: [String; 0] = [];
     let base = "https://gitlab.example.com";
     assert_eq!(
         validation_errors(&gitlab_oauth_config(base, base, "rotate_both", base)),
-        delegated
+        none
     );
     // The registration's base URL normalizes to the written target.
     assert_eq!(
@@ -511,7 +508,7 @@ fn gitlab_rest_and_git_share_one_gitlab_oauth_connection_on_the_instance() {
             "rotate_both",
             "https://gitlab.example.com/"
         )),
-        delegated
+        none
     );
 }
 
@@ -520,11 +517,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
     let base = "https://gitlab.example.com";
     let registration = |reason: &str| {
         format!("oauth.registrations.gitlab is not a valid gitlab registration: {reason}")
-    };
-    let delegated = |service: &str| {
-        format!(
-            "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which {service} does not"
-        )
     };
     let elsewhere = |service: &str, consumer: &str, instance: &str| {
         format!(
@@ -544,7 +536,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
             ),
-            delegated("gitlab_git"),
         ]
     );
     // A target on another instance than its consumers.
@@ -555,7 +546,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
             ),
-            delegated("gitlab_git"),
             elsewhere("gitlab", base, other),
             elsewhere("gitlab_git", base, other),
         ]
@@ -564,7 +554,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
     assert_eq!(
         validation_errors(&gitlab_oauth_config(base, base, "rotate_both", other)),
         [
-            delegated("gitlab_git"),
             format!(
                 "credentials.connections.gitlab: gitlab acts on {base} but gitlab_git acts on {other}; a token connection's consumers must act on one upstream"
             ),
@@ -577,7 +566,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "GitLab requires rotation = \"rotate_both\": every refresh replaces both the access and the refresh token"
             ),
-            delegated("gitlab_git"),
         ]
     );
 }
