@@ -1679,6 +1679,10 @@ async fn append_management_audit_with_details(
     if let Some(phase) = extra.phase {
         management.insert("phase".to_string(), json!(phase));
     }
+    let connection_services = connection_target_services(snapshot, envelope);
+    if let Some(services) = &connection_services {
+        management.insert("targetServices".to_string(), json!(services));
+    }
     if let Some(scope) = policy_management_scope {
         let (target_service, service_specific) = audit_target_service(snapshot, envelope).await;
         for (key, value) in
@@ -1694,7 +1698,9 @@ async fn append_management_audit_with_details(
             service_specific,
         );
         management.insert("authorizationBasis".to_string(), json!(basis));
-    } else if let Some(target_service) = admin_target_service(envelope) {
+    } else if let Some(target_service) =
+        admin_target_service(envelope, connection_services.as_deref())
+    {
         management.insert("targetService".to_string(), json!(target_service));
     }
     if !policy_management_authorities.is_empty() {
@@ -1742,13 +1748,47 @@ async fn append_management_audit_with_details(
     snapshot.runtime.append_audit_record(&record).await
 }
 
+/// The services consuming the credential connection a management target
+/// names, in configured order, which its record lists as `targetServices`.
+fn connection_target_services(
+    snapshot: &RuntimeSnapshot,
+    envelope: &ManagementEnvelope,
+) -> Option<Vec<String>> {
+    let connection = envelope.target.as_ref()?.get("connection")?.as_str()?;
+    Some(
+        snapshot
+            .runtime
+            .effective_credentials()
+            .connection_consumers(connection)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// The one service a credential connection target is about: its only
+/// consumer. A record about a connection several services share has no
+/// single scope service.
+fn connection_scope_service(services: &[String]) -> Option<&str> {
+    match services {
+        [service] => Some(service),
+        _ => None,
+    }
+}
+
 /// The service an admin operation acts on, taken from its target, so admin
 /// records carry `targetService` like policy-management records do and are
-/// visible to that service's policy managers. Self-service operations are
+/// visible to that service's policy managers: the target's service, or the
+/// only consumer of its credential connection. Self-service operations are
 /// excluded: a user's own actions stay out of service managers' view.
-fn admin_target_service(envelope: &ManagementEnvelope) -> Option<&str> {
+fn admin_target_service<'a>(
+    envelope: &'a ManagementEnvelope,
+    connection_services: Option<&'a [String]>,
+) -> Option<&'a str> {
     if !envelope.operation.starts_with("admin.") {
         return None;
+    }
+    if let Some(services) = connection_services {
+        return connection_scope_service(services);
     }
     envelope
         .target
@@ -1784,6 +1824,9 @@ async fn audit_target_service(
     let Some(target) = envelope.target.as_ref() else {
         return (None, false);
     };
+    if let Some(services) = connection_target_services(snapshot, envelope) {
+        return (connection_scope_service(&services).map(str::to_owned), true);
+    }
     if let Some(service) = target.get("service").and_then(Value::as_str) {
         return (Some(service.to_string()), true);
     }
