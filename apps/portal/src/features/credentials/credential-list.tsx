@@ -169,6 +169,7 @@ export function useCredentialList(subject: AccountSubject) {
   );
   const counts = {
     all: rows.length,
+    settable: rows.filter((row) => row.kind === "token" || row.kind === "oauth").length,
     attention: rows.filter(needsAttention).length,
     missing: rows.filter(isMissing).length,
     unused: rows.filter((row) => row.kind === "retained").length
@@ -181,7 +182,6 @@ export type CredentialListModel = ReturnType<typeof useCredentialList>;
 
 export function CredentialToolbar({ model }: { model: CredentialListModel }) {
   const { list, counts } = model;
-  const usable = counts.all - counts.unused;
   return (
     <Toolbar>
       <ToolbarRow>
@@ -198,7 +198,7 @@ export function CredentialToolbar({ model }: { model: CredentialListModel }) {
         />
         <FilterInput value={list.state.q} onChange={(q) => list.setState({ q })} placeholder="Filter credentials…" debounceMs={150} />
         <ToolbarSummary grow>
-          <b>{usable - counts.missing}</b> of {usable} set up
+          <b>{counts.settable - counts.missing}</b> of {counts.settable} set up
         </ToolbarSummary>
       </ToolbarRow>
     </Toolbar>
@@ -530,8 +530,9 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
       <>
         <DrawerSection title="Not used">
           <p className="wb-small wb-fg-2">
-            The configuration no longer selects this stored credential: its service now uses another connection, its name or profile is retired, or its connection
-            uses OAuth for this account. No action reads it. Delete it when it is no longer needed.
+            No service reads this stored credential for this account. Either the configuration no longer selects it (its service now uses another connection, its
+            name or profile is retired, or its connection uses OAuth for this account), or the account has no grant on a service that uses it. Delete it when it is
+            no longer needed.
           </p>
         </DrawerSection>
         <DrawerSection title="Stored credential">

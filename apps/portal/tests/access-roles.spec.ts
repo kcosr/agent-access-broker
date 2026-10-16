@@ -37,6 +37,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = session;
     else if (pathname === "/v1/me") result = { serviceLimits: [] };
+    else if (pathname === "/v1/credentials") result = { connections: [], retained: [] };
     else if (pathname === "/v1/admin/config/status") result = config;
     else if (pathname === "/v1/admin/principals") result = [principal()];
     else if (pathname === "/v1/admin/principals/target") result = principal();

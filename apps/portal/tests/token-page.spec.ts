@@ -63,6 +63,7 @@ async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnab
       return;
     }
     else if (pathname.endsWith("/tokens/options") || pathname.endsWith("/agent-token-options")) { model.optionReads++; result = model.options; }
+    else if (pathname === "/v1/credentials") result = { connections: [], retained: [] };
     else if ((pathname.endsWith("/effective-access") || pathname.endsWith("/agent-token-effective-access"))) {
       const body = request.postDataJSON() as AgentTokenIssueBody;
       model.previews.push(body);

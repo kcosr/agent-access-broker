@@ -126,6 +126,8 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
         actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
       }] });
+    } else if (endpoint === "/v1/credentials") {
+      body = envelope({ connections: [], retained: [] });
     } else {
       body = envelope([]);
     }

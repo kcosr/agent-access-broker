@@ -79,6 +79,8 @@ async function fixture(page: Page, search = "", catalogUnavailable = () => false
       body = envelope(grants.filter((item) => url.searchParams.get("status") === "deleted" ? item.status === "deleted" : item.status !== "deleted"));
     } else if (url.pathname === "/v1/resource-types") {
       body = { resourceTypes: [] };
+    } else if (url.pathname === "/v1/credentials") {
+      body = envelope({ connections: [], retained: [] });
     } else {
       body = envelope([]);
     }
