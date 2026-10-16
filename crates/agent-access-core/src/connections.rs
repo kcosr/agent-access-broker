@@ -410,9 +410,26 @@ fn validate_token_profile(
             }
         } else if descriptor.credential_profile_kind(profile).is_none() {
             errors.push(format!(
-                "{label}.token_profile {profile} is unsupported for service {service}"
+                "{label}.token_profile {profile} is unsupported for service {service}, which accepts {}",
+                accepted_profiles(descriptor)
             ));
         }
+    }
+}
+
+/// The token profiles `descriptor` declares under the current
+/// configuration, as a rejection names them.
+fn accepted_profiles(descriptor: &ServiceDescriptor) -> String {
+    let profiles = descriptor
+        .credentials
+        .profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect::<Vec<_>>();
+    if profiles.is_empty() {
+        "no token profile".to_string()
+    } else {
+        profiles.join(", ")
     }
 }
 
@@ -555,6 +572,21 @@ mod tests {
             );
         }
         credentials
+    }
+
+    #[test]
+    fn a_rejected_token_profile_names_the_profiles_the_consumer_accepts() {
+        let none = ServiceDescriptor::new("plain", "Plain");
+        assert_eq!(accepted_profiles(&none), "no token profile");
+        let declared = ServiceDescriptor::new("site", "Site").with_credentials(
+            agent_access_provider::CredentialDescriptor::default()
+                .profile("site-api-token", "basic_api_token")
+                .profile("site-bearer-token", "bearer_token"),
+        );
+        assert_eq!(
+            accepted_profiles(&declared),
+            "site-api-token, site-bearer-token"
+        );
     }
 
     #[test]

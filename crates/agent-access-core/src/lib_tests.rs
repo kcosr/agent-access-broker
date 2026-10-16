@@ -3057,7 +3057,7 @@ fn rejects_a_shared_connection_profile_a_consumer_does_not_declare() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.atlassian.token_profile jira-cloud-api-token is unsupported for service confluence",
+        "credentials.connections.atlassian.token_profile jira-cloud-api-token is unsupported for service confluence, which accepts confluence-cloud-api-token",
     );
     assert!(
         !errors

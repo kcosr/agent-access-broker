@@ -580,8 +580,9 @@ depend on the consumers and the surrounding config:
 | any Git HTTP gateway | `git-bearer-token` | `bearer_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 
 Any other profile fails validation, as does a profile that one consumer of the
-connection does not declare; Jira and Confluence therefore keep separate
-connections. A Git gateway also accepts the profile of another consumer of its
+connection does not declare, with `credentials.connections.<id>.token_profile
+<profile> is unsupported for service <service>, which accepts <profiles>`;
+Jira and Confluence therefore keep separate connections. A Git gateway also accepts the profile of another consumer of its
 connection, such as `gitlab-access-token`. It presents a bearer-kind credential
 as its [`upstream_token_auth`](#gateways) selects, and a basic-kind credential
 with its own username.
