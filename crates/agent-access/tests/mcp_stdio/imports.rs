@@ -552,7 +552,6 @@ async fn exercise_import(openapi: bool) {
                 "put",
                 "personal",
                 "imported",
-                "default",
                 "--profile",
                 "token",
                 "--field-file",

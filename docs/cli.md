@@ -500,23 +500,43 @@ submit only the content they intend to write.
 
 ### `credentials` (self-service)
 
-Operates on the calling principal's own managed credentials. All `credentials`
-subcommands reject `--token-value` (see "Commands that reject literal or
-alternate token sources").
+Operates on the calling principal's own tokens for its credential connections:
+the per-principal credential slots that one or more services consume, such as
+one `gitlab` connection for GitLab REST and the GitLab Git gateway (see
+[credential connections](configuration.md#credential-connections)). All
+`credentials` subcommands reject `--token-value` (see "Commands that reject
+literal or alternate token sources").
 
-- `credentials list` — `GET /v1/credentials`.
-- `credentials inspect <service> <name>` — `GET /v1/credentials/{service}/{name}`.
-- `credentials put <service> <name> [field flags] [--verify] [--verify-repository <REPO>]`
+- `credentials list` — `GET /v1/credentials`: your connections, each with its
+  method (`token`, `oauth` or `unavailable`), the services using it that you are
+  entitled to, and any stored token, plus the retained stored credentials the
+  configuration no longer selects.
+- `credentials targets` — `GET /v1/credentials/targets`: the connections whose
+  token you can store now, with their input form.
+- `credentials inspect <connection>` — `GET /v1/credentials/connections/{connection}`.
+- `credentials put <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>]`
   — fetches the broker-owned input schema first
-  (`GET /v1/credentials/{service}/{name}/input-schema`, with `?profile=...` when
-  `--profile` is set), builds the secret body from the field sources, then
-  `PUT /v1/credentials/{service}/{name}`. With `--verify`, it follows up with
-  `POST /v1/credentials/{service}/{name}/verify`. Git gateway verification
-  requires `--verify-repository <namespace/repository>`.
-- `credentials delete <service> <name>` — `DELETE /v1/credentials/{service}/{name}`.
-- `credentials verify <service> <name> [--repository <REPO>]` —
-  `POST /v1/credentials/{service}/{name}/verify`. Use
-  `--repository <namespace/repository>` for Git gateway credentials.
+  (`GET /v1/credentials/connections/{connection}/input-schema`, with
+  `?profile=...` when `--profile` is set), builds the secret body from the field
+  sources, then `PUT /v1/credentials/connections/{connection}`. `--profile`
+  only asserts the connection's token profile; the broker rejects any other.
+  With `--verify`, it follows up with
+  `POST /v1/credentials/connections/{connection}/verify`.
+- `credentials delete <connection>` — `DELETE /v1/credentials/connections/{connection}`.
+- `credentials verify <connection> [--service <SERVICE>] [--repository <REPO>]` —
+  `POST /v1/credentials/connections/{connection}/verify`, probing as you through
+  a service using the connection that you hold a `per_user` grant on. Without
+  `--service`, the broker picks the first such service with an identity probe,
+  or checks the token locally. `--repository <namespace/repository>` selects a
+  Git gateway service, for example
+  `credentials verify gitlab --service gitlab_git --repository team/project`.
+- `credentials delete-retained <credential-id>` —
+  `DELETE /v1/credentials/retained/{credentialId}`, for a retained row that
+  `credentials list` shows. A connection's active token is deleted with
+  `credentials delete <connection>` instead.
+
+OAuth connections are connected and disconnected only in the portal, with a
+signed-in browser session; `credentials list` shows their method as `oauth`.
 
 There is no `agent-access git ...` command. Git fetch and push use the
 normal `git` executable against the broker gateway listener; the CLI only manages
@@ -739,6 +759,8 @@ the same effective group.
   agent-access admin audit events list --cursor <nextCursor>
   ```
 - `admin rights list | grant <principal> --right <RIGHT> [--service ...] [--credential-name ...] [--expires-at ...] [--reason ...] | revoke <right_id>`.
+  A credential right names a credential connection: `--service` is the
+  connection ID and `--credential-name` is `default`.
 - `admin tokens list | issue <principal> --name <NAME> [--token-class <CLASS>] [--execution-context <CONTEXT> ...] [--service <SVC> ...] [--action <SERVICE=ACTION> ...] [--resource-id <SERVICE=ID> ...] [--resource-group-id <SERVICE=ID> ...] [--restrict-resources <SERVICE> ...] [--service-restrictions-file <PATH>] [--ttl ... | --expires-at ... | --never] | pause <token_id> | resume <token_id> | revoke <token_id>`.
   Unlike self-service `tokens issue`, `admin tokens issue` accepts `--token-class`
   (default `agent_invoke`). The broker validates expiry input on the shared
@@ -763,10 +785,16 @@ the same effective group.
   token-boundary JSON file flag.
   Pause and resume likewise accept only `agent_invoke`; authentication,
   management, and browser-session backing tokens cannot be paused.
-- `admin credentials list | inspect <principal> <service> <name> | put <principal> <service> <name> [field flags] [--verify] [--verify-repository <REPO>] | delete <principal> <service> <name> | verify <principal> <service> <name> [--repository <REPO>] | rewrap --from-key <ID> --to-key <ID>`.
+- `admin credentials list [--principal <PRINCIPAL>] | targets <principal> | inspect <principal> <connection> | put <principal> <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>] | delete <principal> <connection> | verify <principal> <connection> [--service <SERVICE>] [--repository <REPO>] | inspect-by-id <credential-id> | delete-by-id <credential-id> | rewrap --from-key <ID> --to-key <ID>`.
   `admin credentials put` mirrors the self-service `credentials put` field-source
   set and `--verify` follow-up, with a leading `<principal>` positional, and uses
-  the `/v1/admin/principals/{principal}/credentials/...` routes.
+  the `/v1/admin/principals/{principal}/credentials/connections/{connection}`
+  routes. These apply only when the connection selects a token for the
+  principal, such as a service account's administrator-provisioned token.
+  Verification probes as the principal, so an administrator needs no invocation
+  grants of its own. `list` returns every stored row, active and retained, with
+  its stored `service` and `name`; `inspect-by-id` and `delete-by-id` use
+  `/v1/admin/credentials/{credential_id}` for cleanup of any row.
 - `admin policy status | catalog | grants list [--subject ...] [--service ...] [--execution-context ...] [--status ...] | grants inspect <grant_ref> | grants create [--grant-id <ID>] --subject <SUBJECT> [--subject <SUBJECT> ...] --service <SERVICE> --action <ACTION> ... --execution-context <CONTEXT> [--execution-context <CONTEXT> ...] --credential-mode <MODE> [--resource-id <ID> ...] [--resource-group-id <ID> ...] [--resources-json <JSON> | --resources-file <PATH>] | grants update <grant_ref> --expected-version <N> [field flags] | grants validate [--grant-id <ID>] [--expected-version <N>] [field flags] | grants subjects add <grant_ref> --subject <SUBJECT> --expected-version <N> | grants subjects remove <grant_ref> --subject <SUBJECT> --expected-version <N> [--last-subject-behavior reject|disable_grant] | grants enable|disable|delete <grant_ref> --expected-version <N> | grants export`.
   Policy grant create requires one or more repeatable `--subject` flags. Update
   and validate accept repeated `--subject` flags as a full replacement list when
@@ -936,7 +964,7 @@ Field sources:
   is allowed across the whole command).
 - Convenience aliases: `--username`, `--username-env`, and
   `--username-file`, plus `--profile`, `--display-name`, `--expires-at`,
-  `--verify`, and `--verify-repository`.
+  `--verify`, `--verify-service`, and `--verify-repository`.
 
 Rules:
 
@@ -1692,29 +1720,29 @@ agent-access --url http://127.0.0.1:8787 --token-env ADMIN_TOKEN \
   admin principals create nightly-reporter --kind service_account \
   --display-name "Nightly Reporter"
 
-# Store a Jira managed credential for yourself (user_manage token)
+# Store your token for the Jira credential connection (user_manage token)
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
-  credentials put jira default --profile jira-cloud-api-token \
+  credentials put jira \
   --username-env JIRA_ALICE_USERNAME \
   --field-env token=JIRA_ALICE_API_TOKEN \
   --verify
 
-# Store a GitLab REST managed credential for yourself
+# Store one GitLab token for the gitlab connection that GitLab REST and the
+# GitLab Git gateway share, and verify it through GitLab REST
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
-  credentials put gitlab default --profile gitlab-access-token \
-  --field-env token=GITLAB_TOKEN \
-  --verify
+  credentials put gitlab --field-env token=GITLAB_TOKEN --verify
 
-# Store and verify a Git gateway credential against one repository. GitLab Git
-# HTTP accepts only Basic credentials: GITLAB_GIT_USERNAME may be any non-empty
-# name, such as oauth2, for an access token. A gateway that sets
-# upstream_token_auth = { scheme = "basic", ... } takes a token-only
-# git-bearer-token credential instead.
+# Verify the same token through the Git gateway against one repository. The
+# gateway presents it as its upstream_token_auth selects; GitLab Git HTTP needs
+# { scheme = "basic", username = "oauth2" }.
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
-  credentials put gitlab_git default --profile git-basic-api-token \
-  --username-env GITLAB_GIT_USERNAME \
-  --field-env token=GITLAB_TOKEN \
-  --verify --verify-repository team/project
+  credentials verify gitlab --service gitlab_git --repository team/project
+
+# Provision a service account's token (admin token required)
+agent-access --url http://127.0.0.1:8787 --token-env ADMIN_TOKEN \
+  admin credentials put nightly-reporter jira \
+  --username-env JIRA_REPORTER_USERNAME \
+  --field-env token=JIRA_REPORTER_API_TOKEN --verify
 
 # Use normal Git against the gateway listener. Configure the native helper as
 # described below so Git obtains the agent_invoke broker token from this CLI.

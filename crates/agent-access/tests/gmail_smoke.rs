@@ -196,7 +196,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["service"] == "gmail")
+        .find(|row| row["registration"] == "google")
         .unwrap()["connection"];
     assert_eq!(connection["registration"], "google", "{connections}");
     assert_eq!(

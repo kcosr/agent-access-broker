@@ -720,7 +720,6 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "put",
             "avery",
             "ticketing",
-            "default",
             "--profile",
             "username-token",
             "--username",
@@ -732,14 +731,7 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
     assert_no_secret(&saved.to_string(), "the saved credential");
     let verified = run(
         &admin,
-        &[
-            "admin",
-            "credentials",
-            "verify",
-            "avery",
-            "ticketing",
-            "default",
-        ],
+        &["admin", "credentials", "verify", "avery", "ticketing"],
     );
     assert_eq!(
         verified["result"]["verificationStatus"], "upstream_verified",
@@ -1071,14 +1063,7 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
     // discovery and the MCP listing.
     run(
         &admin,
-        &[
-            "admin",
-            "credentials",
-            "delete",
-            "avery",
-            "ticketing",
-            "default",
-        ],
+        &["admin", "credentials", "delete", "avery", "ticketing"],
     );
     let alone = invoke(&agent, "issue.search", json!({"query": ""}));
     assert_eq!(
