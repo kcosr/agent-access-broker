@@ -1087,12 +1087,25 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
         .map(|record| {
             (
                 record["principal"].as_str().unwrap().to_owned(),
-                record.get("credentialMode").cloned().unwrap_or(Value::Null),
+                (
+                    record.get("credentialMode").cloned().unwrap_or(Value::Null),
+                    record
+                        .get("credentialConnection")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                ),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(modes["alice"], Value::Null, "{modes:?}");
-    assert_eq!(modes["charlie"], json!("service"), "{modes:?}");
+    // Alice's call passed her personal credential beside the service one:
+    // its mode is null, but it names the import's credential connection.
+    assert_eq!(modes["alice"], (Value::Null, json!("tickets")), "{modes:?}");
+    // Charlie's passed only the service grant, so no connection is named.
+    assert_eq!(
+        modes["charlie"],
+        (json!("service"), Value::Null),
+        "{modes:?}"
+    );
 }
 
 /// Creates `tickets` with `modes`, discovers and accepts it, stores a

@@ -1714,6 +1714,7 @@ async fn append_auth_audit(
         resource_scopes: ResourceScopes::new(),
         matched_grant: None,
         credential_mode: Some(None),
+        credential_connection: None,
         decision: envelope.decision.clone(),
         reason_code: envelope.reason_code.map(Into::into),
         upstream_status: None,

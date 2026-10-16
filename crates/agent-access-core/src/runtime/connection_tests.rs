@@ -222,3 +222,56 @@ async fn readiness_checks_connection_configuration_without_principals() {
     assert_eq!(runtime.connection_token_profile("jira"), None);
     assert_eq!(runtime.personal_credential_key("fake"), None);
 }
+
+#[tokio::test]
+async fn audit_names_the_connection_only_when_a_personal_credential_is_used() {
+    let audit_path = temp_path("connection-audit.jsonl");
+    let (mut config, _store) = connection_config("tracker");
+    config.audit = Some(jsonl_audit_config(audit_path.display().to_string()));
+    configure_lookup_trace_service(&mut config, "synthetic-service-token");
+    configure_lookup_trace_lookup(&mut config, "synthetic-lookup-token");
+    let runtime = BrokerRuntime::with_providers(
+        config.clone(),
+        vec![Arc::new(LookupTraceProvider::default())],
+    )
+    .unwrap();
+    store_token(&runtime, "tracker", "connection-token");
+    let response = invoke_as(&runtime, identity(Some(crate::PrincipalKind::User))).await;
+    assert_eq!(response.status, 200, "{:?}", response.envelope);
+    // A principal without a kind fails resolving the personal lookup
+    // before policy selects a mode, so nothing names a connection.
+    let denied = invoke_as(&runtime, identity(None)).await;
+    assert_eq!(denied.status, 403);
+
+    let service_audit_path = temp_path("connection-service-audit.jsonl");
+    config.audit = Some(jsonl_audit_config(service_audit_path.display().to_string()));
+    config.policy.grants = vec![lookup_trace_grant("service", None, &["project-PROJ"])];
+    let service =
+        BrokerRuntime::with_providers(config, vec![Arc::new(LookupTraceProvider::default())])
+            .unwrap();
+    let response = invoke_as(&service, identity(Some(crate::PrincipalKind::User))).await;
+    assert_eq!(response.status, 200, "{:?}", response.envelope);
+
+    let personal = audit_records(&audit_path)
+        .into_iter()
+        .filter(|record| record["service"] == "jira")
+        .collect::<Vec<_>>();
+    assert_eq!(personal.len(), 2, "{personal:?}");
+    assert_eq!(personal[0]["decision"], "allow");
+    assert_eq!(personal[0]["credentialMode"], "per_user");
+    assert_eq!(personal[0]["credentialConnection"], "tracker");
+    assert_eq!(personal[1]["decision"], "deny");
+    assert!(personal[1].get("credentialMode").is_none());
+    assert!(personal[1].get("credentialConnection").is_none());
+    let shared = audit_records(&service_audit_path)
+        .into_iter()
+        .filter(|record| record["service"] == "jira")
+        .collect::<Vec<_>>();
+    assert_eq!(shared.len(), 1, "{shared:?}");
+    assert_eq!(shared[0]["credentialMode"], "service");
+    assert!(
+        shared[0].get("credentialConnection").is_none(),
+        "{}",
+        shared[0]
+    );
+}

@@ -4154,6 +4154,11 @@ impl BrokerRuntime {
             resource_scopes: context.resource_scopes.clone(),
             matched_grant: context.matched_grant.clone(),
             credential_mode: context.credential_mode.clone().map(Some),
+            credential_connection: self.audit_credential_connection(
+                &context.service,
+                context.credential_mode.as_deref(),
+                None,
+            ),
             decision: Decision::Allow,
             reason_code: None,
             upstream_status: None,
@@ -6439,6 +6444,11 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
+        let credential_connection = self.audit_credential_connection(
+            &service,
+            credential_mode.as_deref(),
+            command.as_ref(),
+        );
         let mut audit_record = AuditRecord {
             search_authorization,
             timestamp: Utc::now().to_rfc3339(),
@@ -6454,6 +6464,7 @@ impl BrokerRuntime {
             resource_scopes,
             matched_grant,
             credential_mode: credential_mode.map(Some),
+            credential_connection,
             decision: envelope.decision.clone(),
             reason_code: envelope.reason_code.clone(),
             upstream_status,
@@ -8567,6 +8578,11 @@ pub struct AuditRecord {
     pub matched_grant: Option<MatchedGrantAudit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_mode: Option<Option<String>>,
+    /// The credential connection the call's personal credential comes from:
+    /// present whenever the selected mode is `per_user`, or a command call
+    /// passes a `per_user` grant, even when `credentialMode` is null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_connection: Option<String>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<ReasonCodeId>,

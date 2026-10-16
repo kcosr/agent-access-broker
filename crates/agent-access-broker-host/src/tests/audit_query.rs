@@ -250,6 +250,7 @@ fn synthetic(id: &str, seconds: i64, principal: &str, service: &str, action: &st
         resource_scopes: ResourceScopes::new(),
         matched_grant: None,
         credential_mode: None,
+        credential_connection: None,
         decision: Decision::Allow,
         reason_code: None,
         upstream_status: None,

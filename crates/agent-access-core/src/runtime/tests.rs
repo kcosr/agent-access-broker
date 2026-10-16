@@ -1423,6 +1423,7 @@ pub(super) fn test_audit_record() -> AuditRecord {
         resource_scopes: BTreeMap::new(),
         matched_grant: None,
         credential_mode: None,
+        credential_connection: None,
         decision: Decision::Allow,
         reason_code: None,
         upstream_status: None,

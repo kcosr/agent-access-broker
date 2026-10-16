@@ -53,6 +53,30 @@ impl BrokerRuntime {
             .map(|connection| connection.id)
     }
 
+    /// The credential connection a call's audit record names: the one
+    /// `service` consumes, when the call's selected mode is `per_user` or a
+    /// command call passes a `per_user` grant (its `credentialMode` is then
+    /// null when it also passes service grants). `None` when only service
+    /// credentials are used.
+    pub(super) fn audit_credential_connection(
+        &self,
+        service: &str,
+        credential_mode: Option<&str>,
+        command: Option<&super::command_dispatch::AdmittedCommand>,
+    ) -> Option<String> {
+        let personal = credential_mode == Some("per_user")
+            || command.is_some_and(|command| {
+                command
+                    .authorization()
+                    .credential_modes()
+                    .contains("per_user")
+            });
+        personal
+            .then(|| self.personal_credential_key(service))
+            .flatten()
+            .map(str::to_owned)
+    }
+
     /// The caller's token for `service`'s connection, which execution,
     /// both lookup phases and the gateway use. An OAuth selection cannot
     /// supply a static credential, and an unavailable selection never falls

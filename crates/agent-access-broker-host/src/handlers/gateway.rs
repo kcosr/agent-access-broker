@@ -6016,6 +6016,16 @@ mod tests {
             "authorization: Basic b2F1dGgyOnBlcnNvbmFsLXRva2Vu"
         );
         drain_gateway_test_audit(&runtime).await;
+        // Gateway records name the connection the personal token came from.
+        let records = audit_records(&audit_path)
+            .into_iter()
+            .filter(|record| record["service"] == "gitlab_git")
+            .collect::<Vec<_>>();
+        assert!(!records.is_empty());
+        for record in records {
+            assert_eq!(record["credentialMode"], "per_user", "{record}");
+            assert_eq!(record["credentialConnection"], "gitlab", "{record}");
+        }
     }
 
     async fn read_http_request_headers(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
