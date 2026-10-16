@@ -55,9 +55,12 @@ test.afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
 
-/** A user with self-service; records every broker request as `METHOD path` with its body. */
-async function fixture(page: Page) {
-  const session = { authenticated: true, principal: "viewer", role: "user", selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
+/**
+ * A user with self-service, or an administrator managing the service account
+ * `bot`; records every broker write as `METHOD path` with its body.
+ */
+async function fixture(page: Page, role: "user" | "admin" = "user", start = "/ui/credentials") {
+  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const writes: Array<{ request: string; body: unknown }> = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -76,18 +79,30 @@ async function fixture(page: Page) {
     else if (pathname === "/v1/credentials/connections/gitlab/verify") result = { ...token, probeService: "gitlab_git" };
     else if (pathname === `/v1/credentials/retained/${retained.credentialId}`) result = retained;
     else if (pathname === "/v1/oauth/connections/google") result = { disconnected: true, remoteRevocation: "not_requested" };
+    else if (pathname === "/v1/admin/config/status") result = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
+    else if (pathname === "/v1/admin/principals/bot") result = bot;
+    else if (pathname === "/v1/admin/principals/bot/credentials") result = botCredentials;
+    else if (pathname === "/v1/admin/principals/bot/credentials/connections/jira") result = botToken;
     await route.fulfill({ json: envelope(result) });
   });
-  await page.goto(`${baseUrl}/ui/credentials`);
-  await expect(page.getByRole("main", { name: "Credentials" })).toBeVisible();
+  await page.goto(`${baseUrl}${start}`);
   return { writes, errors };
 }
+
+// A service account that lost every grant on the jira connection still owns its active token.
+const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
+const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "jira-cloud-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
+const botCredentials = {
+  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "jira-cloud-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
+  retained: []
+};
 
 const list = (page: Page) => page.getByRole("table", { name: "Credentials", exact: true });
 const row = (page: Page, name: string) => list(page).getByRole("row").filter({ has: page.getByRole("link", { name, exact: true }) });
 
 test("one row per connection names the services it serves and verifies through a Git service", async ({ page }, testInfo) => {
   const { writes, errors } = await fixture(page);
+  await expect(page.getByRole("main", { name: "Credentials" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("credentials-list.png"), fullPage: true });
   const gitlab = row(page, "GitLab");
   await expect(gitlab).toContainText("GitLab REST, GitLab Git and 1 other service");
@@ -134,4 +149,23 @@ test("a retained stored credential is deleted by its ID", async ({ page }) => {
   const confirm = page.getByRole("alertdialog", { name: "Delete stored credential?", exact: true });
   await confirm.getByRole("button", { name: "Delete credential", exact: true }).click();
   await expect.poll(() => writes.map((write) => write.request)).toContain(`DELETE /v1/credentials/retained/${retained.credentialId}`);
+});
+
+test("an administrator sees a principal's active token after it lost every grant and can delete it", async ({ page }) => {
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/bot/credentials");
+  const jira = row(page, "Jira");
+  await expect(jira).toContainText("Not verified");
+  await expect(jira).toContainText("No current grants");
+  await expect(jira).toContainText("jira-cloud-api-token");
+  await jira.getByRole("link", { name: "Jira", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Jira credential", exact: true });
+  await expect(drawer.getByText("No service this account is granted uses this connection now.")).toBeVisible();
+  await expect(drawer.getByText("Also used by 1 other service this account is not granted.")).toBeVisible();
+  // Verification needs a grant on a consuming service; no token form without a target.
+  await expect(drawer.getByRole("button", { name: "Verify", exact: true })).toHaveCount(0);
+  await expect(drawer.getByRole("button", { name: /credential$/ })).toHaveCount(0);
+  await drawer.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Delete credential?", exact: true }).getByRole("button", { name: "Delete credential", exact: true }).click();
+  await expect.poll(() => writes.map((write) => write.request)).toContain("DELETE /v1/admin/principals/bot/credentials/connections/jira");
+  expect(errors).toEqual([]);
 });

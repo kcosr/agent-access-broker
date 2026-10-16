@@ -1,44 +1,10 @@
 // Credential connections as the portal presents them: a principal's
 // connections (one credential slot several services consume), its stored rows
 // the configuration no longer selects, and the wording that names consumers.
-import type { ConnectionConsumer, ConnectionCredential, CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget } from "../types";
+import type { ConnectionConsumer, CredentialConnection, CredentialList } from "../types";
 import { plural } from "../workbench";
 
-/** The stored name of every connection's token row. */
-export const CONNECTION_CREDENTIAL_NAME = "default";
-
 export const EMPTY_CREDENTIAL_LIST: CredentialList = { connections: [], retained: [] };
-
-/** A stored row as its connection's active token. */
-export function connectionCredential(row: CredentialMetadata): ConnectionCredential {
-  const { service, name: _name, ...rest } = row;
-  return { ...rest, connection: service };
-}
-
-/**
- * An administered principal's list, from its targets and its stored rows. A
- * target's active token is its `(connection, default)` row with the target's
- * profile; every other stored row is retained, deletable only by its ID.
- */
-export function administeredCredentialList(targets: CredentialTarget[], stored: CredentialMetadata[]): CredentialList {
-  const active = new Set<string>();
-  const connections = targets.map<CredentialConnection>((target) => {
-    const row = stored.find((item) => item.service === target.connection && item.name === CONNECTION_CREDENTIAL_NAME && item.profile === target.profile);
-    if (row) active.add(row.credentialId);
-    return {
-      connection: target.connection,
-      displayName: target.displayName,
-      method: "token",
-      consumers: target.consumers,
-      otherConsumers: target.otherConsumers,
-      profile: target.profile,
-      credentialKind: target.credentialKind,
-      registration: null,
-      credential: row ? connectionCredential(row) : null
-    };
-  });
-  return { connections, retained: stored.filter((row) => !active.has(row.credentialId)) };
-}
 
 /** The Credentials list key of an OAuth registration's row; a connection's row key is its ID. */
 export const oauthRowKey = (registration: string) => `oauth:${registration}`;

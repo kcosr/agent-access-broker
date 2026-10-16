@@ -238,7 +238,12 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         priority: 2,
         truncate: true,
         minWidth: "14ch",
-        cell: (row) => (row.kind === "retained" ? <span className="wb-muted">Not used</span> : rowConsumers(row) || <span className="wb-muted">No current grants</span>)
+        cell: (row) => {
+          if (row.kind === "retained") return <span className="wb-muted">Not used</span>;
+          // Without an entitled service, the drawer counts the others.
+          const entitled = row.kind === "oauth" ? row.oauth.consumers : row.connection.consumers;
+          return entitled.length ? rowConsumers(row) : <span className="wb-muted">No current grants</span>;
+        }
       },
       {
         key: "method",
@@ -485,7 +490,8 @@ function DrawerActions({ model, row }: { model: CredentialListModel; row: Creden
   );
 }
 
-function UsedBy({ consumers, otherConsumers }: Pick<CredentialConnection, "consumers" | "otherConsumers">) {
+function UsedBy({ consumers, otherConsumers, administered }: Pick<CredentialConnection, "consumers" | "otherConsumers"> & { administered: boolean }) {
+  const holder = administered ? "this account is" : "you are";
   return (
     <DrawerSection title="Used by">
       {consumers.length ? (
@@ -497,9 +503,9 @@ function UsedBy({ consumers, otherConsumers }: Pick<CredentialConnection, "consu
           ))}
         </ul>
       ) : (
-        <p className="wb-small wb-muted">No service you are granted uses this connection now.</p>
+        <p className="wb-small wb-muted">No service {holder} granted uses this connection now.</p>
       )}
-      {otherConsumers ? <p className="wb-small wb-muted">Also used by {otherConsumers} other {otherConsumers === 1 ? "service" : "services"} you are not granted.</p> : null}
+      {otherConsumers ? <p className="wb-small wb-muted">Also used by {otherConsumers} other {otherConsumers === 1 ? "service" : "services"} {holder} not granted.</p> : null}
     </DrawerSection>
   );
 }
@@ -515,7 +521,7 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
         <DrawerSection title="Account">
           <OAuthConnectionDetails target={target} pending={connections.pending === target.registration} />
         </DrawerSection>
-        <UsedBy consumers={target.consumers} otherConsumers={target.otherConsumers} />
+        <UsedBy consumers={target.consumers} otherConsumers={target.otherConsumers} administered={subject.administered} />
         <DrawerSection title="How this works">
           <p className="wb-small wb-fg-2">
             Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them; consent at the provider is not removed.
@@ -530,9 +536,8 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
       <>
         <DrawerSection title="Not used">
           <p className="wb-small wb-fg-2">
-            No service reads this stored credential for this account. Either the configuration no longer selects it (its service now uses another connection, its
-            name or profile is retired, or its connection uses OAuth for this account), or the account has no grant on a service that uses it. Delete it when it is
-            no longer needed.
+            The configuration no longer selects this stored credential: its service now uses another connection, its name or profile is retired, or its connection
+            uses OAuth for this account. No service reads it. Delete it when it is no longer needed.
           </p>
         </DrawerSection>
         <DrawerSection title="Stored credential">
@@ -555,7 +560,7 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
         <DrawerSection title="Unavailable">
           <p className="wb-small wb-fg-2">This connection offers no personal credential for this kind of account, so its services cannot run with personal credentials for it.</p>
         </DrawerSection>
-        <UsedBy consumers={row.connection.consumers} otherConsumers={row.connection.otherConsumers} />
+        <UsedBy consumers={row.connection.consumers} otherConsumers={row.connection.otherConsumers} administered={subject.administered} />
       </>
     );
   }
@@ -578,7 +583,7 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
           />
         </DrawerSection>
       ) : null}
-      <UsedBy consumers={connection.consumers} otherConsumers={connection.otherConsumers} />
+      <UsedBy consumers={connection.consumers} otherConsumers={connection.otherConsumers} administered={subject.administered} />
       {writable && credential ? <RepositoryVerification connection={connection} onVerify={(service, repository) => actions.verify(connection.connection, { service, repository })} /> : null}
       {writable && row.target ? (
         <DrawerSection title={credential ? "Replace secret" : "Save a credential"}>

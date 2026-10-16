@@ -8,7 +8,6 @@ import type {
   BrokerTokenRecord,
   ConfigStatusResult,
   CredentialList,
-  CredentialMetadata,
   CredentialTarget,
   ExternalGroupBinding,
   GroupDetail,
@@ -33,7 +32,7 @@ import type {
 } from "../types";
 import type { ImportListResult, ImportPreviewResult } from "../import-types";
 import { portalQueryKeys, viewerKey } from "../lib/portal-queries";
-import { administeredCredentialList, EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
+import { EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
 import { indexResourceTypes, NO_RESOURCE_TYPES, type ResourceTypes } from "../lib/resource-types";
 import { canViewAdmin, canUseSelfService, hasPolicyScope } from "../lib/capabilities";
 import { useSession } from "../app/session";
@@ -50,7 +49,6 @@ export type ConsoleData = {
 type AdminUserData = {
   methods: LoginMethodRecord[];
   userTokens: AdminBrokerTokenRecord[];
-  userCredentials: CredentialMetadata[];
 };
 
 /** Session facts every query gate uses. */
@@ -113,9 +111,9 @@ export function useConsoleData(subject: AccountSubject, enabled = true) {
       runQuery((current) =>
         Promise.all([
           brokerApi.adminPrincipalCredentialTargets(current, principalId),
-          brokerApi.adminCredentials(current, principalId),
+          brokerApi.adminPrincipalCredentials(current, principalId),
           brokerApi.adminPrincipalAgentTokens(current, principalId, true, true)
-        ]).then(([targets, stored, tokens]) => ({ targets, credentials: administeredCredentialList(targets, stored), tokens }))
+        ]).then(([targets, credentials, tokens]) => ({ targets, credentials, tokens }))
       )
   });
   const query = subject.administered ? managed : self;
@@ -277,7 +275,7 @@ export function useAdminLoginMethods(principalId: string) {
   });
 }
 
-/** Login methods, management tokens, and credentials shown on the admin user page. */
+/** Login methods and management tokens shown on the admin user page. */
 export function useAdminUserDetail(principalId: string) {
   const { viewer, admin, runQuery } = useQueryAccess();
   return useQuery<AdminUserData>({
@@ -287,9 +285,8 @@ export function useAdminUserDetail(principalId: string) {
       runQuery((current) =>
         Promise.all([
           brokerApi.adminLoginMethods(current, principalId),
-          brokerApi.adminTokens(current, principalId),
-          brokerApi.adminCredentials(current, principalId)
-        ]).then(([methods, userTokens, userCredentials]) => ({ methods, userTokens, userCredentials }))
+          brokerApi.adminTokens(current, principalId)
+        ]).then(([methods, userTokens]) => ({ methods, userTokens }))
       )
   });
 }

@@ -7,7 +7,7 @@ import { accessRows, filterAccessRows, ACCESS_STATE } from "../src/features/acce
 import { credentialVerificationNeedsRepository } from "../src/mutations/credentials";
 import { indexResourceTypes } from "../src/lib/resource-types";
 import type { AgentTokenOptions, ConnectionConsumer, CredentialConnection } from "../src/types";
-import { administeredCredentialList, connectionForService, consumerSummary } from "../src/lib/credentials";
+import { connectionForService, consumerSummary } from "../src/lib/credentials";
 import { readUrlState, writeUrlState } from "../src/lib/url-state";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
@@ -136,18 +136,5 @@ describe("My access metadata", () => {
     expect(consumerSummary(gitlab.consumers, gitlab.otherConsumers)).toBe("GitLab REST, GitLab Git and 1 other service");
     expect(consumerSummary([consumer("jira", "Jira", [])], 0)).toBe("Jira");
     expect(consumerSummary([], 2)).toBe("2 other services");
-  });
-
-  it("splits an administered principal's stored rows into active tokens and retained rows", () => {
-    const stamp = { ownerPrincipal: "bot", ownerKind: "user", credentialKind: "bearer_token", metadata: {}, status: "active", createdAt: "", updatedAt: "", createdBy: "", updatedBy: "" };
-    const target = { connection: "gitlab", displayName: "GitLab", consumers: [consumer("gitlab", "GitLab REST", [])], otherConsumers: 0, profile: "gitlab-access-token", credentialKind: "bearer_token", inputSchema: { connection: "gitlab", profile: "gitlab-access-token", credentialKind: "bearer_token", fields: [] } };
-    const active = { ...stamp, credentialId: "active", service: "gitlab", name: "default", profile: "gitlab-access-token" };
-    const gitOnly = { ...stamp, credentialId: "git-only", service: "gitlab_git", name: "default", profile: "git-bearer-token" };
-    const otherName = { ...stamp, credentialId: "other-name", service: "gitlab", name: "work", profile: "gitlab-access-token" };
-    const list = administeredCredentialList([target], [active, gitOnly, otherName]);
-    expect(list.connections).toHaveLength(1);
-    expect(list.connections[0]!.credential).toMatchObject({ credentialId: "active", connection: "gitlab" });
-    expect(list.connections[0]!.credential).not.toHaveProperty("service");
-    expect(list.retained.map((row) => row.credentialId)).toEqual(["git-only", "other-name"]);
   });
 });

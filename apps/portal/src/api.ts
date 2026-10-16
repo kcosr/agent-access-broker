@@ -626,10 +626,9 @@ export const brokerApi = {
       { method: "POST" },
       session
     ),
-  adminCredentials: (session: Session, principalId?: string) => {
-    const query = principalId ? `?principal=${enc(principalId)}` : "";
-    return managementRequest<CredentialMetadata[]>(`/v1/admin/credentials${query}`, {}, session);
-  },
+  /** A principal's credential list, in the shape of its own `GET /v1/credentials`. */
+  adminPrincipalCredentials: (session: Session, principalId: string) =>
+    managementRequest<CredentialList>(`/v1/admin/principals/${enc(principalId)}/credentials`, {}, session),
   adminDeleteCredential: (session: Session, credentialId: string) =>
     managementRequest<CredentialMetadata>(`/v1/admin/credentials/${enc(credentialId)}`, { method: "DELETE" }, session),
   adminPolicyStatus: (session: Session) =>
