@@ -6,9 +6,7 @@ with Jira access to the `DEMO` project. Ask your administrator for the broker UR
 your sign-in method, and the services and execution contexts you should use.
 
 The screenshots use synthetic accounts and credentials in the local managed
-demo. The credential verification success and failure screenshots illustrate
-browser-only simulated responses; they do not demonstrate a connection to a real
-upstream service. The demo's Jira configuration uses an example host and fake
+demo. The demo's Atlassian configuration uses an example host and fake
 credentials. Run the CLI invocation below only against a configured deployment
 with a real issue you are allowed to read.
 
@@ -118,21 +116,6 @@ if **Connect** or **Reconnect** is unavailable.
    choose that section's **Verify**.
 3. Read **Status**, **Last checked**, **Last verified**, and any **Last error**.
    The last successful verification time and the latest attempt time are separate.
-
-![Credential drawer with a successful verification status](../images/portal/guide-annotated/user-credential-test-success-light.png)
-
-*Browser-only simulated success, used to illustrate the status presentation.
-It is not evidence of a live Jira connection.*
-
-![Credential drawer with a failed verification status and error](../images/portal/guide-annotated/user-credential-test-failure-light.png)
-
-*Browser-only simulated failure, used to illustrate the sanitized error and
-verification timestamps.*
-
-![Git gateway verification requiring a repository](../images/portal/guide-annotated/user-credential-test-repository-light.png)
-
-*Verifying through a Git gateway requires a repository the credential should
-reach.*
 
 Expected result: the status reflects the latest supported verification outcome.
 An upstream verification establishes the tested credential's access at that time;
