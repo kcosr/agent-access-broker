@@ -989,8 +989,11 @@ async fn revocation_transport_failure_is_retryable_and_needs_the_secret() {
         Err(OAuthDialectError::Configuration)
     );
     assert!(instance.routes().await.is_empty());
-    let uri = instance.server.uri();
-    drop(instance.server);
+    // A loopback port nothing listens on.
+    let uri = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
     let config = registration(&uri, &uri);
     let http = OAuthHttp::build(
         "oauth.registrations.gitlab",
