@@ -4318,6 +4318,184 @@ async fn memory_stream_expected_size_mismatch_fails_before_bytes() {
     assert!(stream.next().await.is_none());
 }
 
+/// The host's own bound on a raw download, as the SDK's bounded downloads
+/// report it.
+const EXPECTED_LIMIT_MESSAGE: &str = "raw download exceeded the download limit";
+
+/// A runtime serving `provider` with `limits.max_download_bytes = limit` and
+/// JSONL audit at `audit_path`.
+fn download_limited_runtime(
+    provider: impl agent_access_provider::test_support::DescribedProvider + 'static,
+    limit: u64,
+    audit_path: &Path,
+) -> BrokerRuntime {
+    let mut config = base_fake_config();
+    config.audit = Some(jsonl_audit_config(audit_path.display().to_string()));
+    config.limits.max_download_bytes = limit;
+    BrokerRuntime::with_providers(config, vec![Arc::new(provider)]).unwrap()
+}
+
+/// The response's stream, which must be live.
+fn live_stream(response: &mut BrokerResponse<Value>) -> ProviderByteStream {
+    let ProviderResultStreamSource::Stream(stream) = response.stream.take().unwrap().source else {
+        panic!("expected stream source");
+    };
+    stream.lock().unwrap().take().unwrap()
+}
+
+/// The single terminal record of the downloads at `audit_path`, after the
+/// one started record.
+fn terminal_download_record(audit_path: &Path) -> Value {
+    let records = audit_records(audit_path);
+    let phases = stream_phase_counts(&records);
+    assert_eq!(phases.get("started"), Some(&1), "{records:?}");
+    assert_eq!(phases.values().sum::<usize>(), 2, "{records:?}");
+    records
+        .into_iter()
+        .find(|record| record["providerAudit"]["streamPhase"] != "started")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn required_stream_past_the_download_limit_fails_before_the_crossing_chunk() {
+    let audit_path = temp_path("stream-download-limit.audit.jsonl");
+    // "prefix" fits in 12 bytes; "-suffix" would bring the body to 13. The
+    // provider enforces no limit of its own.
+    let runtime = download_limited_runtime(CompletedStreamProvider, 12, &audit_path);
+
+    let mut response = invoke_test_stream(&runtime).await;
+
+    assert_eq!(response.status, 200);
+    let mut stream = live_stream(&mut response);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"prefix")
+    );
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.message, EXPECTED_LIMIT_MESSAGE);
+    // The download ends at the failure; nothing past the limit follows.
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    runtime
+        .shutdown_audit(Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let failed = terminal_download_record(&audit_path);
+    assert_eq!(failed["providerAudit"]["streamPhase"], "failed");
+    assert_eq!(failed["decision"], "error");
+    assert_eq!(failed["reasonCode"], "attachment_size_denied");
+    assert_eq!(
+        failed["providerAudit"]["streamMessage"],
+        EXPECTED_LIMIT_MESSAGE
+    );
+    // The record counts and digests only the delivered bytes.
+    assert_eq!(failed["providerAudit"]["streamBytes"], json!(6));
+    assert_eq!(
+        failed["providerAudit"]["streamSha256"],
+        "e7a2e8b216e5aec3facf743962d3997f2e7d70088ef257de472d6a258049832e"
+    );
+}
+
+#[tokio::test]
+async fn required_stream_exactly_at_the_download_limit_completes() {
+    let audit_path = temp_path("stream-download-at-limit.audit.jsonl");
+    let runtime = download_limited_runtime(CompletedStreamProvider, 13, &audit_path);
+
+    let mut response = invoke_test_stream(&runtime).await;
+
+    assert_eq!(response.status, 200);
+    let mut stream = live_stream(&mut response);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"prefix")
+    );
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"-suffix")
+    );
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    runtime
+        .shutdown_audit(Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let completed = terminal_download_record(&audit_path);
+    assert_eq!(completed["providerAudit"]["streamPhase"], "completed");
+    assert_eq!(completed["decision"], "allow");
+    assert_eq!(completed["providerAudit"]["streamBytes"], json!(13));
+}
+
+/// Returns the 13 bytes `prefix-suffix` from memory rather than a stream.
+struct InMemoryDownloadProvider;
+
+impl agent_access_provider::test_support::DescribedProvider for InMemoryDownloadProvider {
+    fn descriptor(&self) -> ServiceDescriptor {
+        agent_access_fake::fake_descriptor()
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for InMemoryDownloadProvider {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        agent_access_fake::FakeProvider
+            .echo_scopes(request.action(), request.inputs())
+            .map(ScopeResolution::resources)
+    }
+
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        Ok(ProviderResult::new(json!({
+            "provider": "fake",
+            "action": request.action(),
+        }))
+        .with_stream(ProviderResultStream::from_bytes(
+            "text/plain",
+            b"prefix-suffix".to_vec(),
+        ))
+        .with_audit(json!({
+            "provider": "fake",
+            "operation": "echo",
+        })))
+    }
+}
+
+#[tokio::test]
+async fn in_memory_body_past_the_download_limit_fails_before_any_bytes() {
+    let audit_path = temp_path("memory-download-limit.audit.jsonl");
+    let runtime = download_limited_runtime(InMemoryDownloadProvider, 12, &audit_path);
+
+    let mut response = invoke_test_stream(&runtime).await;
+
+    assert_eq!(response.status, 200);
+    let mut stream = live_stream(&mut response);
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(error.reason_code, ReasonCode::AttachmentSizeDenied);
+    assert_eq!(error.message, EXPECTED_LIMIT_MESSAGE);
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    runtime
+        .shutdown_audit(Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let failed = terminal_download_record(&audit_path);
+    assert_eq!(failed["providerAudit"]["streamPhase"], "failed");
+    assert_eq!(failed["reasonCode"], "attachment_size_denied");
+    assert_eq!(failed["providerAudit"]["streamBytes"], json!(0));
+
+    // A body exactly at the limit stays in memory, unchanged.
+    let at_limit_path = temp_path("memory-download-at-limit.audit.jsonl");
+    let runtime = download_limited_runtime(InMemoryDownloadProvider, 13, &at_limit_path);
+    let response = invoke_test_stream(&runtime).await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.stream.unwrap().memory_len(), Some(13));
+}
+
 #[tokio::test]
 async fn required_static_identity_selects_policy_and_credentials() {
     let token_path = write_temp_secret("agent-access-token");

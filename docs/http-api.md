@@ -2396,7 +2396,10 @@ reason code; the provider chooses no decision. The code is one of
 `attachment_size_denied`, `upstream_connection_failed`,
 `upstream_protocol_failed`, or `upstream_timeout`, or one of the provider's own
 domain reasons. The Broker keeps its committed response and records the
-failure in the stream's terminal audit record with `decision = error`.
+failure in the stream's terminal audit record with `decision = error`. The
+Broker fails a download that would pass `limits.max_download_bytes` the same
+way, with `attachment_size_denied`, whatever bound the provider applied: it
+delivers only the bytes within the limit.
 
 A delegated OAuth credential's own failures pass through providers unchanged.
 In particular, a refresh already in progress for the same connection reports
@@ -2845,6 +2848,13 @@ On success the broker:
 If the broker would otherwise produce a status >= 400, it falls back to the JSON
 envelope instead of a raw stream. A response that should carry a stream but has
 none returns `upstream_protocol_failed` (HTTP 502).
+
+A stream that fails after the 200 response started, including one stopped at
+`limits.max_download_bytes`, ends without completing its body: the transfer is
+aborted before the body's end. Treat such a body as a failed download, never as
+a complete file; the CLI and stdio MCP report it as failed and leave an existing
+destination unchanged. The failure's reason is in the stream's terminal audit
+record.
 
 ## Deliberately issued GitLab credentials
 

@@ -1747,6 +1747,14 @@ The other values above are the built-in defaults. All numeric limits must be
 non-zero and `upload_spool_dir` must be non-empty. `upload_spool_max_bytes`
 defaults to `max_http_body_bytes * 4`.
 
+`max_download_bytes` caps each raw download. Providers apply it, or a smaller
+provider setting, to their upstream reads, and the Broker itself stops any raw
+download that would pass it: the response delivers only the bytes within the
+limit and then fails with `attachment_size_denied` in the download's terminal
+audit record. The CLI and stdio MCP report the truncated download as failed and
+leave an existing destination unchanged. See
+[raw downloads](design.md#operational-limits).
+
 `upload_spool_dir` participates in runtime state-lock admission even when no
 current provider action is uploading at startup. The broker creates or validates
 the directory, canonicalizes it, and locks `.agent-access-broker.spool.lock`

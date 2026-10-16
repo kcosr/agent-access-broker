@@ -609,6 +609,69 @@ fn empty_json_object() -> Value {
     json!({})
 }
 
+/// The message of the host's own download-limit failure, worded like the
+/// SDK's bounded downloads.
+const DOWNLOAD_LIMIT_MESSAGE: &str = "raw download exceeded the download limit";
+
+/// Bounds a raw download by `limits.max_download_bytes`, whatever bound the
+/// provider applied itself. The chunk that would pass the limit is withheld:
+/// the stream fails there with `attachment_size_denied`, the reason the SDK's
+/// bounded downloads report for this limit, and ends. An in-memory body over
+/// the limit fails the same way before any byte.
+fn limited_download(stream: ProviderResultStream, max_bytes: u64) -> ProviderResultStream {
+    let memory_over_limit = matches!(
+        &stream.source,
+        ProviderResultStreamSource::Memory(bytes) if bytes.len() as u64 > max_bytes
+    );
+    if memory_over_limit {
+        return ProviderResultStream::from_stream(
+            stream.content_type,
+            futures_util::stream::iter([Err(download_limit_failure())]),
+        );
+    }
+    stream.map_byte_stream(|inner| {
+        Box::pin(DownloadLimitStream {
+            inner: Some(inner),
+            remaining: max_bytes,
+        })
+    })
+}
+
+fn download_limit_failure() -> ProviderStreamError {
+    ProviderStreamError::new(ReasonCode::AttachmentSizeDenied, DOWNLOAD_LIMIT_MESSAGE)
+}
+
+/// A provider's raw download stream, failing at the first chunk that would
+/// take it past the bytes `remaining`.
+struct DownloadLimitStream {
+    /// The provider's stream, dropped once the limit fails the download.
+    inner: Option<ProviderByteStream>,
+    remaining: u64,
+}
+
+impl Stream for DownloadLimitStream {
+    type Item = Result<Bytes, ProviderStreamError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let Some(inner) = this.inner.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let item = std::task::ready!(inner.as_mut().poll_next(cx));
+        if let Some(Ok(chunk)) = &item {
+            match this.remaining.checked_sub(chunk.len() as u64) {
+                Some(remaining) => this.remaining = remaining,
+                None => {
+                    // Read nothing more from the provider.
+                    this.inner = None;
+                    return Poll::Ready(Some(Err(download_limit_failure())));
+                }
+            }
+        }
+        Poll::Ready(item)
+    }
+}
+
 struct TerminalAuditStream {
     inner: ProviderByteStream,
     state: Arc<TerminalAuditState>,
@@ -6442,6 +6505,8 @@ impl BrokerRuntime {
             execution_context,
             provider_audit,
         };
+        let stream =
+            stream.map(|stream| limited_download(stream, self.config.limits.max_download_bytes));
         let mut terminal_permit = None;
         let stream_needs_terminal_audit = stream
             .as_ref()
