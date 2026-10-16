@@ -523,8 +523,8 @@ Validation rules:
   under [`upstream_token_auth`](#gateways).
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
-  Today these consumers are `gmail` and the development `oauth_stub` service;
-  see [oauth.md](oauth.md).
+  Today these consumers are `gmail`, GitLab REST (`gitlab`) and the
+  development `oauth_stub` service; see [oauth.md](oauth.md).
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or

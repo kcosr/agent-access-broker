@@ -247,7 +247,7 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     .unwrap();
     assert!(
         backend
-            .upload_project(42, upload_fixture().1, &test_credential())
+            .upload_project(42, upload_fixture().1, &backend_credential())
             .await
             .is_ok()
     );
@@ -260,7 +260,7 @@ async fn project_upload_uses_streaming_idle_budget_instead_of_json_request_timeo
     .unwrap();
     assert!(matches!(
         backend
-            .upload_project(42, upload_fixture().1, &test_credential())
+            .upload_project(42, upload_fixture().1, &backend_credential())
             .await
             .unwrap_err(),
         GitlabBackendError::NoResponse { timed_out: true }
@@ -306,15 +306,20 @@ async fn project_upload_progress_extends_request_beyond_idle_window_and_stalls_f
                 .unwrap();
         let url = backend.endpoint("projects/42/uploads").unwrap();
         let started = Instant::now();
-        let result = send_gitlab_upload(
-            &backend.upload_client,
-            &bearer_credential("upload-token"),
+        // A static token never repeats an upload, so its one attempt takes
+        // the paced request.
+        let mut prepared = Some((
             backend
                 .upload_client
                 .request(Method::POST, url.clone())
                 .multipart(reqwest::multipart::Form::new().part("file", part)),
-            "project.upload",
             progress,
+        ));
+        let result = send_gitlab_upload(
+            &backend.upload_client,
+            &GitlabCredential::from_static(bearer_credential("upload-token")),
+            || std::future::ready(Ok(prepared.take().expect("one upload attempt"))),
+            "project.upload",
             Duration::from_millis(idle_ms),
             backend.limits.max_upstream_response_bytes,
         )
@@ -511,7 +516,7 @@ async fn project_upload_rejects_reflected_errors_redirects_and_oversized_respons
             .mount(&server)
             .await;
         let error = http_backend(&server)
-            .upload_project(42, upload_fixture().1, &test_credential())
+            .upload_project(42, upload_fixture().1, &backend_credential())
             .await
             .unwrap_err();
         let public = gitlab_backend_error(error);
@@ -528,7 +533,7 @@ async fn project_upload_rejects_reflected_errors_redirects_and_oversized_respons
     backend.limits.max_upstream_response_bytes = 16;
     assert!(matches!(
         backend
-            .upload_project(42, upload_fixture().1, &test_credential())
+            .upload_project(42, upload_fixture().1, &backend_credential())
             .await
             .unwrap_err(),
         GitlabBackendError::ResponseTooLarge
@@ -720,6 +725,11 @@ fn webhook_update_carries_disabled_tls_only_to_new_https_destinations() {
 
 fn test_credential() -> ExecutionCredential {
     bearer_credential("gitlab-token")
+}
+
+/// [`test_credential`] as backend calls present it.
+fn backend_credential() -> GitlabCredential {
+    GitlabCredential::from_static(test_credential())
 }
 
 fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
@@ -1300,8 +1310,8 @@ fn delegated_access_for(
 /// Page tokens bind the credential method and, for OAuth, the connection
 /// binding: a token replayed under another account, connection generation,
 /// principal, method or GitLab instance is rejected, while a routine refresh
-/// and a restart with the stable key keep it. GitLab does not yet execute
-/// with delegated access, so the binding is checked directly.
+/// and a restart with the stable key keep it. The binding is checked
+/// directly here; `access::tests` searches through delegated execution.
 #[test]
 fn gitlab_page_tokens_bind_the_credential_method_and_oauth_connection() {
     let key = test_signing_key(6);
@@ -3356,7 +3366,7 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
 async fn http_backend_note_and_discussion_mutations_use_exact_routes_and_bodies() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
 
     Mock::given(method("GET"))
         .and(path("/api/v4/projects/42/issues/7/notes/701"))
@@ -3610,7 +3620,7 @@ async fn http_backend_note_and_discussion_mutations_use_exact_routes_and_bodies(
 async fn http_backend_note_deletes_reject_success_statuses_other_than_204() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     Mock::given(method("DELETE"))
         .and(path("/api/v4/projects/42/issues/7/notes/701"))
         .respond_with(ResponseTemplate::new(200))
@@ -3651,7 +3661,7 @@ async fn http_backend_note_deletes_reject_204_responses_with_bodies() {
     });
 
     let backend = http_backend_for_base(&uri);
-    let credential = test_credential();
+    let credential = backend_credential();
     let error = backend
         .delete_issue_note(
             42,
@@ -3747,7 +3757,7 @@ async fn http_backend_pages_beyond_one_hundred_issues_and_notes() {
         .await;
 
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let issue_request = |page| GitlabIssueSearchRequest {
         state: None,
         labels: Vec::new(),
@@ -3826,7 +3836,7 @@ async fn http_backend_exposes_only_allowlisted_structured_mutation_validation() 
                 assignee_ids: Vec::new(),
                 confidential: None,
             },
-            &test_credential(),
+            &backend_credential(),
         )
         .await
         .unwrap_err();
@@ -3859,7 +3869,10 @@ async fn http_backend_rejects_wrong_type_current_user_identity() {
         .await;
     let backend = http_backend(&server);
 
-    let error = backend.current_user(&test_credential()).await.unwrap_err();
+    let error = backend
+        .current_user(&backend_credential())
+        .await
+        .unwrap_err();
     assert!(matches!(error, GitlabBackendError::Protocol(_)));
     let public = gitlab_backend_error(error);
     assert_eq!(public.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -3920,7 +3933,7 @@ async fn http_backend_uses_exact_review_read_routes_and_pagination() {
         .await;
 
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let request = GitlabMergeRequestListRequest {
         iid: 5,
         max_results: 10,
@@ -4002,7 +4015,7 @@ async fn http_backend_views_exact_diff_version_and_streams_raw_diff() {
         .await;
 
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let version = backend
         .merge_request_diff_version(
             42,
@@ -4063,13 +4076,16 @@ async fn http_backend_does_not_expose_scalar_or_lookup_validation_messages() {
                 assignee_ids: Vec::new(),
                 confidential: None,
             },
-            &test_credential(),
+            &backend_credential(),
         )
         .await
         .unwrap_err();
     assert_eq!(mutation_error, GitlabBackendError::HttpStatus(400));
 
-    let lookup_error = backend.issue(42, 7, &test_credential()).await.unwrap_err();
+    let lookup_error = backend
+        .issue(42, 7, &backend_credential())
+        .await
+        .unwrap_err();
     assert_eq!(lookup_error, GitlabBackendError::HttpStatus(400));
     for error in [mutation_error, lookup_error] {
         let public = gitlab_backend_error(error);
@@ -4137,7 +4153,7 @@ async fn http_backend_does_not_read_authorization_failure_bodies_as_validation()
                 assignee_ids: Vec::new(),
                 confidential: None,
             },
-            &test_credential(),
+            &backend_credential(),
         )
         .await
         .unwrap_err();
@@ -4151,7 +4167,7 @@ async fn http_backend_does_not_read_authorization_failure_bodies_as_validation()
 async fn http_backend_inline_and_reply_writes_use_exact_routes_and_bodies() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     Mock::given(method("POST"))
         .and(path("/api/v4/projects/42/merge_requests/5/discussions"))
         .and(body_json(json!({
@@ -4215,7 +4231,7 @@ async fn http_backend_inline_and_reply_writes_use_exact_routes_and_bodies() {
 async fn http_backend_draft_view_and_list_accept_gitlab_default_empty_positions() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let mut damaged = draft_note_json(11963, "edited draft");
     damaged["commit_id"] = json!("048da6d085c5ad8c8c7f28f7799c9d9afb0d319e");
     damaged["line_code"] = json!("src_operator_output_109");
@@ -4293,7 +4309,7 @@ async fn http_backend_draft_view_and_list_accept_gitlab_default_empty_positions(
 async fn http_backend_draft_crud_and_publication_use_exact_routes_queries_and_bodies() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     Mock::given(method("GET"))
         .and(path("/api/v4/projects/42/merge_requests/5/draft_notes"))
         .and(query_param_is_missing("per_page"))
@@ -4513,7 +4529,7 @@ async fn http_backend_draft_crud_and_publication_use_exact_routes_queries_and_bo
 async fn http_backend_review_preflight_reads_use_exact_routes_and_reviewer_query() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     Mock::given(method("GET"))
         .and(path("/api/v4/version"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": "19.2.0-ee" })))
@@ -4584,7 +4600,7 @@ async fn http_backend_review_preflight_reads_use_exact_routes_and_reviewer_query
 async fn http_backend_suggestion_apply_uses_action_mode_for_exact_routes_and_bodies() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let suggestion = |id| {
         json!({
             "id": id,
@@ -4662,7 +4678,7 @@ async fn http_backend_suggestion_apply_uses_action_mode_for_exact_routes_and_bod
 async fn http_backend_approval_routes_preserve_pagination_tier_errors_and_exact_bodies() {
     let server = MockServer::start().await;
     let backend = http_backend(&server);
-    let credential = test_credential();
+    let credential = backend_credential();
     let summary = json!({
         "approvals_required": 1,
         "approvals_left": 0,
@@ -5242,7 +5258,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
             .mount(&server)
             .await;
         let backend_error = http_backend(&server)
-            .issue(42, 7, &test_credential())
+            .issue(42, 7, &backend_credential())
             .await
             .unwrap_err();
         let GitlabBackendError::RateLimited(wait) = &backend_error else {
@@ -6926,67 +6942,4 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
             (fate != WriteFate::Refused).then_some("POST /api/v4/projects/42/issues HTTP/1.1")
         );
     }
-}
-
-/// A delegated lease that no GitLab path may use.
-struct UnusedLease;
-
-#[async_trait]
-impl DelegatedLease for UnusedLease {
-    fn access(&self) -> DelegatedAccess {
-        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
-    }
-    fn binding_identity(&self) -> DelegatedBindingId {
-        agent_access_provider::test_support::delegated_binding_id("unused")
-    }
-    async fn revalidate(&self) -> Result<(), ProviderError> {
-        panic!("GitLab must not revalidate delegated lookup access");
-    }
-    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
-        panic!("GitLab must not mark delegated lookup access rejected");
-    }
-    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
-        panic!("GitLab must not recover delegated lookup access");
-    }
-}
-
-/// GitLab accepts no delegated credentials, so delegated lookup access fails
-/// closed in scope resolution and at execution, before any upstream call,
-/// instead of standing in for a static credential.
-#[tokio::test]
-async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
-    let server = MockServer::start().await;
-    let provider = provider_for_server(&server);
-    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
-    let inputs = json!({ "project": "sip/service" });
-    let assert_unsupported = |error: ProviderError| {
-        assert_eq!(error.decision(), Decision::Deny);
-        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
-        assert_eq!(
-            error.message,
-            "GitLab lookups do not accept delegated credentials"
-        );
-    };
-
-    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
-        "gitlab",
-        "project.view",
-        inputs.clone(),
-    )
-    .delegated_lookup(delegated.clone());
-    assert_unsupported(
-        provider
-            .resolve_scopes(fixture.request())
-            .await
-            .unwrap_err(),
-    );
-
-    let invocation = InvocationBuilder::new("gitlab", "project.view")
-        .inputs(inputs)
-        .resources(repository_scopes_from_path("sip/service"))
-        .credential(test_credential())
-        .delegated_lookup(delegated)
-        .build();
-    assert_unsupported(provider.invoke(invocation).await.unwrap_err());
-    assert!(server.received_requests().await.unwrap().is_empty());
 }

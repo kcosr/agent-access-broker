@@ -301,10 +301,12 @@ binary and needs `python3`, whose absence fails it.
   seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
   page-token and draft-handle families, `config.rs`, `present.rs`).
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
-  pagination headers, and HTTP client, `config.rs`, `provisioning.rs`,
-  `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`: one instance's
-  target and `gitlab` audience, token-info scope evidence at code exchange,
-  and the account's linked sign-ins for `login_binding`).
+  pagination headers, and HTTP client, `access.rs` the credential each request
+  presents: a static token, or delegated access pinned to the instance before
+  every request with one 401 recovery per operation, `config.rs`,
+  `provisioning.rs`, `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`:
+  one instance's target and `gitlab` audience, token-info scope evidence at
+  code exchange, and the account's linked sign-ins for `login_binding`).
 - `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
   (gateway credential rules, request authorization, tenant/gateway client
   routes and their route fingerprint, the credential binding of their

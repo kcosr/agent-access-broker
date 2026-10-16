@@ -778,6 +778,17 @@ All notable changes to this project are documented in this file.
   originally granted scopes. Refresh material is consuming. Only consumers on
   the registration's instance, such as GitLab REST and a Git gateway there,
   pass offline validation. See [GitLab OAuth](docs/oauth.md#gitlab).
+- GitLab REST accepts delegated access: a `gitlab` credential connection may set
+  `oauth`, and people's GitLab REST lookups and actions then use their GitLab
+  OAuth connection, with one lease per invocation. Immediately before each
+  GitLab request the provider pins the access to its instance (`api_base_url`
+  without `/api/v4`) and the `gitlab` audience. A 401 marks the presented
+  access rejected and renews it once per invocation, whether it answered a
+  lookup or the execution, and repeats that request, including a write or an
+  upload; a further 401 fails as `credential_invalid`. Static tokens are
+  presented as before. Token-only project and service-account token actions
+  stay unavailable through OAuth. See
+  [GitLab REST OAuth connections](docs/providers-gitlab-rest.md#oauth-connections).
 - The development `oauth_stub` service declares its `base_url` as its upstream
   authority.
 - Optional OAuth login binding, off unless a registration sets

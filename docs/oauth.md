@@ -157,7 +157,9 @@ cannot be recalled.
 The `gitlab` dialect connects a person's account on one GitLab instance. GitLab
 REST and a GitLab [Git gateway](git-http-gateway.md) on that instance consume
 one credential connection, so a person connects once for both, and each
-service's own grants still decide what it may do.
+service's own grants still decide what it may do. GitLab REST's use of the
+connection, including its lookups and 401 recovery, is described under
+[GitLab REST OAuth connections](providers-gitlab-rest.md#oauth-connections).
 
 ### GitLab administrator setup
 
@@ -689,8 +691,9 @@ is lost, malformed, or ambiguous, the family becomes uncertain. The Broker does 
 refresh token or continue handing out prior access leases. The owner reconnects.
 A persisted unfinished attempt after process loss is likewise treated
 conservatively. An upstream 401 on a read permits at most one version-aware
-refresh/retry. Gmail also permits this one recovery after a mutation's explicit
-401 authentication rejection; no timeout, transport or server-error replay occurs.
+refresh/retry. Gmail and GitLab REST also permit this one recovery after a
+mutation's explicit 401 authentication rejection; no timeout, transport or
+server-error replay occurs.
 Leases stay pinned to their original connection/generation across both revalidation
 and unauthorized recovery.
 

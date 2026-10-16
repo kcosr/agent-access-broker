@@ -490,13 +490,12 @@ fn validation_errors(raw: &str) -> Vec<String> {
 }
 
 /// GitLab REST and a GitLab Git gateway on the registration's instance pass
-/// the dialect's offline authority check, in production. Neither accepts
-/// delegated credentials yet, so validation still rejects the OAuth method
-/// for both: the connection cannot reach them through OAuth.
+/// the dialect's offline authority check, in production. GitLab REST accepts
+/// delegated credentials; the Git gateway does not yet, so validation still
+/// rejects the OAuth method for the shared connection.
 #[test]
 fn gitlab_rest_and_git_share_one_gitlab_oauth_connection_on_the_instance() {
     let delegated = [
-        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab does not",
         "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab_git does not",
     ];
     let base = "https://gitlab.example.com";
@@ -545,7 +544,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
             ),
-            delegated("gitlab"),
             delegated("gitlab_git"),
         ]
     );
@@ -557,7 +555,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
             ),
-            delegated("gitlab"),
             delegated("gitlab_git"),
             elsewhere("gitlab", base, other),
             elsewhere("gitlab_git", base, other),
@@ -567,7 +564,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
     assert_eq!(
         validation_errors(&gitlab_oauth_config(base, base, "rotate_both", other)),
         [
-            delegated("gitlab"),
             delegated("gitlab_git"),
             format!(
                 "credentials.connections.gitlab: gitlab acts on {base} but gitlab_git acts on {other}; a token connection's consumers must act on one upstream"
@@ -581,7 +577,6 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             registration(
                 "GitLab requires rotation = \"rotate_both\": every refresh replaces both the access and the refresh token"
             ),
-            delegated("gitlab"),
             delegated("gitlab_git"),
         ]
     );
