@@ -195,6 +195,41 @@ async fn disconnect_revokes_the_gitlab_family_and_reports_revoked() {
     assert_eq!(revocations(&gitlab).await.len(), 2);
 }
 
+/// Losing the last grant on the connection's consumers revokes nothing: the
+/// connection stays listed for its owner's cleanup, and that cleanup
+/// disconnect revokes the family.
+#[tokio::test]
+async fn grant_loss_revokes_nothing_until_the_owner_cleans_up() {
+    let (gitlab, _consumer, fixture) = connected_gitlab().await;
+    mount_revoke(&gitlab, ResponseTemplate::new(200)).await;
+    fixture
+        .runtime
+        .disable_managed_policy_grant(agent_access_core::ManagedPolicyGrantStatusRequest {
+            grant_id: "personal-oauth".into(),
+            expected_version: 1,
+            updated_by: "admin".into(),
+        })
+        .unwrap();
+    let rows = fixture.gitlab_rows("gitlab-rows-grant-loss").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["consumers"], json!([]));
+    assert_eq!(rows[0]["canConnect"], false);
+    assert_eq!(rows[0]["canDisconnect"], true);
+    assert_eq!(rows[0]["remoteRevocation"], "not_requested");
+    assert!(fixture.revocation_rows().is_empty());
+    assert!(revocations(&gitlab).await.is_empty());
+
+    assert_eq!(
+        fixture.disconnect_gitlab("gitlab-cleanup-disconnect").await,
+        json!({"disconnected": true, "remoteRevocation": "revoked"})
+    );
+    assert_eq!(revoked_tokens(&gitlab).await, first_family());
+    assert_eq!(
+        fixture.revocation_rows(),
+        [("disconnect".into(), "revoked".into(), false)]
+    );
+}
+
 /// A token GitLab refuses to revoke fails the revocation; local access
 /// never returns.
 #[tokio::test]
