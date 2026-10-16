@@ -143,7 +143,7 @@ test("OAuth connections are one row per registration and disconnect names every 
   await expect(confirm).toContainText("Where the provider supports it, the broker also revokes the account's tokens there.");
   await confirm.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect.poll(() => writes.map((write) => write.request)).toContain("DELETE /v1/oauth/connections/google");
-  await expect(page.getByText("Account disconnected. The provider revoked every token the broker held for the account.")).toBeVisible();
+  await expect(page.getByText("Account disconnected. Access through the broker has ended, and the provider revoked every token the broker held for the account.")).toBeVisible();
 });
 
 test("an OAuth connection's remote revocation state and the provider-side action show in its row", async ({ page }) => {
@@ -151,6 +151,8 @@ test("an OAuth connection's remote revocation state and the provider-side action
   const gitlab = row(page, "GitLab account");
   await expect(gitlab).toHaveCount(1);
   await expect(gitlab).toContainText("Revocation unconfirmed");
+  // The state concerns the connection the broker ended, not current access.
+  await expect(gitlab).toContainText("outcome was lost for an ended connection");
   await expect(gitlab).toContainText("Preferences › Applications › Authorized applications");
   await expect(row(page, "Gmail")).not.toContainText("Revocation");
   expect(errors).toEqual([]);

@@ -167,14 +167,73 @@ describe("imported personal authentication", () => {
     }
   });
   test.each([
-    ["pending", "Revocation pending", "still revoking"],
-    ["revoked", "Revoked at provider", "revoked every token"],
-    ["failed", "Revocation failed", "did not revoke every token"],
-    ["unconfirmed", "Revocation unconfirmed", "token renewal&#x27;s outcome was lost"]
+    ["pending", "Revocation pending", "still revoking the tokens of an ended connection"],
+    ["revoked", "Revoked at provider", "revoked the tokens of the connections the broker ended"],
+    ["failed", "Revocation failed", "did not revoke every token of an ended connection"],
+    ["unconfirmed", "Revocation unconfirmed", "token renewal&#x27;s outcome was lost for an ended connection"]
   ] as const)("a %s remote revocation shows on both connection surfaces", (state, label, explanation) => {
     for (const html of surfaces(oauthTarget({ remoteRevocation: state }))) {
       expect(html).toContain(label);
       expect(html).toContain(explanation);
+      // Without a current connection the row claims nothing about current access.
+      expect(html).not.toContain("current connection");
+      expect(html).not.toContain("Access through the broker has ended");
+    }
+  });
+  // A reconnect, or a replacement by another account, superseded the
+  // previous family; its revocation never describes the new, usable connection.
+  const replaced = (displayName: string, remoteRevocation: OAuthConnectionTarget["remoteRevocation"]) =>
+    oauthTarget({
+      canDisconnect: true,
+      remoteRevocation,
+      connection: { connectionId: "connection-2", subjectId: displayName.toLowerCase(), displayName, status: "ready", reason: null, targets: [] }
+    });
+  test.each([
+    ["reconnect", "Reader"],
+    ["account replacement", "Other Reader"]
+  ] as const)("after a %s, the previous family's revocation is not described as the current connection's", (_, account) => {
+    for (const [state, explanation] of [
+      ["pending", "still revoking the tokens of an ended connection"],
+      ["revoked", "revoked the tokens of the connections the broker ended"]
+    ] as const) {
+      for (const html of surfaces(replaced(account, state))) {
+        expect(html).toContain(account);
+        expect(html).toContain(explanation);
+        expect(html).toContain("The current connection is not affected.");
+        expect(html).not.toContain("Access through the broker has ended");
+        expect(html).not.toContain("every token the broker held for the account");
+        expect(buttons(html).find((button) => button.includes(">Disconnect<"))).not.toContain("disabled");
+      }
+    }
+    for (const html of surfaces(replaced(account, "failed"))) {
+      expect(html).toContain("Revocation failed");
+      expect(html).toContain("did not revoke every token of an ended connection");
+      // The cleanup names the account the ended connection used, which may not be the displayed one.
+      expect(html).toContain("signed in to the account that connection used");
+      expect(html).toContain("revoking at the provider ends it too when it uses the same account; reconnect afterwards.");
+      expect(html).not.toContain("Access through the broker has ended");
+      expect(html).not.toContain("The current connection is not affected.");
+    }
+  });
+  test("a connection that needs reconnect after a lost renewal gets no claim about current access", () => {
+    const target = oauthTarget({
+      canDisconnect: true,
+      remoteRevocation: "unconfirmed",
+      connection: { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "reconnect_required", reason: "oauth_refresh_uncertain", targets: [] }
+    });
+    for (const html of surfaces(target)) {
+      expect(html).toContain("Revocation unconfirmed");
+      expect(html).toContain("token renewal&#x27;s outcome was lost for an ended connection");
+      expect(html).not.toContain("current connection");
+    }
+  });
+  test("a cleanup-only row for a remote revocation offers no disconnect", () => {
+    const target = oauthTarget({ consumers: [], otherConsumers: 1, canConnect: false, connectUnavailableReason: "no_personal_access", canDisconnect: false, remoteRevocation: "failed" });
+    for (const html of surfaces(target)) {
+      expect(html).toContain("Reconnect requires an active grant for your personal account.");
+      expect(html).not.toContain("still disconnect");
+      expect(html).not.toContain(">Disconnect<");
+      expect(html).toContain("Revocation failed");
     }
   });
   test("failed and unconfirmed revocations ask for the provider-side revocation; nothing is shown when none was requested", () => {
@@ -189,8 +248,12 @@ describe("imported personal authentication", () => {
       expect(html).not.toContain("Revoked at provider");
     }
     expect(oauthDisconnectNotice("not_requested")).toEqual({ message: "Account disconnected. Consent at the provider is not removed.", tone: "success" });
-    expect(oauthDisconnectNotice("revoked")).toMatchObject({ tone: "success" });
-    expect(oauthDisconnectNotice("pending").message).toContain("still revoking");
+    // The disconnect notice describes the account just disconnected.
+    expect(oauthDisconnectNotice("revoked")).toEqual({
+      message: "Account disconnected. Access through the broker has ended, and the provider revoked every token the broker held for the account.",
+      tone: "success"
+    });
+    expect(oauthDisconnectNotice("pending").message).toContain("still revoking the account's tokens");
     expect(oauthDisconnectNotice("failed")).toMatchObject({ tone: "error" });
     expect(oauthDisconnectNotice("unconfirmed").message).toContain("Authorized applications");
     expect(oauthDisconnectNotice("unconfirmed").tone).toBe("error");

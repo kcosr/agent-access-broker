@@ -280,7 +280,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
           const target = row.oauth;
           const evidence = target.scopeMode === "server_default" ? oauthScopeEvidence(target) : null;
           const unavailable = oauthConnectUnavailableMessage(target);
-          const revocation = oauthRemoteRevocation(target.remoteRevocation);
+          const revocation = oauthRemoteRevocation(target);
           // A cleanup-only row's profile is unknown: no permission text.
           const permissions =
             target.scopeMode === null ? null : target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions";
@@ -524,7 +524,8 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
         <UsedBy consumers={target.consumers} otherConsumers={target.otherConsumers} administered={subject.administered} />
         <DrawerSection title="How this works">
           <p className="wb-small wb-fg-2">
-            Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them; consent at the provider is not removed.
+            Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them. Where the provider supports it, the broker
+            also revokes the disconnected tokens there; otherwise consent at the provider is not removed.
           </p>
         </DrawerSection>
       </>
