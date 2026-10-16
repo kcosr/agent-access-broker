@@ -2191,10 +2191,11 @@ pub(crate) mod tests {
             [browser_auth.local_password]
             enabled = true
             pepper_ref = {key_ref:?}
+            [credentials.connections.oauth_stub]
+            oauth = {{ registration = "stub", profile = "read" }}
             [credentials.per_user.oauth_stub]
-            type = "oauth"
-            provider = "stub"
-            profile = "read"
+            type = "connection"
+            connection = "oauth_stub"
             # The records API is never contacted by these lifecycle tests.
             [providers.oauth_stub]
             base_url = "http://127.0.0.1:9"
@@ -2376,6 +2377,7 @@ pub(crate) mod tests {
         let broker = runtime(&manager)();
         let identity = crate::IdentityContext {
             principal: "user".into(),
+            principal_kind: Some(crate::PrincipalKind::User),
             authenticated: true,
             ..crate::IdentityContext::anonymous()
         };
@@ -2410,6 +2412,58 @@ pub(crate) mod tests {
             service.availability.requirements[0].resolution,
             "administrator"
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_only_connections_select_nothing_for_service_and_system_principals() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        let broker = runtime(&manager)();
+        let context = crate::ExecutionContext::new("default").unwrap();
+        let discover = |principal_kind| {
+            let identity = crate::IdentityContext {
+                principal: "user".into(),
+                principal_kind,
+                authenticated: true,
+                ..crate::IdentityContext::anonymous()
+            };
+            broker
+                .service_capabilities(&identity, &context, "oauth_stub")
+                .unwrap()
+        };
+        // The connected user's OAuth connection is selected and usable.
+        let service = discover(Some(crate::PrincipalKind::User));
+        assert_eq!(
+            service.availability.state,
+            crate::AvailabilityState::Available
+        );
+        assert!(!service.actions.is_empty());
+        // The same principal ID under another kind never reads that OAuth
+        // connection, and only configuration can change it.
+        for kind in [
+            Some(crate::PrincipalKind::ServiceAccount),
+            Some(crate::PrincipalKind::System),
+            None,
+        ] {
+            let service = discover(kind);
+            assert!(service.actions.is_empty(), "{kind:?}");
+            assert_eq!(
+                service.availability.state,
+                crate::AvailabilityState::Unavailable,
+                "{kind:?}"
+            );
+            assert_eq!(
+                service.availability.requirements[0].reason,
+                "credential_not_provisioned"
+            );
+            assert_eq!(
+                service.availability.requirements[0].resolution,
+                "administrator"
+            );
+        }
+        let requests = server.received_requests().await.unwrap().len();
+        let _ = discover(Some(crate::PrincipalKind::ServiceAccount));
+        assert_eq!(requests, server.received_requests().await.unwrap().len());
     }
 
     async fn fixture() -> (
@@ -3473,10 +3527,13 @@ pub(crate) mod tests {
                 .insert("other".into(), alternate);
             changed
                 .credentials
-                .per_user
+                .connections
                 .get_mut("oauth_stub")
                 .unwrap()
-                .profile = Some("other".into());
+                .oauth
+                .as_mut()
+                .unwrap()
+                .profile = "other".into();
             let changed =
                 Arc::new(crate::BrokerRuntime::new_for_reload(changed, &published.load()).unwrap());
             if publish_during_exchange {
@@ -3541,7 +3598,7 @@ pub(crate) mod tests {
         test_sql(&store, "UPDATE policy_grants SET status='disabled'");
         let identity = next.identity_from_principal_groups(
             "user".into(),
-            None,
+            Some(crate::PrincipalKind::User),
             Some("user".into()),
             Vec::new(),
             None,

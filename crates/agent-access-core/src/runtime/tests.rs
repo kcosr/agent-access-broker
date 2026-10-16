@@ -1,5 +1,7 @@
 use super::*;
 use agent_access_provider::test_support::{basic_credential, bearer_credential};
+#[path = "connection_tests.rs"]
+mod connection;
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
 #[path = "trusted_user_tests.rs"]

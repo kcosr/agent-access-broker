@@ -1253,6 +1253,9 @@ impl BrokerRuntime {
                 .per_user
                 .get(service)
                 .ok_or_else(import_credential_unavailable)?;
+            if credential.kind == "connection" {
+                return self.resolve_connection_token(service, identity).await;
+            }
             return self
                 .resolve_managed_execution_credential(service, credential, identity)
                 .await;

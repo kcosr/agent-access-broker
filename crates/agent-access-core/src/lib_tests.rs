@@ -2428,7 +2428,7 @@ fn rejects_static_per_user_credentials() {
             assert_contains(
                 &errors,
                 &format!(
-                    "credentials.per_user.{service}.type must be secret_store, managed_store, or oauth for per_user credentials"
+                    "credentials.per_user.{service}.type must be connection or secret_store for per_user credentials"
                 ),
             );
         }

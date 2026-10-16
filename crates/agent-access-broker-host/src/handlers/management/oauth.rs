@@ -77,6 +77,13 @@ async fn browser_context(
 
 fn binding(context: &ManagementContext, service: &str) -> Result<OAuthBinding, OAuthError> {
     let runtime = &context.snapshot.runtime;
+    if let Some(connection) = runtime.effective_credentials().personal_connection(service) {
+        // The signed-in principal's kind selects the connection's method.
+        return match connection.select(context.identity.principal_kind) {
+            agent_access_core::Selection::OAuth(oauth) => Ok(oauth.binding()),
+            _ => Err(OAuthError::Configuration),
+        };
+    }
     let credential = runtime
         .effective_credentials()
         .per_user

@@ -69,6 +69,18 @@ impl UnavailableCredential {
         ))
     }
 
+    /// The credential connection selects no method for the caller's
+    /// principal kind. Only an administrator's configuration can change
+    /// that, and no stored material is absent.
+    fn unselected() -> Self {
+        Self {
+            reason: ReasonCode::CredentialNotProvisioned.as_str().into(),
+            unknown: false,
+            administrator: true,
+            failure: None,
+        }
+    }
+
     fn from_provider(error: ProviderError) -> Self {
         let unknown = error.reason_code() == ReasonCode::ManagedStoreUnavailable;
         let administrator = matches!(
@@ -346,6 +358,9 @@ impl BrokerRuntime {
             _ => None,
         }
         .ok_or_else(UnavailableCredential::missing)?;
+        if credential.kind == "connection" {
+            return self.check_connection_credential(service, identity, static_lookup);
+        }
         if credential.kind == "oauth" {
             if static_lookup {
                 return Err(UnavailableCredential::missing());
@@ -391,5 +406,55 @@ impl BrokerRuntime {
         load_execution_credential(service, mode, credential, Some(identity))
             .map(drop)
             .map_err(UnavailableCredential::from_provider)
+    }
+}
+
+impl BrokerRuntime {
+    /// The local availability of the method `identity` selects for
+    /// `service`'s credential connection: the stored token row, or the OAuth
+    /// connection, which can never serve a static lookup. An unavailable
+    /// selection is reported as an administrator requirement.
+    fn check_connection_credential(
+        &self,
+        service: &str,
+        identity: &IdentityContext,
+        static_lookup: bool,
+    ) -> Result<(), UnavailableCredential> {
+        let (connection, selection) = self
+            .personal_selection(service, identity)
+            .ok_or_else(UnavailableCredential::missing)?;
+        match selection {
+            crate::Selection::Unavailable => Err(UnavailableCredential::unselected()),
+            crate::Selection::OAuth(oauth) => {
+                if static_lookup {
+                    return Err(UnavailableCredential::missing());
+                }
+                let (true, Some(manager)) = (identity.authenticated, self.oauth.as_ref()) else {
+                    return Err(UnavailableCredential::missing());
+                };
+                manager
+                    .check_credential(&identity.principal, &oauth.binding())
+                    .map_err(UnavailableCredential::from_oauth)
+            }
+            crate::Selection::Token(profile) => {
+                let (true, Some(store), Some(ring)) = (
+                    identity.authenticated,
+                    self.managed_store.as_ref(),
+                    self.credential_key_ring.as_ref(),
+                ) else {
+                    return Err(UnavailableCredential::missing());
+                };
+                store
+                    .check_user_credential(
+                        ring,
+                        &identity.principal,
+                        connection.id,
+                        crate::CONNECTION_CREDENTIAL_NAME,
+                        profile,
+                    )
+                    .map_err(provider_error_from_managed_store)
+                    .map_err(UnavailableCredential::from_provider)
+            }
+        }
     }
 }

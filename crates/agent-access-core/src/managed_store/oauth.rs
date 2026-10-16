@@ -161,16 +161,30 @@ pub(crate) fn check_admission(
     binding: &OAuthBinding,
     runtime: &crate::BrokerRuntime,
 ) -> Result<(), OAuthError> {
-    let credential = runtime
-        .effective_credentials()
-        .per_user
-        .get(&admission.service)
-        .filter(|credential| credential.kind == "oauth")
-        .ok_or(OAuthError::Stale)?;
-    if admission.credential_name != "default"
-        || credential.provider.as_deref() != Some(binding.registration.as_str())
-        || credential.profile.as_deref() != Some(binding.permission_profile.as_str())
-    {
+    let credentials = runtime.effective_credentials();
+    let configured = match credentials.personal_connection(&admission.service) {
+        // The owner's current kind selects the connection's method.
+        Some(connection) => {
+            let owner_kind =
+                super::principal_kind_at_conn(conn, owner).map_err(|_| OAuthError::Storage)?;
+            match connection.select(owner_kind) {
+                crate::Selection::OAuth(oauth) => Some(oauth.binding()),
+                _ => None,
+            }
+        }
+        None => credentials
+            .per_user
+            .get(&admission.service)
+            .filter(|credential| credential.kind == "oauth")
+            .and_then(|credential| {
+                Some(OAuthBinding {
+                    registration: credential.provider.clone()?,
+                    permission_profile: credential.profile.clone()?,
+                })
+            }),
+    }
+    .ok_or(OAuthError::Stale)?;
+    if admission.credential_name != "default" || configured != *binding {
         return Err(OAuthError::Stale);
     }
     if let Some(record) = runtime.imported_catalog().service(&admission.service) {

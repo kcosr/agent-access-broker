@@ -23,6 +23,7 @@ pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 mod mcp_views;
 mod owned;
+mod personal_credentials;
 #[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]
@@ -2926,8 +2927,13 @@ impl BrokerRuntime {
             )?;
         }
         for (service, credential) in &self.effective_credentials.per_user {
+            let label = format!("credentials.per_user.{service}");
+            if credential.kind == "connection" {
+                self.check_connection_ready(&label, service)?;
+                continue;
+            }
             check_credential_ready(
-                &format!("credentials.per_user.{service}"),
+                &label,
                 service,
                 "per_user",
                 credential,
@@ -5761,12 +5767,26 @@ impl BrokerRuntime {
             if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
                 return Ok(ExecutionAccess::Static(credential.clone()));
             }
-            if let Some(credential) = self
-                .effective_credentials
-                .per_user
-                .get(service)
-                .filter(|credential| credential.kind == "oauth")
-            {
+            let binding = match self.personal_selection(service, identity) {
+                Some((_, crate::Selection::OAuth(oauth))) => Some(Some(oauth.binding())),
+                Some(_) => None,
+                None => self
+                    .effective_credentials
+                    .per_user
+                    .get(service)
+                    .filter(|credential| credential.kind == "oauth")
+                    .map(|credential| {
+                        credential
+                            .provider
+                            .clone()
+                            .zip(credential.profile.clone())
+                            .map(|(registration, permission_profile)| crate::OAuthBinding {
+                                registration,
+                                permission_profile,
+                            })
+                    }),
+            };
+            if let Some(binding) = binding {
                 let accepts_delegated =
                     descriptor.is_some_and(|descriptor| descriptor.delegated.is_some());
                 return with_provider_context(
@@ -5776,7 +5796,7 @@ impl BrokerRuntime {
                     self.acquire_delegated_credential(
                         service,
                         accepts_delegated,
-                        credential,
+                        binding,
                         identity,
                     ),
                 )
@@ -5793,7 +5813,7 @@ impl BrokerRuntime {
         &self,
         service: &str,
         accepts_delegated: bool,
-        credential: &CredentialConfig,
+        binding: Option<crate::OAuthBinding>,
         identity: &IdentityContext,
     ) -> Result<DelegatedCredential, ProviderError> {
         if !accepts_delegated {
@@ -5808,11 +5828,7 @@ impl BrokerRuntime {
                 "delegated credentials require an authenticated identity",
             ));
         }
-        let (Some(manager), Some(registration), Some(permission_profile)) = (
-            self.oauth.clone(),
-            credential.provider.clone(),
-            credential.profile.clone(),
-        ) else {
+        let (Some(manager), Some(binding)) = (self.oauth.clone(), binding) else {
             return Err(ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "delegated OAuth credential is not configured",
@@ -5822,10 +5838,7 @@ impl BrokerRuntime {
             manager,
             service.to_owned(),
             identity.principal.clone(),
-            crate::OAuthBinding {
-                registration,
-                permission_profile,
-            },
+            binding,
         )
         .await
     }
@@ -6297,6 +6310,9 @@ impl BrokerRuntime {
                 "selected credential mode is not provisioned",
             )
         })?;
+        if credential.kind == "connection" {
+            return self.resolve_connection_token(service, identity).await;
+        }
         if credential.kind == "managed_store" {
             return self
                 .resolve_managed_execution_credential(service, credential, identity)
