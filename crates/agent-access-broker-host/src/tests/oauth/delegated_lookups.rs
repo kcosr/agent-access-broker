@@ -422,6 +422,11 @@ async fn requests_without_a_candidate_grant_acquire_nothing() {
     assert_eq!(body["resourceScopes"], json!({}));
     assert!(fixture.requests_after_consent().await.is_empty());
     assert!(take_seen(&provider).is_empty());
+    // No personal credential was used, so the record names no connection.
+    let audit = read_audit_records(&fixture.audit_path);
+    let record = audit.last().unwrap();
+    assert_eq!(record["agentRequestId"], "locate-no-candidate");
+    assert!(record.get("credentialConnection").is_none(), "{record}");
 
     fixture.grant_locate("locate-default", "per_user", "default", None);
     let (status, body) = fixture
@@ -477,6 +482,10 @@ async fn a_final_denial_after_a_delegated_lookup_dispatches_nothing() {
     assert_eq!(record["reasonCode"], "scope_unresolved");
     assert_eq!(record["resourceScopes"], json!({"collection": ["beta"]}));
     assert!(record["matchedGrant"].is_null(), "{record}");
+    // The lookup used the caller's lease, so the record names its connection
+    // although policy selected no credential mode.
+    assert!(record.get("credentialMode").is_none(), "{record}");
+    assert_eq!(record["credentialConnection"], "oauth_stub");
 }
 
 /// The lease's own failures during a lookup describe the caller's

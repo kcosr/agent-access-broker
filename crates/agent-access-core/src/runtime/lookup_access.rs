@@ -163,6 +163,21 @@ impl BrokerRuntime {
         }
     }
 
+    /// The credential connection whose material `lookup` used, when scope
+    /// resolution looked up with the caller's personal token or lease: the
+    /// connection `service` consumes. `None` for a shared or absent lookup,
+    /// or a personal credential that is not a connection.
+    pub(super) fn personal_lookup_connection(
+        &self,
+        service: &str,
+        lookup: &PreScopeLookup,
+    ) -> Option<String> {
+        matches!(lookup, PreScopeLookup::PerUser(_))
+            .then(|| self.effective_credentials.personal_connection(service))
+            .flatten()
+            .map(|connection| connection.id.to_owned())
+    }
+
     /// The caller's personal lookup access before policy, planned only once
     /// a candidate grant exists: the token their connection selects, or a
     /// lease on their OAuth connection, which execution then reuses.

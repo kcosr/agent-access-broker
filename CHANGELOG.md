@@ -711,9 +711,11 @@ All notable changes to this project are documented in this file.
 
 - Invocation and Git gateway audit records carry `credentialConnection`, the
   credential connection a personal credential came from. It is present when the
-  selected credential mode is `per_user`, and when a command call passes a
-  `per_user` grant even though mixed modes leave `credentialMode` null; it is
-  absent when only service credentials are used.
+  selected credential mode is `per_user`; when a command call passes a
+  `per_user` grant even though mixed modes leave `credentialMode` null; and
+  when a metadata lookup before policy used the caller's token or OAuth lease,
+  even if the call is then denied without a credential mode. It is absent when
+  only service credentials are used.
 
 - The provider SDK adds `UpstreamAuthority` and
   `ServiceDescriptor::with_upstream_authority`, through which a backend

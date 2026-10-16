@@ -270,6 +270,101 @@ async fn audit_names_the_connection_only_when_a_personal_credential_is_used() {
     );
 }
 
+/// `issue.view` for project `project` as a user principal.
+async fn invoke_project(runtime: &BrokerRuntime, project: &str) -> BrokerResponse<Value> {
+    runtime
+        .invoke(
+            governed(OperationContext {
+                agent_request_id: format!("agent-request-{project}"),
+                broker_request_id: format!("broker-request-{project}"),
+                identity: identity(Some(crate::PrincipalKind::User)),
+                service: "jira".into(),
+                action: "issue.view".into(),
+                source: SourceContext::unknown(),
+            }),
+            InvokeRequest {
+                inputs: json!({"project": project, "message": "hello"}),
+                body_parts: vec![],
+                ..InvokeRequest::new(json!({}))
+            },
+        )
+        .await
+}
+
+/// A personal lookup before policy reads the caller's connection token, so
+/// the denial that follows when no grant covers the resolved project still
+/// names that connection, with no credential mode. A shared lookup under a
+/// service grant names none.
+#[tokio::test]
+async fn a_denial_after_a_personal_lookup_names_the_connection_it_used() {
+    let audit_path = temp_path("connection-lookup-denial-audit.jsonl");
+    let (mut config, _store) = connection_config("tracker");
+    config.audit = Some(jsonl_audit_config(audit_path.display().to_string()));
+    configure_lookup_trace_service(&mut config, "synthetic-service-token");
+    configure_lookup_trace_lookup(&mut config, "synthetic-lookup-token");
+    let provider = Arc::new(LookupTraceProvider::default());
+    let observations = provider.observations();
+    let runtime = BrokerRuntime::with_providers(config.clone(), vec![provider]).unwrap();
+    store_token(&runtime, "tracker", "connection-token");
+    let denied = invoke_project(&runtime, "OPS").await;
+    assert_eq!(denied.status, 403, "{:?}", denied.envelope);
+    assert_eq!(
+        denied.envelope.reason_code,
+        Some(ReasonCode::ScopeUnresolved.into())
+    );
+    assert_eq!(
+        observations
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|observation| (
+                observation.operation.as_str(),
+                observation.credential.clone()
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            "pre_scope",
+            Some(basic_credential("synthetic-user", "connection-token"))
+        )]
+    );
+
+    let service_audit_path = temp_path("connection-shared-lookup-denial-audit.jsonl");
+    config.audit = Some(jsonl_audit_config(service_audit_path.display().to_string()));
+    config.policy.grants = vec![lookup_trace_grant("service", None, &["project-PROJ"])];
+    let provider = Arc::new(LookupTraceProvider::default());
+    let shared_observations = provider.observations();
+    let service = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
+    let denied = invoke_project(&service, "OPS").await;
+    assert_eq!(denied.status, 403, "{:?}", denied.envelope);
+    assert_eq!(shared_observations.lock().unwrap().len(), 1);
+
+    let personal = audit_records(&audit_path)
+        .into_iter()
+        .filter(|record| record["service"] == "jira")
+        .collect::<Vec<_>>();
+    assert_eq!(personal.len(), 1, "{personal:?}");
+    assert_eq!(personal[0]["decision"], "deny");
+    assert_eq!(personal[0]["reasonCode"], "scope_unresolved");
+    assert_eq!(personal[0]["resourceScopes"], json!({"project": ["OPS"]}));
+    assert!(
+        personal[0].get("credentialMode").is_none(),
+        "{}",
+        personal[0]
+    );
+    assert_eq!(personal[0]["credentialConnection"], "tracker");
+    let shared = audit_records(&service_audit_path)
+        .into_iter()
+        .filter(|record| record["service"] == "jira")
+        .collect::<Vec<_>>();
+    assert_eq!(shared.len(), 1, "{shared:?}");
+    assert_eq!(shared[0]["decision"], "deny");
+    assert!(
+        shared[0].get("credentialConnection").is_none(),
+        "{}",
+        shared[0]
+    );
+}
+
 const RELAY_SECRET: &str = "fixture-connection-relay-credential";
 
 /// A managed-identity broker where `alice` (user), `svc` (service account)

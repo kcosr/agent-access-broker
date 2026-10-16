@@ -36,17 +36,23 @@ impl BrokerRuntime {
         Some((profile, kind))
     }
 
-    /// The credential connection a call's audit record names: the one
-    /// `service` consumes, when the call's selected mode is `per_user` or a
-    /// command call passes a `per_user` grant (its `credentialMode` is then
-    /// null when it also passes service grants). `None` when only service
-    /// credentials are used.
+    /// The credential connection a call's audit record names: the one a
+    /// personal lookup before policy used (`personal_lookup`), even when the
+    /// call then ends before a credential mode is selected or is rejected for
+    /// planning drift; otherwise the one `service` consumes, when the call's
+    /// selected mode is `per_user` or a command call passes a `per_user`
+    /// grant (its `credentialMode` is then null when it also passes service
+    /// grants). `None` when only service credentials are used.
     pub(super) fn audit_credential_connection(
         &self,
         service: &str,
         credential_mode: Option<&str>,
         command: Option<&super::command_dispatch::AdmittedCommand>,
+        personal_lookup: Option<String>,
     ) -> Option<String> {
+        if personal_lookup.is_some() {
+            return personal_lookup;
+        }
         let personal = credential_mode == Some("per_user")
             || command.is_some_and(|command| {
                 command

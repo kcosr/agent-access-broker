@@ -119,6 +119,7 @@ impl BrokerRuntime {
             source: context.operation.source.clone(),
             execution_context: Some(context.execution_context.clone()),
             redact_error_resource_scopes: false,
+            personal_lookup_connection: None,
             started: Instant::now(),
         };
         // Reserve terminal capacity before provider preparation/dispatch. A health

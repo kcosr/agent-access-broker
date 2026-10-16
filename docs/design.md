@@ -1619,10 +1619,12 @@ configured by `[audit]`. The record is camelCase and carries: `auditId`,
 `groups`, `service`, `action`, `resourceScopes`, `matchedGrant`,
 `credentialMode` (`Option<Option<String>>`: `service`/`per_user` on allow, null
 for admin records), `credentialConnection` (the credential connection a personal
-credential came from; present when the selected mode is `per_user`, or when a
+credential came from; present when the selected mode is `per_user`, when a
 command call passes a `per_user` grant even though mixed modes leave
-`credentialMode` null, and absent when only service credentials are used or for
-management and authentication records), `decision`, `reasonCode`, `upstreamStatus`,
+`credentialMode` null, or when a pre-authorization lookup used the caller's
+token or OAuth lease, even if policy then denies the call with no credential
+mode; absent when only service credentials are used or for management and
+authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
 `executionContext`, `searchAuthorization` (search actions), and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,

@@ -1921,6 +1921,10 @@ struct FinalizeContext {
     source: SourceContext,
     execution_context: Option<ExecutionContext>,
     redact_error_resource_scopes: bool,
+    /// The credential connection whose material a personal lookup before
+    /// policy used, which the audit names even when the call ends before a
+    /// credential mode is selected.
+    personal_lookup_connection: Option<String>,
     started: Instant,
 }
 
@@ -3139,6 +3143,7 @@ impl BrokerRuntime {
                 source: context.source,
                 execution_context: None,
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started: Instant::now(),
             },
             Err(error),
@@ -3188,6 +3193,7 @@ impl BrokerRuntime {
                 source: operation.source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started: Instant::now(),
             },
             Err(error),
@@ -3813,6 +3819,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3842,6 +3849,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3872,6 +3880,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3902,6 +3911,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -3938,6 +3948,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: None,
                             started,
                         },
                         Err(error),
@@ -3974,6 +3985,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -4011,6 +4023,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4047,6 +4060,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: None,
                             started,
                         },
                         Err(error),
@@ -4078,6 +4092,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(policy_planning_drift_error()),
@@ -4110,6 +4125,7 @@ impl BrokerRuntime {
                 source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started,
             },
         })
@@ -4151,6 +4167,7 @@ impl BrokerRuntime {
                 &context.service,
                 context.credential_mode.as_deref(),
                 None,
+                context.personal_lookup_connection.clone(),
             ),
             decision: Decision::Allow,
             reason_code: None,
@@ -4641,6 +4658,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4667,6 +4685,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(error),
@@ -4700,6 +4719,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4732,6 +4752,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4764,6 +4785,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(error),
@@ -4803,6 +4825,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4810,6 +4833,8 @@ impl BrokerRuntime {
             }
         };
 
+        let personal_lookup_connection =
+            self.personal_lookup_connection(&service, &pre_scope_lookup);
         let mut audit_search_authorization = None;
         let mut command_authorization = None;
         let (scopes, policy, provider_state, search_authorization) =
@@ -4856,6 +4881,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(error),
@@ -4889,6 +4915,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(error),
@@ -4920,6 +4947,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: personal_lookup_connection.clone(),
                             started,
                         },
                         Err(error),
@@ -4986,6 +5014,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5030,6 +5059,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: lookup_scopes_before_policy,
+                            personal_lookup_connection: personal_lookup_connection.clone(),
                             started,
                         },
                         Err(error),
@@ -5063,6 +5093,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5143,6 +5174,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: personal_lookup_connection.clone(),
                         started,
                     },
                     Err(error),
@@ -5185,6 +5217,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: personal_lookup_connection.clone(),
                         started,
                     },
                     Err(error),
@@ -5259,6 +5292,7 @@ impl BrokerRuntime {
                 source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                personal_lookup_connection: personal_lookup_connection.clone(),
                 started,
             },
         })
@@ -6220,6 +6254,7 @@ impl BrokerRuntime {
             source,
             execution_context,
             redact_error_resource_scopes,
+            personal_lookup_connection,
             started,
         } = context;
         let upstream_resource_ownership = upstream_resource_ownership
@@ -6333,6 +6368,7 @@ impl BrokerRuntime {
             &service,
             credential_mode.as_deref(),
             command.as_ref(),
+            personal_lookup_connection,
         );
         let mut audit_record = AuditRecord {
             search_authorization,
