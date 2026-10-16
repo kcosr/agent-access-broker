@@ -10,7 +10,7 @@
 //! deletable only by its credential ID.
 
 use agent_access_core::{
-    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialInputField, CredentialMetadata,
+    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialInputSchema, CredentialMetadata,
     IdentityContext, PrincipalKind, Selection,
 };
 use serde::Serialize;
@@ -28,16 +28,6 @@ pub(super) struct ConnectionConsumer {
     pub(super) credential_verification_inputs: Vec<String>,
 }
 
-/// The fields storing a connection's token takes.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ConnectionInputSchema {
-    pub(super) connection: String,
-    pub(super) profile: String,
-    pub(super) credential_kind: String,
-    pub(super) fields: Vec<CredentialInputField>,
-}
-
 /// A connection whose token the principal can store now.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +38,7 @@ pub(super) struct ConnectionTarget {
     pub(super) other_consumers: usize,
     pub(super) profile: String,
     pub(super) credential_kind: String,
-    pub(super) input_schema: ConnectionInputSchema,
+    pub(super) input_schema: CredentialInputSchema,
 }
 
 /// The method a connection selects for a principal, as a list row reports
@@ -187,20 +177,14 @@ pub(super) fn token_selection(
 pub(super) fn input_schema(
     runtime: &BrokerRuntime,
     connection: &str,
-) -> Option<ConnectionInputSchema> {
+) -> Option<CredentialInputSchema> {
     let (profile, credential_kind) = runtime.connection_token_profile(connection)?;
-    let schema = agent_access_core::credential_input_schema(
+    agent_access_core::credential_input_schema(
         connection,
         &display_name(runtime, connection),
         profile,
         credential_kind,
-    )?;
-    Some(ConnectionInputSchema {
-        connection: connection.to_string(),
-        profile: schema.profile,
-        credential_kind: schema.credential_kind,
-        fields: schema.fields,
-    })
+    )
 }
 
 /// The setup target of `connection` for a principal of `kind` with the

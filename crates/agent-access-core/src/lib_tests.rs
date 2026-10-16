@@ -1016,7 +1016,7 @@ fn accepts_egress_proxy_config_at_global_and_service_scopes() {
 fn credential_input_schema_describes_required_basic_and_bearer_fields() {
     let basic = credential_input_schema("jira", "Jira", "jira-cloud-api-token", "basic_api_token")
         .expect("basic schema");
-    assert_eq!(basic.service, "jira");
+    assert_eq!(basic.connection, "jira");
     assert_eq!(basic.profile, "jira-cloud-api-token");
     assert_eq!(basic.credential_kind, "basic_api_token");
     assert_eq!(basic.fields.len(), 2);

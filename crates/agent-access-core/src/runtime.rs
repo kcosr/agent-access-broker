@@ -3584,23 +3584,6 @@ impl BrokerRuntime {
         self.services.values()
     }
 
-    /// Credential kind stored by a managed credential profile of a service.
-    pub fn credential_profile_kind(&self, service: &str, profile: &str) -> Option<&'static str> {
-        self.services.get(service)?.credential_profile_kind(profile)
-    }
-
-    /// Input fields for storing a managed credential, prompted with the
-    /// service's display name.
-    pub fn credential_input_schema(
-        &self,
-        service: &str,
-        profile: &str,
-        credential_kind: &str,
-    ) -> Option<crate::CredentialInputSchema> {
-        let descriptor = self.services.get(service)?;
-        crate::credential_input_schema(service, &descriptor.display_name, profile, credential_kind)
-    }
-
     fn action_descriptor(&self, service: &str, action: &str) -> Option<&ActionDescriptor> {
         self.services.get(service)?.action(action)
     }

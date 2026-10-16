@@ -4508,10 +4508,11 @@ pub(crate) fn credential_mode_configured(
     }
 }
 
+/// The fields storing a credential connection's token takes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialInputSchema {
-    pub service: String,
+    pub connection: String,
     pub profile: String,
     pub credential_kind: String,
     pub fields: Vec<CredentialInputField>,
@@ -4530,10 +4531,10 @@ pub struct CredentialInputField {
     pub input_methods: Option<Vec<String>>,
 }
 
-/// Input fields for storing a managed credential of `credential_kind`,
-/// prompted with the service's display name.
+/// Input fields for storing `connection`'s token of `credential_kind`,
+/// prompted with the connection's display name.
 pub fn credential_input_schema(
-    service: &str,
+    connection: &str,
     display_name: &str,
     profile: &str,
     credential_kind: &str,
@@ -4584,7 +4585,7 @@ pub fn credential_input_schema(
         _ => return None,
     };
     Some(CredentialInputSchema {
-        service: service.to_string(),
+        connection: connection.to_string(),
         profile: profile.to_string(),
         credential_kind: credential_kind.to_string(),
         fields,

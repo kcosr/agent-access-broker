@@ -18,15 +18,6 @@ impl BrokerRuntime {
         Some((connection, connection.select(identity.principal_kind)))
     }
 
-    /// The token profile of `service`'s credential connection and the
-    /// credential kind its consumers declare for it; `None` without a
-    /// connection or a token profile. A Git gateway consumer can store a
-    /// profile another consumer of its connection declares.
-    pub fn personal_token_profile(&self, service: &str) -> Option<(&str, &'static str)> {
-        let connection = self.effective_credentials.personal_connection(service)?;
-        self.connection_token_profile(connection.id)
-    }
-
     /// The token profile of the effective credential connection
     /// `connection` and the credential kind its consumers declare for it;
     /// `None` for an unknown connection or one without a token profile.
@@ -43,14 +34,6 @@ impl BrokerRuntime {
             connection,
         )?;
         Some((profile, kind))
-    }
-
-    /// The `service` column of `service`'s personal token rows: the ID of
-    /// the credential connection it consumes, if any.
-    pub fn personal_credential_key(&self, service: &str) -> Option<&str> {
-        self.effective_credentials
-            .personal_connection(service)
-            .map(|connection| connection.id)
     }
 
     /// The credential connection a call's audit record names: the one
@@ -72,9 +55,9 @@ impl BrokerRuntime {
                     .contains("per_user")
             });
         personal
-            .then(|| self.personal_credential_key(service))
+            .then(|| self.effective_credentials.personal_connection(service))
             .flatten()
-            .map(str::to_owned)
+            .map(|connection| connection.id.to_owned())
     }
 
     /// The caller's token for `service`'s connection, which execution,
