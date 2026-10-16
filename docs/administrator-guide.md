@@ -235,7 +235,10 @@ connection tokens rather than these rights.
 
 A credential right applies to one credential connection: its service bound is
 the connection ID and its credential name is `default`. A right on any other
-name, or on a service that no longer names a connection, has no effect.
+name, or on a service that no longer names a connection, has no effect. A
+classless caller also needs its managed principal row, whose kind selects each
+connection's method; rights cannot store a token for a connection that uses
+OAuth for it.
 
 | Right | Classless static credential operation |
 | --- | --- |

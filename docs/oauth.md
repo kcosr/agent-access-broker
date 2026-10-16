@@ -352,9 +352,10 @@ same store transaction as admission. With TOML policy, grants come from the
 current runtime. Admission is for the registration as a whole: at least one
 consuming service whose credential connection selects OAuth for the owner, with
 the flow's exact registration and profile, must have an active `per_user` grant
-for the owner. An administrator's discovery connection for an imported service
-names that service and uses its discovery admission instead. Imported consumers
-must also match the current import revision. Existing session, PKCE, issuer,
+for the owner. An imported consumer also admits an administrator through its
+import-discovery admission. An imported consumer counts only at the import
+version it had when the flow started, and a consumer rebound to another
+registration or profile makes the flow stale. Existing session, PKCE, issuer,
 generation and registration-fingerprint checks still apply.
 
 If a valid matching callback loses setup authority or its binding changes before

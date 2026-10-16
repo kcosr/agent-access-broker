@@ -1298,7 +1298,9 @@ deploying it:
 
 Imported services need no configuration change. Each import with a personal
 binding publishes its own connection under its service ID and keeps reading the
-tokens and OAuth connections its users already have. A connection ID must not
+tokens and OAuth connections its users already have. OAuth consent flows left
+pending by the previous version are discarded as if they had expired; their
+users start consent again, and stored OAuth connections are unaffected. A connection ID must not
 equal an imported service ID or a configured service or gateway that does not
 use it, so choose new IDs accordingly.
 
