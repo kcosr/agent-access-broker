@@ -43,7 +43,7 @@ fn import_adapters() -> [ImportedAdapterRegistration; 3] {
 }
 
 pub(crate) fn backend_registry() -> BackendRegistry {
-    registry_of(NATIVES)
+    registry_of(NATIVES, OAUTH_DIALECTS)
 }
 
 /// The assembly's selection with `replacement` in place of the native of the
@@ -51,19 +51,47 @@ pub(crate) fn backend_registry() -> BackendRegistry {
 pub(crate) fn backend_registry_replacing(
     replacement: &'static BackendRegistration,
 ) -> BackendRegistry {
-    registry_of(NATIVES.map(|native| {
+    registry_of(replacing_native(replacement), OAUTH_DIALECTS)
+}
+
+/// [`backend_registry_replacing`] with `dialect` in place of the OAuth
+/// dialect of the same ID, for tests whose test-local backend consumes a
+/// dialect fixture that reaches a stub server.
+pub(crate) fn backend_registry_replacing_with_dialect(
+    replacement: &'static BackendRegistration,
+    dialect: &'static OAuthDialectRegistration,
+) -> BackendRegistry {
+    registry_of(
+        replacing_native(replacement),
+        OAUTH_DIALECTS.map(|linked| {
+            if linked.id() == dialect.id() {
+                dialect
+            } else {
+                linked
+            }
+        }),
+    )
+}
+
+fn replacing_native(
+    replacement: &'static BackendRegistration,
+) -> [&'static BackendRegistration; 8] {
+    NATIVES.map(|native| {
         if native.kind() == replacement.kind() {
             replacement
         } else {
             native
         }
-    }))
+    })
 }
 
-fn registry_of(natives: [&'static BackendRegistration; 8]) -> BackendRegistry {
+fn registry_of(
+    natives: [&'static BackendRegistration; 8],
+    dialects: [&'static OAuthDialectRegistration; 4],
+) -> BackendRegistry {
     BackendRegistry::new(natives)
         .expect("linked backends register consistently")
-        .with_oauth_dialects(OAUTH_DIALECTS)
+        .with_oauth_dialects(dialects)
         .expect("linked OAuth dialects register consistently")
         .with_imported_adapters(import_adapters())
         .expect("linked imported adapters register consistently")

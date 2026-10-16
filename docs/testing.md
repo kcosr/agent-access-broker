@@ -1893,6 +1893,31 @@ rejection Git reports without asking its credential helper to erase the Broker
 token (it requires `git` and `git http-backend`). No test reaches a real GitLab
 instance.
 
+## Atlassian OAuth
+
+`cargo test -p agent-access-atlassian --lib` covers the `atlassian` dialect
+against stubbed Atlassian endpoints: registration rules, including the
+cloud-ID target, required scopes and one profile; the consumer check that
+requires the gateway on the profile's cloud ID; the authorization URL's
+audience, consent prompt and PKCE; JSON code exchange and refresh with and
+without a response `scope` (an exchange without it fails, a refresh keeps the
+granted scopes); identity mapping; token-response bounds and error
+classification, including Atlassian's 403 `invalid_grant`; and site discovery,
+which merges a site's product entries, adds `read:me` only when granted, keeps
+extra scopes and reports grants for other sites. It also checks every row of
+the Atlassian gateway validation table with and without service credentials.
+
+The Broker host's `tests::oauth::atlassian_dialect` drives browser consent and
+a delegated lease through the OAuth manager with a test consumer that acts
+through the gateway on one site: the merged site target, the pinned cloud ID and
+`api.atlassian.com` audience, a refresh without `scope` that keeps the granted
+scopes and rereads the sites, and a 403 `invalid_grant` that requires reconnect.
+Installation stores nothing for an exchange without `scope`, a grant for another
+site, or a site without one of the shared profile's products. It also validates
+full configurations for every row of the Atlassian connection table, including
+simultaneous bearer service credentials and per-product registrations. No test
+reaches Atlassian.
+
 ## Imported MCP services
 
 The import suites use synthetic servers and credentials; no Grafana, Prometheus,

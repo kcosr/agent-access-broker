@@ -986,8 +986,17 @@ fn providers_value(providers: &ProvidersConfig) -> Value {
             "cloudbees_ci" => cloudbees_value(providers.get().unwrap()),
             "teams" => teams_value(providers.get().unwrap()),
             "oauth_stub" => {
-                let OAuthStubProviderConfig { base_url } = providers.get().unwrap();
-                Fields::default().put("base_url", base_url.as_str()).value()
+                match providers.get::<super::oauth::atlassian_dialect::AtlassianSiteConsumer>() {
+                    Some(consumer) => {
+                        let super::oauth::atlassian_dialect::AtlassianSiteConsumer { cloud_id } =
+                            consumer;
+                        Fields::default().put("cloud_id", cloud_id.as_str()).value()
+                    }
+                    None => {
+                        let OAuthStubProviderConfig { base_url } = providers.get().unwrap();
+                        Fields::default().put("base_url", base_url.as_str()).value()
+                    }
+                }
             }
             "conformance" => conformance_value(providers.get().unwrap()),
             "verifier" => {
