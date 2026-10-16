@@ -1345,7 +1345,7 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
                 "target":{"type":["string","null"]},
                 "canConnect":{"type":"boolean"},
                 "canDisconnect":{"type":"boolean","description":"An owned connection exists. Local disconnect remains available after setup entitlement is removed."},
-                "connectUnavailableReason":{"enum":[null,"no_personal_access","service_unavailable"]},
+                "connectUnavailableReason":{"enum":[null,"no_personal_access","service_unavailable","login_binding_required"],"description":"login_binding_required: the registration binds connections to a Broker sign-in the caller has not linked."},
                 "connection":connection_schema
             }
         }

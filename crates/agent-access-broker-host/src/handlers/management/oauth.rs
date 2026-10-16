@@ -193,7 +193,14 @@ pub(crate) async fn list(
                 "no_personal_access"
             })
         } else {
-            None
+            // A registration bound to a Broker sign-in the user has not
+            // linked cannot connect; consent start and installation check
+            // it again.
+            match manager.check_login_binding(&context.identity.principal, &registration_id) {
+                Ok(()) => None,
+                Err(OAuthError::LoginBindingRequired) => Some("login_binding_required"),
+                Err(failure) => return error(&context, operation, failure).await,
+            }
         };
         let Some(registration) = manager.config().registrations.get(&registration_id) else {
             continue;

@@ -398,6 +398,11 @@ All notable changes to this project are documented in this file.
   prefix `aab_confluence_draft_v4_`. Tokens and draft handles issued before
   the upgrade are rejected: repeat the search or listing without the token,
   and create or stage the draft again.
+- The SDK's intentionally exhaustive `OAuthRegistrationConfig` gains the
+  optional `login_binding: Option<OAuthLoginBinding>` field. Code that builds
+  it with a struct literal adds `login_binding: None`; deserialized
+  registrations without the key are unchanged, as are their fingerprints and
+  stored connections.
 
 ### Added
 
@@ -775,6 +780,27 @@ All notable changes to this project are documented in this file.
   pass offline validation. See [GitLab OAuth](docs/oauth.md#gitlab).
 - The development `oauth_stub` service declares its `base_url` as its upstream
   authority.
+- Optional OAuth login binding, off unless a registration sets
+  `login_binding = { provider = "microsoft", upstream_identity_provider,
+  upstream_tenant_id }`: the Broker installs an upstream account only when it
+  reports a linked identity at that upstream identity provider whose external
+  ID is the Entra object ID of the owner's Broker Microsoft sign-in, whatever
+  sign-in the browser session used. The owner's sign-in must be in
+  `upstream_tenant_id`, the operator's statement of the tenant the upstream's
+  provider uses, which must be `browser_auth.oidc.microsoft.tenant_id`.
+  Consent start and installation check it, installation again inside its
+  transaction. Without a linked sign-in the connections listing reports
+  `connectUnavailableReason: "login_binding_required"`, which the portal
+  explains, and consent fails with `oauth_login_binding_required`; an account
+  linked elsewhere fails with `oauth_login_binding_mismatch` and stores
+  nothing. Only the `gitlab` dialect supports it, reading `/api/v4/user`'s
+  `identities` (GitLab's Entra provider must use `uid_field = "oid"`);
+  validation rejects it on other dialects. Adding, changing or removing it
+  makes the registration's owners reconnect. The SDK adds
+  `OAuthLoginBinding`, `OAuthLoginProvider`, `LinkedIdentity`,
+  `ConnectedIdentity::linked_identities` with `with_linked_identities`, and the
+  default `OAuthDialect::supports_login_binding`. See
+  [GitLab login binding](docs/oauth.md#gitlab-login-binding).
 
 ### Changed
 

@@ -69,6 +69,43 @@ pub struct OAuthRegistrationConfig {
     #[serde(default)]
     pub allow_insecure_loopback: bool,
     pub permission_profiles: BTreeMap<String, OAuthPermissionProfile>,
+    /// Binds each connected upstream account to its owner's Broker sign-in.
+    /// Only a dialect that reports linked identities
+    /// ([`OAuthDialect::supports_login_binding`]) accepts it.
+    // Omitting it preserves existing registration fingerprints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_binding: Option<OAuthLoginBinding>,
+}
+
+/// A registration's `login_binding`: the Broker sign-in an upstream account
+/// must be linked to before the Broker installs a connection to it.
+///
+/// The host requires the connected account to report a linked identity at
+/// `upstream_identity_provider` whose external ID is the owner's user ID at
+/// the Broker's sign-in `provider`. Configuration schema, intentionally
+/// exhaustive like [`OAuthRegistrationConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OAuthLoginBinding {
+    /// The Broker sign-in whose linked identity is authoritative.
+    pub provider: OAuthLoginProvider,
+    /// The upstream's name for the identity provider it signs people in
+    /// through, as its linked identities report it.
+    pub upstream_identity_provider: String,
+    /// The operator's attestation that `upstream_identity_provider` signs
+    /// people in through this tenant of `provider`: the tenant must also be
+    /// the Broker sign-in's own.
+    pub upstream_tenant_id: String,
+}
+
+/// A Broker sign-in an upstream account can be bound to.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthLoginProvider {
+    /// Microsoft Entra ID sign-in: the owner's linked identity is their
+    /// object ID (`oid`) in the Broker's tenant.
+    Microsoft,
 }
 
 #[non_exhaustive]
@@ -395,15 +432,20 @@ pub struct ConnectedIdentity {
     /// None means the grant authorizes a resource but proves no upstream account identity.
     pub subject: Option<String>,
     pub display_name: String,
+    /// The upstream account's identities at external identity providers, as
+    /// the upstream reports them. Empty when it reports none.
+    pub linked_identities: Vec<LinkedIdentity>,
 }
 
 impl ConnectedIdentity {
     /// A connection shown as `display_name` that proves no upstream account
-    /// identity until [`Self::with_subject`] records one.
+    /// identity until [`Self::with_subject`] records one, and reports no
+    /// linked identities.
     pub fn new(display_name: impl Into<String>) -> Self {
         Self {
             subject: None,
             display_name: display_name.into(),
+            linked_identities: Vec::new(),
         }
     }
 
@@ -411,6 +453,38 @@ impl ConnectedIdentity {
     pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
         self.subject = Some(subject.into());
         self
+    }
+
+    /// The account's identities at external identity providers, which a
+    /// registration's `login_binding` checks.
+    pub fn with_linked_identities(
+        mut self,
+        identities: impl IntoIterator<Item = LinkedIdentity>,
+    ) -> Self {
+        self.linked_identities = identities.into_iter().collect();
+        self
+    }
+}
+
+/// One identity an upstream account is linked to at an external identity
+/// provider.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedIdentity {
+    /// The upstream's name for the identity provider.
+    pub provider: String,
+    /// The account's user ID at that identity provider.
+    pub external_id: String,
+}
+
+impl LinkedIdentity {
+    /// The account's identity `external_id` at the identity provider the
+    /// upstream calls `provider`.
+    pub fn new(provider: impl Into<String>, external_id: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            external_id: external_id.into(),
+        }
     }
 }
 
@@ -508,6 +582,14 @@ pub trait OAuthDialect: Send + Sync + 'static {
 
     /// Initial consent may omit refresh capability only when the dialect opts in.
     fn allows_access_without_refresh(&self) -> bool {
+        false
+    }
+
+    /// Whether [`Self::identity`] reports the account's linked identities,
+    /// so registrations may set `login_binding`. The host rejects a
+    /// `login_binding` on a dialect that does not opt in, rather than
+    /// ignoring it; `validate_registration` need not check the field.
+    fn supports_login_binding(&self) -> bool {
         false
     }
     /// Checks the dialect adds to a registration's generic validation; the

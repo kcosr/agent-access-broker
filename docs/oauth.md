@@ -180,7 +180,9 @@ Microsoft Entra ID, setting GitLab's `auto_sign_in_with_provider` to it lets a
 trusted application connect without a click for anyone with a session. The
 provider can still prompt, for example for multi-factor authentication. Keep a
 GitLab administrator who can sign in without it; `?auto_sign_in=false` on the
-sign-in page bypasses it.
+sign-in page bypasses it. When the Broker also signs people in through Entra,
+[login binding](#gitlab-login-binding) can require each connected GitLab
+account to be the person's own.
 
 ### GitLab registration
 
@@ -287,6 +289,75 @@ GitLab refresh tokens do not expire. Disconnecting removes the Broker's copy
 but does not revoke the grant in GitLab: the person revokes the application
 under their GitLab **Applications** settings, or a GitLab administrator revokes
 the application's tokens.
+
+### GitLab login binding
+
+Where people sign in to both the Broker and GitLab through Microsoft Entra ID,
+a registration can require each connected GitLab account to belong to the
+person connecting it: GitLab must report the account linked to the same Entra
+user as the person's Broker account. Binding is off unless the registration
+sets `login_binding`:
+
+```toml
+[oauth.registrations.gitlab.login_binding]
+provider = "microsoft"
+upstream_identity_provider = "azure_activedirectory_v2"
+upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
+```
+
+- `provider = "microsoft"` makes the Broker's
+  [Microsoft sign-in](operator-guide.md#microsoft-entra-oidc-setup-and-operation)
+  authoritative, so `browser_auth.oidc.microsoft.enabled` is required.
+- `upstream_identity_provider` is GitLab's OmniAuth name for its Entra
+  sign-in, as GitLab reports it in a user's `identities`, such as
+  `azure_activedirectory_v2`, or the `name` of an `openid_connect` provider.
+- `upstream_tenant_id` states that this GitLab provider signs people in
+  through that Entra tenant. GitLab does not report the tenant, so the Broker
+  relies on this statement, and it must be
+  `browser_auth.oidc.microsoft.tenant_id`.
+
+Before enabling it, check that:
+
+- GitLab's Entra provider records each person's Entra object ID: set its
+  `uid_field` to `oid`. GitLab's examples differ: some use
+  `preferred_username`, and without `uid_field` GitLab records `sub`, which is
+  not the object ID, so no account would connect. Never use
+  `preferred_username`, which can be changed or reassigned; the Broker
+  compares only object IDs.
+- GitLab includes `identities` in `/api/v4/user` for the profile's scopes.
+  GitLab documents the field but not which scopes expose it; request
+  `/api/v4/user` with a token holding the same scopes and confirm it lists the
+  Entra identity. Without it, no account connects.
+- Each person's Broker account has a Microsoft sign-in: Microsoft
+  just-in-time accounts have one, and an administrator can
+  [link an existing account](administrator-guide.md#microsoft-onboarding).
+
+With the binding set:
+
+- A person without an active Microsoft sign-in in that tenant cannot connect.
+  Their row in `GET /v1/oauth/connections` has `canConnect: false` and
+  `connectUnavailableReason: "login_binding_required"`, which the portal
+  explains, and starting consent fails with HTTP 400 and
+  `error.message: "oauth_login_binding_required"`.
+- After the code exchange, the Broker reads `/api/v4/user` and requires an
+  `identities` entry whose `provider` is `upstream_identity_provider` and whose
+  `extern_uid` is the person's Entra object ID, compared without regard to
+  case. Otherwise the callback fails with HTTP 400 and
+  `error.message: "oauth_login_binding_mismatch"`, and nothing is stored.
+- The Broker checks the person's current Microsoft sign-in again inside the
+  transaction that installs the connection, so a link removed or changed
+  during consent prevents the installation.
+- The Broker account's Microsoft sign-in counts whatever sign-in method the
+  browser session used, including a local password.
+- Errors, logs and audit carry only these codes, never object IDs.
+
+The check runs whenever a connection is installed: on connect, reconnect and
+account replacement. Later changes to either link do not affect an existing
+connection until it is reconnected; disconnect it to end access sooner. Adding,
+changing or removing `login_binding` changes the registration, so every person
+reconnects; a registration without it keeps its connections. Only the `gitlab`
+dialect reports linked identities, and validation rejects `login_binding` on
+any other registration.
 
 ## Development test-provider configuration
 
@@ -420,8 +491,10 @@ connected mailbox. The test records provider does not define mail actions; see
 Each row includes `canConnect`, `canDisconnect` and the required nullable
 `connectUnavailableReason`. The reason is `null` when setup is available,
 `no_personal_access` when the owner lacks a matching `per_user` grant on every
-consumer, or `service_unavailable` when an imported consumer cannot currently
-accept setup. A retained connection can therefore offer Disconnect while
+consumer, `service_unavailable` when an imported consumer cannot currently
+accept setup, or `login_binding_required` when the registration's
+[login binding](#gitlab-login-binding) needs a Broker sign-in the owner has not
+linked. A retained connection can therefore offer Disconnect while
 Connect/Reconnect is unavailable. These flags describe personal management, not
 invocation access.
 
@@ -486,7 +559,12 @@ Broker setup authorization denial returns HTTP 403 with
 `error.message: "oauth_setup_denied"`. An upstream permission or scope rejection
 instead returns HTTP 400 with `reasonCode: "credential_invalid"` and
 `error.message: "oauth_permission_denied"`;
-it does not imply a Broker grant denial.
+it does not imply a Broker grant denial. A registration's
+[login binding](#gitlab-login-binding) refuses consent with HTTP 400,
+`reasonCode: "credential_invalid"` and `error.message:
+"oauth_login_binding_required"` when the owner has no linked sign-in, and
+installation with `error.message: "oauth_login_binding_mismatch"` when the
+upstream account is not linked to it.
 The portal is mounted at `/ui`; the current Broker configuration validator
 rejects any other `portal.mount_path`; callback destinations stay within that portal.
 The three JSON management routes advertise `browser_management` access in the

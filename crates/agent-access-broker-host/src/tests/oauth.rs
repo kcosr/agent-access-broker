@@ -126,6 +126,7 @@ async fn oauth_fixture_with(
     config.oauth.registrations.insert(
         "stub".into(),
         OAuthRegistrationConfig {
+            login_binding: None,
             adapter_settings: Default::default(),
             adapter: OAuthAdapter::new("stub"),
             base_url: server.uri(),
@@ -226,7 +227,7 @@ async fn oauth_fixture_with(
             .unwrap();
         store.add_group("alice", group, "test").unwrap();
     }
-    let broker = TestBroker::start_with_providers(&config, providers).await;
+    let broker = start_oauth_broker(&config, providers).await;
     let runtime = broker.runtime();
     if let Some(subject) = subject {
         runtime
@@ -313,6 +314,45 @@ async fn oauth_fixture_with(
         cookie,
         csrf,
         agent_token,
+    }
+}
+
+/// `config`'s broker serving `providers`. A Microsoft sign-in it enables
+/// is never reached: tests link Microsoft login methods in the store.
+async fn start_oauth_broker(
+    config: &BrokerConfig,
+    providers: Vec<agent_access_provider::ServiceProvider>,
+) -> TestBroker {
+    let mut application = TestBroker::config_builder(config);
+    if config.browser_auth.oidc.microsoft.enabled {
+        application = application.microsoft_oidc_components(
+            Arc::new(UnreachableMicrosoft),
+            Arc::new(agent_access_core::microsoft_oidc::SystemMicrosoftOidcClock),
+        );
+    }
+    TestBroker::start_with(with_provider_instances(application, providers)).await
+}
+
+/// A Microsoft sign-in transport that fails every request without sending.
+struct UnreachableMicrosoft;
+
+impl crate::state::MicrosoftOidcTransport for UnreachableMicrosoft {
+    fn call<'a>(
+        &'a self,
+        _: openidconnect::HttpRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        openidconnect::HttpResponse,
+                        crate::state::MicrosoftOidcTransportError,
+                    >,
+                > + Send
+                + Sync
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(crate::state::MicrosoftOidcTransportError) })
     }
 }
 

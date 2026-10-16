@@ -12,6 +12,9 @@ use agent_access_provider::{
 };
 use std::sync::Mutex;
 
+#[path = "gitlab_login_binding.rs"]
+mod login_binding;
+
 const CALLBACK: &str = "http://127.0.0.1/v1/oauth/callback/gitlab";
 
 /// What a GitLab consumer pins: the normalized instance base its upstream
@@ -118,14 +121,24 @@ impl Provider for InstanceConsumer {
 /// registration on the stubbed instance `gitlab`, whose connection
 /// `consumer` serves as `oauth_stub`.
 async fn gitlab_fixture(gitlab: &MockServer, consumer: &Arc<InstanceConsumer>) -> OAuthFixture {
+    gitlab_fixture_with(gitlab, consumer, |_, _| {}).await
+}
+
+/// [`gitlab_fixture`] after `adjust` changes its configuration further.
+async fn gitlab_fixture_with(
+    gitlab: &MockServer,
+    consumer: &Arc<InstanceConsumer>,
+    adjust: impl FnOnce(&Path, &mut BrokerConfig),
+) -> OAuthFixture {
     let instance = gitlab.uri();
     oauth_fixture_with(
         Some("user:alice"),
-        |_, config| {
+        |directory, config| {
             let stub = config.oauth.registrations.remove("stub").unwrap();
             config.oauth.registrations.insert(
                 "gitlab".into(),
                 OAuthRegistrationConfig {
+                    login_binding: None,
                     adapter: OAuthAdapter::new("gitlab"),
                     base_url: instance.clone(),
                     redirect_uri: CALLBACK.into(),
@@ -162,6 +175,7 @@ async fn gitlab_fixture(gitlab: &MockServer, consumer: &Arc<InstanceConsumer>) -
                 .insert(agent_access_fake::OAuthStubProviderConfig {
                     base_url: instance.clone(),
                 });
+            adjust(directory, config);
         },
         vec![ServiceProvider::from(Arc::clone(consumer))],
     )

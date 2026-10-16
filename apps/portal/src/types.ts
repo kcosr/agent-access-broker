@@ -65,7 +65,7 @@ export type OAuthConnectionTarget = {
   requestedScopes: string[];
   target: string | null;
   canConnect: boolean;
-  connectUnavailableReason: null | "no_personal_access" | "service_unavailable";
+  connectUnavailableReason: null | "no_personal_access" | "service_unavailable" | "login_binding_required";
   canDisconnect: boolean;
   connection: null | {
     connectionId: string | null;

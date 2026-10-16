@@ -275,11 +275,12 @@ pub use lookup::LookupAccess;
 pub use module::{ModuleMetadata, SDK_PACKAGE};
 pub use mutation_receipt::{MutationReceipt, MutationStatus};
 pub use oauth_dialect::{
-    AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken,
+    AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, LinkedIdentity,
     OAUTH_MAX_RESPONSE_BYTES, OAuthAdapter, OAuthCallbackIssuer, OAuthClient, OAuthClientAuth,
-    OAuthDialect, OAuthDialectError, OAuthDialectRegistration, OAuthHttp, OAuthPermissionProfile,
-    OAuthRegistrationConfig, OAuthResponse, OAuthRotation, OAuthScopeMode, OAuthTarget,
-    OAuthTokenEncoding, PreparedAuthorization, RefreshReplay, TokenGrant,
+    OAuthDialect, OAuthDialectError, OAuthDialectRegistration, OAuthHttp, OAuthLoginBinding,
+    OAuthLoginProvider, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthResponse,
+    OAuthRotation, OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, PreparedAuthorization,
+    RefreshReplay, TokenGrant,
 };
 pub use provider::{Provider, ServiceProvider};
 pub use reason::{Decision, HookPhase, InvalidReasonCodeId, ReasonCode, ReasonCodeId};

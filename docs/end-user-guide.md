@@ -385,6 +385,7 @@ report.
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
+| `oauth_login_binding_required` or `oauth_login_binding_mismatch` | The registration accepts only an upstream account linked to your Broker account's Microsoft sign-in. Ask an administrator to link your Microsoft sign-in, or connect the upstream account you sign in to through Microsoft |
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
 | `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |

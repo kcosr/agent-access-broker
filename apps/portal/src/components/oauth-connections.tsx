@@ -21,7 +21,8 @@ const STATUS: Record<string, { label: string; tone: Tone }> = {
 export const OTHER_AUTHORIZATION_OPEN = "Finish or close the other authorization tab before connecting this account.";
 const CONNECT_UNAVAILABLE = {
   no_personal_access: "Reconnect requires an active grant for your personal account. You can still disconnect this account.",
-  service_unavailable: "This service is unavailable for connection. You can still disconnect an existing account."
+  service_unavailable: "This service is unavailable for connection. You can still disconnect an existing account.",
+  login_binding_required: "Connecting requires a Microsoft sign-in linked to your Broker account. Ask an administrator to link it. You can still disconnect an existing account."
 };
 export const AUTHORIZATION_TAB_NOTICE = "Closing the authorization tab may leave consent pending for up to five minutes.";
 const IDENTITY_UNAVAILABLE = "Upstream account identity unavailable; reconnecting asks to confirm replacing the connection.";

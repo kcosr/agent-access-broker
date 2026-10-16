@@ -16,12 +16,16 @@
 //! `revalidated_access_for(&oauth_target(&instance), GITLAB_OAUTH_AUDIENCE)`
 //! for the instance its declared upstream authority names; offline
 //! validation has already checked that this is the registration's instance.
+//!
+//! The connected account reports its linked sign-ins, `/api/v4/user`'s
+//! `identities[]` (`provider`, `extern_uid`), so registrations may set
+//! `login_binding`.
 use agent_access_provider::{
-    AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, OAuthCallbackIssuer,
-    OAuthClient, OAuthClientAuth, OAuthDialect, OAuthDialectError, OAuthDialectRegistration,
-    OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthResponse, OAuthRotation,
-    OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, RefreshReplay, TokenGrant, UpstreamAuthority,
-    UpstreamRetryAfter,
+    AuthorizationRequest, CodeExchange, ConnectedIdentity, IssuedRefreshToken, LinkedIdentity,
+    OAuthCallbackIssuer, OAuthClient, OAuthClientAuth, OAuthDialect, OAuthDialectError,
+    OAuthDialectRegistration, OAuthHttp, OAuthPermissionProfile, OAuthRegistrationConfig,
+    OAuthResponse, OAuthRotation, OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, RefreshReplay,
+    TokenGrant, UpstreamAuthority, UpstreamRetryAfter,
 };
 use async_trait::async_trait;
 use reqwest::Method;
@@ -37,6 +41,9 @@ const DEFAULT_EXPIRES_IN_SECONDS: u64 = 7200;
 /// The manager's bound on access and refresh tokens.
 const MAX_TOKEN_BYTES: usize = 32_768;
 const MAX_USERNAME_BYTES: usize = 255;
+/// Bounds on the linked identities read from `/api/v4/user`.
+const MAX_LINKED_IDENTITIES: usize = 64;
+const MAX_LINKED_IDENTITY_BYTES: usize = 1024;
 const AUTHORIZE_PATH: &str = "oauth/authorize";
 const TOKEN_PATH: &str = "oauth/token";
 const TOKEN_INFO_PATH: &str = "oauth/token/info";
@@ -79,6 +86,10 @@ fn endpoint(config: &OAuthRegistrationConfig, path: &str) -> Result<Url, OAuthDi
 
 #[async_trait]
 impl OAuthDialect for GitlabDialect {
+    fn supports_login_binding(&self) -> bool {
+        true
+    }
+
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String> {
         if config.client_auth != OAuthClientAuth::ClientSecretPost
             || config.encoding != OAuthTokenEncoding::Form
@@ -266,7 +277,9 @@ impl OAuthDialect for GitlabDialect {
                     && !name.chars().any(char::is_control)
             })
             .ok_or_else(invalid)?;
-        Ok(ConnectedIdentity::new(username).with_subject(id.to_string()))
+        Ok(ConnectedIdentity::new(username)
+            .with_subject(id.to_string())
+            .with_linked_identities(linked_identities(&user)))
     }
 
     async fn discover_targets(
@@ -284,6 +297,35 @@ impl OAuthDialect for GitlabDialect {
                 .with_name("GitLab instance"),
         ])
     }
+}
+
+/// The account's linked sign-ins: each `identities[]` entry with a textual
+/// `provider` and `extern_uid` within bounds. An entry that is not is left
+/// out, so it can never satisfy a login binding.
+fn linked_identities(user: &Value) -> Vec<LinkedIdentity> {
+    let text = |entry: &Value, key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= MAX_LINKED_IDENTITY_BYTES
+                    && !value.chars().any(char::is_control)
+            })
+            .map(str::to_owned)
+    };
+    user.get("identities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            Some(LinkedIdentity::new(
+                text(entry, "provider")?,
+                text(entry, "extern_uid")?,
+            ))
+        })
+        .take(MAX_LINKED_IDENTITIES)
+        .collect()
 }
 
 /// A token endpoint response. It holds the issued tokens, so it has no Debug.

@@ -26,6 +26,7 @@ fn profile(target: &str) -> OAuthPermissionProfile {
 /// `default` targets `target`.
 fn registration(base_url: &str, target: &str) -> OAuthRegistrationConfig {
     OAuthRegistrationConfig {
+        login_binding: None,
         adapter: OAuthAdapter::new("gitlab"),
         base_url: base_url.into(),
         redirect_uri: REDIRECT_URI.into(),
@@ -717,6 +718,72 @@ async fn identity_is_the_numeric_user_id_and_username() {
                 .err(),
             Some(expected)
         );
+    }
+}
+
+/// The account's linked sign-ins are `/api/v4/user`'s `identities[]`, which
+/// a registration's `login_binding` checks. An entry without a textual
+/// provider and external UID within bounds is left out, so it can never
+/// satisfy a binding, and an account reporting none still connects.
+#[tokio::test]
+async fn identity_reports_the_accounts_linked_sign_ins() {
+    assert!(dialect().supports_login_binding());
+    let object_id = "cccccccc-cccc-4ccc-8ccc-ccccccccccc3";
+    let directory = "uid=alice,ou=people,dc=example,dc=com";
+    let instance = Instance::start().await;
+    instance
+        .get_responds(
+            "/api/v4/user",
+            ok(json!({
+                "id": 42,
+                "username": "alice",
+                "identities": [
+                    {"provider": "azure_activedirectory_v2", "extern_uid": object_id, "saml_provider_id": null},
+                    {"provider": "ldapmain", "extern_uid": directory},
+                    {"provider": "github", "extern_uid": 1234},
+                    {"provider": "", "extern_uid": object_id},
+                    {"extern_uid": object_id},
+                    {"provider": "openid_connect", "extern_uid": "line\nbreak"},
+                    {"provider": "saml", "extern_uid": "x".repeat(1025)},
+                    "azure_activedirectory_v2"
+                ]
+            })),
+        )
+        .await;
+    let identity = dialect()
+        .identity(&instance.http, &instance.client(), "access-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        identity.linked_identities,
+        [
+            LinkedIdentity::new("azure_activedirectory_v2", object_id),
+            LinkedIdentity::new("ldapmain", directory),
+        ]
+    );
+
+    let many = (0..70)
+        .map(|n| json!({"provider": "saml", "extern_uid": format!("user-{n}")}))
+        .collect::<Vec<_>>();
+    for (identities, expected) in [
+        (None, 0),
+        (Some(Value::Null), 0),
+        (Some(json!("azure_activedirectory_v2")), 0),
+        (Some(json!([])), 0),
+        (Some(Value::Array(many)), 64),
+    ] {
+        let mut user = json!({"id": 42, "username": "alice"});
+        if let Some(identities) = identities {
+            user["identities"] = identities;
+        }
+        let instance = Instance::start().await;
+        instance.get_responds("/api/v4/user", ok(user)).await;
+        let identity = dialect()
+            .identity(&instance.http, &instance.client(), "access-1")
+            .await
+            .unwrap();
+        assert_eq!(identity.subject.as_deref(), Some("42"));
+        assert_eq!(identity.linked_identities.len(), expected);
     }
 }
 

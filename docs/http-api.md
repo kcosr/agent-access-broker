@@ -3185,7 +3185,12 @@ unaffected. Connect/Reconnect without current
 Broker setup authority returns HTTP 403 with `reasonCode: "service_action_denied"`
 and `error.message: "oauth_setup_denied"`. Upstream permission or scope rejection
 remains HTTP 400 with `reasonCode: "credential_invalid"` and
-`error.message: "oauth_permission_denied"`. Setup does not require an invocable
+`error.message: "oauth_permission_denied"`. A registration's
+[login binding](oauth.md#gitlab-login-binding) returns HTTP 400 with
+`reasonCode: "credential_invalid"` and `error.message:
+"oauth_login_binding_required"` when the caller has no linked sign-in, at
+connect or callback, or `"oauth_login_binding_mismatch"` from the callback when
+the upstream account is not linked to it. Setup does not require an invocable
 resource/context or change invocation authorization. Audit targets name
 `{"registration": …}`, with `importedService` when supplied.
 
@@ -3241,8 +3246,10 @@ the Broker keeps no durable record of the consented one, as well as
 `canDisconnect: true`.
 `canConnect`, `canDisconnect` and required nullable `connectUnavailableReason`
 are as follows: `connectUnavailableReason` is `null` when setup is available,
-`no_personal_access` for missing grant authority, or `service_unavailable` for an
-imported service that cannot currently accept setup. Owners retain metadata and
+`no_personal_access` for missing grant authority, `service_unavailable` for an
+imported service that cannot currently accept setup, or `login_binding_required`
+when the registration's [login binding](oauth.md#gitlab-login-binding) needs a
+Broker sign-in the caller has not linked. Owners retain metadata and
 local disconnect for existing connections after grant loss. Rows and flags follow
 the [OAuth ownership rules](oauth.md#browser-management-api).
 

@@ -357,6 +357,15 @@ read_only = true
 # scopes = ["api", "write_repository"] # read-only: ["read_api", "read_repository"]
 # audience = "gitlab"
 # target = "https://gitlab.example.com"
+#
+# Optional, off when omitted: install only GitLab accounts that GitLab reports
+# linked, through its Entra sign-in (uid_field = "oid"), to the owner's Broker
+# Microsoft sign-in. Requires [browser_auth.oidc.microsoft] in the same tenant.
+# See docs/oauth.md#gitlab-login-binding.
+# [oauth.registrations.gitlab.login_binding]
+# provider = "microsoft"
+# upstream_identity_provider = "azure_activedirectory_v2"
+# upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
 
 [policy]
 authority = "toml"

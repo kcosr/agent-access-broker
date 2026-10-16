@@ -5048,6 +5048,7 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
     config.oauth.registrations.insert(
         "stub".into(),
         agent_access_provider::OAuthRegistrationConfig {
+            login_binding: None,
             adapter_settings: Default::default(),
             adapter: agent_access_provider::OAuthAdapter::new("stub"),
             base_url: "https://unreachable.example.test".into(),
@@ -5130,6 +5131,7 @@ fn oauth_registrations_resolve_their_dialect_and_its_rules() {
     config.policy.grants.clear();
     let secret_path = write_temp_secret("oauth-dialect-client-secret");
     let registration = agent_access_provider::OAuthRegistrationConfig {
+        login_binding: None,
         adapter_settings: Default::default(),
         adapter: agent_access_provider::OAuthAdapter::new("stub"),
         base_url: "https://stub.example.test".into(),

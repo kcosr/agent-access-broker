@@ -139,7 +139,8 @@ describe("imported personal authentication", () => {
   });
   test.each([
     ["no_personal_access", "Reconnect requires an active grant for your personal account. You can still disconnect this account."],
-    ["service_unavailable", "This service is unavailable for connection. You can still disconnect an existing account."]
+    ["service_unavailable", "This service is unavailable for connection. You can still disconnect an existing account."],
+    ["login_binding_required", "Connecting requires a Microsoft sign-in linked to your Broker account. Ask an administrator to link it. You can still disconnect an existing account."]
   ] as const)("cleanup rows explain %s and allow local disconnect on both surfaces", (reason, explanation) => {
     const target = oauthTarget({ consumers: [], otherConsumers: 1, canConnect: false, connectUnavailableReason: reason, canDisconnect: true, connection: { connectionId: "connection", subjectId: "reader", displayName: "Reader", status: "ready", reason: null, targets: [] } });
     for (const html of surfaces(target)) {

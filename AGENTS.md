@@ -285,8 +285,11 @@ binary and needs `python3`, whose absence fails it.
   uses; `runtime/personal_credentials.rs` reads the selected token rows;
   `runtime/lookup_access.rs` plans and selects lookup access: the shared
   lookup credential, the caller's token, or the operation's one OAuth lease
-  shared with execution); contains no backend. Its internal `imports`
-  module owns the import adapter contract (`ImportedAdapter`, imported
+  shared with execution) and OAuth login binding (`oauth/login_binding.rs`:
+  a registration's optional `login_binding`, checked against the owner's
+  linked Microsoft sign-in at consent start and, after the identity request,
+  again inside the install transaction); contains no backend. Its internal
+  `imports` module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import
   them from `agent_access_provider` directly, not through core.
@@ -300,7 +303,8 @@ binary and needs `python3`, whose absence fails it.
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `config.rs`, `provisioning.rs`,
   `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`: one instance's
-  target and `gitlab` audience, token-info scope evidence at code exchange).
+  target and `gitlab` audience, token-info scope evidence at code exchange,
+  and the account's linked sign-ins for `login_binding`).
 - `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
   (gateway credential rules, request authorization, tenant/gateway client
   routes and their route fingerprint, the credential binding of their

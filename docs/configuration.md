@@ -2258,6 +2258,14 @@ binary selects: `google` for Gmail, [`gitlab`](oauth.md#gitlab) for GitLab
 REST and Git, `mcp_oauth` for approved imported MCP services, or the
 development-only `stub`. The Broker core defines no dialect of
 its own. This is separate from Microsoft OIDC browser login.
+A registration may set `login_binding = { provider = "microsoft",
+upstream_identity_provider = "<name>", upstream_tenant_id = "<tenant>" }` to
+install only upstream accounts linked to the owner's Broker Microsoft sign-in.
+It requires `browser_auth.oidc.microsoft.enabled`, a canonical lowercase
+`upstream_tenant_id` equal to `browser_auth.oidc.microsoft.tenant_id`, a dialect
+that reports linked identities (today only `gitlab`), and accepts no other keys.
+It is off when omitted; adding, changing or removing it makes every owner of
+the registration reconnect. See [GitLab login binding](oauth.md#gitlab-login-binding).
 Each approved OAuth destination origin (issuer, metadata, token, identity or
 target endpoint) follows the global egress proxy resolution independently. Only
 literal IPv4/IPv6 loopback addresses connect directly, and a loopback issuer

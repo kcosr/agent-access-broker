@@ -1482,6 +1482,8 @@ pub agent_access_core::oauth::OAuthError::FlowLimit
 pub agent_access_core::oauth::OAuthError::IdentityMismatch
 pub agent_access_core::oauth::OAuthError::InvalidFlow
 pub agent_access_core::oauth::OAuthError::InvalidResponse
+pub agent_access_core::oauth::OAuthError::LoginBindingMismatch
+pub agent_access_core::oauth::OAuthError::LoginBindingRequired
 pub agent_access_core::oauth::OAuthError::Permission
 pub agent_access_core::oauth::OAuthError::Principal
 pub agent_access_core::oauth::OAuthError::Provider

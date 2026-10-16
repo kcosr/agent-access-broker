@@ -122,7 +122,7 @@ These shapes are intentionally exhaustive, each an explicit API decision:
 | `RefreshReplay` | A refresh exchange either consumes its input or may reuse it. |
 | `ProviderResultStreamSource` | A body is in memory or streamed, and the host must deliver every source. |
 | `presentation::ReadContentFormat` | Every embedded-body codec receives the format and must render each one. |
-| `AttachmentLimitsConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
+| `AttachmentLimitsConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile`, `OAuthLoginBinding` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
 | `host::ScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. |
 | `InvalidReasonCodeId`, `SigningError`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
 
